@@ -2,7 +2,7 @@
 
 [← Back to the README](../README.md)
 
-The editor, part by part: the home screen, the window, brushes and their options, painting, decorating, water, height maps, 3D sculpting and the controls. The terrain generator has [a page of its own](terrain-graphs.md); how Massif works inside is in [internals](internals.md).
+The editor, part by part: the home screen, the window, brushes and their options, painting, decorating, water, height maps, 3D sculpting and the controls. The terrain generator has [a page of its own](terrain-graphs.md); how Massif works inside is in [internals](internals.md). Coming from WorldPainter? [Where each of its tools is](coming-from-worldpainter.md).
 
 - [The home screen](#the-home-screen)
 - [The window](#the-window)
@@ -54,6 +54,15 @@ arrow keys) move through it; **Skip tour** or Esc ends it at any step. With
 own; **Help ▸ Take the tour** shows it again (over a sample, from the home
 screen). Massif shows no other tips or popups. With Reduce motion on, the
 light jumps from one part to the next rather than gliding.
+
+Before it, the very first start asks **Coming from WorldPainter?** **Yes**
+opens the WorldPainter workspace (the map big in the middle, the tools on the
+left, Terrain, Layers and Brushes on the right), sets WorldPainter's keyboard
+shortcuts, and shows a tour of its own instead, eight steps from where
+WorldPainter put each thing to where Massif has it, then what Massif adds.
+**No** keeps Massif's layout and the tour above. **Help ▸ Where are my
+WorldPainter tools?** shows that tour again. [Coming from
+WorldPainter](coming-from-worldpainter.md) has the whole table.
 
 Behind it is the background chosen in **Settings ▸ Appearance ▸ Home
 background**, one of four styles:

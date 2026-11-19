@@ -16,6 +16,8 @@ Press **Create map** (or `Enter`). A `.massif`, a `.world` or a height map dropp
 ## The tour
 The first time a map is open, a short tour of six steps shows the window: the World and Terrain sides, the tools, Brush Settings, the 2D map, the 3D view, saving and exporting. **Next** and **Back** (or the arrow keys) move through it, **Skip tour** or `Esc` ends it. **Help ▸ Take the tour** shows it again.
 
+Before it, the very first start asks **Coming from WorldPainter?** **Yes** opens the WorldPainter workspace, sets WorldPainter's keyboard shortcuts and shows a tour of where its tools are in Massif instead; **No** keeps Massif's layout and the tour above. See Coming from WorldPainter.
+
 ## A real place
 **From a real place** on the home screen, or **File ▸ New World from a Real Place…**, makes a world of the relief of a place on the Earth; **Edit ▸ Relief of a Real Place…** puts one into the map open, into the selection by its weight or over the whole map. Its land is painted again from the new relief, the old map's painted terrains, biomes, covers and objects taken off (**Terrains ▸ Keep** keeps them and writes only heights and water). Over the whole map, **Change it** under **Map** makes the map another size in the same step (whole tiles of 128 blocks, up to 32,768 a side, around its middle; what is painted outside the new size goes); one undo brings the old map and size back. **Blocks** chooses the block palette, as in New map (Vanilla, your own, the loaded mods'): a new world is made of it; into the map, another palette than the map's switches the map's palette in the same step to undo. The coasts follow a smooth line through the data, with a narrow beach, a sea floor that deepens from the shore and no square pools; lakes the data gives flat are water at their own level; the sea gets ocean biomes by its depth and latitude, lakes river, the sand beach. A tile that cannot be downloaded is made from coarser data, and the status bar says how many were.
 - **Source**: **Terrain Tiles**, the heights of the whole Earth, about 30 m apart, ocean floors included, downloaded as needed; or **A file** you downloaded: a GeoTIFF (its metres a pixel read from it), a 16-bit PNG or a raw `.r16` / `.r32` (say how many metres a pixel covers and what black and white stand for).
@@ -258,6 +260,35 @@ The viewport shows the graph's output in 3D, with its sun, clouds, haze and sea 
 
 ## Converting
 **Convert to voxels** writes the graph to the map: into its ground, or over it (**over the map**: what the graph digs and raises goes into levels of their own, and the map stays as it was). Templates give a whole graph at once.
+
+# Coming from WorldPainter
+Most of WorldPainter's tools are in Massif under the same name or a close one; each tool's card says what WorldPainter calls it. The **WorldPainter** workspace (the last tab of the World side) lays the window out as WorldPainter does: the 2D map big in the middle, the tools on the left, Terrain, Layers and Brushes on the right. **Settings ▸ Keyboard ▸ WorldPainter** gives WorldPainter's shortcuts. **Help ▸ Where are my WorldPainter tools?** shows a short tour of where each thing is. The 3D view and the node graph stay one click away: an area's editor, or the **Terrain** side.
+
+## Where each thing is
+| WorldPainter | Massif |
+| Open a .world | **Open…** or **File ▸ Import WorldPainter World…**: the .world is only read, save as a .massif |
+| Height `⌥H`, Raise Mountain `⌥M`, Raise Pyramid | **Raise / Lower**, the shape from the Brushes panel |
+| Smooth `⌥S`, Flatten `⌥A` | **Smooth**, **Flatten** |
+| Path | **Road** |
+| Pencil `⌥P`, Spray Paint `⌥R` | **Paint terrain**, the terrain from Terrain or Blocks |
+| Fill | Select the area and paint it, or **Edit ▸ Auto paint** by rules |
+| Biomes, Automatic Biomes | **Paint biome**, **Auto biome** |
+| Layers palette | The **Layers** panel and the Decor tools |
+| Import layer (.layer) | **Import WorldPainter layer…**, top of the Layers panel |
+| Custom terrains and materials | The **Blocks** panel, block palettes, mods |
+| Flood `⌥F` | **Flood** |
+| Sponge | **Flood** with `Shift` and the right button |
+| River layer | **River**, **Edit ▸ Whole map ▸ Rivers** |
+| Select, Select with Brush | The Select tools, **Selection brush** |
+| Text, Annotations | **Annotations** |
+| Caverns, Chasms, Tunnels | **Edit ▸ Caves…**, levels |
+| Global Operations | **Edit ▸ Whole map** |
+| 3D View | The **3D View** area, the 3D workspace |
+| Export `⌘E` | **File ▸ Export to Minecraft…** |
+| Scripts | **File ▸ Run Script…** |
+
+## What Massif adds
+The 3D view and 3D Sculpt; the **Terrain** side, a graph of nodes that grows relief and erodes it; **Smooth terrain** (slabs and stairs on top of the land); scripts in Lua beside WorldPainter's own; workspaces of your own, save points, a survival check and the relief of real places.
 
 # WorldPainter worlds
 **Import from WorldPainter…** opens a `.world` file: its dimensions, heights (tall worlds keep their height), terrains, water, biomes and custom terrains. WorldPainter's **Beaches** come in as it draws them: grass with patches of sand, gravel and clay.

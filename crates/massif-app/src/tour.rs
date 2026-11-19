@@ -80,28 +80,19 @@ fn worldpainter_steps() -> Vec<Step> {
         Step {
             targets: &[Target::Open],
             title: tr!("Your .world files"),
-            body: tr!(
-                "Open ({open}) reads a WorldPainter .world as it is: its heights, terrains, layers, water, biomes and annotations. File ▸ Import WorldPainter World… does the same. Save it then as a .massif: your .world is never written to.",
-                open = key(Action::Open)
-            )
+            body: tr!("Open ({open}) reads a WorldPainter .world as it is: its heights, terrains, layers, water, biomes and annotations. File ▸ Import WorldPainter World… does the same. Save it then as a .massif: your .world is never written to.", open = key(Action::Open))
             .into(),
         },
         Step {
             targets: &[Target::Tools(crate::tools::SCULPT_GROUP)],
             title: tr!("Height brushes"),
-            body: tr!(
-                "WorldPainter's Height and Raise Mountain are Raise / Lower here ({raise}); Smooth and Flatten keep their names, and Path is Road. The brushes, WorldPainter's shapes and your custom ones, are in the Brushes panel on the right; size and intensity in Brush Settings, under the tools.",
-                raise = key(Action::Tool(Tool::Raise))
-            )
+            body: tr!("WorldPainter's Height and Raise Mountain are Raise / Lower here ({raise}); Smooth and Flatten keep their names, and Path is Road. The brushes, WorldPainter's shapes and your custom ones, are in the Brushes panel on the right; size and intensity in Brush Settings, under the tools.", raise = key(Action::Tool(Tool::Raise)))
             .into(),
         },
         Step {
             targets: &[Target::Editor(EditorKind::Terrain)],
             title: tr!("Painting terrain"),
-            body: tr!(
-                "Pick a terrain here and paint it with Paint terrain ({paint}), as with WorldPainter's Pencil. Every block of the game and its mods is in the Blocks panel; biomes are painted with Paint biome.",
-                paint = key(Action::Tool(Tool::PaintTerrain))
-            )
+            body: tr!("Pick a terrain here and paint it with Paint terrain ({paint}), as with WorldPainter's Pencil. Every block of the game and its mods is in the Blocks panel; biomes are painted with Paint biome.", paint = key(Action::Tool(Tool::PaintTerrain)))
             .into(),
         },
         Step {
@@ -112,30 +103,19 @@ fn worldpainter_steps() -> Vec<Step> {
         Step {
             targets: &[Target::Tools(crate::tools::WATER_GROUP)],
             title: tr!("Water"),
-            body: tr!(
-                "Flood ({flood}) fills a basin, as WorldPainter's does; Shift and the right button drain it, as its Sponge. River lays a river from its source down the land; Water brush paints water by hand.",
-                flood = key(Action::Tool(Tool::Flood))
-            )
+            body: tr!("Flood ({flood}) fills a basin, as WorldPainter's does; Shift and the right button drain it, as its Sponge. River lays a river from its source down the land; Water brush paints water by hand.", flood = key(Action::Tool(Tool::Flood)))
             .into(),
         },
         Step {
             targets: &[Target::Tools(crate::tools::SELECT_GROUP)],
             title: tr!("Selections"),
-            body: tr!(
-                "A rectangle, an ellipse, a lasso, or painted with the brush as WorldPainter's Select with Brush: the other tools then act only inside it. {all} selects the whole map, {none} clears the selection.",
-                all = key(Action::SelectAll),
-                none = key(Action::Deselect)
-            )
+            body: tr!("A rectangle, an ellipse, a lasso, or painted with the brush as WorldPainter's Select with Brush: the other tools then act only inside it. {all} selects the whole map, {none} clears the selection.", all = key(Action::SelectAll), none = key(Action::Deselect))
             .into(),
         },
         Step {
             targets: &[Target::SaveExport],
             title: tr!("Export"),
-            body: tr!(
-                "Export to Minecraft ({export}) writes the world, as WorldPainter's Export does: version, difficulty, border, spawn, data packs. Save ({save}) keeps your work as a .massif file.",
-                export = key(Action::Export),
-                save = key(Action::Save)
-            )
+            body: tr!("Export to Minecraft ({export}) writes the world, as WorldPainter's Export does: version, difficulty, border, spawn, data packs. Save ({save}) keeps your work as a .massif file.", export = key(Action::Export), save = key(Action::Save))
             .into(),
         },
         Step {
