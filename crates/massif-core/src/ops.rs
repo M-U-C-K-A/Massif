@@ -886,8 +886,9 @@ pub fn auto_preview_with(dim: &Dimension, brush: &Brush, cx: f32, cz: f32, class
         .into_par_iter()
         .map(|pos| {
             let clip = footprint.intersect(&pos.rect());
-            let ground = dim.ground().view(pos);
             let mut out = Vec::new();
+            // No tile: off the map, where the brush changes nothing.
+            let Some(ground) = dim.ground().view(pos) else { return out };
             for j in samples(footprint.z0, d, clip.z0, clip.z1) {
                 let z = footprint.z0 + j * step;
                 for i in samples(footprint.x0, w, clip.x0, clip.x1) {
@@ -896,7 +897,7 @@ pub fn auto_preview_with(dim: &Dimension, brush: &Brush, cx: f32, cz: f32, class
                         continue;
                     }
                     let k = (j * w + i) as usize;
-                    let (Some(new), Some(ground)) = (classes.get(x, z), &ground) else {
+                    let Some(new) = classes.get(x, z) else {
                         out.push((k, Preview::Same));
                         continue;
                     };

@@ -6315,6 +6315,10 @@ fn covers_key(reg: &massif_core::Registry) -> u64 {
 mod water_ux_tests;
 
 #[cfg(test)]
+#[path = "brush_edge_tests.rs"]
+mod brush_edge_tests;
+
+#[cfg(test)]
 mod tests {
     thread_local! {
         /// Make the next frame panic, as a bug would.

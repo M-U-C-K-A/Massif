@@ -601,7 +601,8 @@ impl MapView {
 
     /// Draw what Auto paint or Auto biome would change under the brush at
     /// `at`: the columns that would change, in their new colour.
-    fn show_auto_preview(&mut self, ctx: &egui::Context, painter: &egui::Painter, canvas: Rect, doc: &Document, tools: &ToolState, at: (f64, f64)) {
+    #[allow(clippy::too_many_arguments)]
+    fn show_auto_preview(&mut self, ctx: &egui::Context, painter: &egui::Painter, land: &[egui::Painter], canvas: Rect, doc: &Document, tools: &ToolState, at: (f64, f64)) {
         use std::hash::{Hash, Hasher};
         let biomes = tools.tool == Tool::AutoBiome;
         let base = doc.auto_base();
@@ -662,7 +663,9 @@ impl MapView {
             let min = self.to_screen(canvas, rect[0] as f64, rect[1] as f64);
             let max = self.to_screen(canvas, rect[2] as f64, rect[3] as f64);
             let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-            painter.image(texture.id(), Rect::from_min_max(min, max), uv, Color32::WHITE);
+            for p in land {
+                p.image(texture.id(), Rect::from_min_max(min, max), uv, Color32::WHITE);
+            }
         }
         if let Some(summary) = self.auto_preview.as_ref().and_then(|a| a.summary.as_ref()) {
             Self::auto_legend(painter, canvas, doc, biomes, summary);
@@ -729,7 +732,7 @@ impl MapView {
 
     /// Draw what the noise of the Paint tool would paint under the brush at
     /// `at`, in the colours of its terrains.
-    fn show_pattern_preview(&mut self, ctx: &egui::Context, painter: &egui::Painter, canvas: Rect, doc: &Document, tools: &ToolState, at: (f64, f64)) {
+    fn show_pattern_preview(&mut self, ctx: &egui::Context, land: &[egui::Painter], canvas: Rect, doc: &Document, tools: &ToolState, at: (f64, f64)) {
         use std::hash::{Hash, Hasher};
         /// The most samples a side: a big brush is shown sampled.
         const SAMPLES: usize = 256;
@@ -768,7 +771,9 @@ impl MapView {
             let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
             // Nearly opaque: what the ground will look like, the map just
             // showing through.
-            painter.image(texture.id(), Rect::from_min_max(min, max), uv, Color32::from_white_alpha(225));
+            for p in land {
+                p.image(texture.id(), Rect::from_min_max(min, max), uv, Color32::from_white_alpha(225));
+            }
         }
     }
 
@@ -853,6 +858,57 @@ impl MapView {
             self.center[0] + ((p.x - c.x) / self.zoom) as f64,
             self.center[1] + ((p.y - c.y) / self.zoom) as f64,
         )
+    }
+
+    /// The land of the map within `area` (points), as rectangles of the
+    /// screen: its tiles, those side by side in a row joined, rows alike
+    /// joined (one rectangle for a rectangular map). What the brush's fills,
+    /// hatching and noise and the selection's ants are clipped to, so that
+    /// none is drawn over the void round the map.
+    fn land_rects(&self, canvas: Rect, doc: &Document, area: Rect) -> Vec<Rect> {
+        let area = area.intersect(canvas);
+        let level = doc.dimension().ground();
+        if !area.is_positive() || level.len() == 0 {
+            return Vec::new();
+        }
+        let t = TILE_SIZE as f64;
+        let (x0, z0) = self.to_world(canvas, area.min);
+        let (x1, z1) = self.to_world(canvas, area.max);
+        let (tx0, tz0, tx1, tz1) = ((x0 / t).floor() as i32, (z0 / t).floor() as i32, (x1 / t).floor() as i32, (z1 / t).floor() as i32);
+        let screen = |[a, b, c, d]: [i32; 4]| Rect::from_min_max(self.to_screen(canvas, a as f64 * t, b as f64 * t), self.to_screen(canvas, c as f64 * t, d as f64 * t)).intersect(area);
+        // Too many tiles to look at one by one, far out over a large map:
+        // the map's bounds.
+        if (tx1 - tx0 + 1) as i64 * (tz1 - tz0 + 1) as i64 > 1 << 14 {
+            return level.bounds().map(|(lo, hi)| screen([lo.x, lo.z, hi.x + 1, hi.z + 1])).filter(|r| r.is_positive()).into_iter().collect();
+        }
+        let mut out: Vec<[i32; 4]> = Vec::new();
+        let mut last: Vec<(i32, i32)> = Vec::new();
+        let mut last_at = 0;
+        for tz in tz0..=tz1 {
+            let mut runs = Vec::new();
+            let mut tx = tx0;
+            while tx <= tx1 {
+                if level.contains(massif_core::coords::TilePos::new(tx, tz)) {
+                    let a = tx;
+                    while tx <= tx1 && level.contains(massif_core::coords::TilePos::new(tx, tz)) {
+                        tx += 1;
+                    }
+                    runs.push((a, tx));
+                } else {
+                    tx += 1;
+                }
+            }
+            if !runs.is_empty() && runs == last && out[last_at..].iter().all(|r| r[3] == tz) {
+                for r in &mut out[last_at..] {
+                    r[3] = tz + 1;
+                }
+            } else {
+                last_at = out.len();
+                out.extend(runs.iter().map(|&(a, b)| [a, tz, b, tz + 1]));
+            }
+            last = runs;
+        }
+        out.into_iter().map(screen).filter(|r| r.is_positive()).collect()
     }
 
     fn zoom_at(&mut self, canvas: Rect, p: Pos2, factor: f32) {
@@ -1536,8 +1592,10 @@ impl MapView {
             let (x0, z0) = self.to_world(canvas, canvas.min);
             let (x1, z1) = self.to_world(canvas, canvas.max);
             let view = massif_core::BlockRect::new(x0.floor() as i32, z0.floor() as i32, x1.ceil() as i32, z1.ceil() as i32);
+            // Its ants on the land only.
+            let land: Vec<egui::Painter> = self.land_rects(canvas, doc, canvas).into_iter().map(|r| painter.with_clip_rect(r)).collect();
             let mut select = std::mem::take(&mut self.select);
-            select.draw(ui, &painter, canvas, &|x, z| self.to_screen(canvas, x, z), view, self.zoom, doc.dimension().selection.as_ref());
+            select.draw(ui, &painter, &land, canvas, &|x, z| self.to_screen(canvas, x, z), view, self.zoom, doc.dimension().selection.as_ref());
             self.select = select;
         }
 
@@ -1665,15 +1723,19 @@ impl MapView {
                 let brush = &tools.brush;
                 let shadow = Line::new(3.0, Color32::from_black_alpha(90));
                 let line = Line::new(1.4, Color32::WHITE);
+                // Its fill, hatching and noise over the land only: over the
+                // void round the map, its outline alone, faint.
+                let faint = Line::new(1.0, Color32::from_white_alpha(80));
+                let land: Vec<egui::Painter> = self.land_rects(canvas, doc, Rect::from_center_size(p, Vec2::splat(2.0 * brush.reach() * self.zoom + 8.0))).into_iter().map(|r| painter.with_clip_rect(r)).collect();
                 // The automatic tools show what they would change, a noise
                 // what it would paint.
                 let previewing = !modifiers.alt && self.stroke.is_none();
                 let noise = tools.tool == Tool::PaintTerrain && tools.pattern.on;
                 if previewing && let Some((x, z)) = world_pointer {
                     if matches!(tools.tool, Tool::AutoPaint | Tool::AutoBiome) {
-                        self.show_auto_preview(ui.ctx(), &painter, canvas, doc, tools, (x, z));
+                        self.show_auto_preview(ui.ctx(), &painter, &land, canvas, doc, tools, (x, z));
                     } else if noise {
-                        self.show_pattern_preview(ui.ctx(), &painter, canvas, doc, tools, (x, z));
+                        self.show_pattern_preview(ui.ctx(), &land, canvas, doc, tools, (x, z));
                     }
                 }
                 // How hard the brush presses: lighter where it presses
@@ -1702,10 +1764,14 @@ impl MapView {
                         match by_block {
                             Some((texture, [x0, z0, x1, z1])) => {
                                 let r = Rect::from_min_max(self.to_screen(canvas, x0 as f64, z0 as f64), self.to_screen(canvas, x1 as f64, z1 as f64));
-                                painter.image(texture, r, uv, Color32::WHITE);
+                                for lp in &land {
+                                    lp.image(texture, r, uv, Color32::WHITE);
+                                }
                             }
                             None if fill => {
-                                painter.image(preview.texture.id(), square, uv, Color32::WHITE);
+                                for lp in &land {
+                                    lp.image(preview.texture.id(), square, uv, Color32::WHITE);
+                                }
                             }
                             None => {}
                         }
@@ -1714,8 +1780,10 @@ impl MapView {
                             let under = Line::new(2.4, Color32::from_black_alpha(55));
                             for ring in rings {
                                 if let Some(points) = crate::brushes::drawable(ring.iter().map(|&(u, v)| square.min + vec2(u, v) * side), 1.5, true) {
-                                    painter.add(egui::Shape::closed_line(points.clone(), under));
-                                    painter.add(egui::Shape::closed_line(points, ink));
+                                    for lp in &land {
+                                        lp.add(egui::Shape::closed_line(points.clone(), under));
+                                        lp.add(egui::Shape::closed_line(points.clone(), ink));
+                                    }
                                 }
                             }
                         }
@@ -1743,8 +1811,11 @@ impl MapView {
                     match brush.shape {
                         BrushShape::Circle => {
                             let r = brush.radius * self.zoom;
-                            painter.circle_stroke(p, r, shadow);
-                            painter.circle_stroke(p, r, line);
+                            painter.circle_stroke(p, r, faint);
+                            for lp in &land {
+                                lp.circle_stroke(p, r, shadow);
+                                lp.circle_stroke(p, r, line);
+                            }
                         }
                         BrushShape::Square => rings.push(
                             brush
@@ -1757,10 +1828,15 @@ impl MapView {
                 }
                 rings.retain(|r| r.len() > 2);
                 for ring in &rings {
-                    painter.add(egui::Shape::closed_line(ring.clone(), shadow));
+                    painter.add(egui::Shape::closed_line(ring.clone(), faint));
                 }
-                for ring in rings {
-                    painter.add(egui::Shape::closed_line(ring, line));
+                for lp in &land {
+                    for ring in &rings {
+                        lp.add(egui::Shape::closed_line(ring.clone(), shadow));
+                    }
+                    for ring in &rings {
+                        lp.add(egui::Shape::closed_line(ring.clone(), line));
+                    }
                 }
                 painter.circle_filled(p, 1.5, Color32::WHITE);
                 ui.ctx().set_cursor_icon(CursorIcon::Crosshair);

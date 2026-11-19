@@ -262,11 +262,12 @@ impl SelectView {
         self.painted_outline = None;
     }
 
-    /// Draw the selection's outline and the shape being drawn. `to_screen`
-    /// maps blocks to points; `view`, the blocks the canvas shows; `zoom`,
-    /// the points a block takes.
+    /// Draw the selection's outline and the shape being drawn. `land`: the
+    /// painters of the map's land, which the selection's ants keep to;
+    /// `to_screen` maps blocks to points; `view`, the blocks the canvas
+    /// shows; `zoom`, the points a block takes.
     #[allow(clippy::too_many_arguments)]
-    pub fn draw(&mut self, ui: &Ui, painter: &egui::Painter, canvas: Rect, to_screen: &dyn Fn(f64, f64) -> Pos2, view: BlockRect, zoom: f32, selection: Option<&Arc<Selection>>) {
+    pub fn draw(&mut self, ui: &Ui, painter: &egui::Painter, land: &[egui::Painter], canvas: Rect, to_screen: &dyn Fn(f64, f64) -> Pos2, view: BlockRect, zoom: f32, selection: Option<&Arc<Selection>>) {
         let pal = Palette::of(ui);
         let still = theme::reduce_motion(ui.ctx());
         let time = ui.input(|i| i.time);
@@ -276,7 +277,9 @@ impl SelectView {
         if let Some(sel) = selection {
             let key = Arc::as_ptr(sel) as usize;
             if let Some(edges) = cached_edges(&mut self.outline, sel, key, view, zoom) {
-                marching |= ants(painter, canvas, to_screen, edges, phase, Color32::WHITE);
+                for lp in land {
+                    marching |= ants(lp, canvas, to_screen, edges, phase, Color32::WHITE);
+                }
             }
         }
         if let Some(drag) = &self.drag {
