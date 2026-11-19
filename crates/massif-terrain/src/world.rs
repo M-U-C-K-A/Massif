@@ -187,9 +187,9 @@ pub fn outputs(engine: &Engine, c: &Compiled, lod: u8, cancel: Cancel) -> Result
         out.colors = Some((cf, palette));
     }
     for k in 1..=4u32 {
-        let (top, bottom) = (grid(&format!("layer.{k}.top"))?, grid(&format!("layer.{k}.bottom"))?);
+        let (top, bottom) = (grid(&format!("level.{k}.top"))?, grid(&format!("level.{k}.bottom"))?);
         if let (Some(top), Some(bottom)) = (top, bottom) {
-            let color = grid(&format!("layer.{k}.color"))?.map(|g| (Arc::new(colors(&g)), palette));
+            let color = grid(&format!("level.{k}.color"))?.map(|g| (Arc::new(colors(&g)), palette));
             out.layers.push(LayerOut { slot: k, name: LayerOut::level_name("Terrain graph", k), top: Arc::new(field(&top)), bottom: Arc::new(field(&bottom)), colors: color });
         }
     }

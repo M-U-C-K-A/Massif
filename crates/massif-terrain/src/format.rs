@@ -35,9 +35,14 @@ pub const GUIDE: &str = "\
 - `massif-cli terrain validate graph.json` says what is wrong, each mistake with its path (`nodes.hills.params.hieght`) and the name it probably meant. `massif-cli terrain patch` changes a graph a step at a time: `add`, `set`, `link`, `unlink`, `remove`, `rename`, or a JSON Patch.
 ";
 
-/// The types of node a graph can name, in the library's order.
+/// The types of node a graph can name, every version, in the library's order.
 pub fn public() -> impl Iterator<Item = &'static NodeSpec> {
     registry::all().iter().copied().filter(|s| s.family != Family::Internal)
+}
+
+/// The types new nodes take: the latest version of each.
+pub fn current() -> impl Iterator<Item = &'static NodeSpec> {
+    public().filter(|s| registry::latest(s.id).is_some_and(|l| l.version == s.version))
 }
 
 fn error(path: impl Into<String>, message: impl Into<String>) -> Diagnostic {
@@ -155,11 +160,11 @@ pub fn schema() -> Value {
         "source".into(),
         json!({ "type": "string", "pattern": SOURCE_PATTERN, "description": "What feeds an input: a node's name, and after a dot one of its outputs (the first when left out), as \"hills\" or \"worn.flow\"." }),
     );
-    let ids: Vec<&str> = public().map(|s| s.id).collect();
+    let ids: Vec<String> = public().map(|s| s.type_name()).collect();
     let mut cases = Vec::new();
     for s in public() {
-        defs.insert(s.id.into(), node_schema(s));
-        cases.push(json!({ "if": { "properties": { "type": { "const": s.id } }, "required": ["type"] }, "then": { "$ref": format!("#/$defs/{}", s.id) } }));
+        defs.insert(s.type_name(), node_schema(s));
+        cases.push(json!({ "if": { "properties": { "type": { "const": s.type_name() } }, "required": ["type"] }, "then": { "$ref": format!("#/$defs/{}", s.type_name()) } }));
     }
     defs.insert(
         "node".into(),
@@ -246,7 +251,7 @@ fn node_schema(s: &NodeSpec) -> Value {
         "additionalProperties": false,
         "required": ["type"],
         "properties": {
-            "type": { "const": s.id },
+            "type": { "const": s.type_name() },
             "inputs": ins,
             "params": { "type": "object", "additionalProperties": false, "properties": params },
             "note": { "type": "string", "description": "A note for whoever reads the graph." }
@@ -393,7 +398,7 @@ fn param_json(p: &ParamSpec) -> Value {
 
 fn node_json(s: &'static NodeSpec) -> Value {
     let mut v = json!({
-        "type": s.id,
+        "type": s.type_name(),
         "label": s.label,
         "summary": s.summary,
         "help": s.help,
@@ -431,7 +436,7 @@ pub fn catalog_json() -> Value {
         })).collect::<Vec<_>>(),
         "families": Family::ALL.iter().map(|f| json!({
             "family": f.label(),
-            "nodes": public().filter(|s| s.family == *f).map(node_json).collect::<Vec<_>>()
+            "nodes": current().filter(|s| s.family == *f).map(node_json).collect::<Vec<_>>()
         })).collect::<Vec<_>>()
     })
 }
@@ -484,7 +489,7 @@ pub fn catalog_markdown() -> String {
     }
     for f in Family::ALL {
         let _ = write!(md, "\n## {}\n", f.label());
-        for s in public().filter(|s| s.family == f) {
+        for s in current().filter(|s| s.family == f) {
             node_markdown(&mut md, s);
         }
     }
@@ -510,7 +515,7 @@ fn ports_markdown(md: &mut String, title: &str, ports: &[PortSpec]) {
 }
 
 fn node_markdown(md: &mut String, s: &'static NodeSpec) {
-    let _ = writeln!(md, "\n### {} — `{}`\n\n{} {}", s.label, s.id, s.summary, s.help);
+    let _ = writeln!(md, "\n### {} — `{}`\n\n{} {}", s.label, s.type_name(), s.summary, s.help);
     if matches!(s.kernel, Kernel::Global { .. }) {
         md.push_str("\nA simulation: it works over the whole terrain at the simulations' resolution.\n");
     }
@@ -612,7 +617,7 @@ pub fn example(spec: &'static NodeSpec) -> Graph {
         g.nodes.insert("out".into(), out);
         return g;
     }
-    let mut node = Node::new(spec.id);
+    let mut node = Node::new(&spec.type_name());
     for p in spec.params {
         if let Some(v) = sample(p) {
             node.params.insert(p.name.into(), v);
