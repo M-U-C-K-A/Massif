@@ -12,7 +12,8 @@
 //! that name; `{size:.1}` keeps the number's precision. A text that counts
 //! has two English forms, `trn!("{n} block", "{n} blocks", n = count)`, and
 //! its translation is either one text or `{"one": …, "other": …}`, chosen by
-//! the language's own rule (French counts 0 as one).
+//! the language's own rule (French counts 0 as one). Russian adds `"few"`
+//! (2–4, 22–24…) and `"many"` (5–20, 25…), `"other"` being for fractions.
 
 /// A text of the interface in the language shown. `tr!("Save")` is a
 /// `&'static str`; with placeholders, `tr!("Undo {what}", what)` or
@@ -67,11 +68,12 @@ pub enum Language {
     German,
     Spanish,
     Portuguese,
+    Russian,
 }
 
 impl Language {
     /// The languages offered, each by its own name, after System.
-    pub const ALL: [Language; 5] = [Language::English, Language::French, Language::German, Language::Spanish, Language::Portuguese];
+    pub const ALL: [Language; 6] = [Language::English, Language::French, Language::German, Language::Spanish, Language::Portuguese, Language::Russian];
 
     /// The language's name in that language: how someone looks for theirs.
     pub fn native_name(self) -> &'static str {
@@ -82,6 +84,7 @@ impl Language {
             Language::German => "Deutsch",
             Language::Spanish => "Español",
             Language::Portuguese => "Português",
+            Language::Russian => "Русский",
         }
     }
 
@@ -93,6 +96,7 @@ impl Language {
             Language::German => "de",
             Language::Spanish => "es",
             Language::Portuguese => "pt",
+            Language::Russian => "ru",
         }
     }
 
@@ -120,7 +124,7 @@ impl Language {
     }
 
     fn from_index(i: u8) -> Language {
-        [Language::System, Language::English, Language::French, Language::German, Language::Spanish, Language::Portuguese].get(i as usize).copied().unwrap_or(Language::English)
+        [Language::System, Language::English, Language::French, Language::German, Language::Spanish, Language::Portuguese, Language::Russian].get(i as usize).copied().unwrap_or(Language::English)
     }
 
     /// The file of the language, built into the app; English has none.
@@ -131,6 +135,7 @@ impl Language {
             Language::German => Some(include_str!("../lang/de.json")),
             Language::Spanish => Some(include_str!("../lang/es.json")),
             Language::Portuguese => Some(include_str!("../lang/pt.json")),
+            Language::Russian => Some(include_str!("../lang/ru.json")),
         }
     }
 }
@@ -161,6 +166,7 @@ fn os_languages() -> Vec<String> {
         0x0c => "fr",
         0x0a => "es",
         0x16 => "pt",
+        0x19 => "ru",
         _ => "en",
     };
     vec![code.to_owned()]
@@ -229,7 +235,9 @@ pub fn current() -> Language {
 #[derive(Debug, Clone, Copy)]
 enum Entry {
     One(&'static str),
-    Plural { one: &'static str, other: &'static str },
+    /// `few` and `many` are Russian's: the other languages leave them out,
+    /// and `other` stands in where a form is missing.
+    Plural { one: &'static str, few: Option<&'static str>, many: Option<&'static str>, other: &'static str },
 }
 
 /// A language's texts, by their English text.
@@ -264,7 +272,10 @@ impl Catalog {
             let entry = match value {
                 serde_json::Value::String(s) if !s.is_empty() => Entry::One(leak(s)),
                 serde_json::Value::Object(forms) => match (forms.get("one").and_then(|v| v.as_str()), forms.get("other").and_then(|v| v.as_str())) {
-                    (Some(one), Some(other)) => Entry::Plural { one: leak(one), other: leak(other) },
+                    (Some(one), Some(other)) => {
+                        let form = |name: &str| forms.get(name).and_then(|v| v.as_str()).filter(|s| !s.is_empty()).map(leak);
+                        Entry::Plural { one: leak(one), few: form("few"), many: form("many"), other: leak(other) }
+                    }
                     (None, Some(other)) => Entry::One(leak(other)),
                     _ => continue,
                 },
@@ -274,7 +285,7 @@ impl Catalog {
             let keeps = match entry {
                 Entry::One(s) => placeholders(s) == wanted,
                 // The singular may leave the count out ("un bloc").
-                Entry::Plural { one, other } => placeholders(other) == wanted && placeholders(one).iter().all(|p| wanted.contains(p)),
+                Entry::Plural { one, few, many, other } => placeholders(other) == wanted && [Some(one), few, many].into_iter().flatten().all(|f| placeholders(f).iter().all(|p| wanted.contains(p))),
             };
             if !keeps {
                 log::warn!("language file {name}: the translation of {key:?} changes its placeholders; English instead");
@@ -306,7 +317,7 @@ impl Catalog {
 
 /// The catalog of a language, read the first time it is asked for.
 fn catalog(language: Language) -> Option<&'static Catalog> {
-    static CATALOGS: [OnceLock<Catalog>; 6] = [const { OnceLock::new() }; 6];
+    static CATALOGS: [OnceLock<Catalog>; 7] = [const { OnceLock::new() }; 7];
     let source = language.source()?;
     Some(CATALOGS[language.index() as usize].get_or_init(|| Catalog::parse(language.code(), source)))
 }
@@ -369,26 +380,52 @@ pub fn tr_name_in(language: Language, name: &str) -> Option<&'static str> {
     }
 }
 
-/// Whether a count takes the singular in the language shown.
-fn is_one(language: Language, n: f64) -> bool {
+/// The form a count takes in a language, as CLDR names them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Form {
+    One,
+    Few,
+    Many,
+    Other,
+}
+
+/// The form a count takes in the language shown.
+fn form_of(language: Language, n: f64) -> Form {
     match language {
         // French: 0 and 1 (and 1.5) are singular.
-        Language::French => n.abs() < 2.0,
-        _ => n == 1.0,
+        Language::French if n.abs() < 2.0 => Form::One,
+        // Russian: 1, 21, 31… one; 2–4, 22–24… few; 0, 5–20, 25… many;
+        // fractions other.
+        Language::Russian if n.fract() == 0.0 => {
+            let i = n.abs() as u64;
+            match (i % 10, i % 100) {
+                (1, m) if m != 11 => Form::One,
+                (2..=4, m) if !(12..=14).contains(&m) => Form::Few,
+                _ => Form::Many,
+            }
+        }
+        Language::Russian => Form::Other,
+        _ if n == 1.0 => Form::One,
+        _ => Form::Other,
     }
+}
+
+/// Whether a count takes the singular in the language shown.
+#[cfg(test)]
+fn is_one(language: Language, n: f64) -> bool {
+    form_of(language, n) == Form::One
 }
 
 /// The text of a count in the language shown.
 pub fn tr_count(one: &'static str, other: &'static str, n: f64) -> &'static str {
     let language = current();
     match lookup(other) {
-        Some(Entry::Plural { one: o, other: m }) => {
-            if is_one(language, n) {
-                o
-            } else {
-                m
-            }
-        }
+        Some(Entry::Plural { one, few, many, other }) => match form_of(language, n) {
+            Form::One => one,
+            Form::Few => few.unwrap_or(other),
+            Form::Many => many.unwrap_or(other),
+            Form::Other => other,
+        },
         Some(Entry::One(s)) => s,
         None => {
             if n == 1.0 {
@@ -674,6 +711,13 @@ mod tests {
         assert_eq!(trn!("{n} block", "{n} blocks", n = 1), "1 block");
         assert_eq!(trn!("{n} block", "{n} blocks", n = 0), "0 blocks");
         assert!(is_one(Language::French, 0.0) && !is_one(Language::German, 0.0));
+        let ru = |n: f64| form_of(Language::Russian, n);
+        assert_eq!([1.0, 21.0, 101.0].map(ru), [Form::One; 3]);
+        assert_eq!([2.0, 4.0, 22.0, 104.0].map(ru), [Form::Few; 4]);
+        assert_eq!([0.0, 5.0, 11.0, 12.0, 14.0, 20.0, 111.0].map(ru), [Form::Many; 7]);
+        assert_eq!(ru(1.5), Form::Other);
+        let catalog = Catalog::parse("ru", r#"{"{n} blocks": {"one": "{n} блок", "few": "{n} блока", "many": "{n} блоков", "other": "{n} блока"}}"#);
+        assert!(matches!(catalog.get("{n} blocks"), Some(Entry::Plural { few: Some("{n} блока"), many: Some("{n} блоков"), .. })));
     }
 
     #[test]
@@ -681,6 +725,7 @@ mod tests {
         assert_eq!(Language::from_code("de-AT"), Some(Language::German));
         assert_eq!(Language::from_code("fr_FR.UTF-8"), Some(Language::French));
         assert_eq!(Language::from_code("pt-BR"), Some(Language::Portuguese));
+        assert_eq!(Language::from_code("ru-RU"), Some(Language::Russian));
         assert_eq!(Language::from_code("ja"), None);
         assert_eq!(Language::from_code(""), None);
     }
