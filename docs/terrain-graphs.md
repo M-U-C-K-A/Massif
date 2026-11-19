@@ -19,6 +19,7 @@ blocks.
 - [Over the map, not into it](#over-the-map-not-into-it)
 - [Size](#size)
 - [Convert to voxels](#convert-to-voxels)
+- [The new terrain generator (beta)](#the-new-terrain-generator-beta)
 
 ## The Graph workspace
 
@@ -248,3 +249,61 @@ starter graph builds at 16,384 × 16,384 in about 25 seconds and writes to a
 16k map in about 2 more, in about 5.5 GB of memory; 8,192 × 8,192 takes
 about 12 seconds and 2 GB. The floating mountains, with their two layers,
 take about 55 seconds and 8 GB at 16,384 × 16,384.
+
+## The new terrain generator (beta)
+
+Massif 1.3 brings a new terrain generator, in beta beside the one above,
+which stays as it is: turn it on in **Settings ▸ General ▸ New terrain
+generator (beta)**, and the Terrain side opens its graph instead. A world
+keeps both graphs; an older Massif opens it with its own.
+
+**What it makes.** A graph ends in one **Map Output**, like Blender's
+Material Output: one node with an input for each thing the map can take —
+Height, Water, Albedo (the colour of the ground), Terrain, Biome,
+Temperature and Humidity, Vegetation, Caves, four layers of rock (with their
+colours) and any mask (`mask.snow`, `mask.flow`, `mask.<name>`). Each input is
+optional and says what it stands for when left empty. Sockets have types, in
+colours: heights, masks (0 to 1), colours, vectors (wind), terrains and
+biomes; a height and a mask feed each other, a colour feeds a number by its
+brightness, a number a colour as a grey.
+
+**Nodes.** Shapes a mountain map is made of (ranges along a drawn crest,
+peaks placed by hand, alpine and rounded massifs, volcanoes, mesas, canyons,
+glacial valleys, fault scarps, dunes, karst, craters, islands, archipelagos
+along a chain, coastlines), adjustments (levels, curves, terraces, strata,
+folds, warps, sharpening, transforms), simulations (thermal and stream
+erosion, water flow), climate (temperature, wind, rainfall with rain shadows,
+humidity, the game's biomes), masks of what the relief is (slope, height,
+curvature, facing, sunlight, openness, snow, wetness, distance), colours
+(gradients from nature, mixes) and terrains (layers by masks). Positions are
+fractions of the terrain, distances and heights blocks. Every node and
+setting is listed in [terrain-nodes.md](terrain-nodes.md).
+
+**Live.** With Live on, the World side's map shows the graph as it is
+edited, without writing it: the area in view first, sharp within a few
+milliseconds on the graphics card, the rest of the map behind; simulations
+run quick first and exact once the graph rests. **Apply** writes it to the
+map in one undoable step, as Convert does.
+
+**Graphs of 1.2.** A world whose graph was made with the generator above
+opens with it migrated: each node becomes the node (or the few nodes) doing
+the same, with its settings, links, place and seed. What the new generator
+has no node for yet (floating islands, overhangs, tectonic plates, 1.2's
+water erosion, rivers and lakes) is kept as nodes marked 1.2, which run the
+old code. The noises are new, so a migrated graph keeps its shapes and
+heights, not its exact patterns.
+
+**Examples.** Five graphs to start from: an alpine chain with a glacial
+valley, chalk cliffs over coves, desert mesas over dunes, a volcanic
+archipelago, a canyon in a high plateau.
+
+**For models and scripts.** A graph is a readable JSON document (named
+nodes, inputs naming what feeds them). [terrain-graph.schema.json](terrain-graph.schema.json)
+is its JSON Schema and [terrain-nodes.md](terrain-nodes.md) its catalogue,
+both written from the generator itself. From the command line:
+`massif-cli terrain validate` names each mistake by its path and the name
+probably meant; `terrain patch` applies edits a step at a time (add, set,
+link, unlink, remove, rename) or a JSON Patch; `terrain render` draws a
+graph; `terrain migrate` prints a world's graph, migrated; `terrain build`
+builds a graph into a world.
+
