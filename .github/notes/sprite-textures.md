@@ -1,1 +1,0 @@
-**Glass has its textures again with Minecraft 26.1 and later.** From 26.1 the game writes the texture of glass, stained glass, glass panes and a few other see-through blocks in a new form that Massif did not read: with 26.1 or 26.3 these blocks had no texture and showed grey. They are read again, and marked see-through; older versions of the game read exactly as before.

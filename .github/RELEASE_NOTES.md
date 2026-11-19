@@ -320,6 +320,27 @@ Flood's Where I click, now what Flood is set to until you pick another height, p
 
 File ▸ Run Script… runs a WorldPainter JavaScript script on the open map as it is: its height maps and masks, layers (WorldPainter's own and `.layer` files), terrains and custom `.terrain` files, filters, and worlds made from height maps, saved and exported. The dialog asks for the script's parameters, shows what it prints and the line of an error, has a progress bar and Stop, and the whole run is one step to undo. On the command line, `massif-cli script my.js arguments…` runs one too. Scripts give the map WorldPainter gives, checked column by column against WorldPainter itself, and fast: 600 masks on a 4096 × 4096 map take 8 seconds, where WorldPainter takes 6 minutes. What Massif does not do yet stops the script with "… is not supported yet". A script may only use files in its folder or ones you give it, and has no network. See docs/scripting.md and "Coming from WorldPainter scripts".
 
+**Scripts in Lua, Massif's own API**
+
+Besides WorldPainter's scripts, File ▸ Run Script… and `massif-cli script` run scripts written for Massif itself, in Lua (Luau): the open map is `massif.map`, or open, create, save and export maps; read and write rectangles of columns at once (heights, water, terrains, biomes, layers, annotations); paint masks from images in Massif's own terms with `map:import_mask` (600 masks on a 4096 × 4096 map in under 3 seconds); run Edit ▸ Whole map's passes (erosion, rivers, lakes…) with `map:whole_map`. Lua scripts run in a sandbox: no files but those they may use, no network, no programs. It is the API Massif's plugins will be written with. See docs/scripting.md.
+
+
+**Glass has its textures again with Minecraft 26.1 and later.** From 26.1 the game writes the texture of glass, stained glass, glass panes and a few other see-through blocks in a new form that Massif did not read: with 26.1 or 26.3 these blocks had no texture and showed grey. They are read again, and marked see-through; older versions of the game read exactly as before.
+
+
+**The 3D views no longer crash or freeze on large edited maps.** On a map too large for every block, a tile wholly covered by a level or an overhang (none of its columns drawn by the ground's tracer) closed Massif as the 3D view built it ("index out of bounds"); such columns are now drawn as rock at that scale. And the 3D views no longer hold the window still for seconds after long editing: what they copy of the map to build from is prepared away from the window.
+
+
+**Brush previews stop at the edge of the map**
+
+With the pointer near the edge of the map, the hatching of Auto biome and Auto paint, the brush's strength, the colours of a noise and a selection's marching ants were drawn over the dark void round the map as well. They now stop cleanly at the map's edge, on maps of any shape; only the brush's outline goes on over the void, faintly, so that its whole size still shows.
+
+
+**Massif in Russian.** **Settings ▸ Appearance ▸ Language** now also offers Русский, and Massif picks it by itself on a Russian system. The whole interface is translated, with the names Minecraft gives its blocks and biomes in Russian, and counts take Russian's own forms (1 блок, 2 блока, 5 блоков). Every panel, dialog and menu fits the smallest window in Russian too. The help and the online guide stay in English for now.
+
+
+**At home from WorldPainter.** The first start asks "Coming from WorldPainter?". Yes lays Massif out as WorldPainter: a new WorldPainter workspace with the map big in the middle, the tools on the left and Terrain, Layers and Brushes on the right, WorldPainter's keyboard shortcuts (⌥M for Raise Mountain too), and a tour of eight steps, "Where are my WorldPainter tools?", that lights up where your .world files, height brushes, terrains, layers, water, selections and export are, then what Massif adds. The workspace is the last tab of the World side for everyone, the tour is in the Help menu, and each tool's card says what WorldPainter calls it. docs/coming-from-worldpainter.md and the help map every WorldPainter feature to its place in Massif.
+
 ## New in 0.6.0
 
 **Massif in French and German.** The whole interface (menus, panels, tools and their cards, tooltips, dialogs, the home screen, Settings and the macOS menu bar) is now also in French and in German, in the words Minecraft and WorldPainter players use. Massif follows the system's language by default; **Settings ▸ Appearance ▸ Language** picks another, and the change applies at once, without a restart. A text not yet translated shows in English rather than in pieces, and the help and the online guide stay in English for now. Names that belong to your map (layers, levels, workspaces you renamed) stay as you wrote them.
