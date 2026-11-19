@@ -166,3 +166,69 @@ fn flow_mask(@builtin(global_invocation_id) id: vec3<u32>) {
     let n2 = f32(u.n) * f32(u.n);
     wo[k] = pow(clamp(log(1.0 + a) / log(1.0 + n2), 0.0, 1.0), u.gamma);
 }
+
+// The least, as `acc_init` starts the sums: each sample's value (`rain`
+// holding whole numbers in its bits) and its receiver.
+@compute @workgroup_size(16, 16)
+fn min_init(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= u.n || id.y >= u.n {
+        return;
+    }
+    let k = id.y * u.n + id.x;
+    atomicStore(&d0[k], bitcast<u32>(rain[k]));
+    j0[k] = rcv[k];
+}
+
+// The least of what reaches each sample within the next jump.
+@compute @workgroup_size(16, 16)
+fn min_add(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= u.n || id.y >= u.n {
+        return;
+    }
+    let k = id.y * u.n + id.x;
+    let j = j0[k];
+    if j != NONE {
+        atomicMin(&d1[j], atomicLoad(&d0[k]));
+    }
+}
+
+fn dist2(x: u32, z: u32, s: u32) -> u32 {
+    if s == NONE {
+        return 0xffffffffu;
+    }
+    let dx = i32(s % u.n) - i32(x);
+    let dz = i32(s / u.n) - i32(z);
+    return u32(dx * dx + dz * dz);
+}
+
+// One jump of the nearest-seed search (`u.m` the jump), `j0` into `j1`, as
+// `flow::nearest`.
+@compute @workgroup_size(16, 16)
+fn jfa_step(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= u.n || id.y >= u.n {
+        return;
+    }
+    let k = id.y * u.n + id.x;
+    var best = j0[k];
+    var bd = dist2(id.x, id.y, best);
+    let s = i32(u.m);
+    for (var dz = -1; dz <= 1; dz++) {
+        for (var dx = -1; dx <= 1; dx++) {
+            let cx = i32(id.x) + dx * s;
+            let cz = i32(id.y) + dz * s;
+            if cx < 0 || cz < 0 || cx >= i32(u.n) || cz >= i32(u.n) {
+                continue;
+            }
+            let c = j0[u32(cz) * u.n + u32(cx)];
+            if c == NONE {
+                continue;
+            }
+            let d = dist2(id.x, id.y, c);
+            if d < bd || (d == bd && c < best) {
+                best = c;
+                bd = d;
+            }
+        }
+    }
+    j1[k] = best;
+}

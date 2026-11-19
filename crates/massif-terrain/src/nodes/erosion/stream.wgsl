@@ -18,6 +18,7 @@ struct U {
     has_lift: u32,
     scale: f32,
     sed_share: f32,
+    supply: f32,
 }
 
 @group(0) @binding(0) var<uniform> u: U;
@@ -89,6 +90,13 @@ fn step(@builtin(global_invocation_id) id: vec3<u32>) {
             v = (hk + c * hr) / (1.0 + c);
         }
     }
+    var lm = 1.0;
+    if u.has_lift != 0u {
+        lm = clamp(lift[k], 0.0, 1.0);
+    }
+    if u.supply > 0.0 && r != NONE {
+        v -= u.supply * u.dt * lm * smoothstep(0.15, 0.6, slope);
+    }
     let e = hk - v;
     let total = qin + e * u.sed_share;
     var f = 0.0;
@@ -111,10 +119,6 @@ fn step(@builtin(global_invocation_id) id: vec3<u32>) {
     let x = i32(id.x);
     let z = i32(id.y);
     v += u.diff * (at(x - 1, z) + at(x + 1, z) + at(x, z - 1) + at(x, z + 1) - 4.0 * hk);
-    var lm = 1.0;
-    if u.has_lift != 0u {
-        lm = clamp(lift[k], 0.0, 1.0);
-    }
     v += u.uplift * u.dt * lm;
     hn[k] = v;
 }

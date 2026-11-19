@@ -28,6 +28,21 @@ pub(super) fn rand01(x: u32, z: u32, seed: u32) -> f32 {
     (crate::noise::hash2(x, z, seed) >> 8) as f32 * (1.0 / 16_777_216.0)
 }
 
+/// Smooth noise from about −1 to 1 at `(x, z)`, in its own cells (one
+/// wave a cell or so), the same as `wnoise` of the prelude.
+#[inline]
+pub(super) fn wnoise(x: f32, z: f32, seed: u32) -> f32 {
+    let (fx, fz) = (x.floor(), z.floor());
+    crate::noise::gradient(fx as i32 as u32, fz as i32 as u32, x - fx, z - fz, seed)
+}
+
+/// `t` from 0 to 1, eased (smoothstep's curve).
+#[inline]
+pub(super) fn ease(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
 /// Samples a side of the grid one level coarser.
 #[inline]
 pub(super) fn coarser(n: usize) -> usize {

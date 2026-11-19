@@ -7,6 +7,13 @@ struct U {
     strength: f32,
     drop_axis: f32,
     drop_diag: f32,
+    has_hard: u32,
+    strata_t: f32,
+    strata_hard: f32,
+    strata_share: f32,
+    strata_warp: f32,
+    strata_seed: u32,
+    sp: f32,
 }
 
 @group(0) @binding(0) var<uniform> u: U;
@@ -14,6 +21,7 @@ struct U {
 @group(0) @binding(2) var<storage, read_write> shed: array<f32>;
 @group(0) @binding(3) var<storage, read_write> total: array<f32>;
 @group(0) @binding(4) var<storage, read_write> next: array<f32>;
+@group(0) @binding(5) var<storage, read> hard: array<f32>;
 
 var<private> NB: array<vec3<i32>, 8> = array<vec3<i32>, 8>(
     vec3<i32>(-1, -1, 1), vec3<i32>(0, -1, 0), vec3<i32>(1, -1, 1), vec3<i32>(-1, 0, 0),
@@ -22,6 +30,19 @@ var<private> NB: array<vec3<i32>, 8> = array<vec3<i32>, 8>(
 
 fn inside(x: i32, z: i32) -> bool {
     return x >= 0 && z >= 0 && x < i32(u.n) && z < i32(u.n);
+}
+
+// How hard the rock is at height `h` at sample `(x, z)`, as
+// `Strata::at` on the CPU.
+fn strata_at(h: f32, x: u32, z: u32) -> f32 {
+    if u.strata_t <= 0.0 {
+        return 0.0;
+    }
+    let w = u.strata_warp * wnoise(f32(x) * u.sp / 256.0, f32(z) * u.sp / 256.0, u.strata_seed);
+    let t = h / u.strata_t + w;
+    let phase = t - floor(t);
+    let e = min(0.5 * u.strata_share, 0.08);
+    return u.strata_hard * min(ease(phase / e), ease((u.strata_share - phase) / e));
 }
 
 fn drop_of(d: i32) -> f32 {
@@ -53,7 +74,12 @@ fn excess(@builtin(global_invocation_id) id: vec3<u32>) {
             most = max(most, e);
         }
     }
-    shed[k] = u.strength * 0.5 * most;
+    var hk = 0.0;
+    if u.has_hard != 0u {
+        hk = clamp(hard[k], 0.0, 1.0);
+    }
+    hk = max(hk, strata_at(c, id.x, id.y));
+    shed[k] = u.strength * (1.0 - hk) * 0.5 * most;
     total[k] = sum;
 }
 

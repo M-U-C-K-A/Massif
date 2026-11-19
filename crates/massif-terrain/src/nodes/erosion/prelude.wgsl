@@ -23,3 +23,15 @@ fn nb_of(x: u32, z: u32, n: u32, d: u32) -> u32 {
     }
     return u32(p.y) * n + u32(p.x);
 }
+
+// Smooth noise from about -1 to 1, as `common::wnoise`.
+fn wnoise(x: f32, z: f32, seed: u32) -> f32 {
+    let fx = floor(x);
+    let fz = floor(z);
+    return gradient(bitcast<u32>(i32(fx)), bitcast<u32>(i32(fz)), x - fx, z - fz, seed);
+}
+
+fn ease(t0: f32) -> f32 {
+    let t = clamp(t0, 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
