@@ -642,6 +642,8 @@ fn feeder(g: &mut Graph, kind: PortKind) -> String {
             let (places, streets, lots) = (feeder(g, PortKind::Points), feeder(g, PortKind::Splines), feeder(g, PortKind::Footprints));
             ("houses", Node::new("village.buildings").input("height", "relief").input("squares", &places).input("roads", &streets).input("plots", &lots))
         }
+        PortKind::Density => ("ground", fed("volume.from_height")),
+        PortKind::Layer => ("caves", Node::new("caves.layer")),
         _ => return "relief".into(),
     };
     g.nodes.entry(name.into()).or_insert(node);
@@ -696,6 +698,9 @@ pub fn example(spec: &'static NodeSpec) -> Graph {
             PortKind::Terrain => Some("terrain".to_owned()),
             PortKind::Biome => Some("biome".to_owned()),
             PortKind::Instances => Some("structures".to_owned()),
+            PortKind::Density => Some("volume.carve".to_owned()),
+            PortKind::Layer if spec.id == "caves.biome" => Some("cave_biomes".to_owned()),
+            PortKind::Layer => Some("caves".to_owned()),
             _ => None,
         },
     };

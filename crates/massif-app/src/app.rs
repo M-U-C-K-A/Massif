@@ -13262,6 +13262,78 @@ mod tests {
         }
     }
 
+    /// Caves made by a terrain graph (the Cave System, a tunnel and a hall
+    /// carved along a line) are seen as painted ones are: in the 2D cut and
+    /// through the ground in 3D.
+    #[test]
+    fn graph_caves_seen_underground() {
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let graph = massif_terrain::model::Graph::from_json(
+            r#"{ "nodes": {
+            "relief": { "type": "input.map" },
+            "system": { "type": "massif:cave-system", "inputs": { "height": "relief" } },
+            "tunnel": { "type": "volume.tube", "params": { "path": [{ "x": 0.1, "z": 0.55 }, { "x": 0.5, "z": 0.5 }, { "x": 0.9, "z": 0.6 }], "y": 0, "radius": 6, "variation": 0.3 } },
+            "hall": { "type": "volume.sphere", "params": { "x": 0.5, "z": 0.5, "y": 0, "radius": 30, "squash": 0.5 } },
+            "join": { "type": "volume.combine", "inputs": { "a": "tunnel", "b": "hall" }, "params": { "smooth": 6 } },
+            "rough": { "type": "volume.shape", "inputs": { "volume": "join" } },
+            "out": { "type": "output.map", "inputs": { "caves": "system.caves", "cave_biomes": "system.biomes", "volume.carve": "rough" } } } }"#,
+        )
+        .unwrap();
+        let done = {
+            let app = h.state_mut();
+            let space = massif_terrain::world::space_of(&app.doc.world, 0, &graph);
+            let env = std::sync::Arc::new(massif_terrain::world::MapEnv::new(&app.doc.world, 0, 1, "."));
+            let (c, _) = massif_terrain::compile::compile_in(&graph, space, 512, env);
+            let engine = massif_terrain::engine::Engine::new(Default::default());
+            let reg = app.doc.world.registry.clone();
+            let dim = app.doc.dim;
+            app.doc.history.begin("Terrain graph", dim);
+            let done = massif_terrain::underground::apply(&engine, &c, &reg, &mut app.doc.history.edit(&mut app.doc.world, dim), &massif_terrain::engine::never).unwrap();
+            app.doc.commit();
+            app.doc.caves_changed = true;
+            done
+        };
+        assert!(done.cave_layers == 1 && done.chunks > 10 && done.biome_cells > 0, "{done:?}");
+        // The cut through y 0 crosses the hall at the map's middle.
+        let dim = h.state().doc.dimension();
+        let grid = crate::map_render::SurfaceGrid::build_at(dim, massif_core::TilePos::containing(0, 0), Some(0)).expect("a tile");
+        let open = grid.0.iter().filter(|s| s.flags & crate::map_render::FLAG_CUT_CAVE != 0).count();
+        assert!(open > 1000, "{open} columns open at y 0 under the hall");
+        let Some(dir) = dir else { return };
+        let ppp = std::env::var("MASSIF_SNAPSHOT_PPP").unwrap_or_else(|_| "1".into());
+        let id = h.state().active_map.or_else(|| h.state().maps.keys().next().copied()).expect("a map view");
+        for (name, zoom, y) in [("graph-caves-cut", 0.9f32, 0), ("graph-caves-cut-close", 3.0, 0), ("graph-caves-cut-deep", 0.9, -40)] {
+            {
+                let view = h.state_mut().maps.get_mut(&id).unwrap();
+                view.cut = Some(y);
+                view.center = [0.0, 0.0];
+                view.zoom = zoom;
+            }
+            let mut frames = 0;
+            while frames < 8 || h.state().map_cache.busy() {
+                h.step();
+                frames += 1;
+                assert!(frames < 3000, "the map never finished");
+            }
+            h.run_steps(4);
+            h.render().unwrap().save(dir.join(format!("{name}-{ppp}x.png"))).unwrap();
+        }
+        h.state_mut().maps.get_mut(&id).unwrap().cut = None;
+        let k = h.state().layout.workspaces.iter().position(|w| w.root.shows(EditorKind::View3d) && !w.root.shows(EditorKind::Map)).unwrap_or(3);
+        h.state_mut().layout.active = k;
+        h.state_mut().view3d.xray = true;
+        let mut frames = 0;
+        while frames < 5 || h.state().view3d.pending() > 0 {
+            h.step();
+            frames += 1;
+            assert!(frames < 4000, "the 3D view never finished");
+        }
+        h.run_steps(10);
+        h.render().unwrap().save(dir.join(format!("graph-caves-xray-{ppp}x.png"))).unwrap();
+    }
+
     /// Edit ▸ Relief of a Real Place and File ▸ New World from a Real
     /// Place, from tiles put in memory (no network): the dialog shows the
     /// place and the ground it makes (renders with MASSIF_SNAPSHOT_DIR);

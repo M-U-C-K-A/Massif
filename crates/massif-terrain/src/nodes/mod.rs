@@ -4,6 +4,7 @@
 //! shared line per family.
 
 mod adjust;
+pub(crate) mod caves;
 mod climate;
 mod color;
 mod combine;
@@ -30,7 +31,7 @@ pub const WGSL_COMMON: &str = include_str!("wgsl/common.wgsl");
 pub fn all() -> &'static [&'static NodeSpec] {
     static ALL: OnceLock<Vec<&'static NodeSpec>> = OnceLock::new();
     ALL.get_or_init(|| {
-        [inputs::NODES, primitives::NODES, shapes::NODES, adjust::NODES, erosion::NODES, climate::NODES, masks::NODES, color::NODES, combine::NODES, geometry::NODES, structures::NODES, volume::NODES, legacy::NODES, output::NODES, convert::NODES].concat()
+        [inputs::NODES, primitives::NODES, shapes::NODES, adjust::NODES, erosion::NODES, climate::NODES, masks::NODES, color::NODES, combine::NODES, geometry::NODES, structures::NODES, volume::NODES, caves::NODES, legacy::NODES, output::NODES, convert::NODES].concat()
     })
 }
 

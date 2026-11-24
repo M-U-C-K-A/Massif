@@ -10,7 +10,7 @@ use crate::model::Component;
 use std::sync::OnceLock;
 
 /// Each composite shipped: its type, version and JSON.
-const SHIPPED: &[(&str, u16, &str)] = &[("massif:mountain", 1, include_str!("../components/mountain.json")), ("massif:village-generator", 1, include_str!("../components/village-generator.json"))];
+const SHIPPED: &[(&str, u16, &str)] = &[("massif:mountain", 1, include_str!("../components/mountain.json")), ("massif:village-generator", 1, include_str!("../components/village-generator.json")), ("massif:cave-system", 1, include_str!("../components/cave-system.json"))];
 
 /// Every composite shipped, parsed once: type, version, definition.
 pub fn all() -> &'static [(&'static str, u16, Component)] {
@@ -60,7 +60,20 @@ mod tests {
             let mut g = Graph::default();
             let id = g.add(Node::new(&if *version == 1 { kind.to_string() } else { format!("{kind}@{version}") }));
             let out = g.add(Node::new("output.map"));
-            g.link(&format!("{id}.{}", c.outputs[0].name), &out, "height");
+            // Its inputs that must be fed, by a relief; its first output to
+            // the Map Output's input of its type.
+            let relief = g.add(Node::new("noise.fbm"));
+            for i in c.inputs.iter().filter(|i| !i.optional) {
+                g.link(&relief, &id, &i.name);
+            }
+            let first = &c.outputs[0];
+            let from = c.nodes.get(first.from.split('.').next().unwrap_or("")).and_then(|n| crate::registry::spec(&n.kind)).and_then(|s| s.outputs.iter().find(|o| Some(o.name) == first.from.split('.').nth(1)));
+            let into = match from.map(|o| o.kind) {
+                Some(crate::registry::PortKind::Layer) => "caves",
+                Some(crate::registry::PortKind::Mask) => "mask.out",
+                _ => "height",
+            };
+            g.link(&format!("{id}.{}", first.name), &out, into);
             let (_, d) = compile(&g, Space::new(1024), 256);
             assert!(d.iter().all(|d| d.severity != Severity::Error), "{kind}: {d:#?}");
         }

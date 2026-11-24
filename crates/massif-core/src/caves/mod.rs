@@ -112,6 +112,11 @@ pub struct CaveDef {
     /// Its place among the cave layers in the Layers panel.
     #[serde(default, skip_serializing_if = "crate::registry::is_zero")]
     pub order: u32,
+    /// The terrain graph node that made it (its id), when a graph's Cave
+    /// Layer did: a re-Apply updates it, and never touches layers painted
+    /// by hand.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph: Option<String>,
 }
 
 impl CaveDef {
@@ -143,6 +148,7 @@ impl CaveDef {
             removed: false,
             locked: false,
             order: 0,
+            graph: None,
         }
     }
 

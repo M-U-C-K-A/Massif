@@ -1,0 +1,54 @@
+{
+  "label": "Cave System",
+  "category": "Underground",
+  "summary": "The game's caves under a relief — chambers, tunnels, noodles, ravines, aquifers and a lava floor — with lush caves under wet ground, deep dark under the mountains and dripstone caves between.",
+  "inputs": [
+    { "name": "height", "label": "Height", "type": "height", "help": "The relief over the caves: its wet hollows take lush caves, its mountains deep dark under them." },
+    { "name": "area", "label": "Area", "type": "mask", "optional": true, "help": "Where the caves go; everywhere when left empty." }
+  ],
+  "outputs": [
+    { "name": "caves", "label": "Caves", "from": "caves.layer" },
+    { "name": "biomes", "label": "Cave biomes", "from": "biomes.layer" }
+  ],
+  "exposed": [
+    { "name": "seed", "label": "Seed", "help": "Another seed gives other caves of the same kind.", "targets": ["caves.seed"] },
+    { "name": "chambers", "label": "Chambers", "help": "How much of the rock the large chambers take.", "targets": ["caves.cheese_density"], "category": "Caves" },
+    { "name": "tunnels", "label": "Tunnels", "help": "How many long winding tunnels.", "targets": ["caves.spaghetti_density"], "category": "Caves" },
+    { "name": "noodles", "label": "Noodles", "help": "How many thin tunnels.", "targets": ["caves.noodles_density"], "category": "Caves" },
+    { "name": "ravines", "label": "Ravines", "help": "How many ravines.", "targets": ["caves.ravines_density"], "category": "Caves" },
+    { "name": "size", "label": "Size", "help": "How large the chambers and tunnels are (1: as the game carves them).", "targets": ["caves.cheese_size", "caves.spaghetti_size", "caves.noodles_size", "caves.ravines_size"], "category": "Caves" },
+    { "name": "low", "label": "Lowest", "help": "The lowest height the caves reach, in blocks.", "targets": ["caves.low"], "unit": "blocks", "category": "Depth" },
+    { "name": "high", "label": "Highest", "help": "The highest height tunnels reach; the roof keeps them under the ground.", "targets": ["caves.high"], "unit": "blocks", "category": "Depth" },
+    { "name": "entrances", "label": "Surface entrances", "help": "The share of the land where caves open to the sky.", "targets": ["caves.openings"], "category": "Depth" },
+    { "name": "aquifers", "label": "Aquifers", "help": "Water and lava lakes at their own levels, sealed by walls of rock.", "targets": ["caves.aquifers"], "category": "Water and lava" },
+    { "name": "flooded", "label": "Flooded share", "help": "The share of the rock's zones holding water or lava.", "targets": ["caves.aquifer_density"], "category": "Water and lava" },
+    { "name": "lava", "label": "Lava share", "help": "The share of the deep flooded zones holding lava.", "targets": ["caves.lava"], "category": "Water and lava" },
+    { "name": "lava_floor", "label": "Lava floor height", "help": "Caves under this height are full of lava.", "targets": ["caves.lava_floor_y"], "unit": "blocks", "category": "Water and lava" },
+    { "name": "lush", "label": "Lush caves", "help": "How much of the wet ground has lush caves under it.", "targets": ["lush.amount"], "category": "Biomes" },
+    { "name": "dripstone", "label": "Dripstone caves", "help": "How much of the rock between holds dripstone caves.", "targets": ["dripstone.amount"], "category": "Biomes" },
+    { "name": "deep_dark", "label": "Deep dark", "help": "How much of the ground under the mountains has the deep dark far below.", "targets": ["deep_dark.amount"], "category": "Biomes" },
+    { "name": "mountains", "label": "Mountains from", "help": "The height above which the ground counts as mountains, in blocks.", "targets": ["highland.from"], "unit": "blocks", "category": "Biomes", "advanced": true }
+  ],
+  "nodes": {
+    "caves": { "type": "caves.layer", "inputs": { "mask": "in.area" } },
+    "wet": { "type": "mask.wetness", "inputs": { "height": "in.height" }, "params": { "scale": 64, "sensitivity": 0.6 } },
+    "highland": { "type": "mask.height", "inputs": { "height": "in.height" }, "params": { "from": 140, "to": 4096, "softness": 60 } },
+    "lowland": { "type": "mask.invert", "inputs": { "mask": "highland.mask" } },
+    "lush": { "type": "caves.biome", "inputs": { "mask": "wet.mask" }, "params": { "biome": "lush", "low": -8, "high": 56, "amount": 0.8 } },
+    "dripstone": { "type": "caves.biome", "inputs": { "mask": "lowland.mask" }, "params": { "biome": "dripstone", "low": -40, "high": 40, "amount": 0.35 } },
+    "deep_dark": { "type": "caves.biome", "inputs": { "mask": "highland.mask" }, "params": { "biome": "deep_dark", "low": -64, "high": -20, "amount": 0.9 } },
+    "upper": { "type": "caves.merge", "inputs": { "a": "dripstone.layer", "b": "lush.layer" } },
+    "biomes": { "type": "caves.merge", "inputs": { "a": "upper.layer", "b": "deep_dark.layer" }, "params": { "mode": "both" } }
+  },
+  "ui": {
+    "caves": { "pos": [0, 0] },
+    "wet": { "pos": [0, 220] },
+    "highland": { "pos": [0, 420] },
+    "lowland": { "pos": [220, 520] },
+    "lush": { "pos": [260, 220] },
+    "dripstone": { "pos": [440, 520] },
+    "deep_dark": { "pos": [260, 400] },
+    "upper": { "pos": [660, 300] },
+    "biomes": { "pos": [880, 360] }
+  }
+}

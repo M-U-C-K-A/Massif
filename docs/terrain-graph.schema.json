@@ -1211,6 +1211,567 @@
       "title": "Warp",
       "type": "object"
     },
+    "caves.biome": {
+      "additionalProperties": false,
+      "description": "A cave biome — lush, dripstone or deep dark — between two heights, where a mask says. Paints a cave biome in the rock between Lowest and Highest where the mask says, as the Cave biome tool paints it: the caves there take its decoration on export (moss and vines, dripstone, sculk). Connect it to the Map Output's Cave biomes; several go through Merge cave layers. Apply adds the biome where the graph gives it and leaves the rest of the map's cave biomes as they are.",
+      "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "@amount": {
+              "$ref": "#/$defs/source",
+              "description": "A field driving “Amount”: each place takes the value it has there."
+            },
+            "mask": {
+              "$ref": "#/$defs/source",
+              "description": "Where the biome goes, from 0 to 1. (mask) Left empty: 1 everywhere.",
+              "title": "Mask"
+            }
+          },
+          "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "default": 1.0,
+              "description": "How much of the masked area takes it. A field connected to the input `@amount` drives it place by place.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Amount",
+              "type": "number",
+              "x-drivable": true,
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "biome": {
+              "default": "lush",
+              "description": "The cave biome.",
+              "enum": [
+                "lush",
+                "dripstone",
+                "deep_dark"
+              ],
+              "title": "Biome",
+              "x-options": [
+                {
+                  "help": "Moss, azaleas, cave vines with glow berries, dripleaves over clay pools, spore blossoms.",
+                  "label": "Lush caves",
+                  "value": "lush"
+                },
+                {
+                  "help": "Dripstone blocks, stalactites and stalagmites.",
+                  "label": "Dripstone caves",
+                  "value": "dripstone"
+                },
+                {
+                  "help": "Sculk, sensors, shriekers and catalysts (Minecraft 1.19 and later).",
+                  "label": "Deep dark",
+                  "value": "deep_dark"
+                }
+              ],
+              "x-section": "main"
+            },
+            "high": {
+              "default": 40.0,
+              "description": "The highest height it fills, in blocks. Usually -64 to 320.",
+              "maximum": 4096.0,
+              "minimum": -2048.0,
+              "title": "Highest",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -64.0,
+                320.0
+              ],
+              "x-unit": "blocks"
+            },
+            "low": {
+              "default": -64.0,
+              "description": "The lowest height it fills, in blocks. Usually -64 to 320.",
+              "maximum": 4096.0,
+              "minimum": -2048.0,
+              "title": "Lowest",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -64.0,
+                320.0
+              ],
+              "x-unit": "blocks"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "caves.biome"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Cave biome",
+      "type": "object"
+    },
+    "caves.layer": {
+      "additionalProperties": false,
+      "description": "Caves as the game carves them since 1.18 — chambers, tunnels, noodles, ravines, water and lava — where a mask says. One of the map's cave layers, made by the graph: its settings are the Caves tool's, and the mask says where its caves go (they thin out where it falls). Connect it to the Map Output's Caves; Apply adds or updates the layer, marked as the graph's, and the map carves it as it carves painted caves: sealed aquifers, lava under the lava floor, cave biomes and decoration on export. Several layers go through Merge cave layers.",
+      "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "@amount": {
+              "$ref": "#/$defs/source",
+              "description": "A field driving “Amount”: each place takes the value it has there."
+            },
+            "mask": {
+              "$ref": "#/$defs/source",
+              "description": "Where the caves go, from 0 to 1. (mask) Left empty: 1 everywhere.",
+              "title": "Mask"
+            }
+          },
+          "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "default": 1.0,
+              "description": "How much of the masked area takes the layer: lower, its caves are fewer and patchier. A field connected to the input `@amount` drives it place by place.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Amount",
+              "type": "number",
+              "x-drivable": true,
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "aquifer_density": {
+              "default": 0.35,
+              "description": "The share of the rock's zones holding water or lava.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Flooded share",
+              "type": "number",
+              "x-section": "detail",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "aquifer_size": {
+              "default": 1.0,
+              "description": "How large a zone of one level is (1: 48 blocks across, 24 high).",
+              "maximum": 2.0,
+              "minimum": 0.5,
+              "title": "Zone size",
+              "type": "number",
+              "x-section": "detail",
+              "x-soft": [
+                0.5,
+                2.0
+              ],
+              "x-unit": "ratio"
+            },
+            "aquifers": {
+              "default": true,
+              "description": "Water and lava lakes at their own levels, sealed from each other by walls of rock as the game seals them.",
+              "title": "Aquifers",
+              "type": "boolean",
+              "x-section": "detail"
+            },
+            "chambers_high": {
+              "default": 54.0,
+              "description": "The highest height chambers and ravines reach: under the sea level, as in the game. In blocks. Usually -64 to 320.",
+              "maximum": 4096.0,
+              "minimum": -2048.0,
+              "title": "Chambers top",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -64.0,
+                320.0
+              ],
+              "x-unit": "blocks"
+            },
+            "cheese": {
+              "default": true,
+              "description": "Large chambers with pillars of rock standing in them (the game's cheese caves).",
+              "title": "Chambers",
+              "type": "boolean",
+              "x-section": "main"
+            },
+            "cheese_density": {
+              "default": 0.5,
+              "description": "How much of the rock the chambers take.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Chambers density",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "cheese_size": {
+              "default": 1.0,
+              "description": "How large the chambers are (1: as the game carves them).",
+              "maximum": 2.0,
+              "minimum": 0.5,
+              "title": "Chambers size",
+              "type": "number",
+              "x-section": "shape",
+              "x-soft": [
+                0.5,
+                2.0
+              ],
+              "x-unit": "ratio"
+            },
+            "high": {
+              "default": 319.0,
+              "description": "The highest height tunnels and noodles reach; the roof keeps them under the ground. In blocks. Usually -64 to 320.",
+              "maximum": 4096.0,
+              "minimum": -2048.0,
+              "title": "Highest",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -64.0,
+                320.0
+              ],
+              "x-unit": "blocks"
+            },
+            "lava": {
+              "default": 0.35,
+              "description": "The share of the flooded zones under Lava under holding lava rather than water.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Lava share",
+              "type": "number",
+              "x-section": "detail",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "lava_floor": {
+              "default": true,
+              "description": "Caves under Lava floor height are full of lava, whatever their zone (the game's lava under y −54).",
+              "title": "Lava floor",
+              "type": "boolean",
+              "x-section": "detail"
+            },
+            "lava_floor_y": {
+              "default": -54.0,
+              "description": "The top of the lava floor. In blocks. Usually -64 to 320.",
+              "maximum": 4096.0,
+              "minimum": -2048.0,
+              "title": "Lava floor height",
+              "type": "number",
+              "x-section": "detail",
+              "x-soft": [
+                -64.0,
+                320.0
+              ],
+              "x-unit": "blocks"
+            },
+            "lava_under": {
+              "default": 0.0,
+              "description": "Lakes of lava only below this height. In blocks. Usually -64 to 320.",
+              "maximum": 4096.0,
+              "minimum": -2048.0,
+              "title": "Lava under",
+              "type": "number",
+              "x-section": "detail",
+              "x-soft": [
+                -64.0,
+                320.0
+              ],
+              "x-unit": "blocks"
+            },
+            "low": {
+              "default": -56.0,
+              "description": "The lowest height the caves reach, in blocks. Usually -64 to 320.",
+              "maximum": 4096.0,
+              "minimum": -2048.0,
+              "title": "Lowest",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -64.0,
+                320.0
+              ],
+              "x-unit": "blocks"
+            },
+            "noodles": {
+              "default": true,
+              "description": "Thin tunnels, many of them.",
+              "title": "Noodles",
+              "type": "boolean",
+              "x-section": "main"
+            },
+            "noodles_density": {
+              "default": 0.5,
+              "description": "How many noodles.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Noodles density",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "noodles_size": {
+              "default": 1.0,
+              "description": "How wide the noodles are.",
+              "maximum": 2.0,
+              "minimum": 0.5,
+              "title": "Noodles size",
+              "type": "number",
+              "x-section": "shape",
+              "x-soft": [
+                0.5,
+                2.0
+              ],
+              "x-unit": "ratio"
+            },
+            "openings": {
+              "default": 0.15,
+              "description": "The share of the land where caves may open to the sky.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Surface entrances",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "ravines": {
+              "default": true,
+              "description": "Long, deep, narrow cuts.",
+              "title": "Ravines",
+              "type": "boolean",
+              "x-section": "main"
+            },
+            "ravines_density": {
+              "default": 0.3,
+              "description": "How many ravines.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Ravines density",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "ravines_size": {
+              "default": 1.0,
+              "description": "How long and deep the ravines are.",
+              "maximum": 2.0,
+              "minimum": 0.5,
+              "title": "Ravines size",
+              "type": "number",
+              "x-section": "shape",
+              "x-soft": [
+                0.5,
+                2.0
+              ],
+              "x-unit": "ratio"
+            },
+            "roof": {
+              "default": 6,
+              "description": "Blocks of rock kept over the caves under the ground's surface, save at the entrances.",
+              "maximum": 64,
+              "minimum": 0,
+              "title": "Roof",
+              "type": "integer",
+              "x-section": "main"
+            },
+            "seed": {
+              "description": "Another seed gives another variation of the same settings. Left out, it comes from the node's name.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer",
+              "x-section": "detail"
+            },
+            "spaghetti": {
+              "default": true,
+              "description": "Long winding tunnels (the game's spaghetti caves).",
+              "title": "Tunnels",
+              "type": "boolean",
+              "x-section": "main"
+            },
+            "spaghetti_density": {
+              "default": 0.5,
+              "description": "How many tunnels.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Tunnels density",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "spaghetti_size": {
+              "default": 1.0,
+              "description": "How wide and long the tunnels are.",
+              "maximum": 2.0,
+              "minimum": 0.5,
+              "title": "Tunnels size",
+              "type": "number",
+              "x-section": "shape",
+              "x-soft": [
+                0.5,
+                2.0
+              ],
+              "x-unit": "ratio"
+            },
+            "water_high": {
+              "default": 56.0,
+              "description": "The highest level an aquifer fills to. In blocks. Usually -64 to 320.",
+              "maximum": 4096.0,
+              "minimum": -2048.0,
+              "title": "Highest water",
+              "type": "number",
+              "x-section": "detail",
+              "x-soft": [
+                -64.0,
+                320.0
+              ],
+              "x-unit": "blocks"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "caves.layer"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Cave layer",
+      "type": "object"
+    },
+    "caves.merge": {
+      "additionalProperties": false,
+      "description": "Two cave layers (or cave biomes) as one: each place takes the stronger, or, for cave biomes, both at their own heights. For a map with several kinds of caves (shallow tunnels everywhere, deep chambers under the mountains) or several cave biomes: chain as many as needed into the Map Output's Caves or Cave biomes. A column holds one cave layer; with Both, cave biomes at different heights stack in a column.",
+      "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "a": {
+              "$ref": "#/$defs/source",
+              "description": "A cave layer or cave biome. (layer)",
+              "title": "A"
+            },
+            "b": {
+              "$ref": "#/$defs/source",
+              "description": "Another, of the same kind. (layer)",
+              "title": "B"
+            }
+          },
+          "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "default": "stronger",
+              "description": "How two layers given at the same place merge.",
+              "enum": [
+                "stronger",
+                "both"
+              ],
+              "title": "Mode",
+              "x-options": [
+                {
+                  "help": "Each place takes the stronger of the two, B where they are equal: for cave layers, and for cave biomes at the same heights.",
+                  "label": "Stronger",
+                  "value": "stronger"
+                },
+                {
+                  "help": "Cave biomes only: where both are given, both are painted, each between its own heights (deep dark low down, lush caves above it).",
+                  "label": "Both",
+                  "value": "both"
+                }
+              ],
+              "x-section": "main"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "caves.merge"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Merge cave layers",
+      "type": "object"
+    },
     "climate.biomes": {
       "additionalProperties": false,
       "description": "The game's biomes from the climate: oceans by their warmth, beaches, rivers, peaks and meadows by height, and on land a table of temperature against humidity. Connect Temperature and Humidity (and Height, Water for oceans, beaches, rivers and peaks). Above Peaks blocks over the sea lie frozen, jagged or stony peaks, meadows and groves just under them; within Beach blocks of the sea level, beaches. On land: snowy plains and taiga in the cold, plains and forests in the mild, savanna and swamp in the warm, desert, badlands and jungle in the hot. The Biome output goes to the Map Output; the Colour output shows them as maps do.",
@@ -10183,6 +10744,171 @@
           "if": {
             "properties": {
               "type": {
+                "const": "volume.sphere"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/volume.sphere"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "volume.box"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/volume.box"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "volume.tube"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/volume.tube"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "volume.noise"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/volume.noise"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "volume.caves"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/volume.caves"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "volume.combine"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/volume.combine"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "volume.shape"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/volume.shape"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "volume.limit"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/volume.limit"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "caves.layer"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/caves.layer"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "caves.biome"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/caves.biome"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "caves.merge"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/caves.merge"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
                 "const": "legacy.floating_islands"
               }
             },
@@ -10448,6 +11174,17 @@
                 "village.props",
                 "village.ground",
                 "volume.from_height",
+                "volume.sphere",
+                "volume.box",
+                "volume.tube",
+                "volume.noise",
+                "volume.caves",
+                "volume.combine",
+                "volume.shape",
+                "volume.limit",
+                "caves.layer",
+                "caves.biome",
+                "caves.merge",
                 "legacy.floating_islands",
                 "legacy.overhang",
                 "legacy.rocks",
@@ -10969,9 +11706,14 @@
               "description": "The game's biome of each column. (biome) Left empty: from Temperature and Humidity when given, else the map's biomes.",
               "title": "Biome"
             },
+            "cave_biomes": {
+              "$ref": "#/$defs/source",
+              "description": "Cave biomes (lush, dripstone, deep dark) between their heights, from Cave Biome nodes: its first plane is the key of a Cave Biome node's settings (or of two merged with Both), its second how much of the area takes them. (layer) Left empty: the map's.",
+              "title": "Cave biomes"
+            },
             "caves": {
               "$ref": "#/$defs/source",
-              "description": "The cave layer of each column, by its number among the world's cave layers, and how much of the area it takes. (layer) Left empty: the map's.",
+              "description": "The caves of each column, from Cave Layer nodes: its first plane is the key of a Cave Layer node's settings (not a number among the map's layers), its second how much of the area the layer takes. Apply makes each node's layer one of the map's, marked as the graph's. (layer) Left empty: the map's.",
               "title": "Caves"
             },
             "cover": {
@@ -11103,6 +11845,16 @@
               "$ref": "#/$defs/source",
               "description": "The understory layer of each column (bushes, ferns…), and how dense. (layer) Left empty: the map's.",
               "title": "Understory"
+            },
+            "volume.add": {
+              "$ref": "#/$defs/source",
+              "description": "A volume of rock added: where its value (about the distance to its surface, in blocks) is negative, rock of the column's terrain (arches, overhangs, floating rock), written into the map's sculpted blocks. (density) Left empty: none.",
+              "title": "Volume add"
+            },
+            "volume.carve": {
+              "$ref": "#/$defs/source",
+              "description": "A volume cut out of the ground: where its value (about the distance to its surface, in blocks) is negative, air, written into the map's sculpted blocks. (density) Left empty: none.",
+              "title": "Volume carve"
             },
             "water": {
               "$ref": "#/$defs/source",
@@ -13481,6 +14233,380 @@
       "title": "Village walls",
       "type": "object"
     },
+    "volume.box": {
+      "additionalProperties": false,
+      "description": "A box with rounded edges: a room, a gallery, a block of rock. A box of Width × Height × Length blocks at a place of the terrain and a height, turned about the vertical and rounded at its edges. Its value is the distance to its surface, negative inside.",
+      "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {},
+          "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "height": {
+              "default": 16.0,
+              "description": "Bottom to top, in blocks. Usually 0 to 256.",
+              "maximum": 4096.0,
+              "minimum": 0.0,
+              "title": "Height",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                256.0
+              ],
+              "x-unit": "blocks"
+            },
+            "length": {
+              "default": 32.0,
+              "description": "North to south, in blocks. Usually 0 to 256.",
+              "maximum": 4096.0,
+              "minimum": 0.0,
+              "title": "Length",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                256.0
+              ],
+              "x-unit": "blocks"
+            },
+            "rounding": {
+              "default": 2.0,
+              "description": "The radius of its rounded edges. In blocks. Usually 0 to 32.",
+              "maximum": 4096.0,
+              "minimum": 0.0,
+              "title": "Rounding",
+              "type": "number",
+              "x-section": "shape",
+              "x-soft": [
+                0.0,
+                32.0
+              ],
+              "x-unit": "blocks"
+            },
+            "turn": {
+              "default": 0.0,
+              "description": "Turned about the vertical. In degrees.",
+              "maximum": 180.0,
+              "minimum": -180.0,
+              "title": "Turn",
+              "type": "number",
+              "x-section": "shape",
+              "x-soft": [
+                -180.0,
+                180.0
+              ],
+              "x-unit": "degrees"
+            },
+            "width": {
+              "default": 32.0,
+              "description": "West to east, in blocks. Usually 0 to 256.",
+              "maximum": 4096.0,
+              "minimum": 0.0,
+              "title": "Width",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                256.0
+              ],
+              "x-unit": "blocks"
+            },
+            "x": {
+              "default": 0.5,
+              "description": "Where its middle is, west to east across the terrain. In fraction of the terrain's side. Usually 0 to 1.",
+              "maximum": 2.0,
+              "minimum": -1.0,
+              "title": "X",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "fraction"
+            },
+            "y": {
+              "default": 20.0,
+              "description": "The height of its middle, in blocks. Usually -64 to 320.",
+              "maximum": 4096.0,
+              "minimum": -2048.0,
+              "title": "Height",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -64.0,
+                320.0
+              ],
+              "x-unit": "blocks"
+            },
+            "z": {
+              "default": 0.5,
+              "description": "Where its middle is, north to south across the terrain. In fraction of the terrain's side. Usually 0 to 1.",
+              "maximum": 2.0,
+              "minimum": -1.0,
+              "title": "Z",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "fraction"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "volume.box"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Box",
+      "type": "object"
+    },
+    "volume.caves": {
+      "additionalProperties": false,
+      "description": "The game's noise caves as a volume — chambers with pillars, winding tunnels, noodles — between two heights, where a mask says. The noise the game carves its caves from since 1.18, as a volume to shape further: cheese chambers with pillars, spaghetti tunnels and noodles, each with its density and size, fading out toward Lowest and Highest and where the mask falls. Unlike a Cave layer, it has no roof, aquifers or decoration: combine it with other volumes (keep it under a relief with Combine ▸ Intersect, carve it along a band of strata with a mask), then carve it through the Map Output's Volume carve.",
+      "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "mask": {
+              "$ref": "#/$defs/source",
+              "description": "Where the caves go, from 0 to 1. (mask) Left empty: 1 everywhere.",
+              "title": "Mask"
+            }
+          },
+          "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "cheese": {
+              "default": 0.5,
+              "description": "How much of the rock the chambers take.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Chambers",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "high": {
+              "default": 48.0,
+              "description": "The highest height they reach. In blocks. Usually -64 to 320.",
+              "maximum": 4096.0,
+              "minimum": -2048.0,
+              "title": "Highest",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -64.0,
+                320.0
+              ],
+              "x-unit": "blocks"
+            },
+            "low": {
+              "default": -56.0,
+              "description": "The lowest height the caves reach. In blocks. Usually -64 to 320.",
+              "maximum": 4096.0,
+              "minimum": -2048.0,
+              "title": "Lowest",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -64.0,
+                320.0
+              ],
+              "x-unit": "blocks"
+            },
+            "noodles": {
+              "default": 0.3,
+              "description": "How many thin tunnels.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Noodles",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "seed": {
+              "description": "Another seed gives another variation of the same settings. Left out, it comes from the node's name.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer",
+              "x-section": "detail"
+            },
+            "size": {
+              "default": 1.0,
+              "description": "How large they are (1: as the game carves them).",
+              "maximum": 2.0,
+              "minimum": 0.5,
+              "title": "Size",
+              "type": "number",
+              "x-section": "shape",
+              "x-soft": [
+                0.5,
+                2.0
+              ],
+              "x-unit": "ratio"
+            },
+            "spaghetti": {
+              "default": 0.5,
+              "description": "How many winding tunnels.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Tunnels",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "volume.caves"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Cave noise",
+      "type": "object"
+    },
+    "volume.combine": {
+      "additionalProperties": false,
+      "description": "Two volumes as one: their union, A without B, or what they share, with a smooth seam if asked. The booleans of solids. Union joins caves into one network; Subtract cuts B out of A (a cave out of the ground, a doorway out of a wall); Intersect keeps the part of A inside B (cave noise kept under a relief). Smoothness rounds where they meet, over that many blocks.",
+      "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "a": {
+              "$ref": "#/$defs/source",
+              "description": "A volume. (density) Left empty: nothing.",
+              "title": "A"
+            },
+            "b": {
+              "$ref": "#/$defs/source",
+              "description": "Another. (density) Left empty: nothing.",
+              "title": "B"
+            }
+          },
+          "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "default": "union",
+              "description": "How they combine.",
+              "enum": [
+                "union",
+                "subtract",
+                "intersect"
+              ],
+              "title": "Operation",
+              "x-options": [
+                {
+                  "help": "Both: what is inside either.",
+                  "label": "Union",
+                  "value": "union"
+                },
+                {
+                  "help": "A without B: B cut out of A.",
+                  "label": "Subtract",
+                  "value": "subtract"
+                },
+                {
+                  "help": "Only what is inside both.",
+                  "label": "Intersect",
+                  "value": "intersect"
+                }
+              ],
+              "x-section": "main"
+            },
+            "smooth": {
+              "default": 0.0,
+              "description": "Over how many blocks the seam is rounded. Usually 0 to 32.",
+              "maximum": 4096.0,
+              "minimum": 0.0,
+              "title": "Smoothness",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                32.0
+              ],
+              "x-unit": "blocks"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "volume.combine"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Combine volumes",
+      "type": "object"
+    },
     "volume.from_height": {
       "additionalProperties": false,
       "description": "The ground of a relief as a volume: matter under its heights, air above. Where volumes start: caves are cut out of it, arches and overhangs added to it, and Volume to relief reads its top back. Its value is the height above the ground in blocks, negative under it.",
@@ -13525,6 +14651,589 @@
         "inputs"
       ],
       "title": "Relief to volume",
+      "type": "object"
+    },
+    "volume.limit": {
+      "additionalProperties": false,
+      "description": "A volume kept between two heights, or under the ground, and where a mask says. Keeps a volume between Lowest and Highest and where the mask is over one half, fading it out over Fade blocks; with Under the ground and a relief, also at least Cover blocks under its surface, so that caves never break through it.",
+      "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "height": {
+              "$ref": "#/$defs/source",
+              "description": "The relief, for Under the ground. (height) Left empty: none.",
+              "title": "Height"
+            },
+            "mask": {
+              "$ref": "#/$defs/source",
+              "description": "Where it is kept. (mask) Left empty: everywhere.",
+              "title": "Mask"
+            },
+            "volume": {
+              "$ref": "#/$defs/source",
+              "description": "The volume. (density)",
+              "title": "Volume"
+            }
+          },
+          "required": [
+            "volume"
+          ],
+          "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "cover": {
+              "default": 4.0,
+              "description": "Blocks of ground kept over it, under the relief. Usually 0 to 64.",
+              "maximum": 4096.0,
+              "minimum": 0.0,
+              "title": "Cover",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                64.0
+              ],
+              "x-unit": "blocks"
+            },
+            "fade": {
+              "default": 4.0,
+              "description": "Over how many blocks it thins out at its limits. Usually 0 to 32.",
+              "maximum": 4096.0,
+              "minimum": 0.0,
+              "title": "Fade",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                32.0
+              ],
+              "x-unit": "blocks"
+            },
+            "high": {
+              "default": 320.0,
+              "description": "The highest height it reaches. In blocks. Usually -64 to 320.",
+              "maximum": 4096.0,
+              "minimum": -2048.0,
+              "title": "Highest",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -64.0,
+                320.0
+              ],
+              "x-unit": "blocks"
+            },
+            "low": {
+              "default": -64.0,
+              "description": "The lowest height it reaches. In blocks. Usually -64 to 320.",
+              "maximum": 4096.0,
+              "minimum": -2048.0,
+              "title": "Lowest",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -64.0,
+                320.0
+              ],
+              "x-unit": "blocks"
+            },
+            "under": {
+              "default": true,
+              "description": "Keeps it under the relief given.",
+              "title": "Under the ground",
+              "type": "boolean",
+              "x-section": "main"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "volume.limit"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Limit volume",
+      "type": "object"
+    },
+    "volume.noise": {
+      "additionalProperties": false,
+      "description": "Blobs of 3D noise taking a share of space: pockets, sponge-like rock, floating islands. 3D gradient noise of three octaves, cut so that the volume takes Share of space, in blobs about Scale blocks across (flatter as Squash falls). Limit it to a band of heights or a mask with Limit volume, carve it from the ground or add it above.",
+      "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {},
+          "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "scale": {
+              "default": 48.0,
+              "description": "About how large a blob is, in blocks. Usually 0 to 256.",
+              "maximum": 4096.0,
+              "minimum": 0.0,
+              "title": "Scale",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                256.0
+              ],
+              "x-unit": "blocks"
+            },
+            "seed": {
+              "description": "Another seed gives another variation of the same settings. Left out, it comes from the node's name.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer",
+              "x-section": "detail"
+            },
+            "share": {
+              "default": 0.2,
+              "description": "The share of space the blobs take.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Share",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "squash": {
+              "default": 0.6,
+              "description": "Their height against their width.",
+              "maximum": 4.0,
+              "minimum": 0.1,
+              "title": "Squash",
+              "type": "number",
+              "x-section": "shape",
+              "x-soft": [
+                0.1,
+                4.0
+              ],
+              "x-unit": "ratio"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "volume.noise"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Noise volume",
+      "type": "object"
+    },
+    "volume.shape": {
+      "additionalProperties": false,
+      "description": "A volume grown or shrunk, and roughened: rock walls that are not smooth. Grow pushes the surface out by that many blocks (negative: in); Roughness moves it in and out by up to that many blocks with 3D noise of Roughness scale, so that carved halls and tunnels get the uneven walls of real caves.",
+      "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "volume": {
+              "$ref": "#/$defs/source",
+              "description": "The volume. (density)",
+              "title": "Volume"
+            }
+          },
+          "required": [
+            "volume"
+          ],
+          "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "grow": {
+              "default": 0.0,
+              "description": "Blocks the surface moves out (in when negative).",
+              "maximum": 64.0,
+              "minimum": -64.0,
+              "title": "Grow",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -64.0,
+                64.0
+              ],
+              "x-unit": "blocks"
+            },
+            "roughness": {
+              "default": 2.0,
+              "description": "How far the noise moves the surface, in blocks. Usually 0 to 16.",
+              "maximum": 4096.0,
+              "minimum": 0.0,
+              "title": "Roughness",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                16.0
+              ],
+              "x-unit": "blocks"
+            },
+            "scale": {
+              "default": 8.0,
+              "description": "How large the bumps are, in blocks. Usually 0 to 64.",
+              "maximum": 4096.0,
+              "minimum": 0.0,
+              "title": "Roughness scale",
+              "type": "number",
+              "x-section": "shape",
+              "x-soft": [
+                0.0,
+                64.0
+              ],
+              "x-unit": "blocks"
+            },
+            "seed": {
+              "description": "Another seed gives another variation of the same settings. Left out, it comes from the node's name.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer",
+              "x-section": "detail"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "volume.shape"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Shape volume",
+      "type": "object"
+    },
+    "volume.sphere": {
+      "additionalProperties": false,
+      "description": "A ball, or one round each point: a hall to carve, a boulder to add. A ball of Radius blocks at a place of the terrain and a height; given points, one at each instead (its radius times the point's scale, Depth blocks under it): chambers where Scatter put them. Its value is the distance to its surface, negative inside.",
+      "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "points": {
+              "$ref": "#/$defs/source",
+              "description": "Where the balls are. (points) Left empty: one ball, at the settings' place.",
+              "title": "Points"
+            }
+          },
+          "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "depth": {
+              "default": 0.0,
+              "description": "Given points, how far under them the balls' middles lie. In blocks. Usually 0 to 256.",
+              "maximum": 4096.0,
+              "minimum": 0.0,
+              "title": "Depth",
+              "type": "number",
+              "x-section": "shape",
+              "x-soft": [
+                0.0,
+                256.0
+              ],
+              "x-unit": "blocks"
+            },
+            "radius": {
+              "default": 16.0,
+              "description": "In blocks. Usually 0 to 128.",
+              "maximum": 4096.0,
+              "minimum": 0.0,
+              "title": "Radius",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                128.0
+              ],
+              "x-unit": "blocks"
+            },
+            "squash": {
+              "default": 1.0,
+              "description": "Its height against its width: under 1, a flat hall.",
+              "maximum": 4.0,
+              "minimum": 0.1,
+              "title": "Squash",
+              "type": "number",
+              "x-section": "shape",
+              "x-soft": [
+                0.1,
+                4.0
+              ],
+              "x-unit": "ratio"
+            },
+            "x": {
+              "default": 0.5,
+              "description": "Where it is, west to east across the terrain. In fraction of the terrain's side. Usually 0 to 1.",
+              "maximum": 2.0,
+              "minimum": -1.0,
+              "title": "X",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "fraction"
+            },
+            "y": {
+              "default": 20.0,
+              "description": "The height of its middle, in blocks. Usually -64 to 320.",
+              "maximum": 4096.0,
+              "minimum": -2048.0,
+              "title": "Height",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -64.0,
+                320.0
+              ],
+              "x-unit": "blocks"
+            },
+            "z": {
+              "default": 0.5,
+              "description": "Where it is, north to south across the terrain. In fraction of the terrain's side. Usually 0 to 1.",
+              "maximum": 2.0,
+              "minimum": -1.0,
+              "title": "Z",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "fraction"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "volume.sphere"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Sphere",
+      "type": "object"
+    },
+    "volume.tube": {
+      "additionalProperties": false,
+      "description": "A tunnel along lines: a cave that follows a drawn path, a lava tube, a mine. A round tunnel of Radius blocks along each line (its width, when Radius is 0), Depth blocks under the line's points, wider and narrower along its length by Variation. Draw the path, or give the splines of a river or a road to dig under. Its value is the distance to the tunnel's wall, negative inside.",
+      "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "splines": {
+              "$ref": "#/$defs/source",
+              "description": "The lines to follow. (splines) Left empty: the line drawn in Path.",
+              "title": "Splines"
+            }
+          },
+          "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "depth": {
+              "default": 0.0,
+              "description": "How far under the lines' points the tunnel runs. In blocks. Usually 0 to 256.",
+              "maximum": 4096.0,
+              "minimum": 0.0,
+              "title": "Depth",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                256.0
+              ],
+              "x-unit": "blocks"
+            },
+            "path": {
+              "default": [],
+              "description": "The line the tunnel follows, when no splines are given (x and z across the terrain).",
+              "items": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "x": {
+                        "description": "West to east, as a fraction of the terrain's side (0 to 1).",
+                        "type": "number"
+                      },
+                      "z": {
+                        "description": "North to south, as a fraction of the terrain's side (0 to 1).",
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "x",
+                      "z"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "description": "West to east, as a fraction of the terrain's side (0 to 1).",
+                        "type": "number"
+                      },
+                      {
+                        "description": "North to south, as a fraction of the terrain's side (0 to 1).",
+                        "type": "number"
+                      }
+                    ],
+                    "type": "array"
+                  }
+                ]
+              },
+              "title": "Path",
+              "type": "array",
+              "x-closed": false,
+              "x-section": "main"
+            },
+            "radius": {
+              "default": 4.0,
+              "description": "In blocks; 0: half each line's width. Usually 0 to 32.",
+              "maximum": 4096.0,
+              "minimum": 0.0,
+              "title": "Radius",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                32.0
+              ],
+              "x-unit": "blocks"
+            },
+            "seed": {
+              "description": "Another seed gives another variation of the same settings. Left out, it comes from the node's name.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer",
+              "x-section": "detail"
+            },
+            "variation": {
+              "default": 0.3,
+              "description": "How much wider and narrower it gets along its length.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Variation",
+              "type": "number",
+              "x-section": "shape",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "y": {
+              "default": 20.0,
+              "description": "The height of the drawn path. In blocks. Usually -64 to 320.",
+              "maximum": 4096.0,
+              "minimum": -2048.0,
+              "title": "Height",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -64.0,
+                320.0
+              ],
+              "x-unit": "blocks"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "volume.tube"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Tube",
       "type": "object"
     },
     "water.flow": {

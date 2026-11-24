@@ -214,6 +214,7 @@ fn build(mut args: Args) -> Res<()> {
     let rect = massif_core::BlockRect::new(c.space.x0, c.space.z0, c.space.x0 + c.space.size as i32, c.space.z0 + c.space.size as i32);
     let tiles: Vec<massif_core::TilePos> = rect.tiles().collect();
     let (seed, sea) = (world.meta.seed as u64, world.meta.sea_level);
+    let registry = world.registry.clone();
     let mut history = massif_core::History::new(1);
     history.begin("Terrain graph", 0);
     {
@@ -223,6 +224,18 @@ fn build(mut args: Args) -> Res<()> {
         massif_core::graph::apply(edit, &extent, &outputs, seed, &paint, &write);
         if outputs.biomes.is_some() {
             massif_core::graph::apply_biomes(edit, &extent, &outputs, &climate, &tiles);
+        }
+        let started = Instant::now();
+        let under = massif_terrain::underground::apply(&engine, &c, &registry, edit, &never).map_err(|e| e.to_string())?;
+        if under != Default::default() {
+            eprintln!(
+                "underground in {:.1} s: {} cave layers over {} columns, {} cells of cave biomes, {} sculpted chunks",
+                started.elapsed().as_secs_f64(),
+                under.cave_layers,
+                under.cave_columns,
+                under.biome_cells,
+                under.chunks
+            );
         }
     }
     if !outputs.layers.is_empty() {

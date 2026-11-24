@@ -3068,7 +3068,365 @@ Outputs:
   "terrain": { "seed": 0, "size": 4096 },
   "nodes": {
     "from_height": { "type": "volume.from_height", "inputs": { "height": "relief" } },
-    "out": { "type": "output.map", "inputs": { "height": "relief" } },
+    "out": { "type": "output.map", "inputs": { "height": "relief", "volume.carve": "from_height" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } }
+  }
+}
+```
+
+### Sphere — `volume.sphere`
+
+A ball, or one round each point: a hall to carve, a boulder to add. A ball of Radius blocks at a place of the terrain and a height; given points, one at each instead (its radius times the point's scale, Depth blocks under it): chambers where Scatter put them. Its value is the distance to its surface, negative inside.
+
+Inputs:
+
+- `points` (points, optional) — Where the balls are. Left empty: one ball, at the settings' place.
+
+Outputs:
+
+- `volume` (density) — Negative inside the balls.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `x` | number | 0.5 | -1 to 2 fraction of the terrain's side | Where it is, west to east across the terrain. In fraction of the terrain's side. Usually 0 to 1. |
+| `z` | number | 0.5 | -1 to 2 fraction of the terrain's side | Where it is, north to south across the terrain. In fraction of the terrain's side. Usually 0 to 1. |
+| `y` | number | 20 | -2048 to 4096 blocks | The height of its middle, in blocks. Usually -64 to 320. |
+| `radius` | number | 16 | 0 to 4096 blocks | In blocks. Usually 0 to 128. |
+| `squash` | number | 1 | 0.1 to 4 | Its height against its width: under 1, a flat hall. |
+| `depth` | number | 0 | 0 to 4096 blocks | Given points, how far under them the balls' middles lie. In blocks. Usually 0 to 256. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "out": { "type": "output.map", "inputs": { "height": "relief", "volume.carve": "sphere" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } },
+    "sphere": { "type": "volume.sphere" }
+  }
+}
+```
+
+### Box — `volume.box`
+
+A box with rounded edges: a room, a gallery, a block of rock. A box of Width × Height × Length blocks at a place of the terrain and a height, turned about the vertical and rounded at its edges. Its value is the distance to its surface, negative inside.
+
+Outputs:
+
+- `volume` (density) — Negative inside the box.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `x` | number | 0.5 | -1 to 2 fraction of the terrain's side | Where its middle is, west to east across the terrain. In fraction of the terrain's side. Usually 0 to 1. |
+| `z` | number | 0.5 | -1 to 2 fraction of the terrain's side | Where its middle is, north to south across the terrain. In fraction of the terrain's side. Usually 0 to 1. |
+| `y` | number | 20 | -2048 to 4096 blocks | The height of its middle, in blocks. Usually -64 to 320. |
+| `width` | number | 32 | 0 to 4096 blocks | West to east, in blocks. Usually 0 to 256. |
+| `height` | number | 16 | 0 to 4096 blocks | Bottom to top, in blocks. Usually 0 to 256. |
+| `length` | number | 32 | 0 to 4096 blocks | North to south, in blocks. Usually 0 to 256. |
+| `turn` | number | 0 | -180 to 180 degrees | Turned about the vertical. In degrees. |
+| `rounding` | number | 2 | 0 to 4096 blocks | The radius of its rounded edges. In blocks. Usually 0 to 32. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "box": { "type": "volume.box" },
+    "out": { "type": "output.map", "inputs": { "height": "relief", "volume.carve": "box" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } }
+  }
+}
+```
+
+### Tube — `volume.tube`
+
+A tunnel along lines: a cave that follows a drawn path, a lava tube, a mine. A round tunnel of Radius blocks along each line (its width, when Radius is 0), Depth blocks under the line's points, wider and narrower along its length by Variation. Draw the path, or give the splines of a river or a road to dig under. Its value is the distance to the tunnel's wall, negative inside.
+
+Inputs:
+
+- `splines` (splines, optional) — The lines to follow. Left empty: the line drawn in Path.
+
+Outputs:
+
+- `volume` (density) — Negative inside the tunnels.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `path` | curve | none | each `x`, `z` | The line the tunnel follows, when no splines are given (x and z across the terrain). |
+| `y` | number | 20 | -2048 to 4096 blocks | The height of the drawn path. In blocks. Usually -64 to 320. |
+| `radius` | number | 4 | 0 to 4096 blocks | In blocks; 0: half each line's width. Usually 0 to 32. |
+| `depth` | number | 0 | 0 to 4096 blocks | How far under the lines' points the tunnel runs. In blocks. Usually 0 to 256. |
+| `variation` | number | 0.3 | 0 to 1 | How much wider and narrower it gets along its length. |
+| `seed` | seed | — | 0 to 4294967295 | Another seed gives another variation of the same settings. Left out, it comes from the node's name. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "out": { "type": "output.map", "inputs": { "height": "relief", "volume.carve": "tube" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } },
+    "tube": { "type": "volume.tube", "params": { "path": [{ "x": 0.2, "z": 0.55 }, { "x": 0.5, "z": 0.45 }, { "x": 0.8, "z": 0.5 }] } }
+  }
+}
+```
+
+### Noise volume — `volume.noise`
+
+Blobs of 3D noise taking a share of space: pockets, sponge-like rock, floating islands. 3D gradient noise of three octaves, cut so that the volume takes Share of space, in blobs about Scale blocks across (flatter as Squash falls). Limit it to a band of heights or a mask with Limit volume, carve it from the ground or add it above.
+
+Outputs:
+
+- `volume` (density) — Negative inside the blobs, about in blocks.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `share` | number | 0.2 | 0 to 1 | The share of space the blobs take. |
+| `scale` | number | 48 | 0 to 4096 blocks | About how large a blob is, in blocks. Usually 0 to 256. |
+| `squash` | number | 0.6 | 0.1 to 4 | Their height against their width. |
+| `seed` | seed | — | 0 to 4294967295 | Another seed gives another variation of the same settings. Left out, it comes from the node's name. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "noise": { "type": "volume.noise" },
+    "out": { "type": "output.map", "inputs": { "height": "relief", "volume.carve": "noise" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } }
+  }
+}
+```
+
+### Cave noise — `volume.caves`
+
+The game's noise caves as a volume — chambers with pillars, winding tunnels, noodles — between two heights, where a mask says. The noise the game carves its caves from since 1.18, as a volume to shape further: cheese chambers with pillars, spaghetti tunnels and noodles, each with its density and size, fading out toward Lowest and Highest and where the mask falls. Unlike a Cave layer, it has no roof, aquifers or decoration: combine it with other volumes (keep it under a relief with Combine ▸ Intersect, carve it along a band of strata with a mask), then carve it through the Map Output's Volume carve.
+
+Inputs:
+
+- `mask` (mask, optional) — Where the caves go, from 0 to 1. Left empty: 1 everywhere.
+
+Outputs:
+
+- `volume` (density) — Negative in the caves, about in blocks.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `cheese` | number | 0.5 | 0 to 1 | How much of the rock the chambers take. |
+| `spaghetti` | number | 0.5 | 0 to 1 | How many winding tunnels. |
+| `noodles` | number | 0.3 | 0 to 1 | How many thin tunnels. |
+| `low` | number | -56 | -2048 to 4096 blocks | The lowest height the caves reach. In blocks. Usually -64 to 320. |
+| `high` | number | 48 | -2048 to 4096 blocks | The highest height they reach. In blocks. Usually -64 to 320. |
+| `size` | number | 1 | 0.5 to 2 | How large they are (1: as the game carves them). |
+| `seed` | seed | — | 0 to 4294967295 | Another seed gives another variation of the same settings. Left out, it comes from the node's name. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "caves": { "type": "volume.caves" },
+    "out": { "type": "output.map", "inputs": { "height": "relief", "volume.carve": "caves" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } }
+  }
+}
+```
+
+### Combine volumes — `volume.combine`
+
+Two volumes as one: their union, A without B, or what they share, with a smooth seam if asked. The booleans of solids. Union joins caves into one network; Subtract cuts B out of A (a cave out of the ground, a doorway out of a wall); Intersect keeps the part of A inside B (cave noise kept under a relief). Smoothness rounds where they meet, over that many blocks.
+
+Inputs:
+
+- `a` (density, optional) — A volume. Left empty: nothing.
+- `b` (density, optional) — Another. Left empty: nothing.
+
+Outputs:
+
+- `volume` (density) — The two combined.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `op` | choice | `union` | `union`, `subtract`, `intersect` | How they combine. `union`: Both: what is inside either. `subtract`: A without B: B cut out of A. `intersect`: Only what is inside both. |
+| `smooth` | number | 0 | 0 to 4096 blocks | Over how many blocks the seam is rounded. Usually 0 to 32. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "combine": { "type": "volume.combine" },
+    "out": { "type": "output.map", "inputs": { "height": "relief", "volume.carve": "combine" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } }
+  }
+}
+```
+
+### Shape volume — `volume.shape`
+
+A volume grown or shrunk, and roughened: rock walls that are not smooth. Grow pushes the surface out by that many blocks (negative: in); Roughness moves it in and out by up to that many blocks with 3D noise of Roughness scale, so that carved halls and tunnels get the uneven walls of real caves.
+
+Inputs:
+
+- `volume` (density) — The volume.
+
+Outputs:
+
+- `volume` (density) — Grown and roughened.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `grow` | number | 0 | -64 to 64 blocks | Blocks the surface moves out (in when negative). |
+| `roughness` | number | 2 | 0 to 4096 blocks | How far the noise moves the surface, in blocks. Usually 0 to 16. |
+| `scale` | number | 8 | 0 to 4096 blocks | How large the bumps are, in blocks. Usually 0 to 64. |
+| `seed` | seed | — | 0 to 4294967295 | Another seed gives another variation of the same settings. Left out, it comes from the node's name. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "ground": { "type": "volume.from_height", "inputs": { "height": "relief" } },
+    "out": { "type": "output.map", "inputs": { "height": "relief", "volume.carve": "shape" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } },
+    "shape": { "type": "volume.shape", "inputs": { "volume": "ground" } }
+  }
+}
+```
+
+### Limit volume — `volume.limit`
+
+A volume kept between two heights, or under the ground, and where a mask says. Keeps a volume between Lowest and Highest and where the mask is over one half, fading it out over Fade blocks; with Under the ground and a relief, also at least Cover blocks under its surface, so that caves never break through it.
+
+Inputs:
+
+- `volume` (density) — The volume.
+- `mask` (mask, optional) — Where it is kept. Left empty: everywhere.
+- `height` (height, optional) — The relief, for Under the ground. Left empty: none.
+
+Outputs:
+
+- `volume` (density) — The volume, kept where asked.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `low` | number | -64 | -2048 to 4096 blocks | The lowest height it reaches. In blocks. Usually -64 to 320. |
+| `high` | number | 320 | -2048 to 4096 blocks | The highest height it reaches. In blocks. Usually -64 to 320. |
+| `fade` | number | 4 | 0 to 4096 blocks | Over how many blocks it thins out at its limits. Usually 0 to 32. |
+| `under` | boolean | true |  | Keeps it under the relief given. |
+| `cover` | number | 4 | 0 to 4096 blocks | Blocks of ground kept over it, under the relief. Usually 0 to 64. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "ground": { "type": "volume.from_height", "inputs": { "height": "relief" } },
+    "limit": { "type": "volume.limit", "inputs": { "volume": "ground" } },
+    "out": { "type": "output.map", "inputs": { "height": "relief", "volume.carve": "limit" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } }
+  }
+}
+```
+
+### Cave layer — `caves.layer`
+
+Caves as the game carves them since 1.18 — chambers, tunnels, noodles, ravines, water and lava — where a mask says. One of the map's cave layers, made by the graph: its settings are the Caves tool's, and the mask says where its caves go (they thin out where it falls). Connect it to the Map Output's Caves; Apply adds or updates the layer, marked as the graph's, and the map carves it as it carves painted caves: sealed aquifers, lava under the lava floor, cave biomes and decoration on export. Several layers go through Merge cave layers.
+
+Inputs:
+
+- `mask` (mask, optional) — Where the caves go, from 0 to 1. Left empty: 1 everywhere.
+
+Outputs:
+
+- `layer` (layer) — The cave layer, and how much of each place it takes.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `amount` | number | 1 | 0 to 1 | How much of the masked area takes the layer: lower, its caves are fewer and patchier. A field connected to the input `@amount` drives it place by place. |
+| `cheese` | boolean | true |  | Large chambers with pillars of rock standing in them (the game's cheese caves). |
+| `cheese_density` | number | 0.5 | 0 to 1 | How much of the rock the chambers take. |
+| `spaghetti` | boolean | true |  | Long winding tunnels (the game's spaghetti caves). |
+| `spaghetti_density` | number | 0.5 | 0 to 1 | How many tunnels. |
+| `noodles` | boolean | true |  | Thin tunnels, many of them. |
+| `noodles_density` | number | 0.5 | 0 to 1 | How many noodles. |
+| `ravines` | boolean | true |  | Long, deep, narrow cuts. |
+| `ravines_density` | number | 0.3 | 0 to 1 | How many ravines. |
+| `low` | number | -56 | -2048 to 4096 blocks | The lowest height the caves reach, in blocks. Usually -64 to 320. |
+| `high` | number | 319 | -2048 to 4096 blocks | The highest height tunnels and noodles reach; the roof keeps them under the ground. In blocks. Usually -64 to 320. |
+| `chambers_high` | number | 54 | -2048 to 4096 blocks | The highest height chambers and ravines reach: under the sea level, as in the game. In blocks. Usually -64 to 320. |
+| `roof` | integer | 6 | 0 to 64 | Blocks of rock kept over the caves under the ground's surface, save at the entrances. |
+| `openings` | number | 0.15 | 0 to 1 | The share of the land where caves may open to the sky. |
+| `cheese_size` | number | 1 | 0.5 to 2 | How large the chambers are (1: as the game carves them). |
+| `spaghetti_size` | number | 1 | 0.5 to 2 | How wide and long the tunnels are. |
+| `noodles_size` | number | 1 | 0.5 to 2 | How wide the noodles are. |
+| `ravines_size` | number | 1 | 0.5 to 2 | How long and deep the ravines are. |
+| `aquifers` | boolean | true |  | Water and lava lakes at their own levels, sealed from each other by walls of rock as the game seals them. |
+| `aquifer_density` | number | 0.35 | 0 to 1 | The share of the rock's zones holding water or lava. |
+| `aquifer_size` | number | 1 | 0.5 to 2 | How large a zone of one level is (1: 48 blocks across, 24 high). |
+| `water_high` | number | 56 | -2048 to 4096 blocks | The highest level an aquifer fills to. In blocks. Usually -64 to 320. |
+| `lava` | number | 0.35 | 0 to 1 | The share of the flooded zones under Lava under holding lava rather than water. |
+| `lava_under` | number | 0 | -2048 to 4096 blocks | Lakes of lava only below this height. In blocks. Usually -64 to 320. |
+| `lava_floor` | boolean | true |  | Caves under Lava floor height are full of lava, whatever their zone (the game's lava under y −54). |
+| `lava_floor_y` | number | -54 | -2048 to 4096 blocks | The top of the lava floor. In blocks. Usually -64 to 320. |
+| `seed` | seed | — | 0 to 4294967295 | Another seed gives another variation of the same settings. Left out, it comes from the node's name. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "layer": { "type": "caves.layer" },
+    "out": { "type": "output.map", "inputs": { "caves": "layer", "height": "relief" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } }
+  }
+}
+```
+
+### Cave biome — `caves.biome`
+
+A cave biome — lush, dripstone or deep dark — between two heights, where a mask says. Paints a cave biome in the rock between Lowest and Highest where the mask says, as the Cave biome tool paints it: the caves there take its decoration on export (moss and vines, dripstone, sculk). Connect it to the Map Output's Cave biomes; several go through Merge cave layers. Apply adds the biome where the graph gives it and leaves the rest of the map's cave biomes as they are.
+
+Inputs:
+
+- `mask` (mask, optional) — Where the biome goes, from 0 to 1. Left empty: 1 everywhere.
+
+Outputs:
+
+- `layer` (layer) — The biome, and how much of each place it takes.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `biome` | choice | `lush` | `lush`, `dripstone`, `deep_dark` | The cave biome. `lush`: Moss, azaleas, cave vines with glow berries, dripleaves over clay pools, spore blossoms. `dripstone`: Dripstone blocks, stalactites and stalagmites. `deep_dark`: Sculk, sensors, shriekers and catalysts (Minecraft 1.19 and later). |
+| `low` | number | -64 | -2048 to 4096 blocks | The lowest height it fills, in blocks. Usually -64 to 320. |
+| `high` | number | 40 | -2048 to 4096 blocks | The highest height it fills, in blocks. Usually -64 to 320. |
+| `amount` | number | 1 | 0 to 1 | How much of the masked area takes it. A field connected to the input `@amount` drives it place by place. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "biome": { "type": "caves.biome" },
+    "out": { "type": "output.map", "inputs": { "cave_biomes": "biome", "height": "relief" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } }
+  }
+}
+```
+
+### Merge cave layers — `caves.merge`
+
+Two cave layers (or cave biomes) as one: each place takes the stronger, or, for cave biomes, both at their own heights. For a map with several kinds of caves (shallow tunnels everywhere, deep chambers under the mountains) or several cave biomes: chain as many as needed into the Map Output's Caves or Cave biomes. A column holds one cave layer; with Both, cave biomes at different heights stack in a column.
+
+Inputs:
+
+- `a` (layer, optional) — A cave layer or cave biome.
+- `b` (layer, optional) — Another, of the same kind.
+
+Outputs:
+
+- `layer` (layer) — The stronger of the two at each place.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `mode` | choice | `stronger` | `stronger`, `both` | How two layers given at the same place merge. `stronger`: Each place takes the stronger of the two, B where they are equal: for cave layers, and for cave biomes at the same heights. `both`: Cave biomes only: where both are given, both are painted, each between its own heights (deep dark low down, lush caves above it). |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "merge": { "type": "caves.merge" },
+    "out": { "type": "output.map", "inputs": { "caves": "merge", "height": "relief" } },
     "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } }
   }
 }
@@ -3105,10 +3463,13 @@ Inputs:
 - `objects` (layer, optional) — The object layer of each column (trees, rocks…), and how dense. Left empty: the map's.
 - `understory` (layer, optional) — The understory layer of each column (bushes, ferns…), and how dense. Left empty: the map's.
 - `pockets` (layer, optional) — The pocket layer of each column (ores, clay, gravel in the rock), and how strongly. Left empty: the map's.
-- `caves` (layer, optional) — The cave layer of each column, by its number among the world's cave layers, and how much of the area it takes. Left empty: the map's.
+- `caves` (layer, optional) — The caves of each column, from Cave Layer nodes: its first plane is the key of a Cave Layer node's settings (not a number among the map's layers), its second how much of the area the layer takes. Apply makes each node's layer one of the map's, marked as the graph's. Left empty: the map's.
+- `cave_biomes` (layer, optional) — Cave biomes (lush, dripstone, deep dark) between their heights, from Cave Biome nodes: its first plane is the key of a Cave Biome node's settings (or of two merged with Both), its second how much of the area takes them. Left empty: the map's.
 - `annotations` (layer, optional) — The annotation colour of each column. Left empty: the map's.
 - `structures` (instances, optional) — Buildings, villages and the game's structures to place, each built on the generated ground; a re-Apply replaces those the graph placed, never those placed by hand. Left empty: none.
 - `roads` (splines, optional) — Roads and paths laid along their lines, with their width and kind. Left empty: none.
+- `volume.carve` (density, optional) — A volume cut out of the ground: where its value (about the distance to its surface, in blocks) is negative, air, written into the map's sculpted blocks. Left empty: none.
+- `volume.add` (density, optional) — A volume of rock added: where its value (about the distance to its surface, in blocks) is negative, rock of the column's terrain (arches, overhangs, floating rock), written into the map's sculpted blocks. Left empty: none.
 - `mask.flow` (mask, optional) — Where water runs, written to the map as the mask “flow”. Left empty: none.
 - `mask.wear` (mask, optional) — Where the ground was worn away, written as the mask “wear”. Left empty: none.
 - `mask.deposition` (mask, optional) — Where sediment settled, written as the mask “deposition”. Left empty: none.

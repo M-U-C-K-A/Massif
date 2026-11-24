@@ -43,6 +43,8 @@ fn fingerprints() -> BTreeMap<String, Vec<f64>> {
                 PortKind::Splines => "rd",
                 PortKind::Footprints => "lt",
                 PortKind::Instances => "bd",
+                PortKind::Density => "vol",
+                PortKind::Layer => "cav",
                 _ => "feed",
             };
             inputs.push(format!(r#""{}": "{src}""#, port.name));
@@ -54,6 +56,7 @@ fn fingerprints() -> BTreeMap<String, Vec<f64>> {
             "rd": {{ "type": "village.roads", "inputs": {{ "height": "feed", "squares": "sq" }}, "params": {{ "pack": {pack}, "seed": 5 }} }},
             "lt": {{ "type": "village.plots", "inputs": {{ "squares": "sq", "roads": "rd" }}, "params": {{ "pack": {pack}, "seed": 6 }} }},
             "bd": {{ "type": "village.buildings", "inputs": {{ "height": "feed", "squares": "sq", "roads": "rd", "plots": "lt" }}, "params": {{ "pack": {pack}, "seed": 7 }} }},
+            "vol": {{ "type": "volume.from_height", "inputs": {{ "height": "feed" }} }}, "cav": {{ "type": "caves.layer", "params": {{ "seed": 4 }} }},
             "n": {{ "type": "{}", "inputs": {{ {} }}, "params": {{ "seed": 3 }} }} }} }}"#,
             spec.type_name(),
             inputs.join(", "),

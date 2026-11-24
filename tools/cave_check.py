@@ -55,6 +55,8 @@ def main() -> int:
     ap.add_argument("--minecraft", type=Path, default=Path.home() / "Library/Application Support/minecraft")
     ap.add_argument("--java")
     ap.add_argument("--accept-eula", action="store_true", help="you accept Mojang's EULA for this local server")
+    ap.add_argument("--keep", action="store_true", help="check the world's own caves (a terrain graph's) instead of painting the game's")
+    ap.add_argument("--probe", action="append", default=[], metavar="X,Y,Z,BLOCK", help="also check that block X Y Z is BLOCK (minecraft:air in a carved tunnel, say)")
     args = ap.parse_args()
 
     cli = ROOT / "target/release/massif-cli"
@@ -62,8 +64,12 @@ def main() -> int:
         subprocess.run(["cargo", "build", "--release", "-p", "massif-cli"], cwd=ROOT, check=True)
     work = Path(tempfile.mkdtemp(prefix="massif-cave-check-"))
     caves = work / "caves.massif"
-    out = subprocess.run([str(cli), "caves", str(args.world), str(caves), "--biomes"], check=True, capture_output=True, text=True).stdout
+    out = subprocess.run([str(cli), "caves", str(args.world), str(caves)] + (["--keep"] if args.keep else ["--biomes"]), check=True, capture_output=True, text=True).stdout
     places = [json.loads(line) for line in out.splitlines() if line.startswith("{")]
+    for probe in args.probe:
+        x, y, z, block = probe.split(",", 3)
+        EXPECT[block] = block
+        places.append({"kind": block, "x": int(x), "y": int(y), "z": int(z)})
     print(f"{len(places)} places to check: " + ", ".join(sorted({p['kind'] for p in places})))
     world_dir = work / "massif-check"
     subprocess.run([str(cli), "export", str(caves), str(world_dir), "--version", args.version, "--void", "--overwrite"], check=True)

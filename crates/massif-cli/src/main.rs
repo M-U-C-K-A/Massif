@@ -34,7 +34,7 @@ USAGE
   massif-cli terrain stream <graph.json> [--size BLOCKS] [--window BLOCKS] [--cache MB] [--cpu]
   massif-cli terrain migrate <world.massif> [--out FILE]
   massif-cli terrain build <world.massif> <out.massif> [--graph FILE] [--samples N] [--cpu]
-  massif-cli caves <world.massif> <out.massif> [--biomes] [--seed N]
+  massif-cli caves <world.massif> <out.massif> [--biomes] [--seed N] [--keep]
   massif-cli structure <world.massif> <out.massif> <kind> <x> <z> [--y Y] [--seed N] [--turn T] [--jar PATH] [--keep-land]
   massif-cli structure-checks <world.massif>
   massif-cli village <world.massif> <out.massif> <x0> <z0> <x1> <z1> [--theme NAME | --pack DIR] [--walls] [--seed N] [--jar PATH]
@@ -652,6 +652,7 @@ fn cmd_caves(mut args: Args) -> Res<()> {
     use massif_core::caves::{CaveDef, CaveLayers};
     use massif_core::caves::decorate::{Deco, Thickness, decorate_tile};
     let biomes = args.flag("--biomes");
+    let keep = args.flag("--keep");
     let seed: u32 = args.option("--seed")?.map(|v| v.parse().map_err(|_| format!("not a seed: {v}"))).transpose()?.unwrap_or(1);
     let [path, out] = args.positional(["<world.massif>", "<out.massif>"])?;
     let mut world = massif_format::load(&path).map_err(|e| e.to_string())?;
@@ -662,12 +663,15 @@ fn cmd_caves(mut args: Args) -> Res<()> {
     let n = defs.len() as u16;
     let mut history = massif_core::history::History::new(1);
     history.begin("Caves", 0);
-    let painted = {
+    // --keep: the world's own caves (a terrain graph's), only listed.
+    let painted = if keep {
+        0
+    } else {
         let mut edit = history.edit(&mut world, 0);
         edit.set_caves(CaveLayers::new(defs));
         massif_core::ops::fill_caves(&mut edit, n)
     };
-    if biomes && let Some((a, b)) = world.dims[0].bounds() {
+    if biomes && !keep && let Some((a, b)) = world.dims[0].bounds() {
         let t = massif_core::TILE_SIZE;
         let (x0, z0, x1, z1) = (a.x * t, a.z * t, (b.x + 1) * t, (b.z + 1) * t);
         let third = (x1 - x0) / 3;

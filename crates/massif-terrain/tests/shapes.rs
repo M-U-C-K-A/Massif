@@ -127,13 +127,15 @@ fn every_node_evaluates_with_its_defaults() {
                     registry::PortKind::Splines => "rd",
                     registry::PortKind::Footprints => "lt",
                     registry::PortKind::Instances => "bd",
+                    registry::PortKind::Density => "vol",
+                    registry::PortKind::Layer => "cav",
                     _ => "feed",
                 };
                 inputs.push_str(&format!(r#"{}"{}": "{}""#, if k > 0 && !inputs.is_empty() { ", " } else { "" }, port.name, src));
             }
         }
         let json = format!(
-            r#"{{ "nodes": {{ "feed": {{ "type": "noise.fbm" }}, "paint": {{ "type": "color.ramp", "inputs": {{ "height": "feed" }} }}, "lay": {{ "type": "terrain.layers" }}, "pts": {{ "type": "points.scatter", "params": {{ "spacing": 256 }} }}, "rd": {{ "type": "village.roads", "inputs": {{ "squares": "pts" }} }}, "lt": {{ "type": "village.plots", "inputs": {{ "squares": "pts", "roads": "rd" }} }}, "bd": {{ "type": "village.buildings", "inputs": {{ "squares": "pts", "roads": "rd", "plots": "lt" }} }}, "n": {{ "type": "{}", "inputs": {{ {inputs} }} }} }} }}"#,
+            r#"{{ "nodes": {{ "feed": {{ "type": "noise.fbm" }}, "paint": {{ "type": "color.ramp", "inputs": {{ "height": "feed" }} }}, "lay": {{ "type": "terrain.layers" }}, "pts": {{ "type": "points.scatter", "params": {{ "spacing": 256 }} }}, "rd": {{ "type": "village.roads", "inputs": {{ "squares": "pts" }} }}, "lt": {{ "type": "village.plots", "inputs": {{ "squares": "pts", "roads": "rd" }} }}, "bd": {{ "type": "village.buildings", "inputs": {{ "squares": "pts", "roads": "rd", "plots": "lt" }} }}, "vol": {{ "type": "volume.from_height", "inputs": {{ "height": "feed" }} }}, "cav": {{ "type": "caves.layer" }}, "n": {{ "type": "{}", "inputs": {{ {inputs} }} }} }} }}"#,
             spec.id
         );
         let c = compiled(&json);

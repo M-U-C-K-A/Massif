@@ -41,6 +41,7 @@ pub mod params;
 pub mod preview;
 pub mod registry;
 pub mod space;
+pub mod underground;
 pub mod util;
 pub mod world;
 

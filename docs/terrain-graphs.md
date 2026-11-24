@@ -279,6 +279,31 @@ curvature, facing, sunlight, openness, snow, wetness, distance), colours
 fractions of the terrain, distances and heights blocks. Every node and
 setting is listed in [terrain-nodes.md](terrain-nodes.md).
 
+**Underground.** A **Cave layer** node is one of the map's cave layers
+made by the graph (chambers, tunnels, noodles and ravines with their
+densities, sizes and heights, the roof, the surface entrances, sealed
+aquifers and the lava floor), and its mask says where its caves go; a
+**Cave biome** node paints lush caves, dripstone caves or the deep dark
+between two heights where a mask says. **Merge cave layers** takes the
+stronger of two, or, with **Both**, stacks cave biomes at their own heights
+in the same columns. The composite **Cave System** puts them together over a
+relief: the game's caves, lush caves under wet ground, the deep dark far
+under the mountains, dripstone caves between, with its densities, depths,
+water and lava and biomes as settings; open it to change its rules. They go
+to the Map Output's **Caves** and **Cave biomes**: Apply adds or updates the
+graph's own cave layer (marked as the graph's, removed when its node is),
+leaves the layers painted by hand where the graph puts no caves, and the
+caves are carved, sealed and decorated on export as painted ones are.
+**Volumes** are for what cave layers cannot do: a **Tube** along a drawn
+line or a river's or road's splines, a **Sphere** (a hall, or one at each
+point Scatter places), a **Box**, **Cave noise** (the game's noise caves as a
+volume), a **Noise volume**, combined by **Combine volumes** (union,
+subtract, intersect, with a smooth seam), roughened by **Shape volume** and
+kept to a band of heights, a mask or under the ground by **Limit volume**.
+The Map Output's **Volume carve** cuts its volume out of the ground, **Volume
+add** fills its volume with rock: Apply writes them into the map's sculpted
+blocks, where only the volume reaches.
+
 **Live.** With Live on, the World side's map shows the graph as it is
 edited, without writing it: the area in view first, sharp within a few
 milliseconds on the graphics card, the rest of the map behind; simulations

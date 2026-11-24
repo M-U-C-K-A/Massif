@@ -819,12 +819,14 @@ pub fn fill_caves(edit: &mut Edit, layer: u16) -> usize {
 /// selection's feathered edge is), so that the caves thin out where the
 /// strength falls: the plane holds layer numbers only, and a layer's caves
 /// fade over the share of the columns around painted with it. A column of
-/// a locked layer keeps it. Over `tiles` of the edited level (the ground's).
-/// Returns the columns changed.
+/// a locked layer keeps it; a column the raster leaves without a layer
+/// keeps a layer painted by hand (only a graph's own are taken away). Over
+/// `tiles` of the edited level (the ground's). Returns the columns changed.
 pub fn fill_caves_from(edit: &mut Edit, tiles: &[TilePos], at: impl Fn(i32, i32) -> (u16, f32) + Sync) -> usize {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let caves = edit.dim().caves.clone();
     let locked = |v: u16| caves.get(v).is_some_and(|d| d.locked);
+    let by_hand = |v: u16| caves.defs().get((v as usize).wrapping_sub(1)).is_some_and(|d| d.graph.is_none());
     let changed = AtomicUsize::new(0);
     let everywhere = BlockRect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX);
     edit.par_tiles(tiles.to_vec(), everywhere, false, |pos, _, tile| {
@@ -836,12 +838,49 @@ pub fn fill_caves_from(edit: &mut Edit, tiles: &[TilePos], at: impl Fn(i32, i32)
             let kept = strength >= 1.0 || (strength > 0.0 && (hash2(x, z, 0x0CA7_E5F1) as f32) < strength * u32::MAX as f32);
             let value = if kept { layer } else { 0 };
             let old = tile.caves.get(i);
-            if old != value && !locked(old) {
+            if old != value && !locked(old) && !(value == 0 && by_hand(old)) {
                 tile.caves.set(i, value);
                 n += 1;
             }
         }
         tile.caves.compact();
+        changed.fetch_add(n, Ordering::Relaxed);
+    });
+    changed.into_inner()
+}
+
+/// Paint cave biomes from a raster, as a terrain graph fills them: `at(x,
+/// z, biomes)` gives, at the middle column of each cell of 4 × 4 columns,
+/// the biomes (each with the heights it fills, `y0..y1`) and their
+/// strength, 0 to 1: a cell takes them in a share of the cells as large as
+/// the strength (the same cells for the same strength). Cells the raster
+/// gives nothing keep what they hold. Over `tiles` of the edited level (the
+/// ground's). Returns the cells changed.
+pub fn fill_cave_biomes_from(edit: &mut Edit, tiles: &[TilePos], at: impl Fn(i32, i32, &mut Vec<(u16, i32, i32)>) -> f32 + Sync) -> usize {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let changed = AtomicUsize::new(0);
+    let everywhere = BlockRect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX);
+    let cells = crate::caves::CELLS;
+    edit.par_tiles(tiles.to_vec(), everywhere, false, |pos, _, tile| {
+        let (x0, z0) = pos.origin();
+        let mut n = 0;
+        let mut biomes = Vec::new();
+        for cz in 0..cells {
+            for cx in 0..cells {
+                let (x, z) = (x0 + cx as i32 * 4 + 2, z0 + cz as i32 * 4 + 2);
+                biomes.clear();
+                let strength = at(x, z, &mut biomes);
+                let kept = strength >= 1.0 || (strength > 0.0 && (hash2(x, z, 0xB10E_CA7E) as f32) < strength * u32::MAX as f32);
+                if !kept {
+                    continue;
+                }
+                for &(biome, y0, y1) in &biomes {
+                    if biome != 0 && y1 > y0 {
+                        n += tile.cave_biomes.paint((cx, cx + 1), (y0.div_euclid(4), (y1 + 3).div_euclid(4)), (cz, cz + 1), biome, |_, _, _| true);
+                    }
+                }
+            }
+        }
         changed.fetch_add(n, Ordering::Relaxed);
     });
     changed.into_inner()
