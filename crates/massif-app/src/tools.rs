@@ -1474,12 +1474,18 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
                 let biome = if invert { 0 } else { tools.biome };
                 ops::paint_biome(&mut edit, brush, x, z, BiomeId(biome), stroke.salt)
             }
-            Tool::Cover => ops::paint_cover(&mut edit, brush, x, z, if invert { 0 } else { tools.cover }, stroke.salt),
+            // The right button rubs out the layer chosen, the others left
+            // where they are (as WorldPainter's does).
+            Tool::Cover if invert => ops::erase_cover(&mut edit, brush, x, z, tools.cover, stroke.salt),
+            Tool::Cover => ops::paint_cover(&mut edit, brush, x, z, tools.cover, stroke.salt),
             // A sub-canopy layer is painted beside the base one.
-            Tool::Objects if understory => ops::paint_understory(&mut edit, brush, x, z, if invert { 0 } else { tools.object_layer }, stroke.salt),
-            Tool::Objects => ops::paint_objects(&mut edit, brush, x, z, if invert { 0 } else { tools.object_layer }, stroke.salt),
+            Tool::Objects if understory && invert => ops::erase_understory(&mut edit, brush, x, z, tools.object_layer, stroke.salt),
+            Tool::Objects if understory => ops::paint_understory(&mut edit, brush, x, z, tools.object_layer, stroke.salt),
+            Tool::Objects if invert => ops::erase_objects(&mut edit, brush, x, z, tools.object_layer, stroke.salt),
+            Tool::Objects => ops::paint_objects(&mut edit, brush, x, z, tools.object_layer, stroke.salt),
             Tool::TreeSize => ops::paint_tree_size(&mut edit, brush, x, z, if invert { 0 } else { tools.tree_size.clamp(1, 4) }, stroke.salt),
-            Tool::Pockets => ops::paint_pockets(&mut edit, brush, x, z, if invert { 0 } else { tools.pocket_layer }, stroke.salt),
+            Tool::Pockets if invert => ops::erase_pockets(&mut edit, brush, x, z, tools.pocket_layer, stroke.salt),
+            Tool::Pockets => ops::paint_pockets(&mut edit, brush, x, z, tools.pocket_layer, stroke.salt),
             Tool::Slabs => ops::paint_slabs(&mut edit, brush, x, z, if invert { 0 } else { slabs }, stroke.salt),
             Tool::Combined => {
                 ops::paint_parts(&mut edit, brush, x, z, &parts, stroke.salt);

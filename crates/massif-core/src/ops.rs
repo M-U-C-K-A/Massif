@@ -452,6 +452,53 @@ fn paint_plane(
     share: Option<(f32, u64)>,
     plane: impl Fn(&mut Tile) -> &mut Plane<u16> + Sync,
 ) {
+    paint_plane_over(edit, brush, cx, cz, salt, value, slot, share, None, plane);
+}
+
+/// Rub out layer `layer` of a plane under the brush, leaving the others of
+/// the slot where they are, as WorldPainter's right button does with a
+/// layer. `salt` should change from dab to dab.
+#[allow(clippy::too_many_arguments)]
+fn erase_plane(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, salt: u64, layer: u16, slot: crate::registry::Slot, plane: impl Fn(&mut Tile) -> &mut Plane<u16> + Sync) {
+    if layer != 0 {
+        paint_plane_over(edit, brush, cx, cz, salt, 0, Some(slot), None, Some(layer), plane);
+    }
+}
+
+/// Rub out ground cover `cover` under the brush, the others left.
+pub fn erase_cover(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, cover: u16, salt: u64) {
+    erase_plane(edit, brush, cx, cz, salt, cover, crate::registry::Slot::Cover, |t| &mut t.cover);
+}
+
+/// Rub out object layer `layer` under the brush, the others left.
+pub fn erase_objects(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, layer: u16, salt: u64) {
+    erase_plane(edit, brush, cx, cz, salt, layer, crate::registry::Slot::Objects, |t| &mut t.objects);
+}
+
+/// Rub out sub-canopy layer `layer` under the brush, the others left.
+pub fn erase_understory(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, layer: u16, salt: u64) {
+    erase_plane(edit, brush, cx, cz, salt, layer, crate::registry::Slot::Objects, |t| &mut t.understory);
+}
+
+/// Rub out pocket layer `layer` under the brush, the others left.
+pub fn erase_pockets(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, layer: u16, salt: u64) {
+    erase_plane(edit, brush, cx, cz, salt, layer, crate::registry::Slot::Pockets, |t| &mut t.pockets);
+}
+
+/// [`paint_plane`], over the columns holding `over` alone when it is given.
+#[allow(clippy::too_many_arguments)]
+fn paint_plane_over(
+    edit: &mut Edit,
+    brush: &Brush,
+    cx: f32,
+    cz: f32,
+    salt: u64,
+    value: u16,
+    slot: Option<crate::registry::Slot>,
+    share: Option<(f32, u64)>,
+    over: Option<u16>,
+    plane: impl Fn(&mut Tile) -> &mut Plane<u16> + Sync,
+) {
     let dab = Dab::new(edit, brush, cx, cz);
     if dab.idle {
         return;
@@ -479,6 +526,9 @@ fn paint_plane(
                 if let Some((slot, locks)) = &locks
                     && locks.holds(*slot, plane(tile).get(i))
                 {
+                    continue;
+                }
+                if over.is_some_and(|o| plane(tile).get(i) != o) {
                     continue;
                 }
                 plane(tile).set(i, value);
@@ -1871,6 +1921,44 @@ mod tests {
         paint_cover(&mut hist.edit(&mut w, 0), &hard_brush(30.0), 0.0, 0.0, ferns, 6);
         hist.commit();
         assert_eq!((cover(&w, -10), cover(&w, 8)), (ferns, ferns));
+    }
+
+    /// The right button of a layer's brush rubs out that layer alone: two
+    /// tree layers side by side, the brush over both erasing the first,
+    /// the second stays; the same for sub-canopy layers, covers and
+    /// pockets.
+    #[test]
+    fn erasing_a_layer_leaves_the_others() {
+        let mut w = world(1);
+        let mut hist = History::default();
+        let at = |w: &World, x: i32, plane: fn(&crate::tile::Tile) -> &Plane<u16>| plane(&w.dims[0].ground().view(TilePos::containing(x, 0)).unwrap()).get(local_index(x, 0));
+        hist.begin("two layers", 0);
+        {
+            let mut e = hist.edit(&mut w, 0);
+            paint_objects(&mut e, &hard_brush(6.0), -10.0, 0.0, 1, 1);
+            paint_objects(&mut e, &hard_brush(6.0), 10.0, 0.0, 2, 2);
+            paint_understory(&mut e, &hard_brush(6.0), -10.0, 0.0, 3, 3);
+            paint_understory(&mut e, &hard_brush(6.0), 10.0, 0.0, 4, 4);
+            paint_cover(&mut e, &hard_brush(6.0), -10.0, 0.0, 5, 5);
+            paint_cover(&mut e, &hard_brush(6.0), 10.0, 0.0, 6, 6);
+        }
+        hist.commit();
+        hist.begin("erase the first", 0);
+        {
+            let mut e = hist.edit(&mut w, 0);
+            erase_objects(&mut e, &hard_brush(30.0), 0.0, 0.0, 1, 7);
+            erase_understory(&mut e, &hard_brush(30.0), 0.0, 0.0, 3, 8);
+            erase_cover(&mut e, &hard_brush(30.0), 0.0, 0.0, 5, 9);
+        }
+        hist.commit();
+        assert_eq!((at(&w, -10, |t| &t.objects), at(&w, 10, |t| &t.objects)), (0, 2), "the second tree layer stays");
+        assert_eq!((at(&w, -10, |t| &t.understory), at(&w, 10, |t| &t.understory)), (0, 4));
+        assert_eq!((at(&w, -10, |t| &t.cover), at(&w, 10, |t| &t.cover)), (0, 6));
+        // Erasing a layer that is not there changes nothing.
+        hist.begin("erase nothing", 0);
+        erase_objects(&mut hist.edit(&mut w, 0), &hard_brush(30.0), 0.0, 0.0, 9, 10);
+        hist.commit();
+        assert_eq!(at(&w, 10, |t| &t.objects), 2);
     }
 
     /// A combined layer's parts each go to their slot, in one stroke: each
