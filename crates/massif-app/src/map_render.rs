@@ -558,6 +558,11 @@ fn hillshade(dx: f32, dz: f32, l: [f32; 3]) -> f32 {
 const WATER: Rgb = [48.0, 96.0, 200.0];
 const HIGHLIGHT: Rgb = [249.0, 115.0, 22.0];
 
+/// How much of a cover's colour shows on the ground it is painted on where
+/// nothing grows, of what shows where something does: the ground painted
+/// stays in sight, the more growing the more colour.
+const BARE: f32 = 0.4;
+
 /// Colours samples for one style.
 pub struct Colorizer<'a> {
     reg: &'a Registry,
@@ -596,31 +601,28 @@ impl<'a> Colorizer<'a> {
         }
     }
 
-    /// The ground's colour `ground` with the cover of sample `c` over it:
-    /// at `at`, a hint of the cover and the plant growing in that column
-    /// if one does, in its own colour; from afar (`None`), the cover's
-    /// colour as thick as it grows. Nothing where it does not grow: off
-    /// soil, or in the air for a cover of the water.
+    /// The ground's colour `ground` with the cover of sample `c` over it,
+    /// in the cover's colour at its opacity: at `at`, in full where
+    /// something grows in that column and lighter where the ground is bare
+    /// ([`BARE`]); from afar (`None`), as thick as it grows. Nothing where it
+    /// does not grow: off soil, or in the air for a cover of the water.
     fn with_cover(&self, ground: Rgb, c: &Sample, at: Option<(i32, i32)>) -> Rgb {
         let Some(def) = c.cover.checked_sub(1).and_then(|k| self.covers.get(k as usize)).and_then(Option::as_ref) else { return ground };
         let wet = c.water_depth() > 0.0;
         if def.underwater != wet || (wet && self.style.lava) || (def.soil_only && !self.soil.get(c.terrain as usize).copied().unwrap_or(false)) {
             return ground;
         }
-        let color = rgb(def.color);
-        match at {
+        let share = match at {
             Some((x, z)) => {
-                let base = mix(ground, color, 0.18);
-                match def.growth(x, z, self.style.seed as u64) {
-                    Some(g) => {
-                        let plant = def.plants.get(g.plant).and_then(|p| massif_core::registry::plant_color(&p.0)).map_or(color, rgb);
-                        mix(base, plant, 0.85)
-                    }
-                    None => base,
+                if def.growth(x, z, self.style.seed as u64).is_some() {
+                    1.0
+                } else {
+                    BARE
                 }
             }
-            None => mix(ground, color, 0.25 + 0.5 * def.density.clamp(0.0, 1.0)),
-        }
+            None => BARE + (1.0 - BARE) * def.density.clamp(0.0, 1.0),
+        };
+        mix(ground, rgb(def.color), def.opacity.clamp(0.0, 1.0) * share)
     }
 
     fn terrain_rgb(&self, id: u16) -> Rgb {
@@ -1970,6 +1972,118 @@ mod tests {
         let land = at(&hidden, 60, 60);
         assert!(land.g() >= land.r(), "the land without its annotation {land:?}");
         assert_eq!(at(&hidden, -70, -60), ice, "only the annotations go");
+    }
+
+    /// A ground cover painted on grass in bands of three of its densities
+    /// (0, 50 and 100 % of the ground growing something), bare grass in the
+    /// fourth, close up (a block a pixel) and from afar (8 blocks a pixel):
+    /// the more grows, the more of its colour (a user saw it go at 100 %
+    /// and stand solid at 0 %). Saved with MASSIF_SNAPSHOT_DIR as
+    /// map-covers-near.png and map-covers-far.png.
+    #[test]
+    fn covers_show_as_thick_as_they_grow() {
+        let (near, far) = cover_bands(&[(0.0, None), (0.5, None), (1.0, None)]);
+        save("map-covers-near.png", &near.0);
+        save("map-covers-far.png", &far.0);
+        for (name, (_, shows)) in [("close up", &near), ("from afar", &far)] {
+            eprintln!("{name}: the colour {shows:?} from the grass at 0, 50 and 100 %");
+            assert!(shows[0] > 4.0 && shows[0] < shows[1] && shows[1] < shows[2], "{name}: more grows, more colour {shows:?}");
+        }
+    }
+
+    /// The map of [`covers_show_as_thick_as_they_grow`] for bands of a cover
+    /// at `(density, opacity)`: close up and from afar, each with how far
+    /// the colour of each band is from the bare grass (mean of the three
+    /// channels, over its middle).
+    fn cover_bands(bands: &[(f32, Option<f32>)]) -> ((ColorImage, Vec<f32>), (ColorImage, Vec<f32>)) {
+        let mut w = generate(&GenParams { tiles_x: 4, tiles_z: 2, landform: Landform::Flat, ..GenParams::default() });
+        let grass = w.registry.cover(w.registry.cover_by_name("Grass").unwrap()).unwrap().clone();
+        let covers: Vec<u16> = bands
+            .iter()
+            .map(|&(density, opacity)| {
+                let mut def = massif_core::registry::CoverDef { name: format!("Grass {density} {opacity:?}"), color: [220, 60, 200], density, ..grass.clone() };
+                cover_opacity(&mut def, opacity);
+                w.registry.add_cover(def)
+            })
+            .collect();
+        let (lo, _) = w.dims[0].bounds().unwrap();
+        let (x0, z0) = (lo.x * 128, lo.z * 128);
+        let mut h = History::default();
+        h.begin("paint", 0);
+        {
+            let mut e = h.edit(&mut w, 0);
+            let square = Brush { shape: BrushShape::Square, radius: 56.0, profile: Profile::Constant, strength: 1.0, rotation: 0.0, mask: None, filter: None };
+            for (k, &c) in covers.iter().enumerate() {
+                ops::paint_cover(&mut e, &square, (x0 + 64 + 128 * k as i32) as f32, (z0 + 128) as f32, c, k as u64);
+            }
+        }
+        h.commit();
+        let dim = &w.dims[0];
+        let near = render_region(dim, &w.registry, 63.0, MapStyle::default(), 0, x0, z0, 4, 2);
+        // From afar: the map's part of the chunks of 8 blocks a pixel,
+        // eight times larger to see.
+        let lod = 3;
+        let wide = render_region(dim, &w.registry, 63.0, MapStyle::default(), lod, x0, z0, 2, 2);
+        let (cx0, cz0) = (x0.div_euclid((CHUNK_PX as i32) << lod) * ((CHUNK_PX as i32) << lod), z0.div_euclid((CHUNK_PX as i32) << lod) * ((CHUNK_PX as i32) << lod));
+        let (fw, fd) = (512 / 8, 256 / 8);
+        let mut far = ColorImage::new([fw * 8, fd * 8], vec![Color32::BLACK; fw * 8 * fd * 8]);
+        for j in 0..fd * 8 {
+            for i in 0..fw * 8 {
+                let (px, pz) = ((x0 - cx0) as usize / 8 + i / 8, (z0 - cz0) as usize / 8 + j / 8);
+                far.pixels[j * fw * 8 + i] = wide.pixels[pz * wide.width() + px];
+            }
+        }
+        // Each band's middle (8 blocks of the 112 painted), against the bare
+        // grass of the fourth band.
+        let shows = |img: &ColorImage, scale: usize| -> Vec<f32> {
+            let mean = |k: usize| -> [f32; 3] {
+                let mut sum = [0.0f32; 3];
+                let mut n = 0.0;
+                for z in 100..156 {
+                    for x in 36..92 {
+                        let c = img.pixels[(z / scale) * img.width() + (128 * k + x) / scale];
+                        for (s, v) in sum.iter_mut().zip([c.r(), c.g(), c.b()]) {
+                            *s += v as f32;
+                        }
+                        n += 1.0;
+                    }
+                }
+                sum.map(|s| s / n)
+            };
+            let bare = mean(3);
+            (0..bands.len()).map(|k| (0..3).map(|i| (mean(k)[i] - bare[i]).abs()).sum::<f32>() / 3.0).collect()
+        };
+        let near_shows = shows(&near, 1);
+        let far_shows = shows(&far, 1);
+        ((near, near_shows), (far, far_shows))
+    }
+
+    /// Give `def` its opacity on the map, where the test asks for one.
+    fn cover_opacity(def: &mut massif_core::registry::CoverDef, opacity: Option<f32>) {
+        if let Some(o) = opacity {
+            def.opacity = o;
+        }
+    }
+
+    /// A cover's opacity sets how strongly its colour shows, close up and
+    /// from afar: a quarter, half and all of it at 100 % of the ground
+    /// growing (all: the cover's own colour), none at all at 0. Saved with
+    /// MASSIF_SNAPSHOT_DIR as map-covers-opacity-near.png and -far.png.
+    #[test]
+    fn a_covers_opacity_sets_how_strongly_it_shows() {
+        let (near, far) = cover_bands(&[(1.0, Some(0.25)), (1.0, Some(0.5)), (1.0, Some(1.0))]);
+        save("map-covers-opacity-near.png", &near.0);
+        save("map-covers-opacity-far.png", &far.0);
+        for (name, (img, shows)) in [("close up", &near), ("from afar", &far)] {
+            eprintln!("{name}: the colour {shows:?} from the grass at opacities 25, 50 and 100 %");
+            assert!(shows[0] > 4.0 && shows[0] < shows[1] && shows[1] < shows[2], "{name}: {shows:?}");
+            // Flat ground, lit evenly: the cover's own colour.
+            let full = img.pixels[128 * img.width() + 2 * 128 + 64];
+            let off = [full.r() as i32 - 220, full.g() as i32 - 60, full.b() as i32 - 200].map(i32::abs);
+            assert!(off.iter().all(|&d| d <= 12), "{name}: the cover's own colour, all of it: {full:?}");
+        }
+        let (none, _) = cover_bands(&[(1.0, Some(0.0)), (0.5, Some(0.0)), (0.0, Some(0.0))]);
+        assert!(none.1.iter().all(|&d| d < 0.5), "none of it: {:?}", none.1);
     }
 
     #[test]

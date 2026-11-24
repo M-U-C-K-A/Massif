@@ -169,6 +169,10 @@ pub struct PackCover {
     pub name: String,
     #[serde(default = "grey")]
     pub color: [u8; 3],
+    /// How strongly its colour shows on the map (see
+    /// [`CoverDef::opacity`]).
+    #[serde(default = "crate::registry::half", skip_serializing_if = "crate::registry::is_half")]
+    pub opacity: f32,
     pub plants: Vec<PackPlant>,
     pub density: f32,
     #[serde(default = "one_high")]
@@ -602,6 +606,7 @@ impl Pack {
         }
         let cover = &self.content.covers[i];
         let mut def = CoverDef::new(&name, cover.color, &[], cover.density);
+        def.opacity = cover.opacity;
         def.plants = cover.plants.iter().map(|p| (p.state.clone(), p.weight)).collect();
         def.height = cover.height;
         def.soil_only = cover.soil_only;
@@ -847,6 +852,7 @@ fn cover_of(c: &CoverDef) -> PackCover {
     PackCover {
         name: c.name.clone(),
         color: c.color,
+        opacity: c.opacity,
         plants: c.plants.iter().map(|(state, weight)| PackPlant { state: state.clone(), weight: *weight }).collect(),
         density: c.density,
         height: c.height,

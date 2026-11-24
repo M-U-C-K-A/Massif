@@ -107,7 +107,8 @@ WorldPainter keeps them, by the brush filters (**Except on** a terrain).
 
 A ground cover's or a tree layer's settings open in a dialog of their own
 (**Settings…** in its menu), and in Tool Settings while it is painted: its
-name and colour, and what its kind needs — a plant layer's plants, density
+name and colour (a ground cover's with the opacity it shows at on the map),
+and what its kind needs — a plant layer's plants, density
 and what it does to the water (Frost, Lava), a tree layer's objects and
 their sizes, spacing, density, turn and slot (Base or Sub-canopy), a
 pocket layer's blocks, share of the rock, size and heights, a combined

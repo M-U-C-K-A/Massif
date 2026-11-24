@@ -224,6 +224,10 @@ pub struct CoverDef {
     pub name: String,
     /// Map colour.
     pub color: [u8; 3],
+    /// How strongly its colour shows over the ground on the map, `0..=1`:
+    /// in full where something grows, lighter where the ground is bare.
+    #[serde(default = "half", skip_serializing_if = "is_half")]
+    pub opacity: f32,
     /// What it places, by block state (`minecraft:poppy`), with weights:
     /// one is picked per column.
     pub plants: Vec<(String, u16)>,
@@ -325,6 +329,17 @@ fn one_high() -> [u8; 2] {
     [1, 1]
 }
 
+/// A cover's opacity on the map, by default: as every cover showed before
+/// it had one.
+pub(crate) fn half() -> f32 {
+    0.5
+}
+
+/// For `skip_serializing_if`: an opacity left as [`half`] is not written.
+pub(crate) fn is_half(v: &f32) -> bool {
+    *v == half()
+}
+
 /// Plants that stand two blocks high, their halves told apart by `half`.
 pub const TALL_PLANTS: [&str; 9] = [
     "tall_grass",
@@ -411,6 +426,7 @@ impl CoverDef {
         Self {
             name: name.to_owned(),
             color,
+            opacity: half(),
             plants: plants.iter().map(|(b, w)| ((*b).to_owned(), *w)).collect(),
             density,
             height: one_high(),

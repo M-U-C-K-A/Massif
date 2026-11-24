@@ -2176,6 +2176,13 @@ pub fn cover_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
             def.color = [c.r(), c.g(), c.b()];
         }
     });
+    tip_row(ui, tr!("Opacity"), tr!("How strongly its colour shows on the map"), |ui| {
+        ui.add(
+            crate::widgets::Field::new(&mut def.opacity, 0.0..=1.0)
+                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
+        )
+    });
     tip_row(ui, tr!("Density"), tr!("Share of the painted ground where something grows"), |ui| {
         ui.add(
             crate::widgets::Field::new(&mut def.density, 0.0..=1.0)

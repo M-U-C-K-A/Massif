@@ -1409,7 +1409,8 @@ The **Ground cover** tool (Paint group) paints what grows on the ground:
 grass, tall grass, flowers, ferns, mushrooms, dead bushes, snow, seagrass,
 frost and lava come with every world, and **New cover** makes one of your own. A cover is
 a mix of blocks with their weights — the flowers of a meadow, or any block
-at all, typed or picked from the game's blocks — with a **density** (the
+at all, typed or picked from the game's blocks — with its colour on the map
+and the **opacity** it shows at, a **density** (the
 share of the painted ground where something grows), a **height** (cane and
 cactus 1 to 3 blocks), **only on soil** (grass, dirt, podzol, moss, mud:
 plants pop off sand and stone in the game) and **under water** (seagrass,
@@ -1420,9 +1421,12 @@ the eyedropper picks the cover under the cursor.
 Covers grow on the topmost surface of a column — the ground, a floating
 island's top, the floor a carve opens — never under an overhang. Where each
 plant grows is decided column by column from the world's seed, so the map,
-the 3D view and the export agree: zoomed in, the map shows every plant in
-its own colour (dandelions yellow, poppies red, cornflowers blue…), and the
-3D view the same. Tall plants are written in their two halves; versions of
+the 3D view and the export agree. Zoomed in, the map shows the cover's
+colour at its opacity in each column where something grows, and lighter
+(two fifths of it) where the ground stays bare; from afar, the mean of the
+two: the denser a cover grows, the more of its colour shows, and at 0 % its
+painted ground stays in sight. The 3D view shows every plant in its own
+colour (dandelions yellow, poppies red, cornflowers blue…). Tall plants are written in their two halves; versions of
 the game without a plant get the closest they have (short grass is grass
 before 1.20.3, cornflowers are blue orchids before 1.14, and before 1.13
 plants are numbered, tall ones as double plants).

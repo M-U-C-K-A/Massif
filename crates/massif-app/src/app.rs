@@ -6501,7 +6501,7 @@ fn covers_key(reg: &massif_core::Registry) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     for c in &reg.covers {
-        (c.color, c.density.to_bits(), c.removed, c.hidden, c.soil_only, c.underwater, c.height, &c.plants).hash(&mut h);
+        (c.color, c.opacity.to_bits(), c.density.to_bits(), c.removed, c.hidden, c.soil_only, c.underwater, c.height, &c.plants).hash(&mut h);
     }
     for l in &reg.object_layers {
         (l.spacing, l.density.to_bits(), l.rotate, l.mirror, l.soil_only, l.underwater, l.sink, l.replace, l.removed, l.hidden, &l.objects).hash(&mut h);
