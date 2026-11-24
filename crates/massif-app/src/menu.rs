@@ -43,6 +43,8 @@ pub enum Command {
     WholeMap(WholeOp),
     /// Edit ▸ Add Reference Image…
     AddReference,
+    /// Edit ▸ Whole map ▸ Snowfall…
+    Snowfall,
     /// Edit ▸ Smooth terrain…: the top of the land in partial blocks.
     SmoothTerrain,
     Caves,
@@ -282,6 +284,7 @@ pub fn menus(state: &State) -> Vec<Menu> {
             entries: WholeOp::ALL
                 .iter()
                 .map(|&op| tipped(Command::WholeMap(op), op.icon(), &format!("{}…", crate::i18n::tr_name(op.label())), map, crate::i18n::tr_name(op.about())))
+                .chain([Entry::Separator, tipped(Command::Snowfall, Icon::Snowflake, tr!("Snowfall…"), map, tr!("Snow laid by the wind and the slopes: drifts in the lee, bare windward ridges"))])
                 .collect(),
         },
         tipped(Command::RealTerrain, Icon::Earth, tr!("Relief of a Real Place…"), map, tr!("The heights of a place on the Earth, into the selection or the whole map")),

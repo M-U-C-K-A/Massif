@@ -30,6 +30,7 @@ mod map;
 mod ops;
 mod rivers;
 mod sim;
+mod snowfall;
 mod tectonics;
 mod templates;
 mod whole;
@@ -40,6 +41,7 @@ pub use files::{is_world, set_world_reader};
 pub use map::{GroundMap, MapSample, MapSource, SampledMap, reads_level, sample_map, surface_of};
 pub use tectonics::{Plate, scatter as scatter_plates};
 pub use templates::Template;
+pub use snowfall::{SNOW_MAX, Snow, Snowfall, lay_snow, snow_covers, snow_over};
 pub use whole::{Reshape, WHOLE_MAX, reshape_ground, reshape_preview};
 
 /// The level of water where there is none: far under any ground.

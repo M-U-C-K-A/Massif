@@ -189,7 +189,7 @@ fn change_of(dim: &Dimension, rect: BlockRect, op: &Reshape, sea: i32, n: usize,
 
 /// The columns of a tile whose surface is the ground's — not covered by
 /// the rock of another level or by what was sculpted in 3D; `None`: all.
-fn ground_on_top(pos: TilePos, tile: &Tile, others: &Others<'_>) -> Option<Vec<bool>> {
+pub(super) fn ground_on_top(pos: TilePos, tile: &Tile, others: &Others<'_>) -> Option<Vec<bool>> {
     let stack = others.stack(pos, Some((LevelKind::Ground, tile)), |_, l| reads_level(l, &[]))?;
     if stack.is_ground_only() {
         return None;

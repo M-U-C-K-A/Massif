@@ -50,6 +50,7 @@ mod render_side;
 mod references;
 mod diorama;
 mod reshape;
+mod snowfall_ui;
 mod reticle;
 mod run_script;
 mod road_draft;

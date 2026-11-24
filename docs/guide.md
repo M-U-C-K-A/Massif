@@ -11,6 +11,7 @@ The editor, part by part: the home screen, the window, brushes and their options
 - [Brushes](#brushes)
 - [Automatic biomes and paint](#automatic-biomes-and-paint)
 - [Noise painting](#noise-painting)
+- [Snowfall](#snowfall)
 - [Reference images](#reference-images)
 - [Layers](#layers)
 - [Packs](#packs)
@@ -865,6 +866,37 @@ the blocks between, so the ground keeps its own detail. On a WorldPainter
 map of 5,888 blocks a side, erosion takes about twenty seconds, the others
 two or three, terraces and smoothing under half a second.
 
+## Snowfall
+
+**Edit ▸ Whole map ▸ Snowfall…** lays snow over the map by a small
+simulation, as the wind and the slopes would leave it:
+
+- **Intensity**: how much snow falls, in blocks, before it moves.
+- **Lowest**, **Highest** and **Fade**: the band of heights it falls on,
+  thinning out over so many blocks past each end.
+- **Deepest**: the most snow anywhere, in snow layers (8 make a block).
+- **Accumulation**: how much of the snow settles where it falls; the rest
+  drifts with the wind.
+- **Steepest slope**: slopes steeper than this shed their snow, which slides
+  to their feet.
+- **Wind ▸ Strength** (how far it carries snow, in blocks; 0 for none) and
+  **From** (0° north, 90° east): the wind strips the slopes facing it and the
+  open ground, and drops the snow in the lee of ridges and in hollows, where
+  drifts gather.
+- **Iterations**: passes of the simulation; more give smoother drifts.
+- **Only on Frost and snow covers**: snow only where Frost or a cover of snow
+  layers is painted.
+
+The picture beside the settings shows the map from above with the snow it
+would lay, made again as they change, with the share of the land under snow
+and the deepest drift. **Let it snow** lays it in the background, one step to
+undo, within the selection when there is one: each column rises by the snow's
+depth in eighths of a block — Minecraft's snow layers, 1 to 8, then whole
+snow blocks under them —, takes the Snow terrain, and is smoothed (whatever
+the map's Smooth terrain switch says) so that the export writes the layers. A
+Frost or snow cover painted there is taken off the column, its snow now part
+of the ground; the water and the ice of Frost stay as they are.
+
 ## Reference images
 
 A reference image is a picture laid over or under the 2D map to trace over,
@@ -1127,6 +1159,22 @@ the background, where the brush options let it (only on grass, a height
 band, a slope…), as one step to undo. The pattern is laid in world
 coordinates: strokes side by side join without a seam, and painting a place
 again gives the same blocks.
+
+**Blend** makes the list an ordered gradient: neighbours in the list are
+dithered into each other, block by block, across their shares. At 0 the
+blocks meet in sharp bands (with the ragged edge **Soft edges** gives); at
+100 % each block fades into the next over the whole of their shares, so that
+dirt 30 %, coarse dirt 30 % and grass 40 % run from dirt through coarse dirt
+to grass with no hard line, and never dirt beside grass. The dither is
+seeded by the world position too: strokes still join.
+
+The same mix is a node of the terrain graph, **Noise paint** (an output): its
+noise, its blocks in order with their shares, and the presets — those built
+in and those saved from the brush or from the node, one list for both, so a
+mix made with the brush is laid by a graph and the other way round. Its mask
+input says where it paints (dithered where the mask is between 0 and 1);
+without one it paints everywhere. Outputs below it in the graph paint over
+it.
 
 ## Gradient brush
 
@@ -1859,7 +1907,9 @@ A world, or a part of one, from the relief of a real place on the Earth.
 - **Map size.** Over the whole map (no selection), the dialog's **Map**
   section says plainly that the map's land is replaced, and its **Size**
   can be kept or changed: **Change it** takes a new width and depth in
-  blocks, made whole tiles of 128 once typed, up to 32,768 a side. The
+  blocks, made whole tiles of 128 once typed, up to 32,768 a side (the
+  chain between them keeps them equal until it is clicked, as in every
+  size of a map: New map, a new world of a real place). The
   map is cut or grown around its middle, and the place's heights fill all
   of it, new ground included. The other levels and the sculpted ground
   (and, with **Keep**, the painted biomes, covers and objects) stay where

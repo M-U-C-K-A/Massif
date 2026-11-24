@@ -385,6 +385,8 @@ enum Dialog {
     Help(crate::help::HelpState),
     /// A filter over the whole map: its settings, the map before and after.
     Reshape(Box<crate::reshape::ReshapeForm>),
+    /// Snowfall over the whole map: its settings and a picture of the snow.
+    Snowfall(Box<crate::snowfall_ui::SnowfallForm>),
     /// The survival check of the whole map.
     Analysis(Box<crate::analysis::AnalysisView>),
     /// The ores the export lays.
@@ -3375,6 +3377,10 @@ impl MassifApp {
             Command::AutoRules => self.dialog = Some(Dialog::AutoRules(false)),
             Command::WholeMap(what) => self.open_reshape(what),
             Command::AddReference => self.pick_reference(),
+            Command::Snowfall => {
+                let map = self.doc.world.dims[self.doc.dim].snapshot();
+                self.dialog = Some(Dialog::Snowfall(Box::new(crate::snowfall_ui::SnowfallForm::new(map))));
+            }
             Command::SmoothTerrain => self.dialog = Some(Dialog::Smooth(Box::new(crate::smooth_page::SmoothForm::new(self.doc.world.meta.smooth.clone(), &self.doc.world.registry, self.doc.dimension())))),
             Command::Caves => self.open_caves(),
             Command::ImportMask => self.pick_mask(ctx, false),
@@ -4779,6 +4785,31 @@ impl MassifApp {
                 }
                 if keep {
                     self.dialog = Some(Dialog::Reshape(form));
+                }
+            }
+            Dialog::Snowfall(mut form) => {
+                use crate::snowfall_ui::Choice;
+                let mut choice = Choice::Keep;
+                let snow = self.doc.world.registry.terrain_by_name("Snow");
+                let response = modal(ctx, "snowfall").show(ctx, |ui| {
+                    choice = form.ui(ui, snow.is_some());
+                });
+                if response.should_close() {
+                    keep = false;
+                }
+                match choice {
+                    Choice::Keep => {}
+                    Choice::Close => keep = false,
+                    Choice::Apply(fall) => {
+                        keep = false;
+                        if let Some(snow) = snow {
+                            let snapshot = self.doc.world.snapshot();
+                            self.jobs.push(Job::snowfall(ctx, snapshot, self.doc.dim, fall, snow, self.doc.revision).on(self.doc.generation));
+                        }
+                    }
+                }
+                if keep {
+                    self.dialog = Some(Dialog::Snowfall(form));
                 }
             }
             Dialog::Analysis(mut view) => {
@@ -6789,6 +6820,10 @@ mod reference_tests;
 #[cfg(test)]
 #[path = "diorama_tests.rs"]
 mod diorama_tests;
+
+#[cfg(test)]
+#[path = "ideas_tests.rs"]
+mod ideas_tests;
 
 #[cfg(test)]
 mod tests {
@@ -19081,6 +19116,7 @@ mod tests {
         for op in crate::reshape::WholeOp::ALL {
             openers.push((format!("{op:?}"), Box::new(move |app: &mut MassifApp, ctx: &egui::Context| app.command(ctx, Command::WholeMap(op)))));
         }
+        openers.push(("Snowfall".into(), Box::new(|app: &mut MassifApp, ctx: &egui::Context| app.command(ctx, Command::Snowfall))));
         for section in [PrefsSection::Appearance, PrefsSection::Accessibility, PrefsSection::Typeface, PrefsSection::Sounds, PrefsSection::Notifications, PrefsSection::Memory, PrefsSection::Autosave, PrefsSection::Keyboard, PrefsSection::Updates, PrefsSection::Graphics, PrefsSection::Developer] {
             openers.push((format!("Settings-{section:?}"), Box::new(move |app: &mut MassifApp, _: &egui::Context| app.dialog = Some(Dialog::Preferences(section)))));
         }

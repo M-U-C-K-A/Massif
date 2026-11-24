@@ -437,6 +437,38 @@ impl Job {
         })
     }
 
+    /// Snow laid over the map `snapshot` (its dimension `dim`) as `fall`
+    /// says, in terrain `snow`: one step to undo.
+    pub fn snowfall(ctx: &egui::Context, mut snapshot: World, dim: usize, fall: massif_core::graph::Snowfall, snow: massif_core::registry::TerrainId, revision: u64) -> Job {
+        use massif_core::auto::Steps;
+        let progress = Arc::new(Steps::default());
+        let p = progress.clone();
+        let label = tr!("Snowfall");
+        Job::spawn(JobKind::Auto, tr!("Snowfall over the whole map").to_owned(), Some(progress as Arc<dyn JobProgress>), ctx, move || {
+            let Some(found) = massif_core::graph::snow_over(&snapshot.dims[dim], &fall, massif_core::graph::SNOW_MAX, &p.cancel) else {
+                return Outcome::Cancelled;
+            };
+            let covers = massif_core::graph::snow_covers(&snapshot.registry);
+            let mut history = massif_core::history::History::new(1);
+            history.begin(label, dim);
+            let changes = massif_core::graph::lay_snow(&mut history.edit(&mut snapshot, 0), &found, &fall, snow, &covers, &p);
+            drop(history);
+            if changes.cancelled {
+                return Outcome::Cancelled;
+            }
+            let level = &mut snapshot.dims[dim].levels[0];
+            level.encode_blobs(&changes.tiles);
+            let tiles = changes.tiles.iter().filter_map(|&pos| level.blob(pos).map(|b| (pos, b))).collect();
+            Outcome::Reshaped {
+                label,
+                tiles,
+                columns: changes.columns,
+                revision,
+                dim,
+            }
+        })
+    }
+
     /// Read the images at `paths` once through for Import mask, and draw
     /// the picture of the map `snapshot`, when given, to show where they
     /// land.
