@@ -521,11 +521,24 @@ impl Typeface {
     }
 }
 
+#[cfg(not(test))]
 static TYPEFACE: AtomicU32 = AtomicU32::new(0);
+
+// Each test on its own thread has its own typeface: a test choosing one does
+// not set the interfaces of the tests beside it in it (each harness takes
+// the typeface of the moment as it starts, see `install`).
+#[cfg(test)]
+thread_local! {
+    static TYPEFACE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
 
 /// The typeface the interface is set in.
 pub fn typeface() -> Typeface {
-    Typeface::ALL[TYPEFACE.load(Ordering::Relaxed) as usize % Typeface::ALL.len()]
+    #[cfg(test)]
+    let k = TYPEFACE.with(|t| t.get());
+    #[cfg(not(test))]
+    let k = TYPEFACE.load(Ordering::Relaxed);
+    Typeface::ALL[k as usize % Typeface::ALL.len()]
 }
 
 /// Set the interface in `face`: it comes first, the system's typeface and
@@ -533,7 +546,11 @@ pub fn typeface() -> Typeface {
 /// stay in the system's monospaced font. Every typeface also has a family
 /// of its own, for the settings to show each in itself.
 pub fn set_typeface(ctx: &egui::Context, face: Typeface) {
-    TYPEFACE.store(Typeface::ALL.iter().position(|&f| f == face).unwrap_or(0) as u32, Ordering::Relaxed);
+    let k = Typeface::ALL.iter().position(|&f| f == face).unwrap_or(0) as u32;
+    #[cfg(test)]
+    TYPEFACE.with(|t| t.set(k));
+    #[cfg(not(test))]
+    TYPEFACE.store(k, Ordering::Relaxed);
     let mut fonts = FontDefinitions::default();
     let fallback = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     for f in Typeface::ALL {
@@ -691,6 +708,20 @@ mod tests {
             };
             assert!(weight.range.min <= 400.0 && weight.range.max >= SEMIBOLD, "{}: weights {:?}", face.name(), weight.range);
         }
+    }
+
+    /// A typeface chosen in one test stays in it: each harness takes the
+    /// typeface of the moment as it starts, and the tests that started while
+    /// one went through every typeface checked their panels and dialogs in
+    /// Inter, Geist or Manrope, where some words are wider, and failed now
+    /// and then under the load of the whole suite.
+    #[test]
+    fn a_typeface_chosen_in_one_test_stays_in_it() {
+        let ctx = egui::Context::default();
+        set_typeface(&ctx, Typeface::Manrope);
+        assert_eq!(typeface(), Typeface::Manrope);
+        assert_eq!(std::thread::spawn(typeface).join().unwrap(), Typeface::System, "another test's");
+        set_typeface(&ctx, Typeface::System);
     }
 
     /// Lucide's icons show whichever typeface is chosen: none puts glyphs
