@@ -1,3 +1,0 @@
-**A tidy list of your instances' mods**
-
-The Blocks panel's **Mods with blocks in your Minecraft instances** shows each instance on one row, with its loader, the version of the game it plays, how many mods with blocks it has and **Use**, instead of every mod's file name in one long paragraph. Click a row to unfold its mods, one a line, by the names they give themselves (from `mods.toml`, `fabric.mod.json` or the `mcmod.info` of 1.12.2 mods), or their file names without versions and loader tags, with their ids and how many blocks they have; hover one for its jar's file name. A search finds instances and mods by name, id or file, and a modpack of hundreds of mods stays quick to scroll.

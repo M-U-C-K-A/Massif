@@ -1,3 +1,0 @@
-**Import mask: the mask window**
-
-Import mask opens as a window of its own where there is room: the map large with the image over it, which you drag, zoom and pan. See the image over the map at the opacity you choose, the mask alone, what the map has now (its biomes, terrains, layer, water or heights), what the import will make of it, the two side by side with a line to drag, or only what changes, with how many columns change. A legend says what each grey or colour paints, and a histogram with black point, white point, midtones and blur adjusts the mask itself before it is imported. Import is still one step to undo; Smaller goes back to the dialog.

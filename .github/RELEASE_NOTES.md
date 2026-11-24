@@ -345,6 +345,98 @@ With the pointer near the edge of the map, the hatching of Auto biome and Auto p
 
 The Render side now draws the open map path-traced on the graphics card: sunlight and skylight bounce off the land, shadows are soft, water mirrors the sky and shows the floor of the shallows, and glowing blocks (glowstone, lanterns, torches, lava…) light what is around them, with the game's textures and models of slabs, stairs, fences, plants and the rest. The map is built as an export would write it, nearest the view first, and the image grows clean while the view stays still. A look to start from (Clear noon, Golden hour, Foggy morning, Night…), the time of day and the season put the sun; haze, fog with shafts of light, clouds and a sea around the map set the air; a lens gives a depth of field (Shift-click to focus). **Save image…** draws the view at its own size, in HD, 4K or 8K, to the samples a pixel asked for, with its progress and Cancel, and writes a PNG.
 
+**Each 3D View shows its own mode.** Several 3D View areas no longer all follow one another: each has its own mode (Terrain, Height, Slope, Biome or Relief), its own water switch and its own camera, so one view can show the land in Terrain while another shows its slopes and a third its biomes. Each area is remembered with the layout and opens again as it was left, a duplicated workspace keeps them, and a new 3D View opens in Terrain, looking where the first one does.
+
+
+**A tidy list of your instances' mods**
+
+The Blocks panel's **Mods with blocks in your Minecraft instances** shows each instance on one row, with its loader, the version of the game it plays, how many mods with blocks it has and **Use**, instead of every mod's file name in one long paragraph. Click a row to unfold its mods, one a line, by the names they give themselves (from `mods.toml`, `fabric.mod.json` or the `mcmod.info` of 1.12.2 mods), or their file names without versions and loader tags, with their ids and how many blocks they have; hover one for its jar's file name. A search finds instances and mods by name, id or file, and a modpack of hundreds of mods stays quick to scroll.
+
+
+**The 2D map no longer shows black squares zoomed out, and shows the pointer**
+
+Zoomed out on a large map, a square or two of the map could stay black until you zoomed in: a part of the map drawn while the tiles it needed were being dropped from memory was drawn with holes, and kept so. It is now always drawn whole, and a part not drawn yet shows the plain background rather than black. The pointer over the 2D map is now the crosshair you chose in Settings ▸ Appearance (dot, cross, circle or Minecraft's plus), white in a dark edge that reads on dark forest as on light sand, stronger in high contrast, in place of the system's thin black crosshair that was lost on dark land; with None, the system's crosshair stays.
+
+
+**Maps taller than Minecraft's own height keep it in 26.1, 26.2 and 26.3**
+
+A map exported for Minecraft 26.1 or later with build limits past Y -64 to 320 opened cut at 319, as if its height data pack were not there: the game refused the pack, whose overworld lacked a setting 26.1 made required, and offered to open the world without it. The pack now holds each version's own overworld with the map's limits (1.21.11's sky, fog, music and beds kept too), and Minecraft 26.3, 26.2, 26.1.2, 1.21.11 and 1.21.8 load it: blocks stand up to the map's top.
+
+
+**Floating panels, and the Render side in panels with a timeline**
+
+Any panel can float: **Float** in an area's **…** menu takes it out of the layout into a window of its own over the window, moved by its title and sized by its corner; **Dock back** puts it back, or drag its title with Shift onto an area to dock it there. Floating panels are kept with their workspace. The Render side (Beta) is now made of panels and workspaces like the other sides: **Render Viewport**, **Sun and Sky**, **Camera**, **Render Output** and **Timeline**, in the workspaces **Still** and **Animation**, each area swappable, splittable and floatable, and in a **Render** section of every area's chooser. The **Timeline** keeps keyframes of the camera and the hour, saved with the map: scrub it and the view follows a smooth path between them, or play it.
+
+
+**Exports onto a USB drive from a Mac open as made**
+
+On a drive formatted for Windows (exFAT or FAT, as most USB drives and SD cards come), macOS writes a hidden "._" file beside every file it writes. Minecraft read the one beside the height data pack's overworld as a part of the pack, failed on it, and opened the world without the pack, cut at its own height. The export now removes those files from the world it writes, and from the data packs it copies in: a world exported onto such a drive opens with its height.
+
+
+**Ground covers show on the map as thick as they grow, at an opacity of their own.** Zoomed in, a cover at 100 % density took the colour of its plants, the green of grass over grass, and seemed gone, while at 0 % it stood as a solid colour. Its colour now shows in full wherever something grows and lighter where the ground stays bare, so the denser a cover, the more it shows, close up and from afar. Each cover has an **Opacity** beside its colour in its settings (50 % as before): how strongly that colour shows over the ground. The 3D view still shows every plant in its own colour.
+
+
+**Shapes sculpted in 3D stay when the map's brushes move the land around them.** An overhang, an arch or a cave built in 3D Sculpt went at the lightest click of Raise, Lower or Smooth beside it on the map, and under Smooth in 3D Sculpt, which smooths as the map does. What was sculpted now keeps its shape and rides on the ground under it: it rises or sinks by the whole blocks the land moves there, and the land the brush moved shows all around it. Each stroke is still one step to undo.
+
+
+**Reference images to trace over**
+
+Pictures can be laid over or under the 2D map to trace over, as WorldPainter's overlay (Edit ▸ Add Reference Image…, or drop a picture (PNG, JPEG, WebP, BMP, TIFF or GIF) on the map). Each is moved, scaled and turned with handles on the map or typed in (its middle, blocks a pixel, rotation), faded, shown or hidden, locked, and set over the map or under it, the map then faded over it. There can be several; they are saved with the map, found again beside it when moved with it, and never exported. A large picture stays smooth at any zoom: it is kept on the graphics card with mipmaps.
+
+
+**Diorama (Beta): the map from above, as the game shows it**
+
+A new view, **Diorama**, in the **View** section of every area's chooser, shows the map from straight above block by block with the game's textures: the trees, plants, houses and other objects an export would place, the water over the shallows, and relief light and shadows so slopes, cliffs and valleys read. Drag to pan, scroll to zoom down to the blocks, **R** to turn the view, **Space** to recentre; **C** shows the caves under a height moved with **Page Up** and **Page Down**. It sits beside the 2D map, floats, and follows your edits as you paint.
+
+
+**Import mask: placing the image is precise**
+
+In Edit ▸ Import mask, the Offset sliders no longer jump tens of thousands of blocks at the slightest move: they span the map, from where the image just touches one edge to where it touches the other, a block a step, and any value typed in is kept exactly. Scale spreads in ratios around the scale that fits the map and a block a pixel, and keeps the image's middle where it is. The image can be dragged on the small map with the mouse, and nudged with the arrow keys, a block a press or 16 with Shift. The Offset row is named in full.
+
+
+**Fixes from the fifth beta's reports**
+
+New mix in the Layers panel makes a mix at once, listed and chosen, its name ready to change. Alt + click picks what is under the cursor, as WorldPainter's eyedropper does: the terrain, or the biome, ground cover or tree layer of the tool in hand, on the map and in the 3D view (Alt with the left button no longer does the tool's inverse: the right button does). In a layer's settings window, Base and Sub-canopy answer the click again while Tool Settings shows the same layer. The right button of a tree layer, a ground cover or a pocket layer rubs out that layer alone, no longer every one of its kind under the brush. On Windows, the game's jar is looked for on every drive and beside the mods chosen (a CurseForge instance on D: or E:), so that Add mods… and Instance… read their blocks. Picking Paint biome shows the map's biomes and Paint terrain its terrains, the view coming back after (Settings ▸ Appearance). Test Export… asks which part of the map to try: the selection, around the view, or blocks typed in.
+
+
+**Floating panels in windows of their own**
+
+**Float** in an area's **…** menu now opens the panel in a real window of your system: move it anywhere, onto another screen, and size it as any window; the map, the 3D View, the Render Viewport and every other panel work there as in the layout. **Dock back** in its **…** menu puts it back, and so does closing its window. Floating panels are kept with their workspace and open where you left them, on a screen there is if theirs was unplugged.
+
+
+**Import mask keeps the image as a reference image**
+
+Import mask now leaves the imported picture on the 2D map as a reference image, exactly where it landed, so you can see the source under what it painted. It is on by default, at the opacity you set, and can be turned off with "Keep the image as a reference image". It is kept with the map like any reference image, never exported, and the map's Reference images button shows, fades, moves or removes it. It replaces the guide that was shown only until the map was closed.
+
+
+**The Render side is as bright on screen as the images it saves**
+
+The Render Viewport showed its image much darker than the PNG that **Save image…** writes from the same camera: the sea nearly black, the land dull. It now shows the same colours as the saved image.
+
+
+**A flood never stops halfway.** Flood changes up to 67,108,864 columns (a square of some 8,000 blocks a side), and it used to stop wherever it was once it reached them: on a large map, a flood that ran out over low land or the sea, a held raise past the rim of a lake, or a Shift + right click on a sea that large left the water it had laid standing cut off where it stopped, a box of water with sheer walls over the land and the sea. Now a flood, a raise, a lowering or a drain that would change more than that changes nothing, and the message says why.
+
+
+**A WorldPainter world keeps its terrains and layers apart, with forests as dense as WorldPainter's, and is as quick right after its import as once reopened.** Custom ground covers came in baked into the terrains, a new terrain for every cover over every terrain ("Water Block on Overgrown Small Stones"), thousands on a large map. They now come in as ground covers of their blocks, as high as they are thick, painted where they were, over the map's own terrains. Tree and object layers stood far fewer trees than WorldPainter's export, a dense forest turning into open woodland: the import now plays WorldPainter's placement with the trees' own shapes and gives each layer the spacing and density that stand as many, at every strength painted, and overlapping tree layers all stand mixed rather than the strongest alone. A large world with ground covers or tunnels kept gigabytes of its map unpacked in memory after the import, and was slow until saved and reopened; it is now stored as a reopened map is.
+
+
+**The 3D View no longer cuts pits in a deep sea.** Where the ocean floor of a map lies at the bottom of the world, at y -64, the part of the 3D View drawn block by block around the eyes showed a pit in the sea: no water over those columns, and sheer walls of water down to the floor of the sea around them. The rest of the map, drawn coarser, showed the sea whole, and the exported world was right. These columns hold their water in the 3D View again, over the floor of the world.
+
+
+**Import mask: the mask window**
+
+Import mask opens as a window of its own where there is room: the map large with the image over it, which you drag, zoom and pan. See the image over the map at the opacity you choose, the mask alone, what the map has now (its biomes, terrains, layer, water or heights), what the import will make of it, the two side by side with a line to drag, or only what changes, with how many columns change. A legend says what each grey or colour paints, and a histogram with black point, white point, midtones and blur adjusts the mask itself before it is imported. Import is still one step to undo; Smaller goes back to the dialog.
+
+
+**Reference images stay out of the way of the tools**
+
+A reference image no longer moves under a brush: clicks and strokes over it go to the tool in hand, as on the bare map. Its handles show only with the Pan tool, or after Edit placement in its menu, until Done or Esc.
+
+
+**Biome colours of Minecraft 26.1 and later**
+
+With the game's 26.1 or later read, swamps, badlands, warm oceans and the other biomes that name their own grass, leaf or water colours have them again in the 3D views and on the Biome map, rather than the colours of plains.
+
 ## New in 0.6.0
 
 **Massif in French and German.** The whole interface (menus, panels, tools and their cards, tooltips, dialogs, the home screen, Settings and the macOS menu bar) is now also in French and in German, in the words Minecraft and WorldPainter players use. Massif follows the system's language by default; **Settings ▸ Appearance ▸ Language** picks another, and the change applies at once, without a restart. A text not yet translated shows in English rather than in pieces, and the help and the online guide stay in English for now. Names that belong to your map (layers, levels, workspaces you renamed) stay as you wrote them.
