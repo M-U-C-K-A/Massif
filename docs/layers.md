@@ -139,6 +139,41 @@ layer's layer of each slot and its share. A double-click renames a layer.
 Each section has its button to add one: New combined, New mix, New
 cover, Import objects…, New pockets.
 
+## Object settings
+
+A tree or object layer lists its objects one a row, as WorldPainter's
+object layer dialog: a click picks one, **Shift+Click** or
+**Shift+↑/↓** a run of them, **⌘/Ctrl+Click** adds or takes one out,
+**⌘/Ctrl+A** all of them. The settings under the list are those of the
+objects picked: a change goes to each, and a setting they do not share
+reads *mixed*. An object two layers share is copied before one of them
+changes it, so that the other keeps it as it was.
+
+Each object has its **frequency** against the others and its **origin**,
+the block of it set on the spot over the ground. With **Own rules**, it
+has every attribute of WorldPainter's object dialog, in place of its
+layer's turning, mirroring, Under water and Replace the ground (the
+layer's Only on soil and Sink still hold):
+
+| Setting | What it does |
+|---|---|
+| Turned, Mirrored | At random, or always as set |
+| Height, Raised by, Varied by | Over the ground or at a fixed height; that many blocks higher; up to that many higher or lower, at random |
+| On land, Under water, On water, Under lava, On lava | Where it may stand: dry ground, the bottom or the top of water and lava |
+| On air | At a fixed height over the ground, it floats rather than being left out |
+| Collides with the floor | Standing on water, its blocks under the water stop at the floor |
+| Extends its foundation | Its lowest blocks go on down to the ground where it would float |
+| Collides with | Over the ground, it takes the place of air only (All), of air, water and plants (Solid), or of anything (None) |
+| Replaces underground | All its blocks in the ground replace it, its solid ones, or none (they only fill air) |
+| Leaves | As they are, made to decay, or never to |
+| Waterlogged | By the water it stands in, or as the object has them |
+| Joins fences and panes | Its fences, panes, bars and walls join their neighbours in it |
+| Placed as air | A block of it written as air: a hollow in the ground |
+
+The map and the 3D view show where each object stands, turned and raised
+as its rules say; its blocks' rules (collisions, leaves, joins, air) are
+the export's. Objects without own rules export byte for byte as before.
+
 ## Saving, packs, WorldPainter and export
 
 - The map saves every layer, its settings and what is painted, and its
@@ -164,17 +199,17 @@ what was not carried over.
 | WorldPainter `.layer` | In Massif |
 |---|---|
 | Plant layer | A ground cover of the same plants, in the same shares, on valid blocks only if it asked |
-| Custom object layer (Bo2, schematics, structures) | An object layer of its objects, read from the file, with their offset, frequency, random turn, density and grid; the trees of WorldPainter's tree pack, the pack's own |
+| Custom object layer (Bo2, schematics, structures) | An object layer of its objects, read from the file, with their offset, frequency, density and grid, and every attribute of each object as its own rules (see Object settings); the trees of WorldPainter's tree pack, the pack's own |
 | Ground cover layer | Laid over the land: a ground cover of its blocks, as high as it is thick. Taking the place of the top of the land: a terrain of its blocks, that deep (in a `.world`, a ground cover on the ground lowered as deep) |
 | Underground pockets layer | Underground pockets of the same blocks, as frequent and as large, between the same heights |
 | Combined layer | A combined layer: its terrain (a custom one from the material written with it), its biome, and the first layer of each slot it holds at its factor; the others it holds are layers of their own |
 | Tunnel and floating layers | Not carried over: Massif carves and raises land with Carve and Solid levels |
 | Custom annotation layers | Not carried over: Massif's annotations are fifteen colours |
 
-Not carried over either, and said in the report: the collision,
-underground, leaf decay, foundation and height settings of a custom object
-layer's objects, and their entities (an object of air or entities only is
-empty); a ground cover's edge shape and noise; farmland under crops. A
+Not carried over either, and said in the report: the entities of a
+custom object layer's objects (an object of air or entities only is
+empty) and the old form of their Replace with air; a ground cover's edge
+shape and noise; farmland under crops. A
 layer of the map is never changed: one with the name of a layer of the file
 but other settings stays as it is, the file's becoming a layer of its own
 ("Meadow 2"); a plant layer imported twice is one ground cover.

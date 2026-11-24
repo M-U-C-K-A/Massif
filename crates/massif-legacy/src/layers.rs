@@ -234,6 +234,7 @@ impl Converter {
                     if let Some(c) = arena.field(key, "colour").and_then(|c| arena.int(c)).filter(|&c| c != 0) {
                         def.color = [(c >> 16) as u8, (c >> 8) as u8, c as u8];
                     }
+                    def.palette = palette_of(arena, key, &mut mapper.registry);
                     let sink = if thickness < 0 { def.height[0] } else { 0 };
                     self.ground_covers.push(cover);
                     return vec![(Conv::Laid { cover: mapper.registry.add_cover(def), sink }, 1.0)];
@@ -520,6 +521,10 @@ fn object_layer(arena: &Arena, key: Value, name: &str, reg: &mut Registry) -> Op
         water |= flag("WPObject.spawnInWater", false);
         land |= flag("WPObject.spawnOnLand", true);
         let frequency = attribute("WPObject.frequency").and_then(|v| arena.int(v)).unwrap_or(100).clamp(1, u16::MAX as i64) as u16;
+        let int = |key: &str| attribute(key).and_then(|v| arena.int(v));
+        let bool = |key: &str| attribute(key).and_then(|v| arena.bool(v));
+        let air = attribute("WPObject.replaceWithAirMaterial").filter(|m| *m != Value::Null).map(|m| crate::worldpainter::material_state(arena, m));
+        def.rules = Some(Box::new(object_rules(&int, &bool, air)));
         def.source = format!("WorldPainter layer {name}");
         reg.objects.push(def);
         weights.push(frequency);
@@ -563,6 +568,55 @@ pub fn calibrate(layer: &mut massif_core::objects::ObjectLayerDef, reg: &Registr
     }
     let shares = std::array::from_fn(|s| if full > 0.0 { (coverage.per_column[s] / full * 255.0).round().clamp(0.0, 255.0) as u8 } else { 0 });
     (coverage, Curve::Shares(shares))
+}
+
+/// An object's attributes in WorldPainter (`ints` reads a number one by
+/// its key, `bools` a boolean one; `air` is its Replace with air block) as
+/// Massif's rules for it: all of them, WorldPainter's defaults for those
+/// it does not have.
+fn object_rules(ints: &dyn Fn(&str) -> Option<i64>, bools: &dyn Fn(&str) -> Option<bool>, air: Option<String>) -> massif_core::objects::ObjectRules {
+    use massif_core::objects::{Collision, Leaves, Mirroring, ObjectRules, Turning, Underground};
+    let int = |key: &str, default: i64| ints(key).unwrap_or(default);
+    let flag = |key: &str, default: bool| bools(key).unwrap_or(default);
+    // Random rotation once meant turning and mirroring both; the two
+    // "only" attributes each say one of them.
+    let both = flag("WPObject.randomRotation", true);
+    // WorldPainter's modes: 1 all, 2 solid, 3 none.
+    let collision = |key: &str, default: i64| match int(key, default) {
+        1 => Collision::All,
+        3 => Collision::Nothing,
+        _ => Collision::Solid,
+    };
+    ObjectRules {
+        turning: if both || flag("WPObject.randomRotationOnly", false) { Turning::Random } else { Turning::Fixed(0) },
+        mirroring: if both || flag("WPObject.randomMirroringOnly", false) { Mirroring::Random } else { Mirroring::Never },
+        on_land: flag("WPObject.spawnOnLand", true),
+        on_air: !flag("WPObject.needsFoundation", true),
+        under_water: flag("WPObject.spawnInWater", false),
+        on_water: flag("WPObject.spawnOnWater", false),
+        collide_with_floor: !flag("WPObject.spawnOnWater.noCollide", false),
+        under_lava: flag("WPObject.spawnInLava", false),
+        on_lava: flag("WPObject.spawnOnLava", false),
+        collision: collision("WPObject.collisionMode", 2),
+        underground: match int("WPObject.undergroundMode", 1) {
+            2 => Underground::Solid,
+            3 => Underground::None,
+            _ => Underground::All,
+        },
+        leaves: match int("WPObject.leafDecay", 1) {
+            2 => Leaves::Decay,
+            3 => Leaves::Persistent,
+            _ => Leaves::AsTheyAre,
+        },
+        manage_waterlogged: flag("WPObject.manageWaterlogged", true),
+        replace_with_air: air,
+        extend_foundation: flag("WPObject.extendFoundation", false),
+        // 1: on the terrain, 2: at a fixed height.
+        fixed_height: int("WPObject.heightMode", 1) == 2,
+        offset: int("WPObject.verticalOffset", 0).clamp(i16::MIN as i64, i16::MAX as i64) as i16,
+        variation: int("WPObject.yVariation", 0).clamp(0, 255) as u8,
+        connect_blocks: flag("WPObject.connectBlocks", false),
+    }
 }
 
 /// Where an object stands, in its box: the block WorldPainter puts on the
@@ -1359,6 +1413,44 @@ mod tests {
         assert_eq!(bush.size, [1, 2, 1]);
         assert!(bush.palette[bush.blocks[0] as usize].starts_with("minecraft:oak_log"), "{:?}", bush.palette);
         assert!(bush.palette[bush.blocks[1] as usize].starts_with("minecraft:oak_leaves"), "{:?}", bush.palette);
+    }
+
+    /// Every attribute of WorldPainter's object dialog is kept: an object
+    /// of none stands by WorldPainter's defaults, one of them all as they
+    /// say.
+    #[test]
+    fn object_attributes_become_its_rules() {
+        use massif_core::objects::{Collision, Leaves, Mirroring, ObjectRules, Turning, Underground};
+        assert_eq!(object_rules(&|_| None, &|_| None, None), ObjectRules::default());
+        let ints = |k: &str| match k {
+            "WPObject.collisionMode" => Some(3),
+            "WPObject.undergroundMode" => Some(2),
+            "WPObject.leafDecay" => Some(3),
+            "WPObject.heightMode" => Some(2),
+            "WPObject.verticalOffset" => Some(90),
+            "WPObject.yVariation" => Some(4),
+            _ => None,
+        };
+        let bools = |k: &str| match k {
+            "WPObject.randomRotation" => Some(false),
+            "WPObject.randomMirroringOnly" => Some(true),
+            "WPObject.needsFoundation" => Some(false),
+            "WPObject.spawnOnLand" => Some(false),
+            "WPObject.spawnOnWater" => Some(true),
+            "WPObject.spawnOnWater.noCollide" => Some(true),
+            "WPObject.spawnInLava" => Some(true),
+            "WPObject.manageWaterlogged" => Some(false),
+            "WPObject.extendFoundation" => Some(true),
+            "WPObject.connectBlocks" => Some(true),
+            _ => None,
+        };
+        let r = object_rules(&ints, &bools, Some("minecraft:glass".into()));
+        assert_eq!((r.turning, r.mirroring), (Turning::Fixed(0), Mirroring::Random));
+        assert_eq!((r.on_land, r.on_air, r.on_water, r.collide_with_floor, r.under_lava, r.under_water, r.on_lava), (false, true, true, false, true, false, false));
+        assert_eq!((r.collision, r.underground, r.leaves), (Collision::Nothing, Underground::Solid, Leaves::Persistent));
+        assert_eq!((r.fixed_height, r.offset, r.variation), (true, 90, 4));
+        assert!(!r.manage_waterlogged && r.extend_foundation && r.connect_blocks);
+        assert_eq!(r.replace_with_air.as_deref(), Some("minecraft:glass"));
     }
 
     /// Where WorldPainter's tunnel modes put a floor and a roof, over ground

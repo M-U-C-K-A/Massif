@@ -149,7 +149,7 @@ fn describe_import(reg: &massif_core::registry::Registry, file: String, layer: &
             LeftOut::Annotations(name) => tr!("“{name}” is an annotation layer: Massif's annotations are fifteen colours, painted with the Annotations tool.", name),
             LeftOut::CustomTerrain(name) => tr!("The custom terrain of “{name}” could not be read.", name),
             LeftOut::Unknown(what) => tr!("“{what}”: Massif has no layer like it.", what),
-            LeftOut::Settings(name, Setting::ObjectRules) => tr!("“{name}”: the collision, underground, leaf decay, foundation and height settings of its objects.", name),
+            LeftOut::Settings(name, Setting::ObjectRules) => tr!("“{name}”: attributes of its objects Massif does not know (the old form of Replace with air).", name),
             LeftOut::Settings(name, Setting::Edges) => tr!("“{name}”: its edge shape.", name),
             LeftOut::Settings(name, Setting::Noise) => tr!("“{name}”: its noise.", name),
             LeftOut::Settings(name, Setting::Farmland) => tr!("“{name}”: farmland under its crops.", name),

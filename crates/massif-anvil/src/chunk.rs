@@ -86,6 +86,10 @@ pub struct ExportContext<'a> {
     objects: Vec<Vec<Vec<u16>>>,
     /// The first state that is not a block of the registry: plants of
     /// covers and blocks of objects, which objects may take the place of.
+    /// Objects as their own rules place them (see
+    /// [`massif_core::objects::ObjectDef::shaped`]), by index; `None` for
+    /// those placed as they are.
+    shaped: Vec<Option<massif_core::objects::ObjectDef>>,
     first_extra: u16,
     /// The first state of an object's block (after the plants of covers):
     /// a sub-canopy object never takes the place of one.
@@ -227,7 +231,10 @@ impl<'a> ExportContext<'a> {
         let mut known: std::collections::HashMap<String, u16> = std::collections::HashMap::new();
         let mut waterlogged: Vec<(u16, u16)> = Vec::new();
         let mut objects = Vec::with_capacity(reg.objects.len());
+        // Objects whose own rules change their blocks, as placed.
+        let shaped: Vec<Option<massif_core::objects::ObjectDef>> = reg.objects.iter().enumerate().map(|(k, def)| if used.contains(&(k as u32)) { def.shaped() } else { None }).collect();
         for (k, def) in reg.objects.iter().enumerate() {
+            let def = shaped[k].as_ref().unwrap_or(def);
             if !used.contains(&(k as u32)) {
                 objects.push(Vec::new());
                 continue;
@@ -502,6 +509,7 @@ impl<'a> ExportContext<'a> {
             covers,
             soil,
             objects,
+            shaped,
             first_extra: reg.blocks.len() as u16,
             first_object,
             reach,
@@ -780,13 +788,23 @@ pub fn tile_placements(ctx: &ExportContext, world: &World, dim: &Dimension, pos:
 
 /// Stand objects in the blocks of the chunk whose corner is `(x0, z0)`.
 fn stand_objects(ctx: &ExportContext, objects: &[Placement], x0: i32, z0: i32, blocks: &mut [u16]) {
+    use massif_core::objects::{Collision, Underground};
     let (min_y, max_y) = (ctx.min_y, ctx.max_y);
     // The base layers' objects first; the sub-canopy ones then grow in
     // the air they leave.
     for p in objects.iter().filter(|p| !p.under).chain(objects.iter().filter(|p| p.under)) {
         let (Some(def), Some(ways)) = (ctx.reg.objects.get(p.object as usize), ctx.objects.get(p.object as usize)) else { continue };
+        let def = ctx.shaped.get(p.object as usize).and_then(Option::as_ref).unwrap_or(def);
         let Some(states) = ways.get((p.turn & 3) as usize + if p.mirror { 4 } else { 0 }) else { continue };
         let replace = ctx.reg.object_layer(p.layer).is_some_and(|l| l.replace);
+        let rules = def.rules.as_deref();
+        // Its own rules: the block it places as air, and which of its
+        // blocks are solid (for Replace underground blocks: solid).
+        let carve = rules.and_then(|r| r.replace_with_air.as_deref()).map(massif_core::objects::canonical).and_then(|air| def.palette.iter().position(|s| *s == air)).map(|k| k as u16);
+        let solid = |k: u16| {
+            let state = &def.palette[k as usize];
+            massif_core::registry::plant_color(state).is_none() && !state.split('[').next().unwrap_or(state).ends_with("leaves")
+        };
         let [w, h, l] = def.size.map(|s| s as i32);
         let base = p.y - def.anchor[1] as i32;
         for bz in 0..l {
@@ -803,8 +821,12 @@ fn stand_objects(ctx: &ExportContext, objects: &[Placement], x0: i32, z0: i32, b
                         continue;
                     }
                     let k = def.at(bx as usize, by as usize, bz as usize);
-                    let state = states.get(k as usize).copied().unwrap_or(SKIP);
-                    if k == 0 || state == SKIP {
+                    if k == 0 {
+                        continue;
+                    }
+                    let hollow = carve == Some(k);
+                    let state = if hollow { 0 } else { states.get(k as usize).copied().unwrap_or(SKIP) };
+                    if state == SKIP {
                         continue;
                     }
                     let i = (((y - min_y) as usize) << 8) | column;
@@ -813,10 +835,47 @@ fn stand_objects(ctx: &ExportContext, objects: &[Placement], x0: i32, z0: i32, b
                     // the place of air, water, plants and other objects; a
                     // sub-canopy one, of air, water and plants.
                     let free = old == 0 || old == ctx.water || (old >= ctx.first_extra && old < if p.under { ctx.first_object } else { ctx.first_ore });
-                    if (replace && !p.under) || free {
-                        // In still water, a block that can hold water does.
-                        let wet = if old == ctx.water && !ctx.lava { ctx.waterlogged.binary_search_by_key(&state, |w| w.0).ok().map(|k| ctx.waterlogged[k].1) } else { None };
-                        blocks[i] = wet.unwrap_or(state);
+                    let place = match rules {
+                        None => (replace && !p.under) || free,
+                        Some(_) if hollow => true,
+                        Some(r) => {
+                            let ground = !(old == 0 || old == ctx.water || (old >= ctx.first_extra && old < ctx.first_ore));
+                            if ground {
+                                (r.on_water && !r.collide_with_floor)
+                                    || match r.underground {
+                                        Underground::All => true,
+                                        Underground::Solid => solid(k),
+                                        Underground::None => false,
+                                    }
+                            } else {
+                                match r.collision {
+                                    Collision::All => old == 0,
+                                    Collision::Solid => free,
+                                    Collision::Nothing => !p.under || free,
+                                }
+                            }
+                        }
+                    };
+                    if !place {
+                        continue;
+                    }
+                    // In still water, a block that can hold water does.
+                    let manage = rules.is_none_or(|r| r.manage_waterlogged);
+                    let wet = if manage && old == ctx.water && !ctx.lava { ctx.waterlogged.binary_search_by_key(&state, |w| w.0).ok().map(|k| ctx.waterlogged[k].1) } else { None };
+                    let state = wet.unwrap_or(state);
+                    blocks[i] = state;
+                    // Its lowest blocks go on down to the ground.
+                    if by == 0 && !hollow && rules.is_some_and(|r| r.extend_foundation) {
+                        let mut y = y - 1;
+                        while y >= min_y {
+                            let i = (((y - min_y) as usize) << 8) | column;
+                            let old = blocks[i];
+                            if !(old == 0 || old == ctx.water || (old >= ctx.first_extra && old < ctx.first_object)) {
+                                break;
+                            }
+                            blocks[i] = state;
+                            y -= 1;
+                        }
                     }
                 }
             }

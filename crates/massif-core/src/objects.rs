@@ -15,6 +15,14 @@ use crate::coords::{BlockRect, TilePos, local_index};
 use crate::registry::{Registry, is_soil};
 use serde::{Deserialize, Serialize};
 
+/// `state` with property `key` set to `value`, added when it has none.
+pub fn set_property(state: &str, key: &str, value: &str) -> String {
+    let (name, rest) = state.split_once('[').unwrap_or((state, ""));
+    let mut props: Vec<String> = rest.trim_end_matches(']').split(',').map(str::trim).filter(|p| !p.is_empty() && p.split('=').next() != Some(key)).map(str::to_owned).collect();
+    props.push(format!("{key}={value}"));
+    format!("{name}[{}]", props.join(","))
+}
+
 /// Whether a block of a schematic means "nothing here": air, and the
 /// structure void that marks the empty parts of a structure.
 pub fn is_nothing(state: &str) -> bool {
@@ -54,6 +62,176 @@ pub struct ObjectDef {
     /// (see [`ObjectDef::color`]).
     #[serde(default)]
     pub colors: Vec<[u8; 3]>,
+    /// Its tree size, set by hand: an index into
+    /// [`Registry::tree_sizes`](crate::registry::Registry::tree_sizes)
+    /// plus one; 0 to have it guessed from its height among the objects
+    /// of its layer (see [`ObjectLayerDef::size_classes`]).
+    #[serde(default, skip_serializing_if = "is_zero_u8")]
+    pub tree_size: u8,
+    /// How it stands, its own rules rather than its layer's: WorldPainter's
+    /// object attributes. `None`: as its layer says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rules: Option<Box<ObjectRules>>,
+}
+
+fn is_zero_u8(n: &u8) -> bool {
+    *n == 0
+}
+
+/// How an object is turned: at random a quarter turn, or always as given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Turning {
+    Random,
+    /// Quarter turns clockwise, 0 to 3.
+    Fixed(u8),
+}
+
+/// How an object is mirrored (east and west swapped).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Mirroring {
+    Random,
+    Never,
+    Always,
+}
+
+/// What blocks already there an object's blocks give way to, as
+/// WorldPainter's collision and underground modes: `All` gives way to
+/// any block (it only takes the place of air), `Solid` to solid blocks
+/// (it takes the place of air, water and plants), `Nothing` takes the
+/// place of everything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Collision {
+    All,
+    Solid,
+    Nothing,
+}
+
+/// Which of an object's blocks in the ground take the place of the ground,
+/// as WorldPainter's underground modes: all of them, its solid ones (the
+/// others only where there is air), or none (they only go where there is
+/// air).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Underground {
+    All,
+    Solid,
+    None,
+}
+
+/// What an object's leaves do in the game.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Leaves {
+    /// As the object has them.
+    AsTheyAre,
+    /// They fall away when no log holds them.
+    Decay,
+    /// They never fall away.
+    Persistent,
+}
+
+/// An object's own rules, all of WorldPainter's object attributes: where
+/// it may stand, how it is turned and set in the ground, what it gives
+/// way to. They stand in for its layer's turning, mirroring, Under water
+/// and Replace the ground; the layer's Only on soil and Sink still hold.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ObjectRules {
+    pub turning: Turning,
+    pub mirroring: Mirroring,
+    /// On dry land.
+    pub on_land: bool,
+    /// Without a solid block under it: at a fixed height over the ground,
+    /// it floats rather than being left out.
+    pub on_air: bool,
+    /// On the bottom of water, under it.
+    pub under_water: bool,
+    /// On the top of water, floating.
+    pub on_water: bool,
+    /// Standing on water, its blocks under the water stop at the floor
+    /// (rather than going through it).
+    pub collide_with_floor: bool,
+    /// On the bottom of lava, and on its top (a map of lava seas).
+    pub under_lava: bool,
+    pub on_lava: bool,
+    /// What its blocks over the ground give way to.
+    pub collision: Collision,
+    /// Which of its blocks in the ground replace it.
+    pub underground: Underground,
+    pub leaves: Leaves,
+    /// Its blocks that can hold water do where they stand in water, and
+    /// do not out of it; otherwise they stay as the object has them.
+    pub manage_waterlogged: bool,
+    /// A block of the object (a state, `minecraft:glass`) placed as air
+    /// rather than itself: to carve a hollow underground.
+    pub replace_with_air: Option<String>,
+    /// Its lowest blocks go on down to the ground when it would float.
+    pub extend_foundation: bool,
+    /// At a fixed height (`offset` is then that height) rather than over
+    /// the ground.
+    pub fixed_height: bool,
+    /// How many blocks over the ground (or, at a fixed height, at what
+    /// height) its anchor stands.
+    pub offset: i16,
+    /// How many blocks higher or lower it may stand, at random: 0 to
+    /// this, about evenly up and down.
+    pub variation: u8,
+    /// Fences, panes, bars and walls of the object join their neighbours.
+    pub connect_blocks: bool,
+}
+
+impl Default for ObjectRules {
+    /// WorldPainter's defaults.
+    fn default() -> Self {
+        Self {
+            turning: Turning::Random,
+            mirroring: Mirroring::Random,
+            on_land: true,
+            on_air: false,
+            under_water: false,
+            on_water: false,
+            collide_with_floor: true,
+            under_lava: false,
+            on_lava: false,
+            collision: Collision::Solid,
+            underground: Underground::All,
+            leaves: Leaves::AsTheyAre,
+            manage_waterlogged: true,
+            replace_with_air: None,
+            extend_foundation: false,
+            fixed_height: false,
+            offset: 0,
+            variation: 0,
+            connect_blocks: false,
+        }
+    }
+}
+
+impl ObjectRules {
+    /// The rules a layer gives its objects, as an object's own.
+    pub fn of_layer(layer: &ObjectLayerDef) -> Self {
+        Self {
+            turning: if layer.rotate { Turning::Random } else { Turning::Fixed(0) },
+            mirroring: if layer.mirror { Mirroring::Random } else { Mirroring::Never },
+            on_land: !layer.underwater,
+            under_water: layer.underwater,
+            collision: if layer.replace { Collision::Nothing } else { Collision::Solid },
+            underground: if layer.replace { Underground::All } else { Underground::None },
+            offset: 0,
+            ..Self::default()
+        }
+    }
+
+    /// Whether it may stand where the top is dry (`None`), under water
+    /// or lava (`Some(lava)`), on the floor (`floor`) or on the top of the
+    /// liquid.
+    pub fn may_stand(&self, liquid: Option<bool>, floor: bool) -> bool {
+        match (liquid, floor) {
+            (None, _) => self.on_land,
+            (Some(false), true) => self.under_water,
+            (Some(false), false) => self.on_water,
+            (Some(true), true) => self.under_lava,
+            (Some(true), false) => self.on_lava,
+        }
+    }
 }
 
 /// A colour for a block, told from its name, when the game's own is not
@@ -145,6 +323,8 @@ impl ObjectDef {
             anchor: [0; 3],
             source: String::new(),
             colors: Vec::new(),
+            tree_size: 0,
+            rules: None,
         };
         def.normalise();
         def.anchor = def.find_anchor();
@@ -241,7 +421,84 @@ impl ObjectDef {
         let mut def = ObjectDef::new(name, new.map(|s| s as u16), self.palette.clone(), blocks);
         def.anchor = std::array::from_fn(|k| ((self.anchor[k] as f32 * scale).floor() as u16).min(new[k] as u16 - 1));
         def.source = self.source.clone();
+        def.rules = self.rules.clone();
         def
+    }
+
+    /// The object as its own rules place it, when they change its blocks:
+    /// its leaves made to decay or not, its fences, panes, bars and walls
+    /// joined to their neighbours in it. `None` when they change nothing.
+    pub fn shaped(&self) -> Option<ObjectDef> {
+        let rules = self.rules.as_deref()?;
+        if rules.leaves == Leaves::AsTheyAre && !rules.connect_blocks {
+            return None;
+        }
+        let mut def = self.clone();
+        if rules.leaves != Leaves::AsTheyAre {
+            let persistent = if rules.leaves == Leaves::Persistent { "true" } else { "false" };
+            for state in def.palette.iter_mut().skip(1) {
+                let name = state.split('[').next().unwrap_or(state);
+                if name.ends_with("leaves") {
+                    *state = canonical(&set_property(state, "persistent", persistent));
+                }
+            }
+        }
+        if rules.connect_blocks {
+            let [w, h, l] = self.size.map(|s| s as usize);
+            let kind = |k: u16| -> Option<&'static str> {
+                let name = self.palette.get(k as usize)?.split('[').next()?;
+                if name.ends_with("_fence") {
+                    Some("fence")
+                } else if name.ends_with("_pane") || name.ends_with("iron_bars") {
+                    Some("pane")
+                } else if name.ends_with("_wall") {
+                    Some("wall")
+                } else {
+                    None
+                }
+            };
+            // Whether a block of the object a fence or a pane joins: its
+            // own kind, or a whole block (not a plant, leaves or the like).
+            let joins = |k: u16, own: &str| -> bool {
+                if k == 0 {
+                    return false;
+                }
+                if let Some(other) = kind(k) {
+                    return other == own || own != "fence" && other != "fence";
+                }
+                let state = &self.palette[k as usize];
+                let name = state.split('[').next().unwrap_or(state);
+                crate::registry::plant_color(state).is_none() && !["leaves", "slab", "stairs", "door", "torch", "button", "sign", "carpet", "trapdoor", "ladder", "lantern", "chain", "rail"].iter().any(|w| name.contains(w))
+            };
+            for y in 0..h {
+                for z in 0..l {
+                    for x in 0..w {
+                        let i = x + z * w + y * w * l;
+                        let k = self.blocks[i];
+                        let Some(own) = kind(k) else { continue };
+                        let near = |dx: i32, dz: i32| -> bool {
+                            let (nx, nz) = (x as i32 + dx, z as i32 + dz);
+                            nx >= 0 && nz >= 0 && (nx as usize) < w && (nz as usize) < l && joins(self.blocks[nx as usize + nz as usize * w + y * w * l], own)
+                        };
+                        let (on, off) = if own == "wall" { ("low", "none") } else { ("true", "false") };
+                        let mut state = self.palette[k as usize].clone();
+                        for (side, dx, dz) in [("north", 0, -1), ("east", 1, 0), ("south", 0, 1), ("west", -1, 0)] {
+                            state = set_property(&state, side, if near(dx, dz) { on } else { off });
+                        }
+                        let state = canonical(&state);
+                        let n = match def.palette.iter().position(|p| *p == state) {
+                            Some(n) => n,
+                            None => {
+                                def.palette.push(state);
+                                def.palette.len() - 1
+                            }
+                        };
+                        def.blocks[i] = n as u16;
+                    }
+                }
+            }
+        }
+        Some(def)
     }
 
     /// The palette index of block `(x, y, z)` of the box.
@@ -525,6 +782,9 @@ impl ObjectLayerDef {
             pick,
             turn: if self.rotate { (h(4) % 4) as u8 } else { 0 },
             mirror: self.mirror && h(5) & 1 == 1,
+            spin: (h(4) % 4) as u8,
+            flip: h(5) & 1 == 1,
+            lift: h(6),
         })
     }
 }
@@ -541,6 +801,11 @@ pub struct Candidate {
     pub pick: u32,
     pub turn: u8,
     pub mirror: bool,
+    /// Its draws for the objects of their own rules: a quarter turn, a
+    /// mirroring, a height within their variation.
+    pub spin: u8,
+    pub flip: bool,
+    pub lift: u32,
 }
 
 /// An object standing on the map.
@@ -766,21 +1031,60 @@ pub fn tile_placements(reg: &Registry, mat: &Materializer, seed: u64, lava: bool
                     },
                 };
                 stack.fluids(cell, &spans, &mut fluids);
-                let wet = fluids.iter().any(|f| f.0 == top.y1);
-                if wet != layer.underwater || (wet && lava) {
+                let liquid = fluids.iter().find(|f| f.0 == top.y1).copied();
+                let wet = liquid.is_some();
+                let Some(rules) = reg.objects[object as usize].rules.as_deref() else {
+                    if wet != layer.underwater || (wet && lava) {
+                        continue;
+                    }
+                    if layer.soil_only && !is_soil(&reg.block(mat.block(&top, c.x, top.y1 - 1, c.z, wet)).state) {
+                        continue;
+                    }
+                    out.push(Placement {
+                        layer: n,
+                        object,
+                        x: c.x,
+                        y: top.y1 - layer.sink as i32,
+                        z: c.z,
+                        turn: c.turn,
+                        mirror: c.mirror,
+                        under,
+                    });
+                    continue;
+                };
+                // Its own rules: on the floor of the water or lava, or on
+                // its top, if it may.
+                let kind = liquid.map(|_| lava);
+                let floor = !wet || rules.may_stand(kind, true);
+                if !rules.may_stand(kind, floor) {
                     continue;
                 }
-                if layer.soil_only && !is_soil(&reg.block(mat.block(&top, c.x, top.y1 - 1, c.z, wet)).state) {
+                if floor && layer.soil_only && !is_soil(&reg.block(mat.block(&top, c.x, top.y1 - 1, c.z, wet)).state) {
+                    continue;
+                }
+                let ground = if floor { top.y1 } else { liquid.map_or(top.y1, |f| f.1) };
+                let v = rules.variation as i32;
+                let lift = if v > 0 { (c.lift % (v as u32 + 1)) as i32 - (v + 1) / 2 } else { 0 };
+                let y = if rules.fixed_height { rules.offset as i32 + lift } else { ground + rules.offset as i32 + lift - layer.sink as i32 };
+                // Floating over the ground only when it may stand on air.
+                if rules.fixed_height && y > ground && !rules.on_air {
                     continue;
                 }
                 out.push(Placement {
                     layer: n,
                     object,
                     x: c.x,
-                    y: top.y1 - layer.sink as i32,
+                    y,
                     z: c.z,
-                    turn: c.turn,
-                    mirror: c.mirror,
+                    turn: match rules.turning {
+                        Turning::Random => c.spin,
+                        Turning::Fixed(t) => t & 3,
+                    },
+                    mirror: match rules.mirroring {
+                        Mirroring::Random => c.flip,
+                        Mirroring::Never => false,
+                        Mirroring::Always => true,
+                    },
                     under,
                 });
             }
@@ -961,6 +1265,73 @@ mod tests {
         let mut spans = Vec::new();
         stack.spans(local_index(p.x, p.z), &mut spans);
         assert_eq!(p.y, spans.last().unwrap().y1);
+    }
+
+    /// An object of its own rules: turned and mirrored as they say, raised,
+    /// varied, at a fixed height only where it may float; the others of
+    /// the layer stand as before.
+    #[test]
+    fn objects_stand_by_their_own_rules() {
+        let mut w = generate(&GenParams { tiles_x: 2, tiles_z: 2, seed: 5, ..GenParams::default() });
+        w.registry.objects.push(tree());
+        let flat = crate::Brush { radius: 60.0, profile: crate::Profile::Constant, strength: 1.0, ..crate::Brush::default() };
+        let mut layer = ObjectLayerDef::new("Oaks", &[0], &w.registry);
+        (layer.soil_only, layer.density) = (false, 1.0);
+        let n = w.registry.add_object_layer(layer);
+        let mut h = History::default();
+        h.begin("objects", 0);
+        crate::ops::set_height(&mut h.edit(&mut w, 0), &flat, 0.0, 0.0, 80.0, crate::ops::Surface::Top);
+        crate::ops::paint_objects(&mut h.edit(&mut w, 0), &crate::Brush { radius: 40.0, profile: crate::Profile::Constant, strength: 1.0, ..crate::Brush::default() }, 0.0, 0.0, n, 1);
+        h.commit();
+        let placements = |w: &crate::world::World| {
+            let dim = &w.dims[0];
+            let mat = Materializer::new(&w.registry, w.meta.seed, dim.min_y);
+            let mut all = Vec::new();
+            for pos in [TilePos::new(-1, -1), TilePos::new(0, -1), TilePos::new(-1, 0), TilePos::new(0, 0)] {
+                all.extend(tile_placements(&w.registry, &mat, 1, false, &TileStack::new(dim, pos, true).unwrap(), pos));
+            }
+            all
+        };
+        let before = placements(&w);
+        // As its layer's: the same spots, turns and heights.
+        w.registry.objects[0].rules = Some(Box::new(ObjectRules::of_layer(&w.registry.object_layers[0])));
+        assert_eq!(placements(&w), before);
+        // Turned a half turn, always mirrored, three blocks up, varied by
+        // up to four.
+        let rules = ObjectRules { turning: Turning::Fixed(2), mirroring: Mirroring::Always, offset: 3, variation: 4, ..ObjectRules::default() };
+        w.registry.objects[0].rules = Some(Box::new(rules.clone()));
+        let own = placements(&w);
+        assert_eq!(own.len(), before.len());
+        assert!(own.iter().all(|p| p.turn == 2 && p.mirror));
+        let heights: std::collections::BTreeSet<i32> = own.iter().map(|p| p.y).collect();
+        let ground = before[0].y;
+        assert!(before.iter().all(|p| p.y == ground), "flat ground");
+        assert_eq!(heights, (ground + 3 - 2..=ground + 3 + 2).collect(), "raised 3, ±2");
+        // At a fixed height over the ground: left out unless it may float.
+        w.registry.objects[0].rules = Some(Box::new(ObjectRules { fixed_height: true, offset: 120, ..rules.clone() }));
+        assert!(placements(&w).is_empty());
+        w.registry.objects[0].rules = Some(Box::new(ObjectRules { fixed_height: true, offset: 120, variation: 0, on_air: true, ..rules.clone() }));
+        assert!(placements(&w).iter().all(|p| p.y == 120));
+        // Not on land: none on dry ground.
+        w.registry.objects[0].rules = Some(Box::new(ObjectRules { on_land: false, under_water: true, ..rules }));
+        assert!(placements(&w).is_empty());
+    }
+
+    /// Own rules that change an object's blocks: leaves made to decay or
+    /// not, fences joined to their neighbours in it.
+    #[test]
+    fn rules_shape_leaves_and_fences() {
+        let mut fence = ObjectDef::new("Fence", [3, 1, 1], vec!["minecraft:air".into(), "minecraft:oak_fence".into(), "minecraft:oak_leaves[distance=7,persistent=false]".into()], vec![1, 1, 2]);
+        assert_eq!(fence.shaped(), None, "no rules, as it is");
+        fence.rules = Some(Box::new(ObjectRules::default()));
+        assert_eq!(fence.shaped(), None, "rules that leave its blocks alone");
+        fence.rules = Some(Box::new(ObjectRules { leaves: Leaves::Persistent, connect_blocks: true, ..ObjectRules::default() }));
+        let shaped = fence.shaped().unwrap();
+        let at = |x: usize| shaped.palette[shaped.at(x, 0, 0) as usize].as_str();
+        assert_eq!(at(0), "minecraft:oak_fence[east=true,north=false,south=false,west=false]");
+        assert_eq!(at(1), "minecraft:oak_fence[east=false,north=false,south=false,west=true]", "leaves do not join");
+        assert_eq!(at(2), "minecraft:oak_leaves[distance=7,persistent=true]");
+        assert_eq!(set_property("minecraft:stone", "a", "b"), "minecraft:stone[a=b]");
     }
 
     /// A column of `h` logs: an object `h` blocks tall.

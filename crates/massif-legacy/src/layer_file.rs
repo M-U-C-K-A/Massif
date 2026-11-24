@@ -33,8 +33,9 @@ pub enum Made {
 /// Settings of a WorldPainter layer Massif does not take.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Setting {
-    /// A custom object layer's objects: collision, underground and leaf
-    /// decay modes, foundations, height modes, lava and water rules.
+    /// A custom object layer's objects: attributes Massif does not read
+    /// (the old form of Replace with air, an attribute of a later
+    /// WorldPainter).
     ObjectRules,
     /// A ground cover's edge shape and width.
     Edges,
@@ -366,7 +367,33 @@ fn keep_the_maps(original: &Registry, reg: &mut Registry, out: &mut LayerFile, b
 /// Whether a custom object layer's objects have settings Massif does not
 /// take.
 fn object_rules(arena: &crate::javaser::Arena, layer: Value) -> bool {
-    const KEPT: [&str; 6] = ["WPObject.file", "WPObject.offset", "WPObject.randomRotation", "WPObject.spawnInWater", "WPObject.spawnOnLand", "WPObject.frequency"];
+    // Every attribute WorldPainter's dialog has is kept (see
+    // `layers::object_rules`); the old form of Replace with air is not.
+    const KEPT: [&str; 23] = [
+        "WPObject.file",
+        "WPObject.offset",
+        "WPObject.randomRotation",
+        "WPObject.randomRotationOnly",
+        "WPObject.randomMirroringOnly",
+        "WPObject.needsFoundation",
+        "WPObject.spawnInWater",
+        "WPObject.spawnInLava",
+        "WPObject.spawnOnLand",
+        "WPObject.spawnOnWater",
+        "WPObject.spawnOnLava",
+        "WPObject.spawnOnWater.noCollide",
+        "WPObject.frequency",
+        "WPObject.collisionMode",
+        "WPObject.undergroundMode",
+        "WPObject.leafDecay",
+        "WPObject.replaceWithAirMaterial",
+        "WPObject.extendFoundation",
+        "WPObject.heightMode",
+        "WPObject.verticalOffset",
+        "WPObject.yVariation",
+        "WPObject.connectBlocks",
+        "WPObject.manageWaterlogged",
+    ];
     let Some(items) = arena.field(layer, "objectProvider").and_then(|p| arena.field(p, "objects")).and_then(|o| arena.list_items(o)) else { return false };
     items.into_iter().any(|item| {
         arena

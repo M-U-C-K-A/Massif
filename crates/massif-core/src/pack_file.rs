@@ -687,6 +687,8 @@ impl Pack {
                         anchor: o.anchor,
                         source: format!("{} ({})", self.name, EXTENSION),
                         colors: o.colors.clone(),
+                        tree_size: 0,
+                        rules: None,
                     });
                     let k = reg.objects.len() as u32 - 1;
                     added.push((choice.object, k));

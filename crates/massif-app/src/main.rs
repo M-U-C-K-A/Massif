@@ -35,6 +35,7 @@ mod map_view;
 mod menu;
 mod menubar;
 mod notify;
+mod object_list;
 mod ores;
 mod pack_share;
 mod packs;

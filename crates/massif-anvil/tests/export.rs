@@ -1060,6 +1060,66 @@ fn same_state(want: &str, got: &str) -> bool {
     parse(want, '[') == parse(got, '|')
 }
 
+/// An object of its own rules, as WorldPainter's attributes say: raised
+/// three blocks, its foundation goes down to the ground; its trunk, the
+/// block placed as air, is a hollow; its leaves decay; the export of the
+/// same map without rules is as before.
+#[test]
+fn objects_are_placed_by_their_own_rules() {
+    use massif_core::objects::{Leaves, Mirroring, ObjectRules, Turning};
+    let mut w = generate(&GenParams { tiles_x: 2, tiles_z: 2, seed: 7, ..GenParams::default() });
+    let k = w.registry.objects.len() as u32;
+    w.registry.objects.push(little_oak());
+    let mut layer = ObjectLayerDef::new("Oaks", &[k], &w.registry);
+    (layer.spacing, layer.density, layer.soil_only) = (12, 1.0, false);
+    let n = w.registry.add_object_layer(layer);
+    let mut h = History::default();
+    h.begin("oaks", 0);
+    {
+        let mut e = h.edit(&mut w, 0);
+        ops::set_height(&mut e, &hard(60.0), 0.0, 0.0, 90.0, Surface::Top);
+        ops::paint_objects(&mut e, &hard(30.0), 0.0, 0.0, n, 1);
+    }
+    h.commit();
+    w.registry.objects[k as usize].rules = Some(Box::new(ObjectRules {
+        turning: Turning::Fixed(0),
+        mirroring: Mirroring::Never,
+        offset: 3,
+        extend_foundation: true,
+        leaves: Leaves::Decay,
+        replace_with_air: Some("minecraft:oak_log[axis=x]".into()),
+        ..ObjectRules::default()
+    }));
+    let snapshot = w.snapshot();
+    let dim = &w.dims[0];
+    let mat = Materializer::new(&w.registry, w.meta.seed, dim.min_y);
+    let mut placements = Vec::new();
+    for pos in [TilePos::new(-1, -1), TilePos::new(0, -1), TilePos::new(-1, 0), TilePos::new(0, 0)] {
+        let stack = TileStack::new(dim, pos, true).unwrap();
+        placements.extend(massif_core::objects::tile_placements(&w.registry, &mat, w.meta.seed as u64, false, &stack, pos));
+    }
+    assert!(placements.len() >= 8, "{} oaks", placements.len());
+    let dir = temp_dir("object-rules");
+    let options = ExportOptions { target: Target::release("1.21.11").unwrap(), ..ExportOptions::default() };
+    export(&snapshot, &dir, &options, &Progress::default()).unwrap();
+    let mut r = Reader::new(&dir);
+    for p in &placements {
+        assert_eq!((p.y, p.turn, p.mirror), (93, 0, false), "{p:?}");
+        // The dirt under the trunk, and on down to the grass.
+        for y in 90..=92 {
+            assert_eq!(r.block(p.x, y, p.z), "minecraft:dirt", "{p:?} at {y}");
+        }
+        assert_eq!(r.block(p.x, 89, p.z), "minecraft:grass_block");
+        // The trunk a hollow; leaves that decay.
+        for y in 93..=94 {
+            assert_eq!(r.block(p.x, y, p.z), "minecraft:air", "{p:?} at {y}");
+        }
+        let leaf = r.state(p.x - 2, p.y + 2, p.z - 1);
+        assert!(leaf.starts_with("minecraft:oak_leaves") && leaf.contains("persistent=false"), "{p:?}: {leaf}");
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// Objects of a layer painted across the border of two tiles stand whole,
 /// turned and mirrored, in every chunk they reach.
 #[test]

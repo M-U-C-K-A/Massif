@@ -1348,7 +1348,7 @@ pub fn object_picture(def: &massif_core::objects::ObjectDef) -> egui::ColorImage
 }
 
 /// The picture of object `k`, made once.
-fn object_texture(ui: &Ui, k: usize, def: &massif_core::objects::ObjectDef) -> egui::TextureHandle {
+pub(crate) fn object_texture(ui: &Ui, k: usize, def: &massif_core::objects::ObjectDef) -> egui::TextureHandle {
     let id = egui::Id::unique(("object picture", k));
     let key = (def.name.clone(), def.size, def.blocks.len(), def.colors.len());
     if let Some((cached, t)) = ui.ctx().data(|d| d.get_temp::<((String, [u16; 3], usize, usize), egui::TextureHandle)>(id))
@@ -1449,7 +1449,6 @@ pub fn object_layer_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Documen
     }
     let k = k.expect("checked above");
     let reg = &mut doc.world.registry;
-    let classes = reg.object_layers[k].size_classes(reg);
     let objects = std::mem::take(&mut reg.objects);
     let layer = &mut reg.object_layers[k];
     ui.add_space(4.0);
@@ -1504,34 +1503,10 @@ pub fn object_layer_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Documen
     );
 
     section(ui, Icon::Boxes, &tr!("Objects · {n}", n = layer.objects.len()));
-    let total: f32 = layer.objects.iter().map(|o| o.1 as f32).sum::<f32>().max(1.0);
-    let mut remove = None;
-    for (row, (index, weight)) in layer.objects.iter_mut().enumerate() {
-        let Some(def) = objects.get(*index as usize) else { continue };
-        ui.horizontal(|ui| {
-            let texture = object_texture(ui, *index as usize, def);
-            let (r, _) = ui.allocate_exact_size(vec2(44.0, 44.0), Sense::hover());
-            let size = texture.size_vec2();
-            let fit = (r.width() / size.x).min(r.height() / size.y);
-            ui.painter().image(texture.id(), Rect::from_center_size(r.center(), size * fit), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 1.0;
-                ui.add(egui::Label::new(RichText::new(&def.name).strong()).truncate()).on_hover_text(&def.source);
-                ui.label(RichText::new(tr!("{value} × {value2} × {value3} · {n} blocks", value = def.size[0], value2 = def.size[1], value3 = def.size[2], n = def.count())).size(11.0).color(pal.weak));
-                ui.label(RichText::new(size_name(classes.get(row).copied().unwrap_or(1) as u16)).size(11.0).color(pal.weak)).on_hover_text(tr!("Its size, where Tree sizes are painted: a quarter of the layer's objects each, by height"));
-                ui.horizontal(|ui| {
-                    crate::widgets::drag(ui, egui::DragValue::new(weight).range(0..=1000).speed(0.2)).on_hover_text(tr!("Weight: how often it stands against the others. 0: only where Tree sizes ask for its size"));
-                    ui.label(RichText::new(format!("{:.0}%", *weight as f32 * 100.0 / total)).size(11.0).color(pal.weak));
-                    if ui.add(egui::Button::new(theme::glyph(Icon::X).to_string()).frame(false).small()).on_hover_text(tr!("Take it out of the layer")).clicked() {
-                        remove = Some(row);
-                    }
-                });
-            });
-        });
-    }
-    if let Some(row) = remove {
-        layer.objects.remove(row);
-    }
+    reg.objects = objects;
+    crate::object_list::object_list(ui, reg, k);
+    let objects = std::mem::take(&mut reg.objects);
+    let layer = &mut reg.object_layers[k];
     let add = crate::widgets::button(ui, theme::with_icon(Icon::Plus, tr!("Add objects…"))).on_hover_text(tr!("Read more files into this layer")).clicked();
     if layer.objects.is_empty() {
         hint(ui, tr!("Nothing stands yet: add objects."));
