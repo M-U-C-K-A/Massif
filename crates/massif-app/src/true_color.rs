@@ -27,6 +27,77 @@ struct Top {
     kind: Option<Kind>,
     /// A pack's map for this very block, or one by height: asked each time.
     custom: bool,
+    /// Its top's connected texture, if it has one (see [`Joined`]).
+    joined: Option<Arc<Joined>>,
+}
+
+/// A connected texture's colours, untinted: what a top shows by its
+/// neighbours, without drawing its tiles.
+#[derive(Debug)]
+pub struct Joined {
+    texture: Arc<massif_assets::connected::Connected>,
+    /// For compact tiles: the mean of each quarter of each tile.
+    quarters: Option<[[Rgb; 4]; 5]>,
+    /// For the others: each tile and its mean.
+    tiles: Vec<(Arc<massif_assets::Texture>, Rgb)>,
+}
+
+fn mean_of(t: &massif_assets::Texture, x0: u32, y0: u32, w: u32, h: u32) -> Rgb {
+    let (mut sum, mut n) = ([0.0f32; 3], 0.0f32);
+    for y in y0..(y0 + h).min(t.height) {
+        for x in x0..(x0 + w).min(t.width) {
+            let p = &t.rgba[((y * t.width + x) * 4) as usize..][..4];
+            if p[3] > 16 {
+                for k in 0..3 {
+                    sum[k] += p[k] as f32;
+                }
+                n += 1.0;
+            }
+        }
+    }
+    sum.map(|v| v / n.max(1.0))
+}
+
+impl Joined {
+    fn new(texture: Arc<massif_assets::connected::Connected>) -> Joined {
+        use massif_assets::connected::Kind;
+        let whole = |t: &massif_assets::Texture| mean_of(t, 0, 0, t.width, t.height);
+        let (quarters, tiles) = match &texture.kind {
+            Kind::Compact(t) => (
+                Some(std::array::from_fn(|k| {
+                    let (w, h) = (t[k].width / 2, t[k].height / 2);
+                    [mean_of(&t[k], 0, 0, w, h), mean_of(&t[k], w, 0, w, h), mean_of(&t[k], 0, h, w, h), mean_of(&t[k], w, h, w, h)]
+                })),
+                Vec::new(),
+            ),
+            Kind::Horizontal(t) | Kind::Vertical(t) => (None, t.iter().map(|x| (x.clone(), whole(x))).collect()),
+            Kind::Repeat { tiles, .. } => (None, tiles.iter().map(|x| (x.clone(), whole(x))).collect()),
+            Kind::Random(t) => (None, t.iter().map(|x| (x.0.clone(), whole(&x.0))).collect()),
+        };
+        Joined { texture, quarters, tiles }
+    }
+
+    /// The mean colour of a top face with `around` it at `(x, y, z)`.
+    fn mean(&self, around: massif_assets::connected::Around, x: i32, y: i32, z: i32) -> Rgb {
+        if let Some(q) = &self.quarters {
+            let k = |side: bool, vertical: bool, corner: bool| match (side, vertical) {
+                (false, false) => 0,
+                (true, false) => 1,
+                (false, true) => 2,
+                (true, true) if corner => 3,
+                (true, true) => 4,
+            };
+            let parts = [
+                q[k(around.left, around.up, around.up_left)][0],
+                q[k(around.right, around.up, around.up_right)][1],
+                q[k(around.left, around.down, around.down_left)][2],
+                q[k(around.right, around.down, around.down_right)][3],
+            ];
+            return std::array::from_fn(|c| parts.iter().map(|p| p[c]).sum::<f32>() / 4.0);
+        }
+        let tile = self.texture.face(around, x, z, (x, y, z));
+        self.tiles.iter().find(|t| Arc::ptr_eq(&t.0, &tile)).map_or_else(|| mean_of(&tile, 0, 0, tile.width, tile.height), |t| t.1)
+    }
 }
 
 /// The tints of a biome at the sea's height, by kind.
@@ -89,7 +160,13 @@ fn top_of(cat: Option<&Catalogue>, rules: &Rules, state: &str, color: [u8; 3]) -
         }
     };
     let custom = rules.blocks.contains_key(shown) || rules.by_height(shown, kind);
-    Top { id: shown.to_owned(), base, kind, custom }
+    // A connected top (OptiFine's CTM, Fusion's): its tiles' colours by
+    // its neighbours.
+    let joined = cat
+        .and_then(|c| c.block(shown).and_then(|b| b.top.as_ref()).and_then(|t| c.connected.get(t)))
+        .filter(|j| j.faces & massif_assets::connected::UP != 0)
+        .map(|j| Arc::new(Joined::new(j.clone())));
+    Top { id: shown.to_owned(), base, kind, custom, joined }
 }
 
 impl TrueColors {
@@ -150,7 +227,11 @@ impl TrueColors {
     }
 
     fn tinted(&self, top: &Top, biome: u16, y: i32) -> Rgb {
-        let Some(kind) = top.kind else { return top.base };
+        self.tinted_from(top, top.base, biome, y)
+    }
+
+    fn tinted_from(&self, top: &Top, base: Rgb, biome: u16, y: i32) -> Rgb {
+        let Some(kind) = top.kind else { return base };
         let tint = if top.custom {
             f(self.rules.tint(&top.id, Some(kind), self.climate(biome), y).unwrap_or([255; 3]))
         } else {
@@ -166,7 +247,23 @@ impl TrueColors {
                 (_, None) => f(self.rules.tint(&top.id, Some(kind), self.climate(biome), y).unwrap_or([255; 3])),
             }
         };
-        std::array::from_fn(|k| top.base[k] * tint[k] / 255.0)
+        std::array::from_fn(|k| base[k] * tint[k] / 255.0)
+    }
+
+    /// Whether a block's top joins its neighbours' (a connected texture
+    /// that depends on them, or on its place).
+    pub fn joins(&self, block: BlockId) -> bool {
+        self.blocks.get(block.0 as usize).is_some_and(|t| t.joined.is_some())
+    }
+
+    /// [`TrueColors::block`] for a block whose top is a connected texture,
+    /// at `(x, y, z)` with `around` it: the tiles it shows there.
+    pub fn block_at(&self, block: BlockId, biome: u16, around: massif_assets::connected::Around, x: i32, y: i32, z: i32) -> Rgb {
+        let Some(top) = self.blocks.get(block.0 as usize) else { return [118.0; 3] };
+        match &top.joined {
+            Some(j) => self.tinted_from(top, j.mean(around, x, y, z), biome, y),
+            None => self.tinted(top, biome, y),
+        }
     }
 
     /// The colour of a block's top in a biome (the registry's number) at a

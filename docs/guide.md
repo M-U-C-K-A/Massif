@@ -2196,10 +2196,16 @@ come first. **Instance…** reads any other modpack: choose its folder (the one 
 - reads its mods that have blocks (the others, Sodium, Iris and the like,
   are left out), its list of blocks made for WorldPainter (see below), and
   the resource packs it has turned on in the game;
-- reads the blocks its KubeJS scripts make, with their states, models and
-  textures from its `kubejs/assets` folder, as a mod named KubeJS (blocks a
-  script makes without writing their files there, nor a resource pack of
-  the instance, are not known);
+- reads the blocks its KubeJS scripts make, as a mod named KubeJS: those
+  its startup scripts register (`StartupEvents.registry('block', …)`, or
+  `onEvent('block.registry', …)` before KubeJS 6), with the name, type
+  (a cube, a slab, stairs, a fence, a wall, a crop) and textures the script
+  gives them (`displayName`, `textureAll`, `texture('up', …)`, `model`), the
+  textures from its `kubejs/assets` folder, as KubeJS itself makes them when
+  the game starts; and the states, models and textures written in that
+  folder, which win over what Massif makes of a script. Massif reads the
+  scripts, it does not run them: a block whose id is built by code (in a
+  loop, from a variable) is not known;
 - reads them over the version of the game the instance plays, when that version is installed here;
   otherwise over the version read now, and the panel says so.
 
@@ -2209,13 +2215,17 @@ a pack's textures replace its mod's) and lists of blocks for WorldPainter
 (`.csv`). Each shows as a chip; clicking it takes it out. They are
 remembered, and read again each time Massif starts.
 
-**Textures made for Fusion.** Fusion draws a texture across blocks
+**Connected textures.** Fusion draws a texture across blocks
 (continuous), by position (random) or joined to the blocks beside it
-(connecting), from a sheet of tiles that its `.png.mcmeta` describes. Massif
-shows each block with one tile of the sheet, at the size of a block: the
-first, the tile of a block with no neighbours for a connected texture.
-Without it, the whole sheet would be drawn on one block. The tiles do not
-join or vary from block to block yet.
+(connecting), from a sheet of tiles that its `.png.mcmeta` describes;
+OptiFine (and Continuity, which reads its files) does the same from
+`optifine/ctm/**/*.properties`: `method=ctm` (47 tiles), `ctm_compact`,
+`horizontal`, `vertical`, `repeat` and `random`, for the textures
+(`matchTiles`) or blocks (`matchBlocks`) they name, on the faces they name.
+The Blocks panel shows each block with the tile of a block alone, at the
+size of a block. In the True Colour view, close up, each top shows the tiles
+its neighbours give it: a block joins those of the same block at the same
+height beside it.
 
 **The blocks.** A mod's blocks come after the game's, in its own creative
 tabs when it gives them (`assets/<namespace>/groups/*.txt`: Conquest

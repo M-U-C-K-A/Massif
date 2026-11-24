@@ -75,6 +75,9 @@ pub struct Archive {
     entries: HashMap<String, Entry>,
     /// For a folder: its files, by their names in it.
     folder: Option<HashMap<String, std::path::PathBuf>>,
+    /// Files made in memory over the others (the block states and models
+    /// of the blocks KubeJS's scripts make), by their names.
+    extra: HashMap<String, Vec<u8>>,
 }
 
 /// The most files a folder read as an archive may list.
@@ -183,7 +186,7 @@ impl Archive {
 
     fn with(data: Data) -> Result<Self, ZipError> {
         let (dir, count) = directory(&data)?;
-        Ok(Self { entries: entries(&dir, count)?.into_iter().collect(), data, folder: None })
+        Ok(Self { entries: entries(&dir, count)?.into_iter().collect(), data, folder: None, extra: HashMap::new() })
     }
 
     /// A folder read as an archive: the files under its subfolders `under`
@@ -213,7 +216,7 @@ impl Archive {
                 }
             }
         }
-        Ok(Self { data: Data::Memory(Vec::new()), entries: HashMap::new(), folder: Some(files) })
+        Ok(Self { data: Data::Memory(Vec::new()), entries: HashMap::new(), folder: Some(files), extra: HashMap::new() })
     }
 
     /// The names of a zip file's entries, reading only its directory: to
@@ -224,16 +227,37 @@ impl Archive {
         Ok(entries(&dir, count)?.into_iter().map(|(n, _)| n).collect())
     }
 
+    /// An archive of files made in memory alone.
+    pub fn of_files(files: Vec<(String, Vec<u8>)>) -> Self {
+        Self { data: Data::Memory(Vec::new()), entries: HashMap::new(), folder: Some(HashMap::new()), extra: files.into_iter().collect() }
+    }
+
+    /// The archive with files made in memory added, over its own of the
+    /// same names.
+    pub fn with_files(mut self, files: Vec<(String, Vec<u8>)>) -> Self {
+        self.extra.extend(files);
+        self
+    }
+
     pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.entries.keys().chain(self.folder.iter().flat_map(HashMap::keys)).map(String::as_str)
+        let extra = &self.extra;
+        self.entries
+            .keys()
+            .chain(self.folder.iter().flat_map(HashMap::keys))
+            .filter(move |n| !extra.contains_key(*n))
+            .chain(extra.keys())
+            .map(String::as_str)
     }
 
     pub fn contains(&self, name: &str) -> bool {
-        self.entries.contains_key(name) || self.folder.as_ref().is_some_and(|f| f.contains_key(name))
+        self.extra.contains_key(name) || self.entries.contains_key(name) || self.folder.as_ref().is_some_and(|f| f.contains_key(name))
     }
 
     /// The bytes of an entry, inflated.
     pub fn read(&self, name: &str) -> Option<Result<Vec<u8>, ZipError>> {
+        if let Some(bytes) = self.extra.get(name) {
+            return Some(Ok(bytes.clone()));
+        }
         if let Some(files) = &self.folder {
             return files.get(name).map(|p| std::fs::read(p).map_err(ZipError::from));
         }

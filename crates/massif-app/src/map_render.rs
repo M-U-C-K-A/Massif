@@ -689,13 +689,27 @@ impl<'a> Colorizer<'a> {
     /// The colour of the column of sample `c` in True Colour: at `at`, the
     /// very block on its top; from afar, its terrain's surface blocks by
     /// their weights.
-    fn true_ground(&self, t: &crate::true_color::TrueColors, c: &Sample, at: Option<(i32, i32)>, biome: u16) -> Rgb {
+    /// `sides`: the samples west, east, north and south, whose blocks a
+    /// connected texture joins.
+    fn true_ground(&self, t: &crate::true_color::TrueColors, c: &Sample, at: Option<(i32, i32)>, biome: u16, sides: [&Sample; 4]) -> Rgb {
         let y1 = block_top(c.height);
+        let top_block = |s: &Sample, x: i32, z: i32| {
+            let y1 = block_top(s.height);
+            let span = Span { y0: y1 - 8, y1, terrain: massif_core::registry::TerrainId(s.terrain), top: y1 as f32 };
+            (self.mat.block(&span, x, y1 - 1, z, s.water_depth() > 0.0), y1)
+        };
         match at {
             Some((x, z)) => {
-                let span = Span { y0: y1 - 8, y1, terrain: massif_core::registry::TerrainId(c.terrain), top: y1 as f32 };
-                let block = self.mat.block(&span, x, y1 - 1, z, c.water_depth() > 0.0);
-                t.block(block, biome, y1 - 1)
+                let (block, _) = top_block(c, x, z);
+                if !t.joins(block) {
+                    return t.block(block, biome, y1 - 1);
+                }
+                // A connected texture: joined where the same block tops a
+                // neighbour at the same height (the corners as their sides).
+                let joined = |s: &Sample, dx: i32, dz: i32| !s.is_empty() && top_block(s, x + dx, z + dz) == (block, y1);
+                let [w, e, n, so] = [joined(sides[0], -1, 0), joined(sides[1], 1, 0), joined(sides[2], 0, -1), joined(sides[3], 0, 1)];
+                let around = massif_assets::connected::Around { left: w, right: e, up: n, down: so, up_left: w && n, up_right: e && n, down_left: w && so, down_right: e && so };
+                t.block_at(block, biome, around, x, y1 - 1, z)
             }
             None => t.terrain(self.reg, c.terrain, biome, y1 - 1),
         }
@@ -823,7 +837,7 @@ impl<'a> Colorizer<'a> {
             MapMode::TrueColour => match &self.truth {
                 Some(t) => {
                     let biome = self.auto.resolve(self.reg, c, self.sea);
-                    let ground = self.true_ground(t, c, at, biome);
+                    let ground = self.true_ground(t, c, at, biome, [l, r, u, d]);
                     let ground = self.with_cover(ground, c, at);
                     scale(ground, shade)
                 }

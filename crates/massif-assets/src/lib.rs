@@ -7,7 +7,9 @@
 //! the textures of its top, sides and bottom, and those give its real
 //! colour, with grass and leaves tinted the way the game tints them.
 
+pub mod connected;
 pub mod instance;
+pub mod kubejs;
 pub mod materials;
 pub mod true_color;
 pub mod zip;
@@ -405,6 +407,9 @@ pub struct Catalogue {
     /// The biome colour maps of the game and the resource packs, and the
     /// packs' maps for blocks (OptiFine's): see [`true_color`].
     pub colors: Arc<true_color::Rules>,
+    /// The connected textures (OptiFine's CTM, Fusion's), by the key of
+    /// the texture they replace: see [`connected`].
+    pub connected: Arc<connected::Table>,
 }
 
 /// A biome as the game or a mod defines it.
@@ -1267,7 +1272,12 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
         if m.is_dir() {
             // A folder of resources reads as a pack (KubeJS's `kubejs`, a
             // resource pack left unzipped); its data, as a data pack's.
-            if m.join("assets").is_dir() {
+            if is_kubejs(m) {
+                // KubeJS's: its assets and the blocks its scripts make.
+                if let Some(a) = kubejs::archive(m) {
+                    archives.push((a, Some(m.clone())));
+                }
+            } else if m.join("assets").is_dir() {
                 match zip::Archive::folder(m, &["assets"]) {
                     Ok(a) => archives.push((a, Some(m.clone()))),
                     Err(e) => skipped.push((m.clone(), e.to_string())),
@@ -1509,7 +1519,7 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
     needed.extend(["block/water_still", "block/lava_still", "environment/clouds", "environment/sun"]);
     needed.sort_unstable();
     needed.dedup();
-    let textures: HashMap<String, Arc<Texture>> = needed
+    let decoded: Vec<(String, Arc<Texture>, Option<connected::Connected>)> = needed
         .into_par_iter()
         .filter_map(|key| {
             let (k, n) = texture_files.get(key)?;
@@ -1521,10 +1531,47 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
             // strip of square frames.
             let meta = archives[*k].0.read(&format!("{n}.mcmeta")).and_then(Result::ok).and_then(|b| serde_json::from_slice::<Value>(&b).ok());
             let (x, y, tw, th) = meta.as_ref().and_then(|m| fusion_tile(m, w, h)).unwrap_or((0, 0, w, w.min(h)));
+            // Fusion's sheet, for the views that join its tiles.
+            let sheet_joined = meta.as_ref().filter(|m| m.get("fusion").is_some()).and_then(|m| {
+                let sheet = Texture { width: w, height: h, rgba: img.as_raw().clone() };
+                connected::fusion(m, &sheet, n)
+            });
             let frame = image::imageops::crop_imm(&img, x, y, tw, th).to_image();
-            Some((key.to_owned(), Arc::new(Texture { width: tw, height: th, rgba: frame.into_raw() })))
+            Some((key.to_owned(), Arc::new(Texture { width: tw, height: th, rgba: frame.into_raw() }), sheet_joined))
         })
         .collect();
+    let mut joined: connected::Table = HashMap::new();
+    let mut textures: HashMap<String, Arc<Texture>> = HashMap::with_capacity(decoded.len());
+    for (key, tex, c) in decoded {
+        if let Some(c) = c {
+            joined.insert(key.clone(), Arc::new(c));
+        }
+        textures.insert(key, tex);
+    }
+    // OptiFine's connected textures (read by Continuity too), the packs'
+    // in order, the last word kept: by texture, or by block for its faces'
+    // textures.
+    for (a, _) in &archives {
+        for rule in connected::read_optifine(a) {
+            let c = Arc::new(rule.connected);
+            for t in &rule.tiles {
+                joined.insert(t.clone(), c.clone());
+            }
+            for id in &rule.blocks {
+                if let Ok(i) = blocks.binary_search_by(|b| b.id.as_str().cmp(id)) {
+                    let b = &blocks[i];
+                    let faces = [(&b.top, connected::UP), (&b.side, connected::SIDES), (&b.bottom, connected::DOWN)];
+                    for (t, face) in faces {
+                        if let Some(t) = t
+                            && c.faces & face != 0
+                        {
+                            joined.insert(t.clone(), c.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
     for b in &mut blocks {
         // A list knows a mod's plants better than their names do, and its
         // blocks' halves.
@@ -1632,6 +1679,7 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
         registered,
         biomes,
         colors: Arc::new(rules),
+        connected: Arc::new(joined),
     })
 }
 
@@ -2351,11 +2399,16 @@ mod tests {
         std::fs::write(assets.join("models/block/pavement.json"), br#"{"loader":"fusion:model","type":"base","parent":"minecraft:block/cube_all","textures":{"all":"kubejs:block/rock/pavement"}}"#).unwrap();
         std::fs::write(assets.join("textures/block/rock/pavement.png"), png(32, 32)).unwrap();
         std::fs::write(assets.join("textures/block/rock/pavement.png.mcmeta"), br#"{"fusion":{"type":"continuous","rows":2,"columns":2}}"#).unwrap();
+        // A block a startup script makes, without files of its own: KubeJS
+        // would write them, from its texture by default.
+        std::fs::create_dir_all(game_dir.join("kubejs/startup_scripts")).unwrap();
+        std::fs::write(game_dir.join("kubejs/startup_scripts/blocks.js"), "StartupEvents.registry('block', event => {\n  event.create('marble').displayName('Marble')\n})\n").unwrap();
+        std::fs::write(assets.join("textures/block/marble.png"), png(16, 16)).unwrap();
         let game_jar = dir.join("1.21.jar");
         std::fs::write(&game_jar, zip::tests_support::tiny_zip(&game)).unwrap();
 
         let instance = instance::Instance::read(&dir.join("instance")).unwrap();
-        assert_eq!(instance.mod_names, ["KubeJS"]);
+        assert_eq!(instance.mod_list.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["KubeJS"]);
         assert_eq!(instance.namespaces, ["kubejs"]);
         let cat = load_with_mods(&game_jar, "1.21", &instance.files()).unwrap();
         let pavement = cat.block("kubejs:pavement").unwrap();
@@ -2363,8 +2416,11 @@ mod tests {
         let tile = cat.texture("kubejs:block/rock/pavement").unwrap();
         assert_eq!((tile.width, tile.height), (16, 16), "one tile of the sheet");
         assert_eq!(&tile.rgba[..4], &[0, 0, 50, 255], "the first");
+        let marble = cat.block("kubejs:marble").expect("the script's block");
+        assert_eq!(marble.top.as_deref(), Some("kubejs:block/marble"));
+        assert_eq!(marble.name, "Marble");
         assert_eq!(cat.mods.len(), 1);
-        assert_eq!((cat.mods[0].name.as_str(), cat.mods[0].kind, cat.mods[0].blocks), ("KubeJS", SourceKind::Mod, 1));
+        assert_eq!((cat.mods[0].name.as_str(), cat.mods[0].kind, cat.mods[0].blocks), ("KubeJS", SourceKind::Mod, 2));
         assert!(cat.skipped.is_empty());
         std::fs::remove_dir_all(dir).unwrap();
     }

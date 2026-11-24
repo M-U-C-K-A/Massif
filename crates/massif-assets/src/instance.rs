@@ -114,7 +114,7 @@ impl Instance {
         // models and textures, as a mod's (after the mods, whose textures
         // its models may use).
         let kubejs = dir.join("kubejs");
-        if let Ok(archive) = Archive::folder(&kubejs, &["assets"]) {
+        if let Some(archive) = crate::kubejs::archive(&kubejs) {
             let spaces = namespaces_in(archive.names());
             if !spaces.is_empty() {
                 let blocks = archive.names().filter(|n| is_blockstate(n)).count();

@@ -11959,7 +11959,7 @@ mod tests {
         // A catalogue with only the mod's name in it, as in
         // block_palettes_in_the_app.
         let mods = vec![massif_assets::ModInfo { name: "Conquest Reforged".to_owned(), namespaces: vec!["conquest".to_owned()], kind: massif_assets::SourceKind::Mod, ..Default::default() }];
-        let cat = massif_assets::Catalogue { version: "1.20.1".into(), source: PathBuf::new(), blocks: Vec::new(), textures: Default::default(), mods, skipped: Vec::new(), definitions: Default::default(), registered: Default::default(), biomes: Vec::new(), colors: Default::default() };
+        let cat = massif_assets::Catalogue { version: "1.20.1".into(), source: PathBuf::new(), blocks: Vec::new(), textures: Default::default(), mods, skipped: Vec::new(), definitions: Default::default(), registered: Default::default(), biomes: Vec::new(), colors: Default::default(), connected: Default::default() };
         h.state_mut().blocks.catalogue = Some(std::sync::Arc::new(cat));
 
         // Into the whole map.
@@ -18146,7 +18146,7 @@ mod tests {
         if !h.state().blocks.namespaces().iter().any(|n| n == "conquest") {
             assert!(!h.state().all_palettes().iter().any(|p| p.name == "Conquest Reforged"), "not offered while the mod is not read");
             let mods = vec![massif_assets::ModInfo { name: "Conquest Reforged".to_owned(), namespaces: vec!["conquest".to_owned()], kind: massif_assets::SourceKind::Mod, ..Default::default() }];
-            let cat = massif_assets::Catalogue { version: "1.20.1".into(), source: PathBuf::new(), blocks: Vec::new(), textures: Default::default(), mods, skipped: Vec::new(), definitions: Default::default(), registered: Default::default(), biomes: Vec::new(), colors: Default::default() };
+            let cat = massif_assets::Catalogue { version: "1.20.1".into(), source: PathBuf::new(), blocks: Vec::new(), textures: Default::default(), mods, skipped: Vec::new(), definitions: Default::default(), registered: Default::default(), biomes: Vec::new(), colors: Default::default(), connected: Default::default() };
             h.state_mut().blocks.catalogue = Some(std::sync::Arc::new(cat));
         }
         assert!(h.state().blocks.namespaces().iter().any(|n| n == "conquest"), "{:?}", h.state().blocks.error);
@@ -20562,7 +20562,7 @@ mod tests {
             biome("regions_unexplored:alpha_grove", "Alpha Grove", "Regions Unexplored"),
             biome("biomesoplenty:mystic_grove", "Mystic Grove", "Biomes O' Plenty"),
         ];
-        let cat = massif_assets::Catalogue { version: "1.21.1".into(), source: PathBuf::new(), blocks: Vec::new(), textures: Default::default(), mods: Vec::new(), skipped: Vec::new(), definitions: Default::default(), registered: Default::default(), biomes, colors: Default::default() };
+        let cat = massif_assets::Catalogue { version: "1.21.1".into(), source: PathBuf::new(), blocks: Vec::new(), textures: Default::default(), mods: Vec::new(), skipped: Vec::new(), definitions: Default::default(), registered: Default::default(), biomes, colors: Default::default(), connected: Default::default() };
         h.state_mut().blocks.catalogue = Some(std::sync::Arc::new(cat));
         let mut areas = Vec::new();
         h.state().layout.current().root.areas(&mut areas);
@@ -21246,6 +21246,77 @@ mod tests {
                 let name = format!("true-colour-{label}-{}{suffix}.png", if mode == crate::map_render::MapMode::Terrain { "terrain" } else { "true" });
                 h.render().unwrap().save(dir.join(name)).unwrap();
             }
+        }
+    }
+
+    /// Connected textures in the True Colour view: a pack's OptiFine CTM for
+    /// sand (`ctm_compact`, a colour a tile), the beaches up close in
+    /// Terrain and in True Colour, where sand alone, joined across, joined
+    /// up and down, inside and at inner corners each shows its tile.
+    /// Renders with MASSIF_SNAPSHOT_DIR, needs the game's jar.
+    #[test]
+    fn connected_textures_in_true_colour() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        if massif_assets::find_jars().is_empty() {
+            eprintln!("needs Minecraft: skipping");
+            return;
+        }
+        let pack = dir.join("true-colour-packs/CTM Test Pack");
+        let ctm = pack.join("assets/minecraft/optifine/ctm/sand");
+        std::fs::create_dir_all(&ctm).unwrap();
+        std::fs::write(pack.join("pack.mcmeta"), br#"{"pack":{"pack_format":34,"description":"CTM test"}}"#).unwrap();
+        std::fs::write(ctm.join("sand.properties"), "matchBlocks=sand\nmethod=ctm_compact\ntiles=0-4\nfaces=top\n").unwrap();
+        // Alone, inside, joined across, joined up and down, inner corner.
+        for (k, c) in [[220u8, 40, 40], [226, 212, 160], [240, 150, 40], [140, 80, 200], [90, 60, 30]].iter().enumerate() {
+            image::RgbaImage::from_pixel(16, 16, image::Rgba([c[0], c[1], c[2], 255])).save(ctm.join(format!("{k}.png"))).unwrap();
+        }
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(3);
+        let ctx = h.ctx.clone();
+        h.state_mut().blocks.load(&ctx, None, vec![pack.clone()]);
+        let started = std::time::Instant::now();
+        while h.state().blocks.catalogue.is_none() {
+            assert!(started.elapsed().as_secs() < 90, "the blocks did not load: {:?}", h.state().blocks.error);
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let cat = h.state().blocks.catalogue.clone().unwrap();
+        let tex = cat.block("minecraft:sand").and_then(|b| b.top.clone()).unwrap();
+        assert!(cat.connected.contains_key(&tex), "the pack's CTM for sand was read ({tex})");
+        // A beach: dry land a block or two over the sea.
+        let beach = {
+            let doc = &h.state().doc;
+            let sea = doc.world.meta.sea_level as f32;
+            let ground = doc.dimension().ground();
+            ground
+                .positions()
+                .flat_map(|p| {
+                    let v = ground.view(p).unwrap();
+                    let (ox, oz) = p.origin();
+                    (0..128 * 128).step_by(7).filter_map(move |i| {
+                        let top = v.top.get(i);
+                        (top >= sea && top < sea + 4.0).then(|| ((ox + (i % 128) as i32) as f64, (oz + (i / 128) as i32) as f64))
+                    })
+                })
+                .next()
+                .expect("a beach")
+        };
+        for mode in [crate::map_render::MapMode::Terrain, crate::map_render::MapMode::TrueColour] {
+            for m in h.state_mut().maps.values_mut() {
+                m.mode = mode;
+                m.center = [beach.0, beach.1];
+                m.zoom = 10.0;
+            }
+            let mut waited = 0;
+            while (waited < 30 || h.state().map_cache.busy()) && waited < 6000 {
+                h.step();
+                waited += 1;
+            }
+            h.run_steps(4);
+            let name = format!("connected-sand-{}.png", if mode == crate::map_render::MapMode::Terrain { "terrain" } else { "true" });
+            h.render().unwrap().save(dir.join(name)).unwrap();
         }
     }
 }
