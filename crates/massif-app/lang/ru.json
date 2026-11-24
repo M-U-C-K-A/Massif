@@ -3476,5 +3476,30 @@
  "{theirs} (yours: {mine})": "{theirs} (у вас: {mine})",
  "{w} × {d} blocks from x {x}, z {z}, in {tw} × {td} tiles of 128 blocks with the border: only these tiles come back when it is merged.": "{w} × {d} блоков от x {x}, z {z}, в {tw} × {td} тайлах по 128 блоков с каймой: при слиянии вернутся только эти тайлы.",
  "“{base}”, the version the zone was exported from, is no longer in the map: the images are painted onto the map at once.": "«{base}», версии, из которой экспортирована зона, больше нет в карте: изображения сразу наносятся на карту.",
- "“{name}” is the map's shared folder now: Publish puts the map in it for others to start from": "«{name}» теперь общая папка карты: «Опубликовать» кладёт туда карту, чтобы другие начали с неё"
+ "“{name}” is the map's shared folder now: Publish puts the map in it for others to start from": "«{name}» теперь общая папка карты: «Опубликовать» кладёт туда карту, чтобы другие начали с неё",
+ "only Massif's own brushes can be moved": "перемещать можно только собственные кисти Massif",
+ "only groups made in Massif can be renamed or deleted": "переименовать или удалить можно только группы, созданные в Massif",
+ "Palettes": "Палитры",
+ "New palette": "Новая палитра",
+ "A named group of layers of any kind, as WorldPainter's palettes: drag layers onto it, or use their menu": "Именованная группа слоёв любого вида, как палитры WorldPainter: перетащите на неё слои или воспользуйтесь их меню",
+ "Sort your layers into palettes of your own: forests, rivers, a modpack's trees.": "Разложите слои по своим палитрам: леса, реки, деревья модпака.",
+ "Delete the palette": "Удалить палитру",
+ "Its layers go back to their sections; none is removed": "Её слои возвращаются в свои разделы; ни один не удаляется",
+ "Empty: drag layers here, or use Palette in a layer's menu.": "Пусто: перетащите сюда слои или выберите «Палитра» в меню слоя.",
+ "New palette…": "Новая палитра…",
+ "Back to its section": "Вернуть в свой раздел",
+ "Move to group": "Переместить в группу",
+ "Renamed the group “{trim}”": "Группа переименована в «{trim}»",
+ "Could not rename the group: {e}": "Не удалось переименовать группу: {e}",
+ "Delete the group": "Удалить группу",
+ "Its brushes go to Custom Brushes; none is deleted": "Его кисти переходят в Custom Brushes; ни одна не удаляется",
+ "Deleted the group; {n} brushes moved to Custom Brushes": {
+  "one": "Группа удалена; {n} кисть перенесена в Custom Brushes",
+  "few": "Группа удалена; {n} кисти перенесены в Custom Brushes",
+  "many": "Группа удалена; {n} кистей перенесено в Custom Brushes",
+  "other": "Группа удалена; {n} кисти перенесены в Custom Brushes"
+ },
+ "Could not delete the group: {e}": "Не удалось удалить группу: {e}",
+ "Moved the brush": "Кисть перемещена",
+ "Could not move the brush: {e}": "Не удалось переместить кисть: {e}"
 }

@@ -103,6 +103,29 @@ tree layer's or a pocket layer's blocks: brushes neither paint another layer of 
 them nor rub them out, until it is unlocked. Terrains are kept the way
 WorldPainter keeps them, by the brush filters (**Except on** a terrain).
 
+## Palettes
+
+**Palettes** sort the layers as WorldPainter's palettes do: named groups
+of layers of any kind, shown at the top of the Layers panel, each folding
+under its title. **New palette** makes one; a layer joins one when it is
+dragged onto it, or by its menu (▸ **Palette**), and is then listed in it
+rather than in its section, with what it is and does unchanged: its slot,
+its order in the export, its lock and eye. Dragged onto a section's title,
+or by ▸ Palette ▸ **Back to its section**, it goes back. A palette's menu
+renames it, moves it up or down, or deletes it: its layers go back to
+their sections, none is removed. Palettes are a way of listing layers, not
+of painting them: they never change the map's blocks.
+
+The map saves its palettes and which layer is in which; a terrain mix,
+kept with the app's settings rather than the map, keeps its palette too.
+A WorldPainter world or `.layer` file brings each custom layer in the
+palette WorldPainter sorted it into, in its place there.
+
+Your own **brushes** have palettes of their own: the groups of the
+Brushes panel, each a folder of Massif's brushes folder. They fold,
+rename and delete (their brushes go to Custom Brushes), and a brush moves
+to another one when it is dragged there or by its menu.
+
 ## Settings
 
 A ground cover's or a tree layer's settings open in a dialog of their own

@@ -3322,5 +3322,28 @@
  "That is this map's own file: pick the copy or the region to merge": "Es el archivo de este mapa: elige la copia o la región que fusionar",
  "The map shows": "El mapa muestra",
  "tiles ": "teselas ",
- "{w} × {d} blocks from x {x}, z {z}, in {tw} × {td} tiles of 128 blocks with the border: only these tiles come back when it is merged.": "{w} × {d} bloques desde x {x}, z {z}, en {tw} × {td} teselas de 128 bloques con el borde: solo estas teselas vuelven al fusionar."
+ "{w} × {d} blocks from x {x}, z {z}, in {tw} × {td} tiles of 128 blocks with the border: only these tiles come back when it is merged.": "{w} × {d} bloques desde x {x}, z {z}, en {tw} × {td} teselas de 128 bloques con el borde: solo estas teselas vuelven al fusionar.",
+ "only Massif's own brushes can be moved": "solo se pueden mover los pinceles propios de Massif",
+ "only groups made in Massif can be renamed or deleted": "solo se pueden renombrar o eliminar los grupos creados en Massif",
+ "Palettes": "Paletas",
+ "New palette": "Nueva paleta",
+ "A named group of layers of any kind, as WorldPainter's palettes: drag layers onto it, or use their menu": "Un grupo con nombre de capas de cualquier tipo, como las paletas de WorldPainter: arrastra capas sobre él o usa su menú",
+ "Sort your layers into palettes of your own: forests, rivers, a modpack's trees.": "Ordena tus capas en paletas propias: bosques, ríos, los árboles de un modpack.",
+ "Delete the palette": "Eliminar la paleta",
+ "Its layers go back to their sections; none is removed": "Sus capas vuelven a sus secciones; ninguna se elimina",
+ "Empty: drag layers here, or use Palette in a layer's menu.": "Vacía: arrastra capas aquí o usa Paleta en el menú de una capa.",
+ "New palette…": "Nueva paleta…",
+ "Back to its section": "Volver a su sección",
+ "Move to group": "Mover al grupo",
+ "Renamed the group “{trim}”": "Grupo renombrado «{trim}»",
+ "Could not rename the group: {e}": "No se pudo renombrar el grupo: {e}",
+ "Delete the group": "Eliminar el grupo",
+ "Its brushes go to Custom Brushes; none is deleted": "Sus pinceles pasan a Custom Brushes; ninguno se elimina",
+ "Deleted the group; {n} brushes moved to Custom Brushes": {
+  "one": "Grupo eliminado; {n} pincel movido a Custom Brushes",
+  "other": "Grupo eliminado; {n} pinceles movidos a Custom Brushes"
+ },
+ "Could not delete the group: {e}": "No se pudo eliminar el grupo: {e}",
+ "Moved the brush": "Pincel movido",
+ "Could not move the brush: {e}": "No se pudo mover el pincel: {e}"
 }

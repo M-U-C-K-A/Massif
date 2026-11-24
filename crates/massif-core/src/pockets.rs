@@ -43,6 +43,10 @@ pub struct PocketDef {
     /// Its place among the pocket layers in the Layers panel.
     #[serde(default, skip_serializing_if = "crate::registry::is_zero")]
     pub order: u32,
+    /// The palette it is sorted into in the Layers panel ("": none, it
+    /// stays in its section).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub palette: String,
 }
 
 impl PocketDef {
@@ -58,6 +62,7 @@ impl PocketDef {
             low,
             high,
             removed: false,
+            palette: String::new(),
             locked: false,
             order: 0,
         }

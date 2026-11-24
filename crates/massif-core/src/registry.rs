@@ -265,6 +265,10 @@ pub struct CoverDef {
     /// export writes it all the same.
     #[serde(default, skip_serializing_if = "crate::registry::is_false")]
     pub hidden: bool,
+    /// The palette it is sorted into in the Layers panel ("": none, it
+    /// stays in its section).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub palette: String,
 }
 
 /// For `skip_serializing_if`: a flag left off is not written.
@@ -438,6 +442,7 @@ impl CoverDef {
             order: 0,
             removed: false,
             hidden: false,
+            palette: String::new(),
         }
     }
 
@@ -560,6 +565,12 @@ pub struct Registry {
     /// at once (no plane of their own).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub combined: Vec<crate::combined::CombinedDef>,
+    /// The palettes of the Layers panel, in their order: named groups the
+    /// layers are sorted into, as WorldPainter's. A layer names its own
+    /// (see [`CoverDef::palette`]); one named by a layer but missing here
+    /// is shown after these.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub palettes: Vec<String>,
 }
 
 impl Registry {
@@ -679,6 +690,7 @@ impl Registry {
             object_layers: Vec::new(),
             pockets: Vec::new(),
             combined: Vec::new(),
+            palettes: Vec::new(),
             well_known: WellKnown {
                 stone: BlockId(0),
                 deepslate: BlockId(0),

@@ -290,6 +290,71 @@ impl BrushLibrary {
         Ok(dir)
     }
 
+    /// Rename the group of folder `dir` (one of Massif's own, below its
+    /// brushes folder): its folder is renamed. Returns the new folder.
+    pub fn rename_group(&self, dir: &Path, name: &str) -> std::io::Result<PathBuf> {
+        let name = name.trim();
+        if name.is_empty() || name.contains(['/', '\\', ':']) || name.starts_with('.') {
+            return Err(std::io::Error::other(tr!("a group name cannot be empty or contain / \\ :")));
+        }
+        self.own_subfolder(dir)?;
+        let to = dir.with_file_name(name);
+        if to == dir {
+            return Ok(to);
+        }
+        if to.exists() {
+            return Err(std::io::Error::other(tr!("there is already a group called “{name}”", name)));
+        }
+        std::fs::rename(dir, &to)?;
+        Ok(to)
+    }
+
+    /// Delete the group of folder `dir`: its brushes go to Massif's own
+    /// group (Custom Brushes), under names not taken there, then its
+    /// folder goes. Returns how many brushes moved.
+    pub fn delete_group(&self, dir: &Path) -> std::io::Result<usize> {
+        let own = self.own_subfolder(dir)?;
+        let mut moved = 0;
+        for entry in std::fs::read_dir(dir)?.flatten() {
+            let path = entry.path();
+            if is_image(&path) {
+                let Some(name) = path.file_name() else { continue };
+                std::fs::rename(&path, free_name(&own, Path::new(name)))?;
+                moved += 1;
+            }
+        }
+        // Folders in it, and files that are not brushes, stay: only an
+        // empty folder is removed.
+        let _ = std::fs::remove_dir(dir);
+        Ok(moved)
+    }
+
+    /// Move brush image `file` to the group of folder `to` (Massif's own
+    /// folders only), under a name not taken there. Returns where it went.
+    pub fn move_brush(&self, file: &Path, to: &Path) -> std::io::Result<PathBuf> {
+        let own = self.own_dir.clone().ok_or_else(|| std::io::Error::other("no folder for brushes"))?;
+        if !file.starts_with(&own) || !to.starts_with(&own) {
+            return Err(std::io::Error::other(tr!("only Massif's own brushes can be moved")));
+        }
+        if file.parent() == Some(to) {
+            return Ok(file.to_path_buf());
+        }
+        let name = file.file_name().ok_or_else(|| std::io::Error::other("no file name"))?;
+        let target = free_name(to, Path::new(name));
+        std::fs::rename(file, &target)?;
+        Ok(target)
+    }
+
+    /// Massif's brushes folder, when `dir` is a folder below it (not the
+    /// folder itself, which is the group Custom Brushes).
+    fn own_subfolder(&self, dir: &Path) -> std::io::Result<PathBuf> {
+        let own = self.own_dir.clone().ok_or_else(|| std::io::Error::other("no folder for brushes"))?;
+        if dir == own || !dir.starts_with(&own) {
+            return Err(std::io::Error::other(tr!("only groups made in Massif can be renamed or deleted")));
+        }
+        Ok(own)
+    }
+
     /// Show Massif's brushes folder in the file manager, making it first.
     pub fn open_folder(&self) -> std::io::Result<()> {
         let dir = self.own_dir.clone().ok_or_else(|| std::io::Error::other("no folder for brushes"))?;

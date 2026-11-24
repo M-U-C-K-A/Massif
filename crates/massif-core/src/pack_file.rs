@@ -712,6 +712,7 @@ impl Pack {
             understory: l.understory,
             locked: false,
             order: 0,
+            palette: String::new(),
         })
     }
 

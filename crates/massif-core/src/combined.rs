@@ -55,12 +55,16 @@ pub struct CombinedDef {
     /// Its place among the combined layers in the Layers panel.
     #[serde(default, skip_serializing_if = "crate::registry::is_zero")]
     pub order: u32,
+    /// The palette it is sorted into in the Layers panel ("": none, it
+    /// stays in its section).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub palette: String,
 }
 
 impl CombinedDef {
     /// A combined layer that paints nothing yet.
     pub fn new(name: &str, color: [u8; 3]) -> Self {
-        Self { name: name.to_owned(), color, parts: Vec::new(), removed: false, order: 0 }
+        Self { name: name.to_owned(), color, parts: Vec::new(), removed: false, order: 0, palette: String::new() }
     }
 
     /// The layer it paints in slot `part`, and over what share.

@@ -703,13 +703,18 @@ impl PatternSettings {
             return;
         }
         self.normalize();
-        let preset = PatternPreset {
+        let mut preset = PatternPreset {
             name: name.to_owned(),
             pattern: self.pattern.clone(),
             terrains: self.terrains.clone(),
+            palette: String::new(),
         };
         match self.saved.iter_mut().find(|p| p.name.eq_ignore_ascii_case(name)) {
-            Some(p) => *p = preset,
+            Some(p) => {
+                // Saved over, it stays in its palette.
+                preset.palette = std::mem::take(&mut p.palette);
+                *p = preset
+            }
             None => self.saved.push(preset),
         }
     }
@@ -721,6 +726,9 @@ pub struct PatternPreset {
     pub name: String,
     pub pattern: massif_core::pattern::Pattern,
     pub terrains: Vec<(String, f32)>,
+    /// The palette of the Layers panel it is sorted into ("": none).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub palette: String,
 }
 
 impl PatternPreset {
@@ -732,6 +740,7 @@ impl PatternPreset {
             name: name.to_owned(),
             pattern,
             terrains: terrains.iter().map(|(n, w)| ((*n).to_owned(), *w)).collect(),
+            palette: String::new(),
         };
         let base = Pattern::default();
         vec![

@@ -3325,5 +3325,28 @@
  "That is this map's own file: pick the copy or the region to merge": "Das ist die Datei dieser Karte: Wähle die Kopie oder Region zum Zusammenführen",
  "The map shows": "Die Karte zeigt",
  "tiles ": "Kacheln ",
- "{w} × {d} blocks from x {x}, z {z}, in {tw} × {td} tiles of 128 blocks with the border: only these tiles come back when it is merged.": "{w} × {d} Blöcke ab x {x}, z {z}, in {tw} × {td} Kacheln zu 128 Blöcken mit dem Rand: Nur diese Kacheln kommen beim Zusammenführen zurück."
+ "{w} × {d} blocks from x {x}, z {z}, in {tw} × {td} tiles of 128 blocks with the border: only these tiles come back when it is merged.": "{w} × {d} Blöcke ab x {x}, z {z}, in {tw} × {td} Kacheln zu 128 Blöcken mit dem Rand: Nur diese Kacheln kommen beim Zusammenführen zurück.",
+ "only Massif's own brushes can be moved": "nur Massifs eigene Pinsel lassen sich verschieben",
+ "only groups made in Massif can be renamed or deleted": "nur in Massif angelegte Gruppen lassen sich umbenennen oder löschen",
+ "Palettes": "Paletten",
+ "New palette": "Neue Palette",
+ "A named group of layers of any kind, as WorldPainter's palettes: drag layers onto it, or use their menu": "Eine benannte Gruppe von Ebenen jeder Art, wie die Paletten von WorldPainter: Ebenen darauf ziehen oder ihr Menü nutzen",
+ "Sort your layers into palettes of your own: forests, rivers, a modpack's trees.": "Ordne deine Ebenen in eigene Paletten: Wälder, Flüsse, die Bäume eines Modpacks.",
+ "Delete the palette": "Palette löschen",
+ "Its layers go back to their sections; none is removed": "Ihre Ebenen kehren in ihre Abschnitte zurück; keine wird entfernt",
+ "Empty: drag layers here, or use Palette in a layer's menu.": "Leer: Ebenen hierher ziehen oder „Palette“ im Menü einer Ebene nutzen.",
+ "New palette…": "Neue Palette…",
+ "Back to its section": "Zurück in seinen Abschnitt",
+ "Move to group": "In Gruppe verschieben",
+ "Renamed the group “{trim}”": "Gruppe in „{trim}“ umbenannt",
+ "Could not rename the group: {e}": "Die Gruppe konnte nicht umbenannt werden: {e}",
+ "Delete the group": "Gruppe löschen",
+ "Its brushes go to Custom Brushes; none is deleted": "Seine Pinsel kommen zu Custom Brushes; keiner wird gelöscht",
+ "Deleted the group; {n} brushes moved to Custom Brushes": {
+  "one": "Gruppe gelöscht; {n} Pinsel zu Custom Brushes verschoben",
+  "other": "Gruppe gelöscht; {n} Pinsel zu Custom Brushes verschoben"
+ },
+ "Could not delete the group: {e}": "Die Gruppe konnte nicht gelöscht werden: {e}",
+ "Moved the brush": "Pinsel verschoben",
+ "Could not move the brush: {e}": "Der Pinsel konnte nicht verschoben werden: {e}"
 }

@@ -894,7 +894,59 @@ pub fn brushes_panel(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLibr
     feedback
 }
 
-/// The groups of brushes made from images.
+/// A custom brush being dragged to another group: its image.
+#[derive(Debug, Clone)]
+struct DraggedBrush(std::path::PathBuf);
+
+/// A group's brushes, as [`brush_grid`]; Massif's own can be dragged to
+/// another of its groups, or moved by their menu (the moves asked go to
+/// `moves`).
+fn custom_brush_grid(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLibrary, brushes: &[(BrushSource, String)], add: Option<&mut bool>, own: &[(String, std::path::PathBuf)], moves: &mut Vec<(std::path::PathBuf, std::path::PathBuf)>) {
+    let dark = ui.visuals().dark_mode;
+    let ctx = ui.ctx().clone();
+    let movable = add.is_some();
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+        for (source, name) in brushes {
+            let texture = library.thumbnail(&ctx, source, dark);
+            let selected = tools.brush_source == *source;
+            let mut response = brush_button(ui, texture, name, selected, 44.0);
+            if let (true, BrushSource::Image(file)) = (movable, source) {
+                response = response.interact(Sense::click_and_drag());
+                if response.drag_started() {
+                    egui::DragAndDrop::set_payload(&ctx, DraggedBrush(file.clone()));
+                }
+                response.context_menu(|ui| {
+                    ui.label(RichText::new(tr!("Move to group")).size(11.0).color(Palette::of(ui).weak));
+                    for (group, dir) in own {
+                        let here = file.parent() == Some(dir.as_path());
+                        if crate::widgets::button(ui, theme::with_icon(if here { Icon::Check } else { Icon::Folder }, group)).clicked() && !here {
+                            moves.push((file.clone(), dir.clone()));
+                            ui.close();
+                        }
+                    }
+                });
+            }
+            let response = if response.hovered() {
+                let shape = library.brush(source, &tools.brush);
+                crate::cards::brush(response, name, &format!("{source:?}"), shape.as_ref())
+            } else {
+                response
+            };
+            if response.clicked() {
+                select_brush(tools, library, source.clone());
+            }
+        }
+        if let Some(add) = add {
+            let r = icon_button(ui, Icon::Plus, false, 44.0).on_hover_text(tr!("Add greyscale images as brushes"));
+            *add |= r.clicked();
+        }
+    });
+}
+
+/// The groups of brushes made from images: Massif's own groups are its
+/// brush palettes, folders of its brushes folder that fold, rename,
+/// delete, and take brushes dragged onto them.
 pub fn custom_brushes_panel(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLibrary) -> Option<String> {
     let mut feedback = None;
     if !library.is_loaded() {
@@ -920,13 +972,105 @@ pub fn custom_brushes_panel(ui: &mut Ui, tools: &mut ToolState, library: &mut Br
             (g.name.clone(), g.dir.clone(), g.writable, entries)
         })
         .collect();
+    // Massif's own groups, to move a brush to.
+    let own: Vec<(String, std::path::PathBuf)> = groups.iter().filter(|g| g.2).map(|g| (g.0.clone(), g.1.clone())).collect();
+    let mut moves: Vec<(std::path::PathBuf, std::path::PathBuf)> = Vec::new();
+    let mut changed = None;
     for (name, dir, writable, entries) in groups {
-        section(ui, if writable { Icon::Folder } else { Icon::FolderOpen }, &tr!("{name}  ·  {n}", n = entries.len(), name));
-        let mut add = false;
-        brush_grid(ui, tools, library, &entries, writable.then_some(&mut add));
-        if add {
-            feedback = add_brushes(library, Some(&dir), ui.ctx());
+        // A group that folds: its title opens and closes it; its menu
+        // renames or deletes one made in Massif.
+        let id = egui::Id::unique(("brush group open", &dir));
+        let mut open = ui.ctx().data_mut(|d| *d.get_persisted_mut_or_insert_with(id, || true));
+        let renaming = egui::Id::unique(("brush group rename", &dir));
+        let mut text: Option<String> = ui.ctx().data(|d| d.get_temp(renaming));
+        let deletable = writable && library.own_dir.as_ref().is_some_and(|o| *o != dir && dir.starts_with(o));
+        let header = ui.horizontal(|ui| {
+            let caret = if open { Icon::ChevronDown } else { Icon::ChevronRight };
+            match &mut text {
+                Some(t) => {
+                    ui.label(RichText::new(theme::glyph(Icon::Folder).to_string()).size(11.0));
+                    let r = ui.add(egui::TextEdit::singleline(t).desired_width(160.0));
+                    if r.lost_focus() {
+                        if ui.input(|i| !i.key_pressed(egui::Key::Escape)) {
+                            changed = Some(match library.rename_group(&dir, t) {
+                                Ok(_) => tr!("Renamed the group “{trim}”", trim = t.trim()),
+                                Err(e) => tr!("Could not rename the group: {e}", e),
+                            });
+                        }
+                        ui.ctx().data_mut(|d| d.remove::<String>(renaming));
+                    } else {
+                        r.request_focus();
+                        ui.ctx().data_mut(|d| d.insert_temp(renaming, t.clone()));
+                    }
+                    None
+                }
+                None => {
+                    let pal = Palette::of(ui);
+                    let label = format!("{}  {}  {}  ·  {}", theme::glyph(caret), theme::glyph(if writable { Icon::Folder } else { Icon::FolderOpen }), name.to_uppercase(), entries.len());
+                    Some(ui.add(egui::Label::new(RichText::new(label).size(10.5).strong().color(pal.weak)).sense(Sense::click()).truncate()))
+                }
+            }
+        });
+        if let Some(r) = header.inner {
+            if r.clicked() {
+                open = !open;
+                ui.ctx().data_mut(|d| d.insert_persisted(id, open));
+            }
+            if deletable {
+                r.context_menu(|ui| {
+                    if crate::widgets::button(ui, theme::with_icon(Icon::Pencil, tr!("Rename"))).clicked() {
+                        ui.ctx().data_mut(|d| d.insert_temp(renaming, name.clone()));
+                        ui.close();
+                    }
+                    let pal = Palette::of(ui);
+                    if crate::widgets::button(ui, RichText::new(theme::with_icon(Icon::Trash2, tr!("Delete the group"))).color(pal.danger)).on_hover_text(tr!("Its brushes go to Custom Brushes; none is deleted")).clicked() {
+                        changed = Some(match library.delete_group(&dir) {
+                            Ok(n) => trn!("Deleted the group; {n} brush moved to Custom Brushes", "Deleted the group; {n} brushes moved to Custom Brushes", n = n),
+                            Err(e) => tr!("Could not delete the group: {e}", e),
+                        });
+                        ui.close();
+                    }
+                });
+            }
         }
+        // A brush let go over the group goes into it.
+        let top = header.response.rect.top();
+        if open {
+            let mut add = false;
+            custom_brush_grid(ui, tools, library, &entries, writable.then_some(&mut add), &own, &mut moves);
+            if add {
+                feedback = add_brushes(library, Some(&dir), ui.ctx());
+            }
+        }
+        if writable {
+            let whole = Rect::from_min_max(pos2(ui.min_rect().left(), top), pos2(ui.min_rect().right(), ui.min_rect().bottom()));
+            if let Some(held) = egui::DragAndDrop::payload::<DraggedBrush>(ui.ctx())
+                && ui.ctx().pointer_latest_pos().is_some_and(|p| whole.contains(p))
+            {
+                if ui.input(|i| i.pointer.any_released()) {
+                    egui::DragAndDrop::clear_payload(ui.ctx());
+                    moves.push((held.0.clone(), dir.clone()));
+                } else {
+                    let pal = Palette::of(ui);
+                    ui.painter().rect_stroke(whole.expand(2.0), theme::TILE_RADIUS, Stroke::new(1.5, pal.accent), StrokeKind::Inside);
+                }
+            }
+        }
+    }
+    for (file, to) in moves {
+        changed = Some(match library.move_brush(&file, &to) {
+            Ok(new) => {
+                if tools.brush_source == BrushSource::Image(file.clone()) {
+                    tools.brush_source = BrushSource::Image(new);
+                }
+                tr!("Moved the brush").to_owned()
+            }
+            Err(e) => tr!("Could not move the brush: {e}", e),
+        });
+    }
+    if let Some(said) = changed {
+        library.load_in_background(ui.ctx());
+        feedback = Some(said);
     }
     if !library.errors.is_empty() {
         let pal = Palette::of(ui);

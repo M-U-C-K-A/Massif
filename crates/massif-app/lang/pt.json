@@ -3322,5 +3322,28 @@
  "That is this map's own file: pick the copy or the region to merge": "Este é o arquivo deste mapa: escolha a cópia ou a região a mesclar",
  "The map shows": "O mapa mostra",
  "tiles ": "ladrilhos ",
- "{w} × {d} blocks from x {x}, z {z}, in {tw} × {td} tiles of 128 blocks with the border: only these tiles come back when it is merged.": "{w} × {d} blocos a partir de x {x}, z {z}, em {tw} × {td} ladrilhos de 128 blocos com a borda: só estes ladrilhos voltam ao mesclar."
+ "{w} × {d} blocks from x {x}, z {z}, in {tw} × {td} tiles of 128 blocks with the border: only these tiles come back when it is merged.": "{w} × {d} blocos a partir de x {x}, z {z}, em {tw} × {td} ladrilhos de 128 blocos com a borda: só estes ladrilhos voltam ao mesclar.",
+ "only Massif's own brushes can be moved": "só os pincéis do próprio Massif podem ser movidos",
+ "only groups made in Massif can be renamed or deleted": "só os grupos criados no Massif podem ser renomeados ou excluídos",
+ "Palettes": "Paletas",
+ "New palette": "Nova paleta",
+ "A named group of layers of any kind, as WorldPainter's palettes: drag layers onto it, or use their menu": "Um grupo com nome de camadas de qualquer tipo, como as paletas do WorldPainter: arraste camadas para ele ou use o menu delas",
+ "Sort your layers into palettes of your own: forests, rivers, a modpack's trees.": "Organize suas camadas em paletas próprias: florestas, rios, as árvores de um modpack.",
+ "Delete the palette": "Excluir a paleta",
+ "Its layers go back to their sections; none is removed": "Suas camadas voltam para suas seções; nenhuma é removida",
+ "Empty: drag layers here, or use Palette in a layer's menu.": "Vazia: arraste camadas para cá ou use Paleta no menu de uma camada.",
+ "New palette…": "Nova paleta…",
+ "Back to its section": "Voltar para sua seção",
+ "Move to group": "Mover para o grupo",
+ "Renamed the group “{trim}”": "Grupo renomeado “{trim}”",
+ "Could not rename the group: {e}": "Não foi possível renomear o grupo: {e}",
+ "Delete the group": "Excluir o grupo",
+ "Its brushes go to Custom Brushes; none is deleted": "Seus pincéis vão para Custom Brushes; nenhum é excluído",
+ "Deleted the group; {n} brushes moved to Custom Brushes": {
+  "one": "Grupo excluído; {n} pincel movido para Custom Brushes",
+  "other": "Grupo excluído; {n} pincéis movidos para Custom Brushes"
+ },
+ "Could not delete the group: {e}": "Não foi possível excluir o grupo: {e}",
+ "Moved the brush": "Pincel movido",
+ "Could not move the brush: {e}": "Não foi possível mover o pincel: {e}"
 }

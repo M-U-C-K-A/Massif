@@ -265,7 +265,8 @@ impl Converter {
                 let size = (4.099 * int("scale", 100) as f32 / 100.0).max(1.0);
                 let (low, high) = (int("minLevel", i32::MIN as i64) as i32, int("maxLevel", i32::MAX as i64) as i32);
                 let color = arena.field(key, "colour").and_then(|c| arena.int(c)).map_or([150, 150, 150], |c| [(c >> 16) as u8, (c >> 8) as u8, c as u8]);
-                let def = massif_core::pockets::PocketDef::new(&name, color, &blocks, share, size, low, high);
+                let mut def = massif_core::pockets::PocketDef::new(&name, color, &blocks, share, size, low, high);
+                def.palette = palette_of(arena, key, &mut mapper.registry);
                 vec![(Conv::Pockets(mapper.registry.add_pocket(def)), 1.0)]
             }
             "tunnel.TunnelLayer" => {
@@ -335,6 +336,7 @@ impl Converter {
                     }
                 }
                 if !def.parts.is_empty() {
+                    def.palette = palette_of(arena, key, &mut mapper.registry);
                     mapper.registry.add_combined(def);
                 }
                 parts
@@ -357,6 +359,45 @@ pub struct Painted {
 /// What layer `key` (of class `class`) becomes in `reg`, adding what it
 /// needs there; `None` for a layer Massif does not convert.
 pub fn convert(arena: &Arena, key: Value, class: &str, reg: &mut Registry) -> Option<Conv> {
+    let conv = convert_layer(arena, key, class, reg)?;
+    // A custom layer keeps the palette WorldPainter sorted it into, and its
+    // place there.
+    let palette = palette_of(arena, key, reg);
+    if !palette.is_empty() {
+        let order = arena.field(key, "paletteIndex").and_then(|v| arena.int(v)).map_or(0, |i| (i + 1).clamp(0, u32::MAX as i64) as u32);
+        match conv {
+            Conv::Cover(n) => {
+                if let Some(c) = reg.covers.get_mut(n as usize - 1) {
+                    (c.palette, c.order) = (palette, order);
+                }
+            }
+            Conv::Objects(n, ..) => {
+                if let Some(l) = reg.object_layers.get_mut(n as usize - 1) {
+                    (l.palette, l.order) = (palette, order);
+                }
+            }
+            Conv::Pockets(n) => {
+                if let Some(p) = reg.pockets.get_mut(n as usize - 1) {
+                    (p.palette, p.order) = (palette, order);
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(conv)
+}
+
+/// The palette a custom layer is sorted into in WorldPainter ("" for one
+/// of its own layers, which have none), added to the palettes of `reg`.
+pub fn palette_of(arena: &Arena, key: Value, reg: &mut Registry) -> String {
+    let Some(name) = arena.field(key, "palette").and_then(|v| arena.string(v)).map(str::trim).filter(|n| !n.is_empty()) else { return String::new() };
+    if !reg.palettes.iter().any(|p| p == name) {
+        reg.palettes.push(name.to_owned());
+    }
+    name.to_owned()
+}
+
+fn convert_layer(arena: &Arena, key: Value, class: &str, reg: &mut Registry) -> Option<Conv> {
     let short = class.strip_prefix(LAYERS)?;
     let string = |name: &str| arena.field(key, name).and_then(|v| arena.string(v)).map(str::to_owned);
     let objects = |n: u16, curve: Curve, reg: &Registry| Conv::Objects(n, curve, reg.object_layer(n).is_some_and(|l| l.understory));
@@ -1514,6 +1555,7 @@ mod tests {
                 (b'I', "scale", None),
                 (b'L', "material", Some("Lorg/pepsoft/minecraft/Material;")),
                 (b'L', "name", Some("Ljava/lang/String;")),
+                (b'L', "palette", Some("Ljava/lang/String;")),
             ],
             null,
         );
@@ -1537,6 +1579,7 @@ mod tests {
         w.string("minecraft:gravel");
         w.u8(TC_NULL);
         w.string("Gravel pockets");
+        w.string("Underground");
 
         let mut parser = Parser::new(&w.out[..]).unwrap();
         let value = parser.next_object().unwrap().unwrap();
@@ -1552,6 +1595,8 @@ mod tests {
         assert_eq!(def.blocks.iter().map(|&(b, w)| (reg.block(b).state.as_str(), w)).collect::<Vec<_>>(), [("minecraft:gravel", 1)]);
         assert_eq!((def.share, def.low, def.high), (0.2, -30, 60));
         assert!((def.size - 4.099 * 1.5).abs() < 1e-4, "{}", def.size);
+        // In the palette WorldPainter sorted it into.
+        assert_eq!((def.palette.as_str(), reg.palettes.as_slice()), ("Underground", &["Underground".to_owned()][..]));
     }
 
     /// WorldPainter's River layer dug as WorldPainter's exporter digs it:
