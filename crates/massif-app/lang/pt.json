@@ -3028,5 +3028,25 @@
   "one": "{n} chunk",
   "other": "{n} chunks"
  },
- "Drag the image on the map to move it; the arrow keys move it a block, with Shift 16.": "Arraste a imagem no mapa para movê-la; as setas a movem um bloco, 16 com Shift."
+ "Drag the image on the map to move it; the arrow keys move it a block, with Shift 16.": "Arraste a imagem no mapa para movê-la; as setas a movem um bloco, 16 com Shift.",
+ "A part of the map, written to a world of its own beside the export (“{name} test”), to try it in the game quickly. To draw a rectangle on the map, select it with the Select tools first.": "Uma parte do mapa, escrita num mundo próprio ao lado da exportação («{name} test»), para experimentá-la rápido no jogo. Para traçar um retângulo no mapa, selecione-o antes com as ferramentas de seleção.",
+ "Around the view": "Ao redor da vista",
+ "Export a part of the map to a world of its own, to try it in the game": "Exportar uma parte do mapa para um mundo próprio, para experimentá-la no jogo",
+ "Export the test": "Exportar o teste",
+ "No biome painted here": "Nenhum bioma pintado aqui",
+ "No ground cover here": "Nenhuma cobertura do solo aqui",
+ "No trees nor objects here": "Nem árvores nem objetos aqui",
+ "Nothing here to pick": "Nada a capturar aqui",
+ "Part of the map": "Parte do mapa",
+ "Picked the biome {name}": "Bioma {name} capturado",
+ "Picked the ground cover {name}": "Cobertura do solo {name} capturada",
+ "Picked the layer {name}": "Camada {name} capturada",
+ "Picked {terrain_name}": "{terrain_name} capturado",
+ "Switch the map's view with the tool": "Mudar a vista do mapa com a ferramenta",
+ "Test Export": "Exportação de teste",
+ "The mouse keeps its own: the wheel sizes the brush (Shift: a block at a time), Ctrl + Shift and the wheel turn it, Alt or Ctrl and the wheel zoom, Alt + click picks the terrain, biome or layer under the cursor.": "O mouse mantém os seus: a roda muda o tamanho do pincel (Shift: bloco a bloco), Ctrl + Shift e a roda o giram, Alt ou Ctrl e a roda dão zoom, Alt + clique captura o terreno, o bioma ou a camada sob o cursor.",
+ "{w} × {d} blocks from x {x}, z {z}: the {n} tiles of 128 blocks it reaches.": {
+  "one": "{w} × {d} blocos a partir de x {x}, z {z}: o bloco de 128 que ele alcança.",
+  "other": "{w} × {d} blocos a partir de x {x}, z {z}: os {n} blocos de 128 que ele alcança."
+ }
 }

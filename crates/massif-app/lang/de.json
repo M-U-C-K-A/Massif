@@ -3031,5 +3031,25 @@
   "one": "{n} Chunk",
   "other": "{n} Chunks"
  },
- "Drag the image on the map to move it; the arrow keys move it a block, with Shift 16.": "Ziehen Sie das Bild auf der Karte, um es zu verschieben; die Pfeiltasten verschieben es um einen Block, mit Umschalt um 16."
+ "Drag the image on the map to move it; the arrow keys move it a block, with Shift 16.": "Ziehen Sie das Bild auf der Karte, um es zu verschieben; die Pfeiltasten verschieben es um einen Block, mit Umschalt um 16.",
+ "A part of the map, written to a world of its own beside the export (“{name} test”), to try it in the game quickly. To draw a rectangle on the map, select it with the Select tools first.": "Ein Teil der Karte, in eine eigene Welt neben dem Export geschrieben („{name} test“), um ihn schnell im Spiel auszuprobieren. Um ein Rechteck auf der Karte zu ziehen, wählen Sie es zuerst mit den Auswahlwerkzeugen aus.",
+ "Around the view": "Um die Ansicht",
+ "Export a part of the map to a world of its own, to try it in the game": "Einen Teil der Karte in eine eigene Welt exportieren, um ihn im Spiel auszuprobieren",
+ "Export the test": "Test exportieren",
+ "No biome painted here": "Hier ist kein Biom gemalt",
+ "No ground cover here": "Hier ist keine Bodenbedeckung",
+ "No trees nor objects here": "Hier sind weder Bäume noch Objekte",
+ "Nothing here to pick": "Hier gibt es nichts aufzunehmen",
+ "Part of the map": "Teil der Karte",
+ "Picked the biome {name}": "Biom {name} aufgenommen",
+ "Picked the ground cover {name}": "Bodenbedeckung {name} aufgenommen",
+ "Picked the layer {name}": "Ebene {name} aufgenommen",
+ "Picked {terrain_name}": "{terrain_name} aufgenommen",
+ "Switch the map's view with the tool": "Kartenansicht mit dem Werkzeug wechseln",
+ "Test Export": "Testexport",
+ "The mouse keeps its own: the wheel sizes the brush (Shift: a block at a time), Ctrl + Shift and the wheel turn it, Alt or Ctrl and the wheel zoom, Alt + click picks the terrain, biome or layer under the cursor.": "Die Maus behält ihre eigenen: Das Mausrad ändert die Pinselgröße (Umschalt: blockweise), Strg + Umschalt und das Mausrad drehen ihn, Alt oder Strg und das Mausrad zoomen, Alt + Klick nimmt Terrain, Biom oder Ebene unter dem Zeiger auf.",
+ "{w} × {d} blocks from x {x}, z {z}: the {n} tiles of 128 blocks it reaches.": {
+  "one": "{w} × {d} Blöcke ab x {x}, z {z}: die {n} Kachel zu 128 Blöcken, die er berührt.",
+  "other": "{w} × {d} Blöcke ab x {x}, z {z}: die {n} Kacheln zu 128 Blöcken, die er berührt."
+ }
 }

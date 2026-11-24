@@ -237,6 +237,18 @@ enum Pending {
     Quit,
 }
 
+/// The part of the map a Test Export writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TestArea {
+    /// The selection (made with the Select tools: a rectangle drawn on the
+    /// map, an ellipse, a lasso…).
+    Selection,
+    /// 384 × 384 blocks around the middle of the map view.
+    View,
+    /// Blocks typed in.
+    Blocks,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExportTab {
     General,
@@ -265,6 +277,13 @@ struct ExportForm {
     spawn: [i32; 3],
     /// Centre of the test export, in blocks (the map view's centre).
     test_centre: (i32, i32),
+    /// Test Export… pressed: the part of the map to test is being chosen.
+    testing: bool,
+    test_area: TestArea,
+    /// The blocks of a test of blocks typed in: west, north, width, depth.
+    test_blocks: [i32; 4],
+    /// The selection's bounds, when the map has one.
+    selection_rect: Option<massif_core::BlockRect>,
     /// A border just around the map: centre and size.
     fit: Option<([f64; 2], f64)>,
     /// The version exported for, among those offered: the releases known,
@@ -1344,6 +1363,10 @@ impl MassifApp {
                     crate::sounds::play(Cue::Select);
                 }
             });
+            // Paint biome shows the map's biomes, Paint terrain its terrains.
+            crate::widgets::row(ui, tr!("Switch the map's view with the tool"), |ui| {
+                crate::widgets::switch(ui, &mut self.settings.map_follows_tool);
+            });
         });
         if crate::i18n::current() != crate::i18n::Language::English {
             ui.add_space(8.0);
@@ -1363,10 +1386,6 @@ impl MassifApp {
     /// that style's few settings — none to touch for it to look right.
     fn prefs_home_background(&mut self, ui: &mut Ui, ctx: &egui::Context) {
         use crate::backdrop::{Direction, FPS, Motion, PrismPalette, RidgesPalette, Shape, Style, WavesPalette};
-            // Paint biome shows the map's biomes, Paint terrain its terrains.
-            crate::widgets::row(ui, tr!("Switch the map's view with the tool"), |ui| {
-                crate::widgets::switch(ui, &mut self.settings.map_follows_tool);
-            });
         let pal = Palette::of(ui);
         let page = crate::home::backdrop_fill(&pal);
         let reduced = theme::reduce_motion(ctx);
@@ -2715,6 +2734,10 @@ impl MassifApp {
             selected_pack: None,
             spawn: self.doc.world.meta.spawn,
             test_centre: centre,
+            testing: false,
+            test_area: if self.doc.selection().is_some() { TestArea::Selection } else { TestArea::View },
+            test_blocks: [centre.0 - 192, centre.1 - 192, 384, 384],
+            selection_rect: self.doc.selection().and_then(|s| s.bounds()),
             fit: self.doc.dimension().bounds().map(|(lo, hi)| {
                 let (x0, z0) = (lo.x as f64 * 128.0, lo.z as f64 * 128.0);
                 let (x1, z1) = ((hi.x + 1) as f64 * 128.0, (hi.z + 1) as f64 * 128.0);
@@ -4080,6 +4103,7 @@ impl MassifApp {
                 let guide = self.guide.as_ref().filter(|(g, generation)| g.shown && *generation == self.doc.generation).map(|(g, _)| (g.texture.id(), g.rect, g.opacity));
                 let shows_3d = self.layout.current().root.shows(EditorKind::View3d);
                 let view = self.maps.entry(id).or_default();
+                view.follow_tool(self.tools.tool, self.settings.map_follows_tool);
                 view.ui(
                     &mut cui,
                     MapInput {
@@ -4104,7 +4128,6 @@ impl MassifApp {
             EditorKind::View3d => {
                 // Opened on a map it has not built: what the 2D map read of
                 // its tiles, for a first look at once.
-                view.follow_tool(self.tools.tool, self.settings.map_follows_tool);
                 let k = self.slots3d.get(&id).copied().unwrap_or(0);
                 let view = match k {
                     0 => &mut self.view3d,
@@ -5399,12 +5422,19 @@ impl MassifApp {
                         crate::widgets::checkbox(ui, &mut form.overwrite, tr!("Replace its region files (everything else is kept)"));
                     }
                     ui.add_space(10.0);
+                    // Test Export…: which part of the map, then the test.
+                    if form.testing {
+                        if export_test_area(ui, &mut form) {
+                            start = Some(true);
+                        }
+                        return;
+                    }
                     ui.horizontal(|ui| {
                         let test = ui
                             .button(tr!("Test Export…"))
-                            .on_hover_text(tr!("Export 384 × 384 blocks around the view, to test it"));
+                            .on_hover_text(tr!("Export a part of the map to a world of its own, to try it in the game"));
                         if test.clicked() {
-                            start = Some(true);
+                            form.testing = true;
                         }
                         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                             if ui.button(tr!("Cancel")).clicked() {
@@ -5455,13 +5485,16 @@ impl MassifApp {
                     }
                     let mut dir = form.parent.join(form.name.trim());
                     if test {
-                        let c = TilePos::containing(form.test_centre.0, form.test_centre.1);
-                        options.area = Some((c.offset(-1, -1), c.offset(1, 1)));
+                        // The tiles of 128 blocks the part chosen reaches.
+                        let rect = form.test_rect();
+                        options.area = Some((TilePos::containing(rect.x0, rect.z0), TilePos::containing(rect.x1 - 1, rect.z1 - 1)));
+                        options.selection_only = form.test_area == TestArea::Selection && form.selection_rect.is_some();
                         options.overwrite = false;
                         options.level_name = Some(tr!("{trim} (test)", trim = form.name.trim()));
                         dir = massif_anvil::unique_dir(&form.parent, &format!("{} test", form.name.trim()));
                         // Spawn in the middle of what is exported.
-                        options.spawn = Some([form.test_centre.0, form.spawn[1].max(self.doc.world.meta.sea_level + 1), form.test_centre.1]);
+                        let (cx, cz) = ((rect.x0 + rect.x1) / 2, (rect.z0 + rect.z1) / 2);
+                        options.spawn = Some([cx, form.spawn[1].max(self.doc.world.meta.sea_level + 1), cz]);
                     }
                     if form.ores != self.doc.world.meta.ores.on {
                         self.doc.world.meta.ores.on = form.ores;
@@ -6352,6 +6385,82 @@ fn export_general(ui: &mut Ui, form: &mut ExportForm) {
             });
         });
     });
+}
+
+impl ExportForm {
+    /// The blocks a Test Export writes (the tiles of 128 blocks it reaches).
+    fn test_rect(&self) -> massif_core::BlockRect {
+        let (cx, cz) = self.test_centre;
+        match (self.test_area, self.selection_rect) {
+            (TestArea::Selection, Some(r)) => r,
+            (TestArea::Blocks, _) => {
+                let [x, z, w, d] = self.test_blocks;
+                massif_core::BlockRect::new(x, z, x + w.max(1), z + d.max(1))
+            }
+            _ => {
+                // The 3 × 3 tiles around the view's middle.
+                let c = TilePos::containing(cx, cz);
+                massif_core::BlockRect::new((c.x - 1) * 128, (c.z - 1) * 128, (c.x + 2) * 128, (c.z + 2) * 128)
+            }
+        }
+    }
+}
+
+/// Test Export: which part of the map goes into the test world (the
+/// selection, the blocks around the view, or blocks typed in), what it
+/// comes to, and the test's own buttons. Whether to export it.
+fn export_test_area(ui: &mut Ui, form: &mut ExportForm) -> bool {
+    let pal = Palette::of(ui);
+    ui.label(RichText::new(tr!("Test Export")).medium());
+    ui.add(egui::Label::new(RichText::new(tr!("A part of the map, written to a world of its own beside the export (“{name} test”), to try it in the game quickly. To draw a rectangle on the map, select it with the Select tools first.", name = form.name.trim())).size(11.5).color(pal.weak)).wrap());
+    ui.add_space(6.0);
+    let mut areas = Vec::new();
+    if form.selection_rect.is_some() {
+        areas.push((TestArea::Selection, tr!("The selection")));
+    }
+    areas.push((TestArea::View, tr!("Around the view")));
+    areas.push((TestArea::Blocks, tr!("These blocks")));
+    crate::widgets::well(ui, |ui| {
+        crate::widgets::row(ui, tr!("Part of the map"), |ui| {
+            let labels: Vec<&str> = areas.iter().map(|a| a.1).collect();
+            let on: Vec<bool> = areas.iter().map(|a| a.0 == form.test_area).collect();
+            if let Some(k) = crate::widgets::button_group(ui, "test area", &labels, &on) {
+                if areas[k].0 == TestArea::Blocks && form.test_area != TestArea::Blocks {
+                    let r = form.test_rect();
+                    form.test_blocks = [r.x0, r.z0, r.width(), r.depth()];
+                }
+                form.test_area = areas[k].0;
+            }
+        });
+        if form.test_area == TestArea::Blocks {
+            let b = &mut form.test_blocks;
+            crate::widgets::row(ui, tr!("Top left corner"), |ui| {
+                ui.add(crate::widgets::Field::new(&mut b[1], -30_000_000..=30_000_000).text("z "));
+                ui.add(crate::widgets::Field::new(&mut b[0], -30_000_000..=30_000_000).text("x "));
+            });
+            crate::widgets::row(ui, tr!("Size"), |ui| {
+                ui.add(crate::widgets::Field::new(&mut b[3], 1..=65_536).text(tr!("depth ")));
+                ui.add(crate::widgets::Field::new(&mut b[2], 1..=65_536).text(tr!("width ")));
+            });
+        }
+    });
+    let r = form.test_rect();
+    let (t0, t1) = (TilePos::containing(r.x0, r.z0), TilePos::containing(r.x1 - 1, r.z1 - 1));
+    let tiles = (t1.x - t0.x + 1) * (t1.z - t0.z + 1);
+    ui.add(egui::Label::new(RichText::new(trn!("{w} × {d} blocks from x {x}, z {z}: the {n} tile of 128 blocks it reaches.", "{w} × {d} blocks from x {x}, z {z}: the {n} tiles of 128 blocks it reaches.", n = tiles, w = r.width(), d = r.depth(), x = r.x0, z = r.z0)).size(11.5).color(pal.weak)).wrap());
+    ui.add_space(10.0);
+    let mut go = false;
+    ui.horizontal(|ui| {
+        if ui.button(tr!("Back")).clicked() {
+            form.testing = false;
+        }
+        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+            if ui.add_enabled(!form.name.trim().is_empty(), theme::primary_button(ui, tr!("Export the test"))).clicked() {
+                go = true;
+            }
+        });
+    });
+    go
 }
 
 fn export_world(ui: &mut Ui, form: &mut ExportForm) {
@@ -10159,6 +10268,181 @@ mod tests {
         h.get_by_label("Done").click();
         h.run_steps(3);
         assert!(h.state().dialog.is_none());
+    }
+
+    /// In a layer's dialog, Base / Sub-canopy answers its clicks while Tool
+    /// Settings shows the same layer beside it: the two controls shared
+    /// their id, and the dialog's clicks went to the panel's (Jack, beta 5).
+    /// Rendered with MASSIF_SNAPSHOT_DIR (and MASSIF_SNAPSHOT_PPP).
+    #[test]
+    fn the_canopy_choice_works_in_the_layer_dialog() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let n = massif_core::treepack::TreeKind::BigOak.install(&mut h.state_mut().doc.world.registry);
+        assert!(!h.state().doc.world.registry.object_layer(n).unwrap().understory);
+        // Painting with it: Tool Settings shows its settings too.
+        h.state_mut().tools.select(Tool::Objects);
+        h.state_mut().tools.object_layer = n;
+        h.run_steps(3);
+        h.state_mut().layers_ui.open = Some((crate::layers::Kind::Objects, n as usize));
+        h.run_steps(5);
+        // The dialog's control: the one over the dialog's layer.
+        let in_dialog = |h: &egui_kittest::Harness<'static, MassifApp>| {
+            let dialog = h.ctx.memory(|m| m.area_rect(Id::unique("layer settings"))).expect("the dialog shown");
+            h.query_all_by_label("Sub-canopy").map(|n| n.rect()).find(|r| dialog.contains(r.center())).expect("Sub-canopy in the dialog")
+        };
+        assert!(h.query_all_by_label("Sub-canopy").count() >= 2, "shown in Tool Settings and in the dialog");
+        let r = in_dialog(&h);
+        h.event(egui::Event::PointerMoved(r.center()));
+        h.run_steps(2);
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: r.center(), button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::default() });
+        }
+        h.run_steps(4);
+        assert!(h.state().doc.world.registry.object_layer(n).unwrap().understory, "made sub-canopy from the dialog");
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            let ppp = h.ctx.pixels_per_point();
+            h.render().unwrap().save(dir.join(format!("layer-dialog-sub-canopy-{ppp}x.png"))).unwrap();
+        }
+    }
+
+    /// Alt + click picks what is under the cursor, as WorldPainter's
+    /// eyedropper, without painting: Paint terrain the terrain, Paint biome
+    /// the biome; the right button with Alt too.
+    #[test]
+    fn alt_click_picks_what_is_under_the_cursor() {
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let map = map_rect(h.state(), &h.ctx);
+        let at = map.center() + vec2(-40.0, 30.0);
+        h.event(egui::Event::PointerMoved(at));
+        h.run_steps(3);
+        let (x, z) = h.state().hover.expect("over the map");
+        let p = crate::tools::probe(&h.state().doc, x, z).expect("land there");
+        // Alt held down over a frame or two, as a hand does.
+        let click = |h: &mut egui_kittest::Harness<'static, MassifApp>, button: egui::PointerButton| {
+            h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
+            h.run_steps(1);
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos: at, button, pressed, modifiers: Modifiers::ALT });
+            }
+            h.run_steps(2);
+            h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+            h.run_steps(2);
+        };
+        let revision = h.state().doc.revision;
+        h.state_mut().tools.select(Tool::PaintTerrain);
+        let other = if p.terrain == 1 { 2 } else { 1 };
+        h.state_mut().tools.terrain = other;
+        h.run_steps(2);
+        click(&mut h, egui::PointerButton::Primary);
+        assert_eq!(h.state().tools.terrain, p.terrain, "the terrain picked");
+        assert_eq!(h.state().doc.revision, revision, "nothing painted");
+        h.state_mut().tools.select(Tool::PaintBiome);
+        h.state_mut().tools.biome = if p.biome == 1 { 2 } else { 1 };
+        h.run_steps(2);
+        click(&mut h, egui::PointerButton::Secondary);
+        if p.biome != 0 {
+            assert_eq!(h.state().tools.biome, p.biome, "the biome picked");
+        }
+        assert_eq!(h.state().doc.revision, revision, "nothing painted");
+        // Without Alt, the tool paints.
+        h.state_mut().tools.select(Tool::PaintTerrain);
+        h.state_mut().tools.terrain = other;
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+        }
+        h.run_steps(3);
+        assert_ne!(h.state().doc.revision, revision, "painted");
+    }
+
+    /// Picking Paint biome shows the map's biomes and Paint terrain its
+    /// terrains; leaving them puts back the view the map was in, unless it
+    /// was changed meanwhile; off in Settings, the view stays.
+    #[test]
+    fn the_map_view_follows_the_tool() {
+        use crate::map_render::MapMode;
+        let mut v = crate::map_view::MapView::default();
+        v.mode = MapMode::Height;
+        v.follow_tool(Tool::Raise, true);
+        assert_eq!(v.mode, MapMode::Height);
+        v.follow_tool(Tool::PaintBiome, true);
+        assert_eq!(v.mode, MapMode::Biome);
+        v.follow_tool(Tool::PaintTerrain, true);
+        assert_eq!(v.mode, MapMode::Terrain);
+        v.follow_tool(Tool::Smooth, true);
+        assert_eq!(v.mode, MapMode::Height, "back to the view it was in");
+        v.follow_tool(Tool::PaintBiome, true);
+        v.mode = MapMode::Slope;
+        v.follow_tool(Tool::Raise, true);
+        assert_eq!(v.mode, MapMode::Slope, "a view chosen meanwhile stays");
+        v.follow_tool(Tool::PaintBiome, false);
+        assert_eq!(v.mode, MapMode::Slope, "off: the view stays");
+        // In the app, through the setting.
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(3);
+        h.state_mut().tools.select(Tool::PaintBiome);
+        h.run_steps(3);
+        assert!(h.state().maps.values().all(|m| m.mode == MapMode::Biome));
+        h.state_mut().tools.select(Tool::Raise);
+        h.run_steps(3);
+        assert!(h.state().maps.values().all(|m| m.mode == MapMode::Terrain));
+        h.state_mut().settings.map_follows_tool = false;
+        h.state_mut().tools.select(Tool::PaintBiome);
+        h.run_steps(3);
+        assert!(h.state().maps.values().all(|m| m.mode == MapMode::Terrain));
+    }
+
+    /// Test Export asks which part of the map: the selection, around the
+    /// view, or blocks typed in; it writes the tiles of 128 blocks that
+    /// part reaches to a world of its own. Rendered with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn test_export_asks_for_an_area() {
+        use egui_kittest::kittest::Queryable;
+        let out = std::env::temp_dir().join(format!("massif-test-export-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        std::fs::create_dir_all(&out).unwrap();
+        let mut h = harness(ThemeChoice::Light);
+        h.run_steps(4);
+        h.state_mut().open_export_dialog();
+        if let Some(Dialog::Export(form)) = &mut h.state_mut().dialog {
+            form.parent = out.clone();
+            form.name = "Area".into();
+        }
+        // The dialog settles in its place over a few frames.
+        h.run_steps(12);
+        h.get_by_label("Test Export…").hover();
+        h.run_steps(2);
+        h.get_by_label("Test Export…").click();
+        h.run_steps(3);
+        assert!(matches!(&h.state().dialog, Some(Dialog::Export(f)) if f.testing), "asks which part");
+        h.get_by_label("These blocks").hover();
+        h.run_steps(2);
+        h.get_by_label("These blocks").click();
+        h.run_steps(3);
+        if let Some(Dialog::Export(form)) = &mut h.state_mut().dialog {
+            assert_eq!(form.test_area, TestArea::Blocks);
+            form.test_blocks = [0, 0, 100, 100];
+        }
+        h.run_steps(12);
+        assert!(h.query_all_by_label_contains("100 × 100 blocks from x 0, z 0: the 1 tile of 128 blocks").next().is_some());
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            let ppp = h.ctx.pixels_per_point();
+            h.render().unwrap().save(dir.join(format!("test-export-area-{ppp}x.png"))).unwrap();
+        }
+        h.get_by_label("Export the test").hover();
+        h.run_steps(2);
+        h.get_by_label("Export the test").click();
+        h.run_steps(2);
+        while !h.state().jobs.is_empty() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            h.run_steps(1);
+        }
+        let said = h.state().status.as_ref().map(|s| s.text.clone()).unwrap_or_default();
+        assert!(said.contains("Exported 64 chunks"), "one tile of 128 blocks: {said}");
+        assert!(out.join("Area test").is_dir(), "a world of its own");
+        let _ = std::fs::remove_dir_all(&out);
     }
 
     /// Jack's forest, as the Conquest Reforged team paints one: tree sizes

@@ -33,7 +33,8 @@ Behind the home screen is the background chosen in **Settings ▸ Appearance ▸
 - `⌘E` exports to Minecraft: the saves folder, the world's name, the version of the game, its rules, its border and data packs.
 - From 1.18.2 to 26.3, the chunks, `level.dat` and the world's folders are written as that version writes them itself: it opens the world without converting it or asking for a backup. Blocks and biomes the version does not have yet become the closest ones it has (a cherry log a birch log, a pale garden a dark forest); renamed blocks take the version's name (short grass is grass before 1.20.3).
 - The water is written as the game leaves it: flowing water at the edges of the steps and falls of rivers, so that no pool rises and nothing overflows when a player changes a block beside the water. Blocks of objects standing in water are waterlogged.
-- **Test Export…** writes only the 3 × 3 tiles around the middle of the map view to a separate world, to check the result in the game quickly.
+- **Test Export…** asks which part of the map to try — the selection (draw it with the Select tools first), around the middle of the map view, or blocks typed in — and writes the tiles of 128 blocks it reaches to a separate world, to check the result in the game quickly.
+- Picking **Paint biome** shows the map's biomes, **Paint terrain** its terrains; the view comes back when you change tools (**Settings ▸ Appearance ▸ Switch the map's view with the tool**).
 
 ## Autosave
 - While the map has changes not saved, Massif keeps a copy of it every few minutes (**Settings ▸ Autosave**: on or off, every 1 to 15 minutes), in a folder of its own, never over your file. It is written in the background: the map stays smooth, even a huge one.

@@ -3150,5 +3150,27 @@
   "many": "{n} чанков",
   "other": "{n} чанка"
  },
- "Drag the image on the map to move it; the arrow keys move it a block, with Shift 16.": "Перетащите изображение по карте, чтобы сдвинуть его; стрелки сдвигают его на блок, с Shift — на 16."
+ "Drag the image on the map to move it; the arrow keys move it a block, with Shift 16.": "Перетащите изображение по карте, чтобы сдвинуть его; стрелки сдвигают его на блок, с Shift — на 16.",
+ "A part of the map, written to a world of its own beside the export (“{name} test”), to try it in the game quickly. To draw a rectangle on the map, select it with the Select tools first.": "Часть карты, записанная в отдельный мир рядом с экспортом («{name} test»), чтобы быстро проверить её в игре. Чтобы обвести прямоугольник на карте, сначала выделите его инструментами выделения.",
+ "Around the view": "Вокруг вида",
+ "Export a part of the map to a world of its own, to try it in the game": "Экспортировать часть карты в отдельный мир, чтобы проверить её в игре",
+ "Export the test": "Экспортировать тест",
+ "No biome painted here": "Здесь не нарисован биом",
+ "No ground cover here": "Здесь нет покрова",
+ "No trees nor objects here": "Здесь нет ни деревьев, ни объектов",
+ "Nothing here to pick": "Здесь нечего взять",
+ "Part of the map": "Часть карты",
+ "Picked the biome {name}": "Взят биом {name}",
+ "Picked the ground cover {name}": "Взят покров {name}",
+ "Picked the layer {name}": "Взят слой {name}",
+ "Picked {terrain_name}": "Взят {terrain_name}",
+ "Switch the map's view with the tool": "Менять вид карты вместе с инструментом",
+ "Test Export": "Тестовый экспорт",
+ "The mouse keeps its own: the wheel sizes the brush (Shift: a block at a time), Ctrl + Shift and the wheel turn it, Alt or Ctrl and the wheel zoom, Alt + click picks the terrain, biome or layer under the cursor.": "У мыши свои действия: колесо меняет размер кисти (Shift — по блоку), Ctrl + Shift и колесо вращают её, Alt или Ctrl и колесо масштабируют, Alt + щелчок берёт рельеф, биом или слой под курсором.",
+ "{w} × {d} blocks from x {x}, z {z}: the {n} tiles of 128 blocks it reaches.": {
+  "one": "{w} × {d} блоков от x {x}, z {z}: {n} плитка по 128 блоков, которой она касается.",
+  "few": "{w} × {d} блоков от x {x}, z {z}: {n} плитки по 128 блоков, которых она касается.",
+  "many": "{w} × {d} блоков от x {x}, z {z}: {n} плиток по 128 блоков, которых она касается.",
+  "other": "{w} × {d} блоков от x {x}, z {z}: {n} плитки по 128 блоков, которых она касается."
+ }
 }

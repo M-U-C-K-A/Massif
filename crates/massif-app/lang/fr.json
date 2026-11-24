@@ -3091,5 +3091,25 @@
   "one": "{n} chunk",
   "other": "{n} chunks"
  },
- "Drag the image on the map to move it; the arrow keys move it a block, with Shift 16.": "Faites glisser l'image sur la carte pour la déplacer ; les flèches la déplacent d'un bloc, de 16 avec Maj."
+ "Drag the image on the map to move it; the arrow keys move it a block, with Shift 16.": "Faites glisser l'image sur la carte pour la déplacer ; les flèches la déplacent d'un bloc, de 16 avec Maj.",
+ "A part of the map, written to a world of its own beside the export (“{name} test”), to try it in the game quickly. To draw a rectangle on the map, select it with the Select tools first.": "Une partie de la carte, écrite dans un monde à part à côté de l'export (« {name} test »), pour l'essayer vite dans le jeu. Pour tracer un rectangle sur la carte, sélectionnez-le d'abord avec les outils de sélection.",
+ "Around the view": "Autour de la vue",
+ "Export a part of the map to a world of its own, to try it in the game": "Exporter une partie de la carte dans un monde à part, pour l'essayer dans le jeu",
+ "Export the test": "Exporter le test",
+ "No biome painted here": "Aucun biome peint ici",
+ "No ground cover here": "Aucune couverture du sol ici",
+ "No trees nor objects here": "Ni arbres ni objets ici",
+ "Nothing here to pick": "Rien à prélever ici",
+ "Part of the map": "Partie de la carte",
+ "Picked the biome {name}": "Biome {name} prélevé",
+ "Picked the ground cover {name}": "Couverture du sol {name} prélevée",
+ "Picked the layer {name}": "Calque {name} prélevé",
+ "Picked {terrain_name}": "{terrain_name} prélevé",
+ "Switch the map's view with the tool": "Changer la vue de la carte avec l'outil",
+ "Test Export": "Export de test",
+ "The mouse keeps its own: the wheel sizes the brush (Shift: a block at a time), Ctrl + Shift and the wheel turn it, Alt or Ctrl and the wheel zoom, Alt + click picks the terrain, biome or layer under the cursor.": "La souris garde les siens : la molette règle la taille du pinceau (Maj : un bloc à la fois), Ctrl + Maj et la molette le tournent, Alt ou Ctrl et la molette zooment, Alt + clic prélève le terrain, le biome ou le calque sous le curseur.",
+ "{w} × {d} blocks from x {x}, z {z}: the {n} tiles of 128 blocks it reaches.": {
+  "one": "{w} × {d} blocs depuis x {x}, z {z} : la tuile de 128 blocs qu'il touche.",
+  "other": "{w} × {d} blocs depuis x {x}, z {z} : les {n} tuiles de 128 blocs qu'il touche."
+ }
 }

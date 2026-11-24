@@ -3028,5 +3028,25 @@
   "one": "{n} chunk",
   "other": "{n} chunks"
  },
- "Drag the image on the map to move it; the arrow keys move it a block, with Shift 16.": "Arrastre la imagen sobre el mapa para moverla; las flechas la mueven un bloque, 16 con Mayús."
+ "Drag the image on the map to move it; the arrow keys move it a block, with Shift 16.": "Arrastre la imagen sobre el mapa para moverla; las flechas la mueven un bloque, 16 con Mayús.",
+ "A part of the map, written to a world of its own beside the export (“{name} test”), to try it in the game quickly. To draw a rectangle on the map, select it with the Select tools first.": "Una parte del mapa, escrita en un mundo propio junto a la exportación («{name} test»), para probarla rápido en el juego. Para trazar un rectángulo en el mapa, selecciónalo antes con las herramientas de selección.",
+ "Around the view": "Alrededor de la vista",
+ "Export a part of the map to a world of its own, to try it in the game": "Exportar una parte del mapa a un mundo propio, para probarla en el juego",
+ "Export the test": "Exportar la prueba",
+ "No biome painted here": "Aquí no hay bioma pintado",
+ "No ground cover here": "Aquí no hay cubierta del suelo",
+ "No trees nor objects here": "Aquí no hay árboles ni objetos",
+ "Nothing here to pick": "Aquí no hay nada que tomar",
+ "Part of the map": "Parte del mapa",
+ "Picked the biome {name}": "Bioma {name} tomado",
+ "Picked the ground cover {name}": "Cubierta del suelo {name} tomada",
+ "Picked the layer {name}": "Capa {name} tomada",
+ "Picked {terrain_name}": "{terrain_name} tomado",
+ "Switch the map's view with the tool": "Cambiar la vista del mapa con la herramienta",
+ "Test Export": "Exportación de prueba",
+ "The mouse keeps its own: the wheel sizes the brush (Shift: a block at a time), Ctrl + Shift and the wheel turn it, Alt or Ctrl and the wheel zoom, Alt + click picks the terrain, biome or layer under the cursor.": "El ratón conserva los suyos: la rueda cambia el tamaño del pincel (Mayús: de bloque en bloque), Ctrl + Mayús y la rueda lo giran, Alt o Ctrl y la rueda hacen zoom, Alt + clic toma el terreno, el bioma o la capa bajo el cursor.",
+ "{w} × {d} blocks from x {x}, z {z}: the {n} tiles of 128 blocks it reaches.": {
+  "one": "{w} × {d} bloques desde x {x}, z {z}: la tesela de 128 bloques que alcanza.",
+  "other": "{w} × {d} bloques desde x {x}, z {z}: las {n} teselas de 128 bloques que alcanza."
+ }
 }

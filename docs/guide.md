@@ -452,9 +452,12 @@ structures beyond the map, world border, spawn point, what surrounds the
 map (vanilla terrain or void) and data packs (copied in and enabled).
 Versions before 1.18 hold 256 blocks of height: the map is cut below 0 and
 above 255, and the dialog says so. The water is written so that the game
-leaves it as it is (see [Water in the game](#water-in-the-game)). **Test Export** writes only the 3 × 3
-tiles around the centre of the map view to a separate folder, to check the
-result in the game quickly.
+leaves it as it is (see [Water in the game](#water-in-the-game)). **Test Export…** asks which part of the map to try: the
+selection (draw a rectangle, an ellipse or a lasso with the Select tools
+first), the 384 × 384 blocks around the middle of the map view, or blocks
+typed in; the tiles of 128 blocks it reaches are written to a world of
+their own beside the export ("… test"), to check the result in the game
+quickly.
 
 The versions offered go from 1.7.10 to 26.3, and every newer game
 installed on the computer. From 1.18.2 on (1.19, 1.20, 1.21 up to 1.21.11,

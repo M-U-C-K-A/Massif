@@ -2211,12 +2211,6 @@ pub fn release_water(doc: &mut Document, hold: WaterHold) -> Feedback {
     })
 }
 
-/// A single-click tool at block `(x, z)`. `inverse` is the right button.
-pub fn click(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, inverse: bool) -> Feedback {
-    match tools.tool {
-        Tool::Eyedropper => {
-            let p = probe(doc, x, z)?;
-            let reg = &doc.world.registry;
 /// Alt + click, as WorldPainter's eyedropper: what is under the cursor, for
 /// the tool in hand: the biome for Paint biome, the ground cover, the
 /// object layer for theirs, the terrain for the others (Paint terrain
@@ -2250,6 +2244,12 @@ pub fn pick(doc: &Document, tools: &mut ToolState, x: i32, z: i32) -> Feedback {
     })
 }
 
+/// A single-click tool at block `(x, z)`. `inverse` is the right button.
+pub fn click(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, inverse: bool) -> Feedback {
+    match tools.tool {
+        Tool::Eyedropper => {
+            let p = probe(doc, x, z)?;
+            let reg = &doc.world.registry;
             let terrain_name = reg.terrain(TerrainId(p.terrain)).name.clone();
             tools.terrain = p.terrain;
             tools.target_height = p.height.round();
