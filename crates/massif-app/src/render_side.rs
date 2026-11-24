@@ -155,6 +155,9 @@ pub struct RenderSide {
     texture: Option<egui::TextureId>,
     /// Tiles edited since they were built.
     dirty: HashSet<TilePos>,
+    /// When the builder last started again on edits: during a stroke, at
+    /// most every [`crate::diorama::RESTART_EVERY`].
+    restarted: Option<Instant>,
     moving_until: f64,
     last: Option<(Orbit, Light, [u32; 2], f32)>,
     /// When the image last started adding samples up, and its samples
@@ -192,6 +195,7 @@ impl Default for RenderSide {
             preset: usize::MAX,
             texture: None,
             dirty: HashSet::new(),
+            restarted: None,
             moving_until: 0.0,
             last: None,
             since: None,
@@ -322,7 +326,7 @@ impl RenderSide {
             let materials = Arc::new(Materials::new(catalogue.clone(), device.limits().max_texture_array_layers as usize));
             let tiles = tiles_by_distance(&doc.world, doc.dim, orbit.target[0], orbit.target[2]);
             let count = tiles.len();
-            let builder = MapBuilder::start(doc.world.snapshot(), doc.dim, target, materials.clone(), tiles);
+            let builder = MapBuilder::start(doc.world.copy_unfrozen(), doc.dim, target, materials.clone(), tiles);
             self.scene = Some(Scene {
                 renderer: Renderer::new(device, queue, extent),
                 materials,
@@ -349,7 +353,10 @@ impl RenderSide {
 
         // Edits since: their tiles first, then those not built yet, from a
         // snapshot of the map as it is now.
-        if !self.dirty.is_empty() {
+        let due = !doc.history.is_recording() || self.restarted.is_none_or(|t| t.elapsed() >= crate::diorama::RESTART_EVERY);
+        if !self.dirty.is_empty() && due {
+            profiling::scope!("Render: edits");
+            self.restarted = Some(Instant::now());
             let mut first: Vec<TilePos> = self.dirty.drain().collect();
             let near = |p: &TilePos| {
                 let (x, z) = ((p.x as f64 + 0.5) * 128.0 - orbit.target[0], (p.z as f64 + 0.5) * 128.0 - orbit.target[2]);
@@ -363,7 +370,7 @@ impl RenderSide {
             }
             first.extend(rest);
             let target = target_for(catalogue.as_ref().map(|c| c.version.as_str()));
-            scene.builder = Some(MapBuilder::start(doc.world.snapshot(), doc.dim, target, scene.materials.clone(), first));
+            scene.builder = Some(MapBuilder::start(doc.world.copy_unfrozen(), doc.dim, target, scene.materials.clone(), first));
             scene.took = None;
             scene.started = Instant::now();
         }

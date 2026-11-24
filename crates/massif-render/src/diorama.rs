@@ -353,94 +353,98 @@ impl Builder {
         let thread = std::thread::Builder::new()
             .name("massif diorama".into())
             .spawn(move || -> Result<(), String> {
-                let d = world.dims.get(dim).ok_or("no such dimension")?;
-                let ctx = ExportContext::new(&world, d, &target)?;
-                let planner = (!world.meta.lava).then(|| massif_core::water::Planner::new(d));
-                let placed: Mutex<HashMap<TilePos, Arc<Vec<Placement>>>> = Mutex::new(HashMap::new());
-                let ring = (ctx.reach + 127) / 128;
-                let water = mats.top_view(mats.id("minecraft:water", &[("level", "0")])).mean;
-                let lava = mats.top_view(mats.id("minecraft:lava", &[("level", "0")])).mean;
-                loop {
-                    let batch: Vec<TilePos> = {
-                        let (lock, wake) = &*q;
-                        let mut g = lock.lock().unwrap();
-                        while g.tiles.is_empty() && !g.stop && !stop.load(Ordering::Relaxed) {
-                            g = wake.wait(g).unwrap();
-                        }
-                        if g.stop || stop.load(Ordering::Relaxed) {
-                            return Ok(());
-                        }
-                        let n = g.tiles.len().saturating_sub(BATCH);
-                        working.fetch_add(g.tiles.len() - n, Ordering::Relaxed);
-                        g.tiles.split_off(n)
-                    };
-                    batch
-                        .par_iter()
-                        .rev()
-                        .map_init(
-                            || (Scratch::new(&ctx), Seen::new(ctx.state_count()), vec![Vec::new(); 256]),
-                            |(scratch, seen, columns), &pos| {
-                                if stop.load(Ordering::Relaxed) {
-                                    return None;
-                                }
-                                let started = Instant::now();
-                                let Some(stack) = TileStack::new(d, pos, true) else {
-                                    return Some(BuiltTile { tile: pos, floors: Arc::new(TileFloors::default()), took: 0.0 });
-                                };
-                                let mut objects = Vec::new();
-                                if ctx.reach > 0 {
-                                    let area = pos.rect().expand(ctx.reach);
-                                    for tz in pos.z - ring..=pos.z + ring {
-                                        for tx in pos.x - ring..=pos.x + ring {
-                                            let here = TilePos::new(tx, tz);
-                                            let cached = placed.lock().unwrap().get(&here).cloned();
-                                            let list = cached.unwrap_or_else(|| {
-                                                let list = Arc::new(tile_placements(&ctx, &world, d, here));
-                                                let mut cache = placed.lock().unwrap();
-                                                if cache.len() > 4096 {
-                                                    cache.clear();
-                                                }
-                                                cache.insert(here, list.clone());
-                                                list
-                                            });
-                                            objects.extend(list.iter().filter(|p| area.x0 <= p.x && p.x < area.x1 && area.z0 <= p.z && p.z < area.z1).copied());
-                                        }
-                                    }
-                                    objects.sort_unstable_by_key(|p| (p.layer, p.x, p.z));
-                                }
-                                scratch.lay_ores(&ctx, &stack, pos);
-                                let steady = if planner.as_ref().is_some_and(|p| p.needs(pos)) { massif_core::water::steady_tile(d, pos, planner.as_ref()) } else { Vec::new() };
-                                let slabs = massif_core::shapes::plan_tile(d, &world.meta.smooth, pos);
-                                let mut per_cell: Vec<Vec<Floor>> = vec![Vec::new(); AREA];
-                                for cz in 0..TILE_CHUNKS {
-                                    for cx in 0..TILE_CHUNKS {
-                                        let blocks = chunk_blocks(&ctx, &stack, pos, cx, cz, &objects, &steady, &slabs, scratch);
-                                        chunk_floors(&ctx, &mats, seen, blocks, columns);
-                                        for (column, list) in columns.iter_mut().enumerate() {
-                                            let (lx, lz) = (column & 15, column >> 4);
-                                            per_cell[(cz * 16 + lz) * TILE + cx * 16 + lx] = std::mem::take(list);
-                                        }
-                                    }
-                                }
-                                let mut floors = TileFloors { starts: Vec::with_capacity(AREA + 1), floors: Vec::new(), surface: Vec::new() };
-                                for list in &per_cell {
-                                    floors.starts.push(floors.floors.len() as u32);
-                                    floors.floors.extend_from_slice(list);
-                                }
-                                floors.starts.push(floors.floors.len() as u32);
-                                floors.floors.shrink_to_fit();
-                                let views = mats.top_views();
-                                floors.surface = colours(&floors, None, size, &views, water, lava);
-                                Some(BuiltTile { tile: pos, floors: Arc::new(floors), took: started.elapsed().as_secs_f32() })
-                            },
-                        )
-                        .for_each_with(tx.clone(), |tx, built| {
-                            if let Some(built) = built {
-                                let _ = tx.send(built);
+                // In the builders' own threads: never in the pool the
+                // interface's brushes and map work in, which would wait for them.
+                crate::builder_pool().install(move || -> Result<(), String> {
+                    let d = world.dims.get(dim).ok_or("no such dimension")?;
+                    let ctx = ExportContext::new(&world, d, &target)?;
+                    let planner = (!world.meta.lava).then(|| massif_core::water::Planner::new(d));
+                    let placed: Mutex<HashMap<TilePos, Arc<Vec<Placement>>>> = Mutex::new(HashMap::new());
+                    let ring = (ctx.reach + 127) / 128;
+                    let water = mats.top_view(mats.id("minecraft:water", &[("level", "0")])).mean;
+                    let lava = mats.top_view(mats.id("minecraft:lava", &[("level", "0")])).mean;
+                    loop {
+                        let batch: Vec<TilePos> = {
+                            let (lock, wake) = &*q;
+                            let mut g = lock.lock().unwrap();
+                            while g.tiles.is_empty() && !g.stop && !stop.load(Ordering::Relaxed) {
+                                g = wake.wait(g).unwrap();
                             }
-                        });
-                    working.store(0, Ordering::Relaxed);
-                }
+                            if g.stop || stop.load(Ordering::Relaxed) {
+                                return Ok(());
+                            }
+                            let n = g.tiles.len().saturating_sub(BATCH);
+                            working.fetch_add(g.tiles.len() - n, Ordering::Relaxed);
+                            g.tiles.split_off(n)
+                        };
+                        batch
+                            .par_iter()
+                            .rev()
+                            .map_init(
+                                || (Scratch::new(&ctx), Seen::new(ctx.state_count()), vec![Vec::new(); 256]),
+                                |(scratch, seen, columns), &pos| {
+                                    if stop.load(Ordering::Relaxed) {
+                                        return None;
+                                    }
+                                    let started = Instant::now();
+                                    let Some(stack) = TileStack::new(d, pos, true) else {
+                                        return Some(BuiltTile { tile: pos, floors: Arc::new(TileFloors::default()), took: 0.0 });
+                                    };
+                                    let mut objects = Vec::new();
+                                    if ctx.reach > 0 {
+                                        let area = pos.rect().expand(ctx.reach);
+                                        for tz in pos.z - ring..=pos.z + ring {
+                                            for tx in pos.x - ring..=pos.x + ring {
+                                                let here = TilePos::new(tx, tz);
+                                                let cached = placed.lock().unwrap().get(&here).cloned();
+                                                let list = cached.unwrap_or_else(|| {
+                                                    let list = Arc::new(tile_placements(&ctx, &world, d, here));
+                                                    let mut cache = placed.lock().unwrap();
+                                                    if cache.len() > 4096 {
+                                                        cache.clear();
+                                                    }
+                                                    cache.insert(here, list.clone());
+                                                    list
+                                                });
+                                                objects.extend(list.iter().filter(|p| area.x0 <= p.x && p.x < area.x1 && area.z0 <= p.z && p.z < area.z1).copied());
+                                            }
+                                        }
+                                        objects.sort_unstable_by_key(|p| (p.layer, p.x, p.z));
+                                    }
+                                    scratch.lay_ores(&ctx, &stack, pos);
+                                    let steady = if planner.as_ref().is_some_and(|p| p.needs(pos)) { massif_core::water::steady_tile(d, pos, planner.as_ref()) } else { Vec::new() };
+                                    let slabs = massif_core::shapes::plan_tile(d, &world.meta.smooth, pos);
+                                    let mut per_cell: Vec<Vec<Floor>> = vec![Vec::new(); AREA];
+                                    for cz in 0..TILE_CHUNKS {
+                                        for cx in 0..TILE_CHUNKS {
+                                            let blocks = chunk_blocks(&ctx, &stack, pos, cx, cz, &objects, &steady, &slabs, scratch);
+                                            chunk_floors(&ctx, &mats, seen, blocks, columns);
+                                            for (column, list) in columns.iter_mut().enumerate() {
+                                                let (lx, lz) = (column & 15, column >> 4);
+                                                per_cell[(cz * 16 + lz) * TILE + cx * 16 + lx] = std::mem::take(list);
+                                            }
+                                        }
+                                    }
+                                    let mut floors = TileFloors { starts: Vec::with_capacity(AREA + 1), floors: Vec::new(), surface: Vec::new() };
+                                    for list in &per_cell {
+                                        floors.starts.push(floors.floors.len() as u32);
+                                        floors.floors.extend_from_slice(list);
+                                    }
+                                    floors.starts.push(floors.floors.len() as u32);
+                                    floors.floors.shrink_to_fit();
+                                    let views = mats.top_views();
+                                    floors.surface = colours(&floors, None, size, &views, water, lava);
+                                    Some(BuiltTile { tile: pos, floors: Arc::new(floors), took: started.elapsed().as_secs_f32() })
+                                },
+                            )
+                            .for_each_with(tx.clone(), |tx, built| {
+                                if let Some(built) = built {
+                                    let _ = tx.send(built);
+                                }
+                            });
+                        working.store(0, Ordering::Relaxed);
+                    }
+                })
             })
             .map_err(|e| e.to_string())?;
         Ok(Self { rx, queue, cancel, busy, thread: Some(thread), error: None, materials, min_y, max_y })

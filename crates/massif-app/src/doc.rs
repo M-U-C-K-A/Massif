@@ -165,7 +165,7 @@ pub struct Document {
     pub generation: u64,
     /// The terrain the map was filled with, as of a revision (see
     /// [`massif_core::auto::base_terrain`]).
-    auto_base: std::sync::Mutex<Option<(u64, Option<massif_core::TerrainId>)>>,
+    auto_base: std::sync::Mutex<Option<(u64, Option<massif_core::TerrainId>, std::time::Instant)>>,
     /// Tiles each level keeps decoded (the memory limit of the settings).
     pub max_hot_tiles: usize,
     /// The heights of the map, read away from the frames.
@@ -182,6 +182,10 @@ pub struct Document {
     /// once (see [`Document::check`]).
     checked: Option<String>,
 }
+
+/// The least time between two readings of the map's own terrain
+/// ([`Document::auto_base`]) while the map changes.
+const AUTO_BASE_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
 
 impl Document {
     pub fn new(world: World, path: Option<PathBuf>, generation: u64) -> Self {
@@ -252,12 +256,16 @@ impl Document {
         let current = job.ready.as_ref().is_some_and(|h| h.revision == self.revision && h.generation == self.generation);
         let due = job.ready.is_none() || job.started.is_none_or(|t| t.elapsed().as_secs_f32() > 1.5);
         if !current && due && job.running.is_none() && !self.history.is_recording() {
-            let dim = self.world.dims[self.dim].snapshot();
+            // A copy that encodes nothing here: freezing the tiles a stroke
+            // changed held up the frame after each stroke.
+            let dim = self.world.dims[self.dim].copy_unfrozen();
             let (revision, generation) = (self.revision, self.generation);
             let (tx, rx) = std::sync::mpsc::channel();
             let ctx = ctx.clone();
             let spawned = std::thread::Builder::new().name("massif heights".into()).spawn(move || {
-                let _ = tx.send(sample_heights(&dim, revision, generation));
+                // Away from the pool the interface's brushes work in.
+                let heights = massif_render::builder_pool().install(|| sample_heights(&dim, revision, generation));
+                let _ = tx.send(heights);
                 ctx.request_repaint();
             });
             if spawned.is_ok() {
@@ -273,13 +281,19 @@ impl Document {
     /// the map has changed.
     pub fn auto_base(&self) -> Option<massif_core::TerrainId> {
         let mut cache = self.auto_base.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((revision, base)) = *cache
-            && revision == self.revision
+        // Read again once the map changed, but not more than every
+        // AUTO_BASE_EVERY: it decodes a sample of the map's tiles, and the
+        // map changes every frame of a stroke or of a reference image
+        // dragged, which the terrain covering nearly all of it does not
+        // follow.
+        if let Some((revision, base, at)) = *cache
+            && (revision == self.revision || at.elapsed() < AUTO_BASE_EVERY)
         {
             return base;
         }
+        profiling::scope!("the map's own terrain");
         let base = massif_core::auto::base_terrain(self.dimension(), &self.world.registry);
-        *cache = Some((self.revision, base));
+        *cache = Some((self.revision, base, std::time::Instant::now()));
         base
     }
 

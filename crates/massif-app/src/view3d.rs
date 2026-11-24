@@ -817,6 +817,7 @@ fn air_bits(spans: &[CellSpan], min_y: i32) -> u32 {
 /// Build tile `tile`: heights and colours of its columns of plain ground,
 /// faces of the others and of its water.
 pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: TilePos, style: Style) -> TileBuild {
+    profiling::scope!("3D build tile");
     build_tile_part(dim, reg, sea, seed, tile, style, None)
 }
 
@@ -3297,6 +3298,7 @@ impl Renderer3d {
     /// Put the packed columns of a tile (row-major, `TILE_SIZE`²) in the
     /// tracer's textures, with the max pyramid over them.
     pub fn upload_columns(&mut self, tile: TilePos, packed: &[u32]) {
+        profiling::scope!("3D upload");
         if let Some(tr) = &mut self.tracer {
             write_columns(&self.queue, tr, tile, packed);
         }
@@ -3532,6 +3534,7 @@ impl Renderer3d {
     /// Put (or replace) the meshed faces of a tile on the GPU: in the
     /// arenas, each face carrying the chunk's slot, which holds its tile.
     pub fn upload(&mut self, tile: TilePos, faces: &ChunkFaces) {
+        profiling::scope!("3D upload");
         if let Some(old) = self.chunks.remove(&tile) {
             self.free_chunk(old);
         }
@@ -3624,6 +3627,7 @@ impl Renderer3d {
     /// Draw the frame into the top left `region` of the target (all of it,
     /// or less while the camera moves).
     pub fn render(&mut self, globals: &Globals, origin: (i32, i32), tiles: &[TilePos], bottom: i32, substrate: Substrate, region: [u32; 2]) {
+        profiling::scope!("3D view: draw");
         if self.target.is_none() {
             return;
         }
@@ -4520,6 +4524,10 @@ fn warm_builds() -> bool {
 #[cfg(test)]
 pub static COLD_BUILDS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// The least time between two glimpses of the 2D map's summaries for a
+/// 3D view that has built nothing yet (see [`View3d::wants_glimpse`]).
+const GLIMPSE_EVERY: Duration = Duration::from_millis(500);
+
 /// The threads that build tiles away from the frames: all the cores but
 /// two, which stay for the interface's own work. (At a lower priority, on
 /// macOS's efficiency cores, a whole map took two to six times as long to
@@ -4643,6 +4651,14 @@ pub struct View3d {
     /// build all of a map (see [`View3d::wants_glimpse`]).
     /// It is for the map's generation and revision then.
     glimpse: Option<((u64, u64), std::sync::Arc<Glimpse>)>,
+    /// When the glimpse was last given: a map edited meanwhile (a reference
+    /// image dragged changes it every frame) has it again at most every
+    /// [`GLIMPSE_EVERY`], not each frame.
+    glimpse_at: Option<Instant>,
+    /// The grid the map takes, and what it was worked out for: its
+    /// generation, dimension, ground tiles, bounds and the pages allowed.
+    #[allow(clippy::type_complexity)]
+    shape_for: Option<((u64, usize, usize, Option<(TilePos, TilePos)>, u32), Option<GridShape>)>,
 }
 
 /// How long a 3D view stays out of sight before its tiles and the
@@ -4827,6 +4843,8 @@ impl Default for View3d {
             shown_pass: 0,
             shown_at: 0.0,
             glimpse: None,
+            glimpse_at: None,
+            shape_for: None,
         }
     }
 }
@@ -4883,6 +4901,7 @@ impl View3d {
     /// shown staying until the new ones are whole), the nearest tiles
     /// first, for [`NEAR_BUDGET`] a frame. Whether some remain to build.
     fn update_near(&mut self, doc: &mut Document, renderer: &mut Renderer3d, moving: bool, ctx: &egui::Context) -> bool {
+        profiling::scope!("3D view: near");
         let stride = self.grid.as_ref().map_or(1, |g| g.stride);
         let style = Style {
             mode: self.mode,
@@ -5165,11 +5184,13 @@ impl View3d {
     /// at once ([`View3d::give_glimpse`]).
     pub fn wants_glimpse(&self, doc: &Document) -> bool {
         let fresh = self.tiles.is_empty() || self.generation != Some(doc.generation);
-        fresh && self.glimpse.as_ref().is_none_or(|(k, _)| *k != (doc.generation, doc.revision))
+        let due = self.glimpse_at.is_none_or(|t| t.elapsed() >= GLIMPSE_EVERY);
+        fresh && self.glimpse.as_ref().is_none_or(|(k, _)| k.0 != doc.generation || (k.1 != doc.revision && due))
     }
 
     pub fn give_glimpse(&mut self, doc: &Document, glimpse: Glimpse) {
         self.glimpse = (!glimpse.is_empty()).then(|| ((doc.generation, doc.revision), std::sync::Arc::new(glimpse)));
+        self.glimpse_at = Some(Instant::now());
     }
 
     /// Whether tiles are still to build, here or away from the frames.
@@ -5312,6 +5333,7 @@ impl View3d {
     /// sets the speed of flight; a click lends the view the mouse, as in
     /// the game.
     fn walk_ui(&mut self, ui: &Ui, response: &egui::Response, doc: &Document, tools: &mut ToolState, rect: Rect) {
+        profiling::scope!("3D view: walking");
         let Some(walk) = &mut self.walk else { return };
         let ctx = ui.ctx().clone();
         walk.pass = ctx.cumulative_pass_nr();
@@ -5673,6 +5695,7 @@ impl View3d {
     /// once away from the frames (see [`Builder`]), a few here within
     /// `budget`. Whether to draw again at once.
     fn build_tiles(&mut self, doc: &mut Document, budget: Duration, renderer: &mut Renderer3d, ctx: &egui::Context) -> bool {
+        profiling::scope!("3D view: tiles");
         let style = Style {
             mode: self.mode,
             water: self.water,
@@ -5930,6 +5953,7 @@ impl View3d {
             return;
         }
         self.look_seen = Some(seen);
+        profiling::scope!("3D view: look keys");
         let reg = &doc.world.registry;
         let key = (cat, crate::textures::materials_key(reg), crate::textures::colors_key(reg));
         if self.look_key == Some(key) {
@@ -6030,6 +6054,7 @@ impl View3d {
             painter.text(rect.center(), Align2::CENTER_CENTER, tr!("The 3D view needs the wgpu renderer"), FontId::proportional(13.0), pal.weak);
             return;
         };
+        let section = profiling::tracing::span!(profiling::tracing::Level::INFO, "3D view: setup").entered();
         let graphics = crate::graphics::get();
         // Edges smoothed or not (Settings ▸ Graphics): another renderer,
         // everything sent to the graphics card again.
@@ -6101,6 +6126,8 @@ impl View3d {
         let extent = map_rect(doc).map_or(512.0, |(x0, z0, x1, z1)| (x1 - x0).max(z1 - z0) as f32);
 
         // ---- walking ---------------------------------------------------------
+        drop(section);
+        let section = profiling::tracing::span!(profiling::tracing::Level::INFO, "3D view: walking and camera").entered();
         // 3D Sculpt's player mode: a click lends the view the mouse (Esc
         // takes it back), which looks around; the keys walk, jump, fly; the
         // buttons sculpt at the crosshair.
@@ -6258,6 +6285,8 @@ impl View3d {
         }
 
         // ---- sculpting -------------------------------------------------------
+        drop(section);
+        let section = profiling::tracing::span!(profiling::tracing::Level::INFO, "3D view: sculpting").entered();
         self.hover = None;
         // The column under the pointer, for the Info panel and the
         // eyedropper: only when the pointer moved or the view did.
@@ -6433,8 +6462,16 @@ impl View3d {
         }
 
         // ---- tiles -----------------------------------------------------------
+        drop(section);
+        let section = profiling::tracing::span!(profiling::tracing::Level::INFO, "3D view: tiles and near").entered();
         let dim = doc.dimension();
-        let shape = GridShape::of(dim, graphics.gpu_pages as usize);
+        // Worked out again only when the map's tiles or the pages allowed
+        // change: it reads every tile of the map, up to five times.
+        let shape_key = (doc.generation, doc.dim, dim.ground().len(), dim.bounds(), graphics.gpu_pages);
+        if self.shape_for.as_ref().is_none_or(|(k, _)| *k != shape_key) {
+            self.shape_for = Some((shape_key, GridShape::of(dim, graphics.gpu_pages as usize)));
+        }
+        let shape = self.shape_for.as_ref().and_then(|(_, s)| s.clone());
         if self.grid != shape {
             // Another stride: the tiles of the grid are not the same ones.
             if self.grid.as_ref().map(|g| g.stride) != shape.as_ref().map(|g| g.stride) {
@@ -6481,6 +6518,8 @@ impl View3d {
         }
 
         // ---- render ----------------------------------------------------------
+        drop(section);
+        let section = profiling::tracing::span!(profiling::tracing::Level::INFO, "3D view: render").entered();
         let ppp = ui.ctx().pixels_per_point();
         let px = [(rect.width() * ppp).round() as u32, (rect.height() * ppp).round() as u32];
         if renderer.ensure_target(px) {
@@ -6754,6 +6793,7 @@ impl View3d {
             }
         }
 
+        drop(section);
         // ---- overlay -------------------------------------------------------
         let stride = self.grid.as_ref().map_or(1, |g| g.stride);
         let mut text = if stride > 1 {

@@ -24,5 +24,17 @@ pub use gpu::{Memory, Renderer};
 pub use map_source::{Built, Extent, MapBuilder};
 pub use materials::Materials;
 
+/// The threads the scene builders (the Diorama's, the Render side's) do
+/// their work on: a pool of their own, two cores short of the computer's.
+/// Built in rayon's global pool, they held up the interface: a brush, or
+/// the 2D map's tiles, waited there for a batch of theirs to end.
+pub fn builder_pool() -> &'static rayon::ThreadPool {
+    static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
+    POOL.get_or_init(|| {
+        let n = std::thread::available_parallelism().map_or(4, |n| n.get()).saturating_sub(2).clamp(1, 16);
+        rayon::ThreadPoolBuilder::new().num_threads(n).thread_name(|i| format!("massif scene builder {i}")).build().expect("a thread pool")
+    })
+}
+
 #[cfg(test)]
 mod tests;

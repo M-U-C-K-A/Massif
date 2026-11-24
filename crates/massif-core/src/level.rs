@@ -95,6 +95,10 @@ pub struct Level {
     hot: usize,
     clock: u64,
     dirty: HashSet<TilePos>,
+    /// [`Level::bounds`], kept: worked out from every tile when asked
+    /// after a tile on its edge went, grown as tiles come. (Asked many times
+    /// a frame, it went through all the tiles of a map each time.)
+    bounds: std::sync::OnceLock<Option<(TilePos, TilePos)>>,
 }
 
 fn decode_or_blank(blob: &[u8], kind: LevelKind, pos: TilePos) -> Tile {
@@ -152,6 +156,7 @@ impl Level {
             hot: 0,
             clock: 0,
             dirty: HashSet::new(),
+            bounds: std::sync::OnceLock::new(),
         }
     }
 
@@ -173,16 +178,44 @@ impl Level {
 
     /// Inclusive tile bounds `(min, max)` of the level, if it has any tile.
     pub fn bounds(&self) -> Option<(TilePos, TilePos)> {
-        let mut it = self.tiles.keys();
-        let first = *it.next()?;
-        let (mut lo, mut hi) = (first, first);
-        for p in it {
-            lo.x = lo.x.min(p.x);
-            lo.z = lo.z.min(p.z);
-            hi.x = hi.x.max(p.x);
-            hi.z = hi.z.max(p.z);
+        *self.bounds.get_or_init(|| {
+            let mut it = self.tiles.keys();
+            let first = *it.next()?;
+            let (mut lo, mut hi) = (first, first);
+            for p in it {
+                lo.x = lo.x.min(p.x);
+                lo.z = lo.z.min(p.z);
+                hi.x = hi.x.max(p.x);
+                hi.z = hi.z.max(p.z);
+            }
+            Some((lo, hi))
+        })
+    }
+
+    /// Put `slot` at `pos`, the bounds kept.
+    fn put(&mut self, pos: TilePos, slot: Slot) -> Option<Slot> {
+        let old = self.tiles.insert(pos, slot);
+        if old.is_none()
+            && let Some(bounds) = self.bounds.get_mut()
+        {
+            *bounds = Some(match *bounds {
+                Some((lo, hi)) => (TilePos::new(lo.x.min(pos.x), lo.z.min(pos.z)), TilePos::new(hi.x.max(pos.x), hi.z.max(pos.z))),
+                None => (pos, pos),
+            });
         }
-        Some((lo, hi))
+        old
+    }
+
+    /// Take the slot at `pos` away, the bounds kept.
+    fn take(&mut self, pos: TilePos) -> Option<Slot> {
+        let old = self.tiles.remove(&pos);
+        if old.is_some()
+            && let Some(Some((lo, hi))) = self.bounds.get()
+            && (pos.x == lo.x || pos.x == hi.x || pos.z == lo.z || pos.z == hi.z)
+        {
+            self.bounds = std::sync::OnceLock::new();
+        }
+        old
     }
 
     /// The tile's encoding at `pos` while it holds: kept, the same `Arc`
@@ -243,7 +276,7 @@ impl Level {
     /// blank tile is made where the level has none. Decoding a cold tile is
     /// left to [`CheckedOut::into_tile`], so that it can run in parallel.
     pub fn check_out(&mut self, pos: TilePos, create: bool) -> Option<CheckedOut> {
-        let taken = match self.tiles.remove(&pos) {
+        let taken = match self.take(pos) {
             Some(Slot::Hot { tile, .. }) => {
                 self.hot -= 1;
                 Taken::Hot(tile)
@@ -289,7 +322,7 @@ impl Level {
             blob: None,
             stamp: self.clock,
         };
-        if let Some(Slot::Hot { .. }) = self.tiles.insert(pos, slot) {
+        if let Some(Slot::Hot { .. }) = self.put(pos, slot) {
             self.hot -= 1;
         }
         self.hot += 1;
@@ -304,7 +337,7 @@ impl Level {
             blob: None,
             stamp: self.clock,
         };
-        match self.tiles.insert(pos, slot) {
+        match self.put(pos, slot) {
             Some(Slot::Hot { .. }) => {}
             _ => self.hot += 1,
         }
@@ -313,14 +346,14 @@ impl Level {
 
     /// Insert or replace a tile from its compressed form (cold).
     pub fn insert_blob(&mut self, pos: TilePos, blob: Blob) {
-        if let Some(Slot::Hot { .. }) = self.tiles.insert(pos, Slot::Cold(blob)) {
+        if let Some(Slot::Hot { .. }) = self.put(pos, Slot::Cold(blob)) {
             self.hot -= 1;
         }
         self.dirty.insert(pos);
     }
 
     pub fn remove(&mut self, pos: TilePos) -> bool {
-        match self.tiles.remove(&pos) {
+        match self.take(pos) {
             Some(Slot::Hot { .. }) => {
                 self.hot -= 1;
                 self.dirty.insert(pos);
@@ -422,6 +455,7 @@ impl Level {
             hot: 0,
             clock: 0,
             dirty: HashSet::new(),
+            bounds: self.bounds.clone(),
         }
     }
 
@@ -431,21 +465,27 @@ impl Level {
     /// they are. [`Level::snapshot`] of the copy, away from the editor,
     /// encodes them; the level itself is left as it was.
     pub fn copy_unfrozen(&self) -> Level {
-        let mut hot = 0;
-        let tiles = self
+        // The tiles changed since they were encoded, copied whole: side by
+        // side (a map painted at length has hundreds, and the Diorama takes
+        // a copy a few times a second while a stroke goes on).
+        let fresh: Vec<(TilePos, Box<Tile>, u64)> = self
             .tiles
-            .iter()
-            .map(|(pos, slot)| {
-                let slot = match slot {
-                    Slot::Cold(b) | Slot::Hot { blob: Some(b), .. } => Slot::Cold(b.clone()),
-                    Slot::Hot { tile, blob: None, stamp } => {
-                        hot += 1;
-                        Slot::Hot { tile: tile.clone(), blob: None, stamp: *stamp }
-                    }
-                };
-                (*pos, slot)
+            .par_iter()
+            .filter_map(|(pos, slot)| match slot {
+                Slot::Hot { tile, blob: None, stamp } => Some((*pos, tile.clone(), *stamp)),
+                _ => None,
             })
             .collect();
+        let hot = fresh.len();
+        let mut tiles: HashMap<TilePos, Slot> = HashMap::with_capacity(self.tiles.len());
+        for (pos, slot) in &self.tiles {
+            if let Slot::Cold(b) | Slot::Hot { blob: Some(b), .. } = slot {
+                tiles.insert(*pos, Slot::Cold(b.clone()));
+            }
+        }
+        for (pos, tile, stamp) in fresh {
+            tiles.insert(pos, Slot::Hot { tile, blob: None, stamp });
+        }
         Level {
             id: self.id,
             name: self.name.clone(),
@@ -455,6 +495,7 @@ impl Level {
             hot,
             clock: self.clock,
             dirty: HashSet::new(),
+            bounds: self.bounds.clone(),
         }
     }
 
@@ -479,7 +520,7 @@ impl Level {
             .collect();
         for (pos, blob, tile) in decoded {
             self.clock += 1;
-            self.tiles.insert(
+            self.put(
                 pos,
                 Slot::Hot {
                     tile,
@@ -524,7 +565,7 @@ impl Level {
             })
             .collect();
         for (pos, blob) in blobs {
-            self.tiles.insert(pos, Slot::Cold(blob));
+            self.put(pos, Slot::Cold(blob));
         }
         self.hot = max_hot;
     }
@@ -587,6 +628,28 @@ mod tests {
             l.insert(TilePos::new(x, -x), Tile::ground(60.0 + x as f32, 1, 63));
         }
         l
+    }
+
+    /// The bounds kept follow the tiles that come and go, an edge tile
+    /// taken out and put back included.
+    #[test]
+    fn bounds_follow_the_tiles() {
+        let mut l = level_with(4);
+        let whole = |l: &Level| l.bounds().map(|(lo, hi)| (lo.x, lo.z, hi.x, hi.z));
+        assert_eq!(whole(&l), Some((0, -3, 3, 0)));
+        l.insert(TilePos::new(-5, 7), Tile::ground(60.0, 1, 63));
+        assert_eq!(whole(&l), Some((-5, -3, 3, 7)));
+        let out = l.check_out(TilePos::new(-5, 7), false).unwrap();
+        assert_eq!(whole(&l), Some((0, -3, 3, 0)), "an edge tile checked out");
+        l.check_in(TilePos::new(-5, 7), out.into_tile());
+        assert_eq!(whole(&l), Some((-5, -3, 3, 7)));
+        l.remove(TilePos::new(1, -1));
+        assert_eq!(whole(&l), Some((-5, -3, 3, 7)), "a tile inside");
+        assert_eq!(whole(&l.snapshot()), whole(&l));
+        for x in [0, 2, 3, -5] {
+            l.remove(TilePos::new(x, if x == -5 { 7 } else { -x }));
+        }
+        assert_eq!(whole(&l), None);
     }
 
     #[test]

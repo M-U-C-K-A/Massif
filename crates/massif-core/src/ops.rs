@@ -131,6 +131,7 @@ fn edit_heights_by_tile<G>(
 ) where
     G: FnMut(f32, f32, i32, i32) -> f32,
 {
+    profiling::scope!("brush: heights");
     let (lo, hi) = (edit.dim().min_y as f32, edit.dim().max_y as f32);
     let surface = if edit.kind().has_bottom() {
         surface
@@ -145,7 +146,10 @@ fn edit_heights_by_tile<G>(
         return;
     }
     let footprint = BlockRect::around(cx, cz, brush.reach());
+    // Whether a column went down: only then can water fill what it left.
+    let lowered = std::sync::atomic::AtomicBool::new(false);
     edit.par_tiles(footprint.tiles(), footprint, false, |pos, clip, tile| {
+        let mut down = false;
         let mut f = per_tile(pos, clip);
         let Tile { top, bottom, .. } = tile;
         let top = top.dense_mut();
@@ -157,6 +161,7 @@ fn edit_heights_by_tile<G>(
                     continue;
                 }
                 let i = local_index(x, z);
+                let was = top[i];
                 match (&mut bottom, surface) {
                     (None, _) => {
                         top[i] = snap_height(held(top[i], f(top[i], w, x, z)).clamp(lo, hi));
@@ -174,11 +179,19 @@ fn edit_heights_by_tile<G>(
                         }
                     }
                 }
+                down |= top[i] < was;
             }
         }
+        if down {
+            lowered.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
     });
-    // The ground lowered beside water fills with it.
-    crate::water::fill_lowered(edit, footprint);
+    // The ground lowered beside water fills with it (raised only, there is
+    // nothing to fill: reading the water around each dab took a third of
+    // a big brush's time).
+    if lowered.into_inner() {
+        crate::water::fill_lowered(edit, footprint);
+    }
 }
 
 /// Raise (or lower, with a negative `amount`) by up to `amount` blocks.

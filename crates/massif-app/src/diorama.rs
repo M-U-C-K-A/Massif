@@ -72,6 +72,12 @@ struct Scene {
     frame: u64,
 }
 
+/// The least time between two starts of a scene's builder on the edits of
+/// a stroke under way (the Diorama's, the Render side's): each start drops
+/// what it had under way, so that starting every frame built nothing until
+/// the stroke ended.
+pub const RESTART_EVERY: Duration = Duration::from_millis(250);
+
 /// The Diorama view.
 pub struct Diorama {
     /// The block at the middle of the view, x and z.
@@ -88,6 +94,9 @@ pub struct Diorama {
     pub relief: f32,
     scene: Option<Scene>,
     dirty: HashSet<TilePos>,
+    /// When the builder last started again on edits: during a stroke, at
+    /// most every [`RESTART_EVERY`].
+    restarted: Option<Instant>,
     texture: Option<egui::TextureId>,
     texture_size: [u32; 2],
     /// The block under the pointer, and the height of its floor seen.
@@ -98,7 +107,7 @@ pub struct Diorama {
 
 impl Default for Diorama {
     fn default() -> Self {
-        Self { center: None, zoom: 2.0, turn: 0, caves: false, slice: 40, relief: 1.0, scene: None, dirty: HashSet::new(), texture: None, texture_size: [0; 2], hover: None, frame_time: Duration::ZERO }
+        Self { center: None, zoom: 2.0, turn: 0, caves: false, slice: 40, relief: 1.0, scene: None, dirty: HashSet::new(), restarted: None, texture: None, texture_size: [0; 2], hover: None, frame_time: Duration::ZERO }
     }
 }
 
@@ -244,7 +253,12 @@ impl Diorama {
 
         // ---- tiles ---------------------------------------------------------
         // Edits since: their tiles built again from the map as it is now.
-        if !self.dirty.is_empty() {
+        // While a stroke goes on, every RESTART_EVERY only: each start
+        // drops what the builder had under way, and takes a copy of the map.
+        let due = !doc.history.is_recording() || self.restarted.is_none_or(|t| t.elapsed() >= RESTART_EVERY);
+        if !self.dirty.is_empty() && due {
+            profiling::scope!("Diorama: edits");
+            self.restarted = Some(Instant::now());
             let target = target_for(catalogue.as_ref().map(|c| c.version.as_str()));
             let mut again: Vec<TilePos> = self.dirty.drain().collect();
             let near = |p: &TilePos| {
@@ -253,7 +267,15 @@ impl Diorama {
             };
             again.sort_by(|a, b| near(a).total_cmp(&near(b)));
             let rest: Vec<TilePos> = scene.asked.iter().copied().filter(|t| !again.contains(t)).collect();
-            match Builder::start(doc.world.snapshot(), doc.dim, target, scene.materials.clone(), scene.gpu.far_size()) {
+            let copy = {
+                profiling::scope!("Diorama: copy of the map");
+                doc.world.copy_unfrozen()
+            };
+            let started = {
+                profiling::scope!("Diorama: builder start");
+                Builder::start(copy, doc.dim, target, scene.materials.clone(), scene.gpu.far_size())
+            };
+            match started {
                 Ok(builder) => {
                     builder.want(&again, false);
                     builder.want(&rest, false);
@@ -511,7 +533,7 @@ fn make_scene(device: &wgpu::Device, queue: &wgpu::Queue, doc: &mut Document, ca
     let materials = Arc::new(Materials::new(catalogue, device.limits().max_texture_array_layers as usize));
     // The probes of the shader, first: water and lava.
     let _ = (materials.id("minecraft:water", &[("level", "0")]), materials.id("minecraft:lava", &[("level", "0")]));
-    let builder = Builder::start(doc.world.snapshot(), doc.dim, target, materials.clone(), far_layout(tiles.len()).0 as usize)?;
+    let builder = Builder::start(doc.world.copy_unfrozen(), doc.dim, target, materials.clone(), far_layout(tiles.len()).0 as usize)?;
     let gpu = DioramaGpu::new(device, queue, lo, hi, tiles.len(), builder.min_y);
     let middle = [((lo.x + hi.x + 1) as f64) * 64.0, ((lo.z + hi.z + 1) as f64) * 64.0];
     let mut order = tiles.clone();

@@ -591,7 +591,10 @@ impl Edit<'_> {
             .copied()
             .filter(|p| !self.step.seen.contains(&(id, *p)))
             .collect();
-        level.encode_blobs(&fresh);
+        {
+            profiling::scope!("edit: undo copies");
+            level.encode_blobs(&fresh);
+        }
         for pos in fresh {
             if self.step.seen.insert((id, pos)) {
                 let before = level.blob(pos);
@@ -624,6 +627,7 @@ impl Edit<'_> {
         f: impl Fn(TilePos, BlockRect, &mut Tile, &Others<'_>) + Sync,
     ) {
         use rayon::prelude::*;
+        profiling::scope!("edit: tiles");
         let positions: Vec<TilePos> = positions
             .into_iter()
             .filter(|p| create || self.level().contains(*p))

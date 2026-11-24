@@ -241,6 +241,7 @@ pub fn check(dim: &Dimension) -> WaterCheck {
 /// it, which the game would fill with running water. Returns the columns
 /// that took water.
 pub fn fill_lowered(edit: &mut crate::history::Edit, rect: crate::coords::BlockRect) -> usize {
+    profiling::scope!("brush: water fills lowered ground");
     use crate::compose::block_top;
     use crate::tile::NO_FLUID;
     use std::collections::HashMap;
