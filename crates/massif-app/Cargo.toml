@@ -36,7 +36,7 @@ lucide-icons = "1.71"
 bytemuck = { version = "1.25", features = ["derive"] }
 glam = "0.34"
 rfd = "0.18"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "tiff", "webp", "gif"] }
 pollster = "1"
 rodio = { version = "0.23", default-features = false, features = ["playback"] }
 # Asks GitHub for the latest release (`update`), over rustls: no system

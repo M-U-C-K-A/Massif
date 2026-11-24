@@ -861,7 +861,7 @@ two or three, terraces and smoothing under half a second.
 A reference image is a picture laid over or under the 2D map to trace over,
 as WorldPainter's overlay: a plan, a sketch, a real map. It only shows: it
 never changes the land and is never exported. **Edit ▸ Add Reference
-Image…**, or drop a PNG or JPEG on the map, adds one where it falls; a picture
+Image…**, or drop a picture (PNG, JPEG, WebP, BMP, TIFF or GIF) on the map, adds one where it falls; a picture
 larger than the map is fitted to it, others take a block a pixel.
 
 The picture button in the map's header lists them, each with an eye to show

@@ -3006,5 +3006,9 @@
  "Take it off the map": "Von der Karte nehmen",
  "Under it": "Darunter",
  "Unlock it": "Entsperren",
- "{px} × {py} pixels: {w:.0} × {d:.0} blocks on the map.": "{px} × {py} Pixel: {w:.0} × {d:.0} Blöcke auf der Karte."
+ "{px} × {py} pixels: {w:.0} × {d:.0} blocks on the map.": "{px} × {py} Pixel: {w:.0} × {d:.0} Blöcke auf der Karte.",
+ "Added {n} reference images, to trace over (never exported). For heights: Edit ▸ Import Mask… ▸ Height": {
+  "one": "Als Referenzbild hinzugefügt, zum Nachzeichnen (nie exportiert). Für seine Höhen: Bearbeiten ▸ Import Mask… ▸ Höhe",
+  "other": "{n} Referenzbilder hinzugefügt, zum Nachzeichnen (nie exportiert). Für Höhen: Bearbeiten ▸ Import Mask… ▸ Höhe"
+ }
 }

@@ -116,3 +116,44 @@ fn reference_images_lie_over_and_under_the_map_and_move_by_their_handles() {
     assert_eq!(ReferenceImage { x: b.x, z: b.z, ..a.clone() }, *b);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A PNG dropped on the map, in the editor, is a reference image where it
+/// fell, not a height map; the message says where height maps go.
+#[test]
+fn a_picture_dropped_on_the_map_becomes_a_reference_image() {
+    #[derive(Debug)]
+    struct Dropped(PathBuf);
+    impl egui::DroppedFile for Dropped {
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+        fn bytes(&self) -> Result<Vec<u8>, String> {
+            std::fs::read(&self.0).map_err(|e| e.to_string())
+        }
+    }
+    let dir = std::env::temp_dir().join(format!("massif-reference-drop-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let plan = dir.join("dropped plan.png");
+    plan_picture(&plan);
+    let mut h = harness_with(ThemeChoice::Dark, ppp());
+    h.run_steps(5);
+    let id = map_id(&h);
+    {
+        let view = h.state_mut().maps.get_mut(&id).unwrap();
+        view.center = [0.0, 0.0];
+        view.zoom = 1.0;
+    }
+    h.run_steps(5);
+    let at = h.state().maps[&id].screen_of(120.0, -40.0);
+    h.event(egui::Event::PointerMoved(at));
+    h.step();
+    h.input_mut().dropped_files = vec![std::sync::Arc::new(Dropped(plan.clone())) as egui::DroppedFileHandle];
+    h.run_steps(6);
+    assert!(h.state().home.is_none(), "still the editor: no height map was read");
+    let refs = &h.state().doc.world.meta.references;
+    assert_eq!(refs.len(), 1);
+    assert_eq!(refs[0].path, plan.to_string_lossy());
+    assert!((refs[0].x - 120.0).abs() < 2.0 && (refs[0].z + 40.0).abs() < 2.0, "where it fell: {} {}", refs[0].x, refs[0].z);
+    assert_eq!(refs[0].size, [600, 400]);
+    let _ = std::fs::remove_dir_all(&dir);
+}

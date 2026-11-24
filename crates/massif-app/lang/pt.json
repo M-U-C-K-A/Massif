@@ -3003,5 +3003,9 @@
  "Take it off the map": "Tirá-la do mapa",
  "Under it": "Sob ele",
  "Unlock it": "Destravá-la",
- "{px} × {py} pixels: {w:.0} × {d:.0} blocks on the map.": "{px} × {py} pixels: {w:.0} × {d:.0} blocos no mapa."
+ "{px} × {py} pixels: {w:.0} × {d:.0} blocks on the map.": "{px} × {py} pixels: {w:.0} × {d:.0} blocos no mapa.",
+ "Added {n} reference images, to trace over (never exported). For heights: Edit ▸ Import Mask… ▸ Height": {
+  "one": "Adicionada como imagem de referência, para decalcar (nunca exportada). Para suas alturas: Editar ▸ Import Mask… ▸ Altura",
+  "other": "{n} imagens de referência adicionadas, para decalcar (nunca exportadas). Para alturas: Editar ▸ Import Mask… ▸ Altura"
+ }
 }

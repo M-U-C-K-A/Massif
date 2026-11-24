@@ -20,9 +20,12 @@ use std::sync::mpsc::{Receiver, channel};
 /// scaled down to it (their placement on the map is the same).
 const MAX_SIDE: u32 = 8192;
 
-/// Whether `path` is a picture Massif reads.
+/// The pictures a reference image may be, by their files' extensions.
+pub const IMAGE_EXTENSIONS: [&str; 8] = ["png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "gif"];
+
+/// Whether `path` is a picture Massif reads as a reference image.
 pub fn is_image(path: &Path) -> bool {
-    path.extension().is_some_and(|e| ["png", "jpg", "jpeg"].iter().any(|x| e.eq_ignore_ascii_case(x)))
+    path.extension().is_some_and(|e| IMAGE_EXTENSIONS.iter().any(|x| e.eq_ignore_ascii_case(x)))
 }
 
 /// A picture read, scaled to fit the GPU, with its own size.
@@ -379,8 +382,42 @@ fn locate(path: &str, map_dir: Option<&Path>) -> PathBuf {
 fn read(path: &Path) -> Read {
     let img = image::ImageReader::open(path).map_err(|e| e.to_string())?.with_guessed_format().map_err(|e| e.to_string())?.decode().map_err(|e| e.to_string())?;
     let size = [img.width(), img.height()];
-    let img = if size[0].max(size[1]) > MAX_SIDE { img.resize(MAX_SIDE, MAX_SIDE, image::imageops::FilterType::Triangle) } else { img };
+    // Past what the GPU holds, a smaller copy (its place on the map is the
+    // same: it keeps its size in pixels).
+    let img = if size[0].max(size[1]) > MAX_SIDE { img.thumbnail(MAX_SIDE, MAX_SIDE) } else { img };
     let rgba = img.to_rgba8();
     let image = ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw());
     Ok((image, size))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every common picture reads, the first frame of a GIF; one past what
+    /// the GPU holds is made smaller and keeps its own size.
+    #[test]
+    fn reference_images_read_every_common_format_and_large_ones() {
+        let dir = std::env::temp_dir().join(format!("massif-reference-formats-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = image::RgbImage::from_fn(40, 30, |x, y| image::Rgb([(x * 6) as u8, (y * 8) as u8, 90]));
+        for ext in IMAGE_EXTENSIONS {
+            let path = dir.join(format!("plan.{ext}"));
+            match ext {
+                // WebP and GIF are written with alpha.
+                "webp" | "gif" => image::DynamicImage::ImageRgb8(img.clone()).to_rgba8().save(&path).unwrap(),
+                _ => img.save(&path).unwrap(),
+            }
+            assert!(is_image(&path), "{ext}");
+            let (picture, size) = read(&path).unwrap_or_else(|e| panic!("{ext}: {e}"));
+            assert_eq!((size, picture.size), ([40, 30], [40, 30]), "{ext}");
+        }
+        assert!(!is_image(Path::new("map.massif")));
+        let big = dir.join("big.png");
+        image::GrayImage::from_pixel(9000, 120, image::Luma([200])).save(&big).unwrap();
+        let (picture, size) = read(&big).unwrap();
+        assert_eq!(size, [9000, 120], "its own size, to place it");
+        assert!(picture.size[0] <= MAX_SIDE as usize && picture.size[0] >= 8000, "{:?}", picture.size);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

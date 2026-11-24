@@ -711,7 +711,7 @@ impl MassifApp {
     /// Pick pictures to lay on the map as reference images, in the middle
     /// of the map shown.
     fn pick_reference(&mut self) {
-        if let Some(paths) = rfd::FileDialog::new().set_title(tr!("Images to trace over")).add_filter(tr!("Images"), &["png", "jpg", "jpeg"]).pick_files() {
+        if let Some(paths) = rfd::FileDialog::new().set_title(tr!("Images to trace over")).add_filter(tr!("Images"), &crate::references::IMAGE_EXTENSIONS).pick_files() {
             self.add_references(&paths, None);
         }
     }
@@ -5782,9 +5782,16 @@ impl MassifApp {
             }
             // Pictures dropped on a map: reference images, where they fell.
             let (images, at): (Vec<PathBuf>, Option<egui::Pos2>) = ctx.input(|i| (i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| crate::references::is_image(p)).collect(), i.pointer.hover_pos()));
+            // On the home screen, with no map, a picture is a height map
+            // (see HomeAction::Dropped); in the editor, a reference image.
             if !images.is_empty() {
                 let spot = at.and_then(|p| self.maps.values().find_map(|v| v.world_under(p)));
                 self.add_references(&images, spot);
+                self.feedback = Some(trn!(
+                    "Added as a reference image, to trace over (never exported). For its heights: Edit ▸ Import Mask… ▸ Height",
+                    "Added {n} reference images, to trace over (never exported). For heights: Edit ▸ Import Mask… ▸ Height",
+                    n = images.len()
+                ));
             }
             // WorldPainter's custom layers: layers of the map.
             let layers: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("layer"))).collect());
