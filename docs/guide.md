@@ -118,11 +118,18 @@ brushes, terrain and biome palettes, levels or world info.
 
 - The icon before an area's title opens every editor on one page, in
   columns: the World side's views, tools and paint, then the Terrain
-  side's generator. The line under them says what the one under the
+  side's generator and the Render side's panels. The line under them says what the one under the
   pointer is for, and whether another area shows it already. An empty
   area holds the same page.
 - The ⋮ menu of an area splits it, joins it with its neighbour, maximises it
   (Ctrl+Space) or closes it. Hold Shift for a one-click close button.
+- **Float** in that menu takes the area out of the layout into a window of
+  its own over it: drag its title to move it, its bottom right corner to
+  size it. **Dock back** in its own ⋮ menu puts it back beside the largest
+  area; or drag its title with **Shift** held onto an area, to dock it on
+  that side of it (onto the centre: in its place, that one floating
+  instead). Any editor floats, on any side; floating panels are saved with
+  their workspace and come back where they were.
 - Drag any corner of an area into it to split it where you let go: the new area opens on that corner's side (across: left or right; up or down: above or below).
 - Drag an area by its title onto another to move it, or onto its centre to
   swap the two. Drag the gaps between areas to resize them.
@@ -130,8 +137,8 @@ brushes, terrain and biome palettes, levels or world info.
   terrain generator (Graph and Render), **World**, the map editor
   (workspaces Layout, Sculpting, Painting, 3D, 3D Sculpt, Maps, Minimal),
   and **Render**, marked Beta, where the map is path-traced and saved as
-  images (see [Render](#render)). Each side remembers the workspace it was
-  left on.
+  images (workspaces Still and Animation, see [Render](#render)). Each
+  side remembers the workspace it was left on.
 - Workspaces are tabs of arrangements; duplicate one with `+`, right-click
   it to reset it (back to how it was at first; a copy goes back to what it
   was copied from), duplicate it or delete it. The layout is remembered.
@@ -2089,6 +2096,13 @@ the view first: the image fills in from the middle out. While the view
 stays still it adds a sample a pixel a frame and grows clean; moving, it
 draws a quarter of the pixels and starts again.
 
+Its panels are editors as any other, in the **Render** section of an
+area's chooser: **Render Viewport**, **Sun and Sky**, **Camera**, **Render
+Output** and **Timeline**. **Still** shows the viewport with the sky, the
+camera and the output beside it; **Animation** the viewport over the
+timeline. Areas split, swap, float and change as on the other sides. One
+area draws the viewport at a time; a second one says where it is.
+
 - **Drag** to turn about the point looked at, **right-drag** (or middle)
   to slide over the land, the **wheel** to come closer, **double-click**
   for the whole map again, **Shift-click** to focus the lens there.
@@ -2103,8 +2117,10 @@ draws a quarter of the pixels and starts again.
 - **Clouds**: their **Cover** (0: none), **Height**, **Thickness**,
   **Density**, **Size**, and how far the **Wind** has moved them; they
   shade the land.
-- **Lens**: the **Angle** of view, the **Aperture** (0: all sharp) and the
-  **Focus** distance, for a depth of field.
+- **Camera** ▸ **Lens**: the **Angle** of view, the **Aperture** (0: all
+  sharp) and the **Focus** distance, for a depth of field. **Position**:
+  the point it **looks at**, its **Turn**, **Tilt** and **Distance**, and
+  **Frame the whole map**.
 - **Image**: how much the glowing blocks **Glow**, the light's
   **Bounces**, and the **Exposure**.
 - **Image to save**: a **Size** (the view's, HD, 4K or 8K) and the
@@ -2114,6 +2130,19 @@ draws a quarter of the pixels and starts again.
   A size larger than the graphics card can draw is refused.
 - **Scene**: tiles built, chunks, the time they took, the graphics
   memory, and the samples a second.
+
+- **Timeline**: keyframes of the camera (where it stands, what it looks
+  at, its angle) and of the hour, over time. Put the playhead somewhere
+  (click or drag along the track), place the camera, then **Add keyframe**
+  (on a keyframe: **Update keyframe**); **Remove** takes the picked one
+  away. Drag a keyframe to move it in time. Between keyframes the camera
+  follows a smooth path through them, the angle and the hour ease from one
+  to the next (midnight crossed the short way). Moving the playhead puts
+  the view there; **Play** runs it (not with less motion: scrub instead);
+  the buttons beside go to the start, the previous or next keyframe, the
+  end. **Length** and **Frames a second** say how the animation will be
+  drawn. The keyframes are saved with the map. Rendering the frames to
+  images is to come.
 
 A map larger than the graphics card's buffers is drawn in part, and says
 so. With less motion (Settings ▸ Accessibility), the view stops at 64

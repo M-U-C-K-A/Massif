@@ -30,6 +30,8 @@ use std::path::PathBuf;
 const HEADER: f32 = theme::HEADER_H;
 const GAP: f32 = 4.0;
 const MIN_AREA: f32 = 90.0;
+/// The smallest a floating panel is sized to.
+const FLOAT_MIN: egui::Vec2 = egui::vec2(240.0, 140.0);
 /// How long the Brushes panel stays outlined, called from 3D Sculpt, in seconds.
 const BRUSHES_CALL: f64 = 1.2;
 
@@ -519,6 +521,8 @@ pub struct MassifApp {
     status: Option<Status>,
     feedback: Option<String>,
     dragging_area: Option<AreaId>,
+    /// A floating panel moved by its title (with Shift, to dock it).
+    dragging_float: Option<AreaId>,
     rename: Option<(usize, String)>,
     /// The Layers panel's layer being renamed.
     layers_ui: crate::layers::LayersUi,
@@ -983,7 +987,7 @@ impl MassifApp {
         }
         self.layout.switch_side(false);
         let parts = [E::Map, E::Tools, E::BrushSettings, E::View3d];
-        let has_all = |w: &crate::layout::Workspace| !w.terrain && parts.iter().all(|k| w.root.shows(*k));
+        let has_all = |w: &crate::layout::Workspace| w.side() == crate::layout::Side::World && parts.iter().all(|k| w.root.shows(*k));
         if !has_all(self.layout.current())
             && let Some(i) = self.layout.workspaces.iter().position(has_all)
         {
@@ -1087,6 +1091,7 @@ impl MassifApp {
             status: None,
             feedback: None,
             dragging_area: None,
+            dragging_float: None,
             rename: None,
             layers_ui: Default::default(),
             pack_dialog: None,
@@ -3412,10 +3417,6 @@ impl MassifApp {
                     });
                 });
             crate::tour::mark(ui.ctx(), crate::tour::Target::Sides, sides.response.rect);
-            if shown == Side::Render {
-                return;
-            }
-            let terrain = self.layout.terrain();
             ui.add_space(4.0);
             // A segmented control: the workspaces of this side in one pill.
             let mut remove = None;
@@ -3428,7 +3429,7 @@ impl MassifApp {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
                         for i in 0..self.layout.workspaces.len() {
-                            if self.layout.workspaces[i].terrain != terrain {
+                            if self.layout.workspaces[i].side() != shown {
                                 continue;
                             }
                             let active = self.layout.active == i;
@@ -3627,7 +3628,20 @@ impl MassifApp {
             Some((id, editor)) => areas.push((id, editor, rect)),
             None => compute(&ws.root, rect, &mut Vec::new(), &mut areas, &mut seps),
         }
-        let area_rects: Vec<(AreaId, Rect)> = areas.iter().map(|(id, _, r)| (*id, *r)).collect();
+        // Floating panels, kept where some of them shows in the window.
+        let bounds = ui.ctx().content_rect();
+        let floats: Vec<(AreaId, EditorKind, Rect)> = ws
+            .floating
+            .iter()
+            .map(|f| {
+                let size = vec2(f.size[0].clamp(FLOAT_MIN.x, bounds.width().max(FLOAT_MIN.x)), f.size[1].clamp(FLOAT_MIN.y, bounds.height().max(FLOAT_MIN.y)));
+                let x = f.pos[0].clamp(bounds.left() - size.x + 80.0, bounds.right() - 80.0);
+                let y = f.pos[1].clamp(bounds.top(), (bounds.bottom() - HEADER).max(bounds.top()));
+                (f.id, f.editor, Rect::from_min_size(pos2(x, y), size))
+            })
+            .collect();
+        // The floating ones first: they are over the others.
+        let area_rects: Vec<(AreaId, Rect)> = floats.iter().rev().map(|(id, _, r)| (*id, *r)).chain(areas.iter().map(|(id, _, r)| (*id, *r))).collect();
         ui.ctx().data_mut(|d| d.insert_temp(Id::unique("massif areas"), area_rects));
 
         // Splitters.
@@ -3656,14 +3670,38 @@ impl MassifApp {
             }
         }
 
-        let shown: HashSet<EditorKind> = areas.iter().map(|a| a.1).collect();
+        let shown: HashSet<EditorKind> = areas.iter().map(|a| a.1).chain(floats.iter().map(|f| f.1)).collect();
         self.map_center = None;
-        let views: Vec<AreaId> = areas.iter().filter(|a| a.1 == EditorKind::View3d).map(|a| a.0).collect();
+        let views: Vec<AreaId> = areas.iter().chain(floats.iter()).filter(|a| a.1 == EditorKind::View3d).map(|a| a.0).collect();
         self.assign_3d_slots(&views);
         for (id, editor, rect) in &areas {
-            self.area(ui, frame, *id, *editor, *rect, &shown);
+            self.area(ui, frame, *id, *editor, *rect, &shown, false);
         }
-        self.maps.retain(|id, _| areas.iter().any(|a| a.0 == *id));
+        for &(id, editor, rect) in &floats {
+            self.floating(ui, frame, id, editor, rect, &shown);
+        }
+        self.maps.retain(|id, _| areas.iter().any(|a| a.0 == *id) || floats.iter().any(|f| f.0 == *id));
+
+        // A floating panel dragged by its title with Shift: docked where it
+        // is let go.
+        if let Some(src) = self.dragging_float {
+            let (pointer, down, shift) = ui.input(|i| (i.pointer.hover_pos(), i.pointer.primary_down(), i.modifiers.shift));
+            let target = pointer.filter(|_| shift).and_then(|p| areas.iter().find(|(_, _, r)| r.contains(p)).map(|(id, _, r)| (*id, *r, zone_of(*r, p))));
+            if let Some((_, r, zone)) = target {
+                let pal = Palette::of(ui);
+                let painter = ui.ctx().layer_painter(LayerId::new(Order::Foreground, Id::unique("dock overlay")));
+                let zone_rect = zone_half(r, zone).shrink(4.0);
+                painter.rect(zone_rect, 8, pal.accent.gamma_multiply(0.22), Stroke::new(2.0, pal.accent), StrokeKind::Inside);
+                let label = if zone == Zone::Center { tr!("Swap") } else { tr!("Dock here") };
+                painter.text(zone_rect.center(), Align2::CENTER_CENTER, label, FontId::proportional(14.0), pal.accent);
+            }
+            if !down {
+                if let Some((dst, _, zone)) = target {
+                    self.layout.dock_back(src, Some((dst, zone)), &[]);
+                }
+                self.dragging_float = None;
+            }
+        }
 
         // Moving an area by its title.
         if let Some(src) = self.dragging_area {
@@ -3677,14 +3715,7 @@ impl MassifApp {
             let painter = ui.ctx().layer_painter(LayerId::new(Order::Foreground, Id::unique("dock overlay")));
             if let Some((_, r, zone)) = target {
                 let pal = Palette::of(ui);
-                let half = |r: Rect, z: Zone| match z {
-                    Zone::Left => Rect::from_min_max(r.min, pos2(r.center().x, r.max.y)),
-                    Zone::Right => Rect::from_min_max(pos2(r.center().x, r.min.y), r.max),
-                    Zone::Top => Rect::from_min_max(r.min, pos2(r.max.x, r.center().y)),
-                    Zone::Bottom => Rect::from_min_max(pos2(r.min.x, r.center().y), r.max),
-                    Zone::Center => r,
-                };
-                let zone_rect = half(r, zone).shrink(4.0);
+                let zone_rect = zone_half(r, zone).shrink(4.0);
                 painter.rect(zone_rect, 8, pal.accent.gamma_multiply(0.22), Stroke::new(2.0, pal.accent), StrokeKind::Inside);
                 let label = if zone == Zone::Center { tr!("Swap") } else { tr!("Split") };
                 painter.text(zone_rect.center(), Align2::CENTER_CENTER, label, FontId::proportional(14.0), pal.accent);
@@ -3748,7 +3779,38 @@ impl MassifApp {
         }
     }
 
-    fn area(&mut self, ui: &mut Ui, frame: &eframe::Frame, id: AreaId, editor: EditorKind, rect: Rect, shown: &HashSet<EditorKind>) {
+    /// A floating panel: an area in a window of its own over the layout,
+    /// moved by its title and sized by its corner.
+    fn floating(&mut self, ui: &mut Ui, frame: &eframe::Frame, id: AreaId, editor: EditorKind, rect: Rect, shown: &HashSet<EditorKind>) {
+        let ctx = ui.ctx().clone();
+        egui::Area::new(Id::unique(("massif floating", id))).order(Order::Middle).fixed_pos(rect.min).constrain(false).show(&ctx, |ui| {
+            let pal = Palette::of(ui);
+            // The window takes every click on it, its editor's widgets over.
+            ui.interact(rect, Id::unique(("massif floating back", id)), Sense::click());
+            let shadow = egui::epaint::Shadow { offset: [0, 6], blur: 24, spread: 0, color: Color32::from_black_alpha(if ui.visuals().dark_mode { 110 } else { 46 }) };
+            ui.painter().add(shadow.as_shape(rect, theme::CARD_RADIUS));
+            self.area(ui, frame, id, editor, rect, shown, true);
+            // Its size, by the bottom right corner.
+            let grip = Rect::from_min_max(rect.max - vec2(16.0, 16.0), rect.max);
+            let response = ui.interact(grip, Id::unique(("massif floating size", id)), Sense::drag());
+            if response.hovered() || response.dragged() {
+                ui.ctx().set_cursor_icon(CursorIcon::ResizeNwSe);
+            }
+            let ink = if response.hovered() || response.dragged() { pal.text } else { pal.weak };
+            for k in [4.0, 8.0] {
+                ui.painter().line_segment([grip.max - vec2(k + 3.0, 3.0), grip.max - vec2(3.0, k + 3.0)], Stroke::new(1.0, ink));
+            }
+            if response.dragged() {
+                let d = response.drag_delta();
+                if let Some(f) = self.layout.current_mut().floating.iter_mut().find(|f| f.id == id) {
+                    f.size = [(rect.width() + d.x).max(FLOAT_MIN.x), (rect.height() + d.y).max(FLOAT_MIN.y)];
+                }
+            }
+        });
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn area(&mut self, ui: &mut Ui, frame: &eframe::Frame, id: AreaId, editor: EditorKind, rect: Rect, shown: &HashSet<EditorKind>, floating: bool) {
         let pal = Palette::of(ui);
         crate::tour::mark(ui.ctx(), crate::tour::Target::Editor(editor), rect);
         let painter = ui.painter_at(rect.expand(1.0));
@@ -3772,6 +3834,22 @@ impl MassifApp {
             let ui = &mut rui;
             // As in the modernised WorldPainter: a menu of commands, and with
             // Shift held, a button that closes the area at once.
+            if floating {
+                ui.menu_button(RichText::new(theme::glyph(Icon::Ellipsis).to_string()).size(14.0).color(pal.weak), |ui| {
+                    if ui.button(theme::with_icon(Icon::ArrowDownLeft, tr!("Dock back"))).on_hover_text(tr!("Back into the layout, beside its largest area")).clicked() {
+                        let areas: Vec<(AreaId, Rect)> = ui.ctx().data(|d| d.get_temp(Id::unique("massif areas"))).unwrap_or_default();
+                        let rects: Vec<(AreaId, [f32; 4])> = areas.iter().map(|(a, r)| (*a, [r.left(), r.top(), r.width(), r.height()])).collect();
+                        self.layout.dock_back(id, None, &rects);
+                    }
+                    ui.separator();
+                    if ui.button(theme::with_icon(Icon::X, tr!("Close panel"))).clicked() {
+                        self.layout.close(id);
+                    }
+                })
+                .response
+                .on_hover_text(tr!("Panel commands · drag the title to move it, with Shift onto an area to dock it there"));
+                break 'commands;
+            }
             if shift && !single && !maximized {
                 if ui
                     .add(egui::Button::new(RichText::new(theme::glyph(Icon::Trash2).to_string()).size(12.5)).frame(false))
@@ -3805,6 +3883,16 @@ impl MassifApp {
                         }
                     });
                 });
+                if ui
+                    .add_enabled(!single && !maximized, egui::Button::new(theme::with_icon(Icon::PictureInPicture2, tr!("Float"))))
+                    .on_hover_text(tr!("In a window of its own over the layout, to move and size freely"))
+                    .clicked()
+                {
+                    let r = rect.translate(vec2(24.0, 24.0));
+                    let screen = ui.ctx().content_rect();
+                    let size = vec2(r.width().min(screen.width() * 0.7), r.height().min(screen.height() * 0.7));
+                    self.layout.detach(id, [r.left(), r.top(), size.x, size.y]);
+                }
                 ui.separator();
                 let label = if maximized { tr!("Restore the layout") } else { tr!("Maximise area") };
                 let icon = if maximized { Icon::Minimize2 } else { Icon::Maximize2 };
@@ -3834,7 +3922,7 @@ impl MassifApp {
         hui.menu_button(format!("{} {}", theme::glyph(editor.icon()), theme::glyph(Icon::ChevronDown)), |ui| {
             let columns = crate::picker::columns_for(ui.ctx().content_rect().width() - 32.0);
             if let Some(kind) = crate::picker::page(ui, Some(editor), shown, self.settings.developer, columns) {
-                self.layout.current_mut().root.set_editor(id, kind);
+                self.layout.set_editor(id, kind);
                 ui.close();
             }
         })
@@ -3848,7 +3936,17 @@ impl MassifApp {
             })
             .inner
             .on_hover_cursor(CursorIcon::Grab);
-        if title.drag_started() && !single {
+        if floating {
+            if title.drag_started() {
+                self.dragging_float = Some(id);
+            }
+            if title.dragged() {
+                let d = title.drag_delta();
+                if let Some(f) = self.layout.current_mut().floating.iter_mut().find(|f| f.id == id) {
+                    f.pos = [rect.left() + d.x, rect.top() + d.y];
+                }
+            }
+        } else if title.drag_started() && !single {
             self.dragging_area = Some(id);
         }
         match editor {
@@ -3881,6 +3979,9 @@ impl MassifApp {
                 hui.add_space(8.0);
                 self.sculpt3d.header(&mut hui);
             }
+            EditorKind::RenderView => {
+                hui.label(RichText::new(tr!("Beta")).size(10.5).strong().color(pal.accent));
+            }
             _ => {}
         }
         // Cut at the commands: what runs past fades out into the card.
@@ -3901,7 +4002,7 @@ impl MassifApp {
         // The top ones over the header; the bottom ones go over the content,
         // after it.
         for corner in [Corner::TopLeft, Corner::TopRight] {
-            if let Some((dir, first, at)) = corner_split(ui, &painter, rect, id, corner) {
+            if !floating && let Some((dir, first, at)) = corner_split(ui, &painter, rect, id, corner) {
                 self.layout.split_at(id, dir, first, at);
             }
         }
@@ -4124,6 +4225,16 @@ impl MassifApp {
                     .show(&mut cui, |ui| self.graph.properties_ui(ui, &mut self.doc));
             }
             EditorKind::RenderSettings => scrolled(&mut cui, &mut |ui| self.graph.render_ui(ui, &self.doc)),
+            EditorKind::RenderView => {
+                let catalogue = self.blocks.catalogue.clone();
+                self.render_side.viewport_ui(&mut cui, id, frame, &mut self.doc, catalogue);
+            }
+            EditorKind::RenderSky => scrolled(&mut cui, &mut |ui| self.render_side.sky_ui(ui, &self.doc)),
+            EditorKind::RenderCamera => scrolled(&mut cui, &mut |ui| self.render_side.camera_ui(ui, &self.doc)),
+            EditorKind::RenderOutput => scrolled(&mut cui, &mut |ui| self.render_side.output_ui(ui, &self.doc)),
+            EditorKind::Timeline => {
+                egui::Frame::new().inner_margin(egui::Margin::symmetric(theme::PAD as i8 - 1, 8)).show(&mut cui, |ui| self.render_side.timeline_ui(ui, &mut self.doc));
+            }
             EditorKind::Developer => {
                 if self.settings.developer {
                     let info = crate::devtools::DevInfo { gpu: frame.wgpu_render_state(), ..self.dev_info() };
@@ -4145,7 +4256,7 @@ impl MassifApp {
                 let developer = self.settings.developer;
                 scrolled(&mut cui, &mut |ui| picked = panels::empty_area(ui, shown, developer));
                 if let Some(kind) = picked {
-                    self.layout.current_mut().root.set_editor(id, kind);
+                    self.layout.set_editor(id, kind);
                 }
             }
         }
@@ -4169,7 +4280,7 @@ impl MassifApp {
         // The bottom corners, over what the editor drew (a map or a 3D view
         // takes every drag there otherwise).
         for corner in [Corner::BottomLeft, Corner::BottomRight] {
-            if let Some((dir, first, at)) = corner_split(ui, &painter, rect, id, corner) {
+            if !floating && let Some((dir, first, at)) = corner_split(ui, &painter, rect, id, corner) {
                 self.layout.split_at(id, dir, first, at);
             }
         }
@@ -5697,12 +5808,7 @@ impl MassifApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(pal.app_bg).inner_margin(egui::Margin { left: 8, right: 8, top: 4, bottom: 8 }))
             .show(ui, |ui| {
-                if self.layout.render {
-                    ui.ctx().data_mut(|d| d.insert_temp(Id::unique("massif areas"), Vec::<(AreaId, Rect)>::new()));
-                    self.render_side.ui(ui, frame, &mut self.doc, self.blocks.catalogue.clone());
-                } else {
-                    self.dock(ui, frame);
-                }
+                self.dock(ui, frame);
             });
         self.notices(&ctx);
 
@@ -6260,6 +6366,17 @@ fn node_at<'a>(node: &'a mut Node, path: &[bool]) -> &'a mut Node {
     match (node, path.split_first()) {
         (Node::Split { a, b, .. }, Some((&right, rest))) => node_at(if right { b } else { a }, rest),
         (node, _) => node,
+    }
+}
+
+/// The half of `r` an area dropped at `z` takes (all of it to swap).
+fn zone_half(r: Rect, z: Zone) -> Rect {
+    match z {
+        Zone::Left => Rect::from_min_max(r.min, pos2(r.center().x, r.max.y)),
+        Zone::Right => Rect::from_min_max(pos2(r.center().x, r.min.y), r.max),
+        Zone::Top => Rect::from_min_max(r.min, pos2(r.max.x, r.center().y)),
+        Zone::Bottom => Rect::from_min_max(pos2(r.min.x, r.center().y), r.max),
+        Zone::Center => r,
     }
 }
 
@@ -7994,7 +8111,7 @@ mod tests {
         };
         {
             let app = h.state_mut();
-            app.layout.workspaces.push(crate::layout::Workspace { name: "Four views".into(), root, maximized: None, terrain: false });
+            app.layout.workspaces.push(crate::layout::Workspace { name: "Four views".into(), root, maximized: None, terrain: false, render: false, floating: Vec::new() });
             let layout = std::mem::take(&mut app.layout).sanitize();
             app.layout = layout;
             app.layout.activate(app.layout.workspaces.len() - 1);
@@ -8160,7 +8277,9 @@ mod tests {
         h.run_steps(3);
         assert_eq!(h.state().layout.side(), Side::Render);
         h.get_by_label("Sun");
-        assert!(h.query_by_label("Layout").is_none(), "no workspace tabs on the Render side");
+        assert!(h.query_by_label("Layout").is_none(), "the Render side's workspaces, not the World side's");
+        h.get_by_label("Still");
+        h.get_by_label("Animation");
         // The map's chunks built and path-traced, the image settling.
         let started = std::time::Instant::now();
         while h.state().render_side.building() && started.elapsed().as_secs() < 120 {
@@ -8171,6 +8290,7 @@ mod tests {
         h.run_steps(24);
         assert!(h.state().render_side.samples() > 8, "samples add up while the view stays still");
         if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            settle_render(&mut h);
             h.render().unwrap().save(dir.join("render-side.png")).unwrap();
         }
         // A still saved: drawn a band at a time, then written as a PNG.
@@ -8192,6 +8312,245 @@ mod tests {
         h.get_by_label_contains(&label(Icon::MountainSnow, "Terrain")).click();
         h.run_steps(3);
         assert_eq!(h.state().layout.side(), Side::Terrain);
+    }
+
+    /// Let the Render side's image settle, with less motion (it stops at
+    /// 64 samples a pixel), so that a snapshot does not wait on the graphics
+    /// card path-tracing frame after frame (at 2x, it would time out).
+    fn settle_render(h: &mut egui_kittest::Harness<'static, MassifApp>) {
+        h.state_mut().settings.reduce_motion = crate::access::Follow::On;
+        let started = std::time::Instant::now();
+        while h.state().render_side.samples() < 64 && started.elapsed().as_secs() < 120 {
+            h.step();
+        }
+        // The frames already asked of the graphics card, drawn: a snapshot
+        // waits a few seconds at most.
+        std::thread::sleep(std::time::Duration::from_secs(4));
+        h.run_steps(4);
+    }
+
+    /// Settings kept in memory, as eframe keeps them on disk.
+    #[derive(Default)]
+    struct MemoryStorage(std::collections::HashMap<String, String>);
+
+    impl eframe::Storage for MemoryStorage {
+        fn get_string(&self, key: &str) -> Option<String> {
+            self.0.get(key).cloned()
+        }
+        fn set_string(&mut self, key: &str, value: String) {
+            self.0.insert(key.to_owned(), value);
+        }
+        fn remove_string(&mut self, key: &str) {
+            self.0.remove(key);
+        }
+        fn flush(&mut self) {}
+    }
+
+    /// The rectangle of area `id` in the last frame.
+    fn area_rect(h: &egui_kittest::Harness<'static, MassifApp>, id: AreaId) -> Rect {
+        let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+        areas.into_iter().find(|(a, _)| *a == id).map(|(_, r)| r).expect("the area is shown")
+    }
+
+    /// Click the area commands (…) of area `id`, then `item` in its menu.
+    fn area_command(h: &mut egui_kittest::Harness<'static, MassifApp>, id: AreaId, item: &str) {
+        use egui_kittest::kittest::Queryable;
+        let rect = area_rect(h, id);
+        let dots = theme::glyph(Icon::Ellipsis).to_string();
+        h.query_all_by_label(&dots).find(|n| rect.contains(n.rect().center())).expect("the area's commands").click();
+        h.run_steps(2);
+        h.get_by_label_contains(item).click();
+        h.run_steps(3);
+    }
+
+    /// A panel floats out of its area through its commands, moves by its
+    /// title, comes back with Dock back; floating, it is saved with the
+    /// workspace and comes back where it was (MASSIF_SNAPSHOT_DIR: a panel
+    /// floating over the World side, light and dark).
+    #[test]
+    fn panels_float_dock_back_and_are_kept() {
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let ppp = std::env::var("MASSIF_SNAPSHOT_PPP").ok().unwrap_or_else(|| "1".into());
+        let mut h = harness(ThemeChoice::Light);
+        h.run_steps(4);
+        let mut areas = Vec::new();
+        h.state().layout.current().root.areas(&mut areas);
+        let info = areas.iter().find(|a| a.1 == EditorKind::Info).unwrap().0;
+        let before = h.state().layout.current().root.count();
+        area_command(&mut h, info, "Float");
+        assert_eq!(h.state().layout.current().root.count(), before - 1);
+        assert_eq!(h.state().layout.current().floating.iter().map(|f| (f.id, f.editor)).collect::<Vec<_>>(), [(info, EditorKind::Info)]);
+        let floated = area_rect(&h, info);
+        // Moved by its title.
+        {
+            use egui_kittest::kittest::Queryable;
+            let title = h.query_all_by_label("Info").find(|n| floated.contains(n.rect().center())).expect("its title").rect().center();
+            h.hover_at(title);
+            h.step();
+            h.drag_at(title);
+            h.step();
+            for k in 1..=6 {
+                h.hover_at(title + vec2(-60.0 * k as f32, -50.0 * k as f32));
+                h.step();
+            }
+            h.drop_at(title + vec2(-360.0, -300.0));
+            h.run_steps(2);
+        }
+        let moved = area_rect(&h, info);
+        assert!((moved.left() - (floated.left() - 360.0)).abs() < 2.0 && (moved.top() - (floated.top() - 300.0)).abs() < 2.0, "{floated:?} → {moved:?}");
+        assert_eq!(h.state().layout.current().root.count(), before - 1, "moving it does not dock it");
+        if let Some(dir) = &dir {
+            for (theme, name) in [(ThemeChoice::Light, "light"), (ThemeChoice::Dark, "dark")] {
+                h.state_mut().settings.theme = theme;
+                h.run_steps(3);
+                h.render().unwrap().save(dir.join(format!("floating-panel-{name}-{ppp}x.png"))).unwrap();
+            }
+        }
+        // Saved with the layout, and read back where it was.
+        let mut storage = MemoryStorage::default();
+        eframe::App::save(h.state_mut(), &mut storage);
+        let kept = eframe::get_value::<Layout>(&storage, LAYOUT_KEY).unwrap().sanitize();
+        assert_eq!(kept.current().floating, h.state().layout.current().floating);
+        let mut again = harness(ThemeChoice::Light);
+        again.state_mut().layout = kept;
+        again.run_steps(4);
+        assert_eq!(area_rect(&again, info), moved, "where it was left");
+        // Docked back into the layout.
+        area_command(&mut h, info, "Dock back");
+        assert!(h.state().layout.current().floating.is_empty());
+        assert_eq!(h.state().layout.current().root.count(), before);
+        assert_eq!(h.state().layout.current().root.editor_of(info), Some(EditorKind::Info));
+        // Floating again, dragged with Shift onto the map: docked there.
+        area_command(&mut h, info, "Float");
+        let map = areas.iter().find(|a| a.1 == EditorKind::Map).unwrap().0;
+        let target = area_rect(&h, map);
+        {
+            use egui_kittest::kittest::Queryable;
+            let r = area_rect(&h, info);
+            let title = h.query_all_by_label("Info").find(|n| r.contains(n.rect().center())).expect("its title").rect().center();
+            h.hover_at(title);
+            h.step();
+            h.drag_at(title);
+            h.step();
+            let goal = pos2(target.left() + target.width() * 0.1, target.center().y);
+            h.event(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
+            for k in 1..=8 {
+                let t = k as f32 / 8.0;
+                h.hover_at(title + (goal - title) * t);
+                h.step();
+            }
+            h.drop_at(goal);
+            h.step();
+            h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+            h.run_steps(2);
+        }
+        assert!(h.state().layout.current().floating.is_empty(), "docked by the map");
+        assert_eq!(h.state().layout.current().root.sibling(info).map(|s| (s.0, s.2, s.3)), Some((map, Dir::Row, true)), "on the map's left");
+    }
+
+    /// The Render side's workspaces as the other sides', its panels in the
+    /// picker's Render section; the Timeline keeps keyframes with the map
+    /// and, scrubbed, puts the view there (MASSIF_SNAPSHOT_DIR: the
+    /// Animation workspace, the picker, light and dark).
+    #[test]
+    fn the_render_side_animates_its_camera() {
+        use crate::layout::Side;
+        use egui_kittest::kittest::Queryable;
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let ppp = std::env::var("MASSIF_SNAPSHOT_PPP").ok().unwrap_or_else(|| "1".into());
+        let mut h = harness(ThemeChoice::Light);
+        h.run_steps(3);
+        h.state_mut().layout.show_side(Side::Render);
+        h.run_steps(2);
+        h.get_by_label("Animation").click();
+        h.run_steps(3);
+        assert_eq!(h.state().layout.current().name, "Animation");
+        let started = std::time::Instant::now();
+        while h.state().render_side.building() && started.elapsed().as_secs() < 120 {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        h.run_steps(4);
+        // A keyframe at 0 s, one at 4 s from elsewhere.
+        h.get_by_label_contains("Add keyframe").click();
+        h.run_steps(2);
+        let first = h.state().render_side.pose_now().unwrap();
+        h.state_mut().render_side.scrub(4.0);
+        h.run_steps(2);
+        h.get_by_label_contains("Frame the whole map").click();
+        h.run_steps(1);
+        {
+            let app = h.state_mut();
+            let mut pose = app.render_side.pose_now().unwrap();
+            pose.eye[0] += 300.0;
+            pose.fov = 30.0;
+            pose.hour = 19.0;
+            let anim = app.doc.world.meta.animation.get_or_insert_default();
+            anim.set(4.0, pose);
+        }
+        h.run_steps(2);
+        let anim = h.state().doc.world.meta.animation.clone().expect("kept with the map");
+        assert_eq!(anim.keys.len(), 2);
+        assert!(h.state().doc.is_modified());
+        // Scrubbed: the view goes to the path's pose there.
+        h.state_mut().render_side.scrub(0.0);
+        h.run_steps(2);
+        let at = h.state().render_side.pose_now().unwrap();
+        assert!((at.eye[0] - first.eye[0]).abs() < 1e-3 && (at.fov - first.fov).abs() < 1e-3, "{at:?} {first:?}");
+        h.state_mut().render_side.scrub(2.0);
+        h.run_steps(2);
+        let mid = h.state().render_side.pose_now().unwrap();
+        let want = anim.sample(2.0).unwrap();
+        assert!((mid.eye[0] - want.eye[0]).abs() < 0.5 && (mid.hour - want.hour).abs() < 1e-3, "{mid:?} {want:?}");
+        for _ in 0..24 {
+            h.step();
+        }
+        if let Some(dir) = &dir {
+            for (theme, name) in [(ThemeChoice::Light, "light"), (ThemeChoice::Dark, "dark")] {
+                h.state_mut().settings.theme = theme;
+                h.run_steps(16);
+                settle_render(&mut h);
+                h.render().unwrap().save(dir.join(format!("render-animation-{name}-{ppp}x.png"))).unwrap();
+            }
+            h.state_mut().settings.theme = ThemeChoice::Light;
+            h.run_steps(2);
+        }
+        // The Still workspace, and the picker with its Render section.
+        h.get_by_label("Still").click();
+        h.run_steps(4);
+        let mut areas = Vec::new();
+        h.state().layout.current().root.areas(&mut areas);
+        let sky = areas.iter().find(|a| a.1 == EditorKind::RenderSky).unwrap().0;
+        let rect = area_rect(&h, sky);
+        let header = format!("{} {}", theme::glyph(Icon::SunMedium), theme::glyph(Icon::ChevronDown));
+        h.query_all_by_label(&header).find(|n| rect.contains(n.rect().center())).expect("the picker of the area").click();
+        h.run_steps(3);
+        for name in ["Render Viewport", "Sun and Sky", "Camera", "Render Output", "Timeline", "Terrain Graph", "Map"] {
+            assert!(h.query_all_by_label(name).next().is_some(), "{name} offered");
+        }
+        if let Some(dir) = &dir {
+            for (theme, name) in [(ThemeChoice::Light, "light"), (ThemeChoice::Dark, "dark")] {
+                h.state_mut().settings.theme = theme;
+                h.run_steps(16);
+                settle_render(&mut h);
+                h.render().unwrap().save(dir.join(format!("render-still-picker-{name}-{ppp}x.png"))).unwrap();
+            }
+        }
+        h.get_all_by_label("Timeline").last().unwrap().click();
+        h.run_steps(3);
+        assert_eq!(h.state().layout.current().editor_of(sky), Some(EditorKind::Timeline));
+        // Saved with the map and read back.
+        let path = std::env::temp_dir().join(format!("massif-animation-{}.massif", std::process::id()));
+        massif_format::save(&h.state().doc.world, &path).unwrap();
+        let back = massif_format::load(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(h.state().doc.world.meta.animation.as_ref(), Some(&anim), "unchanged since");
+        // As JSON, to the last bit or so of a coordinate.
+        let back = back.meta.animation.expect("read back");
+        assert_eq!((back.keys.len(), back.duration, back.fps), (anim.keys.len(), anim.duration, anim.fps));
+        for (a, b) in back.keys.iter().zip(&anim.keys) {
+            assert!(a.time == b.time && a.pose.fov == b.pose.fov && a.pose.hour == b.pose.hour && (0..3).all(|i| (a.pose.eye[i] - b.pose.eye[i]).abs() < 1e-9), "{a:?} {b:?}");
+        }
     }
 
     fn map_rect(app: &MassifApp, ctx: &egui::Context) -> Rect {

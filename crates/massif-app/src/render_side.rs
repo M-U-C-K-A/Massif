@@ -1,6 +1,9 @@
 //! The Render side: the open map path-traced on the graphics card
 //! (`massif_render`), a sample a pixel a frame, added up while the view
-//! stays still; the sun, the sky and the exposure beside it.
+//! stays still. Its panels are editors of the layout as the other sides'
+//! are: the viewport, the sun and sky, the camera, the output and the
+//! timeline of an animation, each in whatever area (or floating window)
+//! the user puts it.
 //!
 //! The map's chunks are built in the background by the exporter, nearest
 //! the view first, and put on the graphics card as they come, so the
@@ -8,9 +11,10 @@
 //! builds its tiles again when the Render side is shown next.
 
 use crate::doc::Document;
-use crate::theme::{self, Icon, Palette, RichTextExt};
+use crate::theme::{self, Icon, Palette};
 use crate::widgets::{Field, row, well};
-use egui::{Align2, Color32, FontId, PointerButton, Rect, RichText, Sense, Ui, pos2, vec2};
+use egui::{Align2, Color32, FontId, PointerButton, Rect, RichText, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use massif_core::animation::{Animation, Pose};
 use massif_core::coords::TilePos;
 use massif_render::map_source::{Extent, MapBuilder, target_for, tiles_by_distance};
 use massif_render::{Camera, Light, Materials, Renderer};
@@ -20,8 +24,6 @@ use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
-/// Width of the column of settings.
-const SIDEBAR: f32 = 280.0;
 /// Time a frame spends putting built chunks on the graphics card.
 const UPLOAD_BUDGET: Duration = Duration::from_millis(6);
 /// Seconds after the view last moved that it is drawn sharp again.
@@ -100,6 +102,14 @@ impl Orbit {
     fn camera(&self, fov: f32) -> Camera {
         Camera::orbit(self.target, self.yaw, self.pitch, self.distance, fov.to_radians())
     }
+
+    /// Turning about `target` from `eye`.
+    fn between(eye: [f64; 3], target: [f64; 3]) -> Orbit {
+        let d = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]];
+        let distance = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-3);
+        let (yaw, pitch) = (d[0].atan2(-d[2]) as f32, (d[1] / distance).clamp(-1.0, 1.0).asin() as f32);
+        Orbit { target, yaw, pitch, distance }
+    }
 }
 
 /// What the renderer holds of the open map.
@@ -118,6 +128,20 @@ struct Scene {
     generation: u64,
     catalogue: Option<usize>,
     dim: usize,
+}
+
+/// Where the Timeline panel is: its playhead, whether it plays, the
+/// keyframe picked, a keyframe being dragged.
+#[derive(Default)]
+struct Playback {
+    /// Seconds.
+    playhead: f32,
+    playing: bool,
+    selected: Option<usize>,
+    /// The keyframe dragged, and where the pointer took it from.
+    dragging: Option<usize>,
+    /// The playhead the view was last put at: moved since, the view follows.
+    applied: Option<f32>,
 }
 
 pub struct RenderSide {
@@ -146,6 +170,12 @@ pub struct RenderSide {
     saved: Option<Result<String, String>>,
     /// The size the image's texture was shown at.
     texture_size: [u32; 2],
+    /// The size of the view, in pixels, when it was last drawn.
+    view_px: [u32; 2],
+    /// The area the view was drawn in, and in which pass: only one area
+    /// draws it a pass, the others say where it is.
+    drawn: Option<(u64, u64)>,
+    playback: Playback,
 }
 
 impl Default for RenderSide {
@@ -153,8 +183,35 @@ impl Default for RenderSide {
         let mut light = Light::default();
         let time = Time::default();
         light.set_time(time.hour, time.day, time.latitude, time.north);
-        Self { scene: None, orbit: None, light, time, fov: 50.0, preset: usize::MAX, texture: None, dirty: HashSet::new(), moving_until: 0.0, last: None, since: None, still_size: 2, still_samples: 256, still: None, writing: None, saved: None, texture_size: [0; 2] }
+        Self {
+            scene: None,
+            orbit: None,
+            light,
+            time,
+            fov: 50.0,
+            preset: usize::MAX,
+            texture: None,
+            dirty: HashSet::new(),
+            moving_until: 0.0,
+            last: None,
+            since: None,
+            still_size: 2,
+            still_samples: 256,
+            still: None,
+            writing: None,
+            saved: None,
+            texture_size: [0; 2],
+            view_px: [0; 2],
+            drawn: None,
+            playback: Playback::default(),
+        }
     }
+}
+
+/// A muted title over a well.
+fn title(ui: &mut Ui, text: &str) {
+    let pal = Palette::of(ui);
+    ui.label(RichText::new(text).size(12.0).color(pal.weak));
 }
 
 impl RenderSide {
@@ -191,6 +248,18 @@ impl RenderSide {
         self.saved.as_ref()
     }
 
+    /// Put the playhead at `time` (tests, as a scrub would).
+    #[cfg(test)]
+    pub fn scrub(&mut self, time: f32) {
+        self.playback.playhead = time;
+    }
+
+    /// Where the camera stands and looks, its angle and the hour (tests).
+    #[cfg(test)]
+    pub fn pose_now(&self) -> Option<Pose> {
+        self.pose()
+    }
+
     /// Tiles the map changed in: built again when the side is shown.
     pub fn invalidate(&mut self, tiles: &[TilePos]) {
         if self.scene.is_some() {
@@ -198,13 +267,34 @@ impl RenderSide {
         }
     }
 
-    /// The Render side, over the whole of the window under its bars.
-    pub fn ui(&mut self, ui: &mut Ui, frame: &eframe::Frame, doc: &mut Document, catalogue: Option<Arc<massif_assets::Catalogue>>) {
+    /// The camera and the sun now, as a keyframe holds them.
+    fn pose(&self) -> Option<Pose> {
+        let orbit = self.orbit?;
+        Some(Pose { eye: orbit.camera(self.fov).eye, target: orbit.target, fov: self.fov, hour: self.time.hour })
+    }
+
+    /// Put the camera and the sun as `pose` has them.
+    fn put(&mut self, pose: &Pose) {
+        self.orbit = Some(Orbit::between(pose.eye, pose.target));
+        self.fov = pose.fov.clamp(10.0, 100.0);
+        if self.time.hour != pose.hour {
+            self.time.hour = pose.hour;
+            self.light.set_time(self.time.hour, self.time.day, self.time.latitude, self.time.north);
+        }
+    }
+
+    /// The Render Viewport: the map path-traced in `ui`'s whole room. Area
+    /// `area` draws it, unless another did in this pass.
+    pub fn viewport_ui(&mut self, ui: &mut Ui, area: u64, frame: &eframe::Frame, doc: &mut Document, catalogue: Option<Arc<massif_assets::Catalogue>>) {
         let pal = Palette::of(ui);
-        let whole = ui.available_rect_before_wrap();
-        let view = Rect::from_min_max(whole.min, pos2((whole.right() - SIDEBAR - 8.0).max(whole.left() + 100.0), whole.bottom()));
-        let side = Rect::from_min_max(pos2(view.right() + 8.0, whole.top()), whole.max);
-        ui.painter().rect_filled(view, theme::CARD_RADIUS, pal.canvas);
+        let view = ui.available_rect_before_wrap();
+        ui.painter().rect_filled(view, 0.0, pal.canvas);
+        let pass = ui.ctx().cumulative_pass_nr();
+        if self.drawn.is_some_and(|(p, a)| p == pass && a != area) {
+            ui.painter().text(view.center(), Align2::CENTER_CENTER, tr!("The render is shown in another area"), FontId::proportional(13.0), pal.weak);
+            return;
+        }
+        self.drawn = Some((pass, area));
         let Some(render_state) = frame.wgpu_render_state() else {
             ui.painter().text(view.center(), Align2::CENTER_CENTER, tr!("Rendering needs the wgpu renderer"), FontId::proportional(13.0), pal.weak);
             return;
@@ -215,6 +305,7 @@ impl RenderSide {
         if self.scene.as_ref().is_some_and(|s| s.generation != doc.generation || s.catalogue != cat_key || s.dim != doc.dim) {
             self.scene = None;
             self.orbit = None;
+            self.playback = Playback::default();
         }
         if self.scene.is_none() {
             let target = target_for(catalogue.as_ref().map(|c| c.version.as_str()));
@@ -222,6 +313,11 @@ impl RenderSide {
                 ui.painter().text(view.center(), Align2::CENTER_CENTER, tr!("Nothing to render: the map is empty"), FontId::proportional(13.0), pal.weak);
                 return;
             };
+            // A map with a camera path opens where it starts.
+            if let Some(pose) = doc.world.meta.animation.as_ref().and_then(|a| a.sample(0.0)) {
+                self.put(&pose);
+                self.playback.applied = Some(0.0);
+            }
             let orbit = *self.orbit.get_or_insert_with(|| framing(&extent, doc.world.meta.sea_level as f64));
             let materials = Arc::new(Materials::new(catalogue.clone(), device.limits().max_texture_array_layers as usize));
             let tiles = tiles_by_distance(&doc.world, doc.dim, orbit.target[0], orbit.target[2]);
@@ -298,7 +394,7 @@ impl RenderSide {
         // The camera: drag to turn about the point looked at, right-drag
         // (or middle) to slide over the land, the wheel to come closer.
         let sense = if self.still.is_some() { Sense::hover() } else { Sense::click_and_drag() };
-        let response = ui.interact(view, egui::Id::unique("massif render view"), sense);
+        let response = ui.interact(view, egui::Id::unique(("massif render view", area)), sense);
         let now = ui.input(|i| i.time);
         let extent = scene.renderer.extent();
         let span = extent.width.max(extent.depth) as f64 * 16.0;
@@ -346,6 +442,7 @@ impl RenderSide {
         // while one is drawn.
         let ppp = ui.ctx().pixels_per_point();
         let px = [(view.width() * ppp).round().max(1.0) as u32, (view.height() * ppp).round().max(1.0) as u32];
+        self.view_px = px;
         let wanted = self.still.as_ref().map_or(px, |s| s.size);
         scene.renderer.resize(wanted[0], wanted[1]);
         if scene.renderer.size() != Some(self.texture_size) || self.texture.is_none() {
@@ -459,24 +556,20 @@ impl RenderSide {
         let at = view.left_bottom() + vec2(theme::PAD, -theme::PAD);
         let galley = ui.painter().layout_no_wrap(status, FontId::proportional(12.0), pal.text);
         let back = Rect::from_min_size(at - vec2(0.0, galley.size().y + 8.0), galley.size() + vec2(16.0, 8.0));
-        ui.painter().rect(back, theme::PILL, pal.panel, egui::Stroke::new(1.0, pal.border), egui::StrokeKind::Inside);
+        ui.painter().rect(back, theme::PILL, pal.panel, Stroke::new(1.0, pal.border), StrokeKind::Inside);
         ui.painter().galley(back.min + vec2(8.0, 4.0), galley, pal.text);
+    }
 
-        // The settings beside, in a column that scrolls.
-        let mut outer = ui.new_child(egui::UiBuilder::new().max_rect(side).layout(egui::Layout::top_down(egui::Align::Min)));
-        outer.horizontal(|ui| {
-            ui.label(RichText::new(theme::with_icon(Icon::Aperture, tr!("Render"))).size(14.0).medium());
-            ui.label(RichText::new(tr!("Beta")).size(11.0).strong().color(pal.accent));
-        });
-        outer.add_space(4.0);
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(&mut outer, |col| {
-        col.spacing_mut().item_spacing.y = 6.0;
+    /// Sun and Sky: a look to start from, the sun by the hour and the place,
+    /// the air and the clouds.
+    pub fn sky_ui(&mut self, ui: &mut Ui, doc: &Document) {
+        ui.spacing_mut().item_spacing.y = 6.0;
         let sea = doc.world.meta.sea_level as f32;
         let (light, time) = (&mut self.light, &mut self.time);
         let mut picked = None;
-        col.label(RichText::new(tr!("Sun and sky")).size(12.0).color(pal.weak));
+        title(ui, tr!("Sun and sky"));
         let before = *time;
-        well(col, |ui| {
+        well(ui, |ui| {
             row(ui, tr!("Look"), |ui| {
                 let name = PRESETS.get(self.preset).map_or(tr!("Custom"), |n| crate::i18n::tr_name(n));
                 crate::widgets::combo("render preset").selected_text(name).show_ui(ui, |ui| {
@@ -509,8 +602,8 @@ impl RenderSide {
         if *time != before {
             light.set_time(time.hour, time.day, time.latitude, time.north);
         }
-        col.label(RichText::new(tr!("Atmosphere")).size(12.0).color(pal.weak));
-        well(col, |ui| {
+        title(ui, tr!("Atmosphere"));
+        well(ui, |ui| {
             row(ui, tr!("Air"), |ui| {
                 ui.add(Field::new(&mut light.air, 0.0..=4.0).max_decimals(2));
             });
@@ -533,8 +626,8 @@ impl RenderSide {
                 crate::widgets::switch(ui, &mut light.sea);
             });
         });
-        col.label(RichText::new(tr!("Clouds")).size(12.0).color(pal.weak));
-        well(col, |ui| {
+        title(ui, tr!("Clouds"));
+        well(ui, |ui| {
             row(ui, tr!("Cover"), |ui| {
                 ui.add(Field::new(&mut light.cloud_cover, 0.0..=1.0).max_decimals(2));
             });
@@ -554,8 +647,19 @@ impl RenderSide {
                 ui.add(Field::new(&mut light.wind[0], 0.0..=20000.0).max_decimals(0));
             });
         });
-        col.label(RichText::new(tr!("Lens")).size(12.0).color(pal.weak));
-        well(col, |ui| {
+        if let Some(k) = picked {
+            self.preset = k;
+            preset(k, light, time, sea);
+        }
+    }
+
+    /// Camera: its lens, where it stands and looks.
+    pub fn camera_ui(&mut self, ui: &mut Ui, doc: &Document) {
+        let pal = Palette::of(ui);
+        ui.spacing_mut().item_spacing.y = 6.0;
+        title(ui, tr!("Lens"));
+        let light = &mut self.light;
+        well(ui, |ui| {
             row(ui, tr!("Angle"), |ui| {
                 ui.add(Field::new(&mut self.fov, 10.0..=100.0).suffix("°").max_decimals(0));
             });
@@ -566,8 +670,58 @@ impl RenderSide {
                 ui.add(Field::new(&mut light.focus, 1.0..=5000.0).logarithmic(true).suffix(" blocks").max_decimals(0));
             });
         });
-        col.label(RichText::new(tr!("Image")).size(12.0).color(pal.weak));
-        well(col, |ui| {
+        title(ui, tr!("Position"));
+        let extent = self.scene.as_ref().map(|s| s.renderer.extent());
+        match (&mut self.orbit, extent) {
+            (Some(orbit), Some(extent)) => {
+                let span = extent.width.max(extent.depth) as f64 * 16.0;
+                let (min_y, max_y) = (doc.dimension().min_y as f64, doc.dimension().max_y as f64);
+                well(ui, |ui| {
+                    let c = extent.center();
+                    row(ui, tr!("Looks at X"), |ui| {
+                        ui.add(Field::new(&mut orbit.target[0], c[0] - span..=c[0] + span).max_decimals(0));
+                    });
+                    row(ui, tr!("Looks at Y"), |ui| {
+                        ui.add(Field::new(&mut orbit.target[1], min_y..=max_y + 512.0).max_decimals(0));
+                    });
+                    row(ui, tr!("Looks at Z"), |ui| {
+                        ui.add(Field::new(&mut orbit.target[2], c[2] - span..=c[2] + span).max_decimals(0));
+                    });
+                    let mut turn = orbit.yaw.to_degrees().rem_euclid(360.0);
+                    row(ui, tr!("Turn"), |ui| {
+                        if ui.add(Field::new(&mut turn, 0.0..=360.0).suffix("°").max_decimals(0)).changed() {
+                            orbit.yaw = turn.to_radians();
+                        }
+                    });
+                    let mut tilt = orbit.pitch.to_degrees();
+                    row(ui, tr!("Tilt"), |ui| {
+                        if ui.add(Field::new(&mut tilt, -89.0..=68.0).suffix("°").max_decimals(0)).changed() {
+                            orbit.pitch = tilt.to_radians();
+                        }
+                    });
+                    row(ui, tr!("Distance"), |ui| {
+                        ui.add(Field::new(&mut orbit.distance, 3.0..=span * 3.0 + 2000.0).logarithmic(true).suffix(" blocks").max_decimals(0));
+                    });
+                });
+                if ui.button(theme::with_icon(Icon::Focus, tr!("Frame the whole map"))).clicked() {
+                    *orbit = framing(&extent, doc.world.meta.sea_level as f64);
+                }
+            }
+            _ => {
+                ui.label(RichText::new(tr!("The camera is placed once the Render Viewport shows the map.")).size(11.5).color(pal.weak));
+            }
+        }
+        ui.add_space(4.0);
+        ui.label(RichText::new(tr!("Drag: turn · right-drag: slide · wheel: closer · shift-click: focus there · double-click: the whole map")).size(11.0).color(pal.weak));
+    }
+
+    /// Render Output: how the image is exposed, and saving it.
+    pub fn output_ui(&mut self, ui: &mut Ui, doc: &Document) {
+        let pal = Palette::of(ui);
+        ui.spacing_mut().item_spacing.y = 6.0;
+        let light = &mut self.light;
+        title(ui, tr!("Image"));
+        well(ui, |ui| {
             row(ui, tr!("Glow"), |ui| {
                 ui.add(Field::new(&mut light.emission, 0.0..=8.0).max_decimals(2));
             });
@@ -578,13 +732,9 @@ impl RenderSide {
                 ui.add(Field::new(&mut light.exposure, 0.1..=16.0).logarithmic(true).max_decimals(2));
             });
         });
-        if let Some(k) = picked {
-            self.preset = k;
-            preset(k, light, time, sea);
-        }
-        col.label(RichText::new(tr!("Image to save")).size(12.0).color(pal.weak));
+        title(ui, tr!("Image to save"));
         let mut start = false;
-        well(col, |ui| {
+        well(ui, |ui| {
             row(ui, tr!("Size"), |ui| {
                 let (name, size) = STILL_SIZES[self.still_size.min(STILL_SIZES.len() - 1)];
                 let text = size.map_or_else(|| crate::i18n::tr_name(name).to_owned(), |[w, h]| format!("{name} · {w} × {h}"));
@@ -599,34 +749,41 @@ impl RenderSide {
                 ui.add(Field::new(&mut self.still_samples, 16..=4096).logarithmic(true));
             });
         });
-        if self.still.is_some() {
-            col.horizontal(|ui| {
-                let s = self.still.as_ref().expect("checked");
-                let done = (scene.renderer.samples as f32 + s.row as f32 / s.size[1].max(1) as f32) / s.samples.max(1) as f32;
+        let ready = self.scene.is_some() && self.orbit.is_some() && self.view_px != [0; 2];
+        if let (Some(s), Some(scene)) = (&self.still, &self.scene) {
+            let done = (scene.renderer.samples as f32 + s.row as f32 / s.size[1].max(1) as f32) / s.samples.max(1) as f32;
+            let mut cancel = false;
+            ui.horizontal(|ui| {
                 ui.add(egui::ProgressBar::new(done.clamp(0.0, 1.0)).desired_width(ui.available_width() - 90.0));
-                if ui.button(tr!("Cancel")).clicked() {
-                    self.still = None;
+                cancel = ui.button(tr!("Cancel")).clicked();
+            });
+            if cancel {
+                self.still = None;
+                if let Some(scene) = &mut self.scene {
                     scene.renderer.restart();
                 }
-            });
-        } else if col
-            .add_enabled(self.writing.is_none(), theme::primary_button(col, theme::with_icon(Icon::Camera, tr!("Save image…"))))
+            }
+        } else if ui
+            .add_enabled(ready && self.writing.is_none(), theme::primary_button(ui, theme::with_icon(Icon::Camera, tr!("Save image…"))))
             .on_hover_text(tr!("Render the view at full quality and save it as a PNG"))
+            .on_disabled_hover_text(tr!("Show the Render Viewport first"))
             .clicked()
         {
             start = true;
         }
         match &self.saved {
             Some(Ok(name)) => {
-                col.label(RichText::new(tr!("Saved {name}", name)).size(11.5).color(pal.weak));
+                ui.label(RichText::new(tr!("Saved {name}", name)).size(11.5).color(pal.weak));
             }
             Some(Err(e)) => {
-                col.label(RichText::new(e.as_str()).size(11.5).color(pal.danger));
+                ui.label(RichText::new(e.as_str()).size(11.5).color(pal.danger));
             }
             None => {}
         }
-        if start {
-            let size = STILL_SIZES[self.still_size.min(STILL_SIZES.len() - 1)].1.unwrap_or(px);
+        if start
+            && let (Some(scene), Some(orbit)) = (&mut self.scene, self.orbit)
+        {
+            let size = STILL_SIZES[self.still_size.min(STILL_SIZES.len() - 1)].1.unwrap_or(self.view_px);
             if !scene.renderer.fits(size[0], size[1]) {
                 self.saved = Some(Err(tr!("This size is larger than the graphics card can draw").to_owned()));
             } else if let Some(path) = rfd::FileDialog::new().set_file_name(format!("{}.png", doc.title())).add_filter(tr!("PNG image"), &["png"]).save_file() {
@@ -635,10 +792,13 @@ impl RenderSide {
                 scene.renderer.restart();
             }
         }
-        col.label(RichText::new(tr!("Scene")).size(12.0).color(pal.weak));
+        let Some(scene) = &self.scene else { return };
+        title(ui, tr!("Scene"));
         let memory = scene.renderer.memory();
         let mb = |b: u64| format!("{:.0} MB", b as f64 / (1 << 20) as f64);
-        well(col, |ui| {
+        let samples = scene.renderer.samples;
+        let most = if theme::reduce_motion(ui.ctx()) { 64 } else { MOST_SAMPLES };
+        well(ui, |ui| {
             row(ui, tr!("Tiles"), |ui| {
                 ui.label(format!("{} / {}", scene.built.len(), scene.tiles));
             });
@@ -658,9 +818,190 @@ impl RenderSide {
                 ui.label(rate.map_or_else(|| "—".to_owned(), |r| format!("{r:.0}")));
             });
         });
-        col.add_space(4.0);
-        col.label(RichText::new(tr!("Drag: turn · right-drag: slide · wheel: closer · shift-click: focus there · double-click: the whole map")).size(11.0).color(pal.weak));
+    }
+
+    /// The Timeline: keyframes of the camera and the sun over time, a
+    /// playhead to scrub, play and step from key to key. Scrubbed, the
+    /// Render Viewport shows the animation there.
+    pub fn timeline_ui(&mut self, ui: &mut Ui, doc: &mut Document) {
+        let pal = Palette::of(ui);
+        let reduce = theme::reduce_motion(ui.ctx());
+        let mut anim = doc.world.meta.animation.clone().unwrap_or_default();
+        let before = anim.clone();
+        let pb = &mut self.playback;
+        pb.playhead = pb.playhead.clamp(0.0, anim.duration);
+        if reduce {
+            pb.playing = false;
+        }
+        if pb.playing {
+            let dt = ui.input(|i| i.stable_dt).min(0.1);
+            pb.playhead += dt;
+            if pb.playhead >= anim.duration {
+                pb.playhead = 0.0;
+            }
+            ui.ctx().request_repaint();
+        }
+        let pose = self.pose();
+        let pb = &mut self.playback;
+        let at_key = anim.key_at(pb.playhead);
+        let (prev, next) = anim.neighbours(pb.playhead);
+
+        // The commands, in a row that wraps.
+        let icon = |i: Icon| RichText::new(theme::glyph(i).to_string()).size(14.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            if ui.button(icon(Icon::SkipBack)).on_hover_text(tr!("To the start")).clicked() {
+                pb.playhead = 0.0;
+            }
+            if ui.add_enabled(prev.is_some(), egui::Button::new(icon(Icon::ChevronFirst))).on_hover_text(tr!("Previous keyframe")).clicked()
+                && let Some(k) = prev
+            {
+                pb.playhead = anim.keys[k].time;
+                pb.selected = Some(k);
+            }
+            let play = if pb.playing { icon(Icon::Pause) } else { icon(Icon::Play) };
+            if ui
+                .add_enabled(!reduce && anim.keys.len() > 1, egui::Button::new(play))
+                .on_hover_text(if pb.playing { tr!("Pause") } else { tr!("Play") })
+                .on_disabled_hover_text(if reduce { tr!("With less motion on, scrub the timeline instead") } else { tr!("Add two keyframes to play the path between them") })
+                .clicked()
+            {
+                pb.playing = !pb.playing;
+            }
+            if ui.add_enabled(next.is_some(), egui::Button::new(icon(Icon::ChevronLast))).on_hover_text(tr!("Next keyframe")).clicked()
+                && let Some(k) = next
+            {
+                pb.playhead = anim.keys[k].time;
+                pb.selected = Some(k);
+            }
+            if ui.button(icon(Icon::SkipForward)).on_hover_text(tr!("To the end")).clicked() {
+                pb.playhead = anim.duration;
+            }
+            ui.separator();
+            ui.label(RichText::new(format!("{:.2} s / {:.2} s", pb.playhead, anim.duration)).monospace().size(12.0));
+            ui.separator();
+            let add = if at_key.is_some() { tr!("Update keyframe") } else { tr!("Add keyframe") };
+            if ui
+                .add_enabled(pose.is_some(), egui::Button::new(theme::with_icon(Icon::DiamondPlus, add)))
+                .on_hover_text(tr!("Keep the camera, its angle and the hour at the playhead"))
+                .on_disabled_hover_text(tr!("Show the Render Viewport first"))
+                .clicked()
+                && let Some(pose) = pose
+            {
+                pb.selected = Some(anim.set(pb.playhead, pose));
+                pb.applied = Some(pb.playhead);
+            }
+            let remove = pb.selected.filter(|&k| k < anim.keys.len()).or(at_key);
+            if ui.add_enabled(remove.is_some(), egui::Button::new(theme::with_icon(Icon::DiamondMinus, tr!("Remove")))).on_hover_text(tr!("Remove the keyframe picked")).clicked()
+                && let Some(k) = remove
+            {
+                anim.remove(k);
+                pb.selected = None;
+            }
+            ui.separator();
+            ui.label(RichText::new(tr!("Length")).color(pal.weak));
+            let shortest = anim.keys.last().map_or(0.5, |k| k.time.max(0.5));
+            ui.add(Field::new(&mut anim.duration, shortest..=600.0).suffix(" s").max_decimals(1));
+            ui.label(RichText::new(tr!("Frames a second")).color(pal.weak));
+            ui.add(Field::new(&mut anim.fps, 1..=120));
         });
+        ui.add_space(6.0);
+
+        // The track: seconds along, keyframes as diamonds, the playhead.
+        let height = ui.available_height().clamp(44.0, 120.0);
+        let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click_and_drag());
+        let painter = ui.painter_at(rect);
+        painter.rect(rect, theme::TILE_RADIUS, pal.well(), Stroke::new(1.0, pal.border), StrokeKind::Inside);
+        let track = rect.shrink2(vec2(12.0, 0.0));
+        let duration = anim.duration.max(1e-3);
+        let x_of = |t: f32| track.left() + (t / duration).clamp(0.0, 1.0) * track.width();
+        let t_of = |x: f32| ((x - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0) * duration;
+        // A tick a second, or every 5, 10, 30 or 60 when they would crowd.
+        let step = [1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0].into_iter().find(|s| track.width() / (duration / s) >= 36.0).unwrap_or(300.0);
+        let ruler = rect.top() + 16.0;
+        let mut s = 0.0;
+        while s <= duration + 1e-3 {
+            let x = x_of(s);
+            painter.vline(x, rect.top() + 2.0..=ruler, Stroke::new(1.0, pal.border));
+            let (at, align) = if x + 28.0 > rect.right() { (pos2(x - 3.0, rect.top() + 2.0), Align2::RIGHT_TOP) } else { (pos2(x + 3.0, rect.top() + 2.0), Align2::LEFT_TOP) };
+            painter.text(at, align, format!("{s:.0} s"), FontId::proportional(10.0), pal.weak);
+            s += step;
+        }
+        painter.hline(rect.x_range(), ruler, Stroke::new(1.0, pal.border));
+        let lane = (ruler + rect.bottom()) / 2.0;
+        // The path between the keys.
+        if let (Some(first), Some(last)) = (anim.keys.first(), anim.keys.last()) {
+            painter.hline(x_of(first.time)..=x_of(last.time), lane, Stroke::new(2.0, pal.accent.gamma_multiply(0.45)));
+        }
+        let pointer = response.interact_pointer_pos().or(response.hover_pos());
+        let near_key = |anim: &Animation, p: egui::Pos2| anim.keys.iter().position(|k| (x_of(k.time) - p.x).abs() <= 7.0 && (p.y - lane).abs() <= 10.0);
+        if response.drag_started()
+            && let Some(p) = pointer
+        {
+            pb.dragging = near_key(&anim, p);
+            if let Some(k) = pb.dragging {
+                pb.selected = Some(k);
+            }
+        }
+        if response.dragged()
+            && let Some(p) = pointer
+        {
+            match pb.dragging {
+                Some(k) => {
+                    let k = anim.move_key(k, t_of(p.x));
+                    pb.dragging = Some(k);
+                    pb.selected = Some(k);
+                    pb.playhead = anim.keys[k].time;
+                }
+                None => pb.playhead = t_of(p.x),
+            }
+        }
+        if response.drag_stopped() {
+            pb.dragging = None;
+        }
+        if response.clicked()
+            && let Some(p) = pointer
+        {
+            match near_key(&anim, p) {
+                Some(k) => {
+                    pb.selected = Some(k);
+                    pb.playhead = anim.keys[k].time;
+                }
+                None => {
+                    pb.selected = None;
+                    pb.playhead = t_of(p.x);
+                }
+            }
+        }
+        for (k, key) in anim.keys.iter().enumerate() {
+            let c = pos2(x_of(key.time), lane);
+            let r = 6.0;
+            let diamond = vec![c + vec2(0.0, -r), c + vec2(r, 0.0), c + vec2(0.0, r), c + vec2(-r, 0.0)];
+            let picked = pb.selected == Some(k);
+            let fill = if picked { pal.accent } else { pal.panel };
+            painter.add(egui::Shape::convex_polygon(diamond, fill, Stroke::new(1.5, if picked { pal.accent } else { pal.text })));
+        }
+        if response.hovered() && pointer.is_some_and(|p| near_key(&anim, p).is_some()) {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        }
+        let x = x_of(pb.playhead);
+        painter.vline(x, rect.top()..=rect.bottom(), Stroke::new(2.0, pal.accent));
+        painter.add(egui::Shape::convex_polygon(vec![pos2(x - 5.0, rect.top()), pos2(x + 5.0, rect.top()), pos2(x, rect.top() + 7.0)], pal.accent, Stroke::NONE));
+        if anim.keys.is_empty() {
+            painter.text(pos2(rect.center().x, lane), Align2::CENTER_CENTER, tr!("Place the camera, then Add keyframe; move the playhead and add another"), FontId::proportional(11.5), pal.weak);
+        }
+
+        // The view follows the playhead, once moved.
+        let follow = (pb.applied != Some(pb.playhead)).then(|| anim.sample(pb.playhead)).flatten();
+        pb.applied = Some(pb.playhead);
+        if let Some(pose) = follow {
+            self.put(&pose);
+            ui.ctx().request_repaint();
+        }
+        if anim != before {
+            doc.world.meta.animation = (!anim.is_empty() || anim.duration != Animation::default().duration || anim.fps != Animation::default().fps).then_some(anim);
+            doc.mark_changed();
+        }
     }
 }
 

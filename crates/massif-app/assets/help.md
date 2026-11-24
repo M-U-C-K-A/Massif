@@ -75,8 +75,9 @@ The check runs in the background — a few seconds for a map of 5,888 blocks a s
 
 ## Areas
 The window is made of areas, as in Blender. Each area shows one editor: the map, the 3D view, tools, settings, brushes, palettes, levels or information.
-- The icon before an area's title opens every editor on one page, in columns: the World side's views, tools and paint, then the Terrain side's generator. The line under them says what the one under the pointer is for, and whether another area shows it already. An empty area holds the same page.
+- The icon before an area's title opens every editor on one page, in columns: the World side's views, tools and paint, then the Terrain side's generator and the Render side's panels. The line under them says what the one under the pointer is for, and whether another area shows it already. An empty area holds the same page.
 - The **…** menu of an area splits it, joins it with its neighbour, maximises it or closes it.
+- **Float** in that menu puts the area in a window of its own over the layout: drag its title to move it, its corner to size it. **Dock back** in its **…** menu puts it back; or Shift-drag its title onto an area to dock it on that side. Floating panels are kept with their workspace.
 - Drag any corner of an area into it to split it where you let go: the new area opens on that corner's side (across: left or right; up or down: above or below).
 - Drag an area by its title onto another to move it there, onto its centre to swap them. Drag the gaps between areas to resize them.
 - `Ctrl Space` maximises the area under the pointer, and gives it back its place.
@@ -255,10 +256,13 @@ Water slows you and lets you swim, and under it the world turns blue and dim, as
 # Render
 The **Render** side draws the open map path-traced: sunlight and skylight bouncing off the land, soft shadows, water that mirrors the sky and shows the shallows' floor, glowing blocks lighting what is around them, with the game's textures and models. The map is built as an export would write it, nearest the view first. Still, the image grows clean; moving, it is drawn coarser.
 
+Its panels are editors as on the other sides (the **Render** section of an area's chooser): **Render Viewport**, **Sun and Sky**, **Camera**, **Render Output**, **Timeline**; workspaces **Still** and **Animation**.
+
 - Drag to turn, right-drag to slide, the wheel to come closer, double-click for the whole map, Shift-click to focus there.
 - **Sun and sky**: a **Look** (Clear noon, Fair weather, Golden hour, Blue hour, Foggy morning, Night), the **Time**, **Day** and **Latitude** put the sun, **North** turns the map. A moon at night.
 - **Atmosphere**: **Air**, **Haze**, a **Fog** filling low ground first, **Shafts of light**, a **Sea around the map**. **Clouds**: cover, height, thickness, density, size, wind; they shade the land.
-- **Lens**: angle, aperture, focus. **Image**: glow, bounces, exposure.
+- **Camera**: angle, aperture, focus; the point it looks at, turn, tilt, distance; **Frame the whole map**. **Render Output**: glow, bounces, exposure.
+- **Timeline**: move the playhead, place the camera, **Add keyframe**; again elsewhere. The view follows the playhead along a smooth path; **Play** runs it. Drag a keyframe to move it; **Remove** takes it away. Keyframes are saved with the map.
 - **Image to save**: a size (the view's, HD, 4K, 8K) and samples a pixel, then **Save image…** writes a PNG, drawn a band at a time, with its progress and **Cancel**.
 
 # Terrain graphs

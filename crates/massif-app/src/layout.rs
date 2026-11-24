@@ -46,6 +46,16 @@ pub enum EditorKind {
     Developer,
     /// The map's save points: to restore, open, compare.
     Versions,
+    /// The Render side's view: the map path-traced.
+    RenderView,
+    /// The Render side's sun, sky, air and clouds.
+    RenderSky,
+    /// The Render side's camera: where it stands, its lens.
+    RenderCamera,
+    /// The Render side's image: its exposure, and stills saved from it.
+    RenderOutput,
+    /// Keyframes of the camera and the sun over time.
+    Timeline,
 }
 
 /// A section of the editors an area can show: its title and its editors.
@@ -54,8 +64,9 @@ pub type Section = (&'static str, &'static [EditorKind]);
 impl EditorKind {
     /// The editors an area can show, column by column, in sections: the
     /// World side's (views and the world, tools, paint), then the Terrain
-    /// side's. Developer's comes after them, with developer mode.
-    pub const COLUMNS: [&'static [Section]; 4] = [
+    /// side's and the Render side's. Developer's comes after the world's,
+    /// with developer mode.
+    pub const COLUMNS: [&'static [Section]; 5] = [
         &[
             (tn!("View"), &[EditorKind::Map, EditorKind::View3d, EditorKind::Sculpt3d]),
             (tn!("World"), &[EditorKind::Info, EditorKind::Versions]),
@@ -74,6 +85,10 @@ impl EditorKind {
         &[(
             tn!("Terrain"),
             &[EditorKind::GraphView, EditorKind::Graph, EditorKind::GraphProps, EditorKind::RenderSettings],
+        )],
+        &[(
+            tn!("Render"),
+            &[EditorKind::RenderView, EditorKind::RenderSky, EditorKind::RenderCamera, EditorKind::RenderOutput, EditorKind::Timeline],
         )],
     ];
 
@@ -105,6 +120,11 @@ impl EditorKind {
             EditorKind::RenderSettings => tr!("Sun, clouds and haze, and images saved from the viewport"),
             EditorKind::Developer => tr!("Frames, memory and processor, live"),
             EditorKind::Versions => tr!("Save points of the map: restore, open or compare them"),
+            EditorKind::RenderView => tr!("The map path-traced under a real sky, growing clean while it stays still"),
+            EditorKind::RenderSky => tr!("A look to start from, the sun by the hour, haze, fog and clouds"),
+            EditorKind::RenderCamera => tr!("Where the camera stands and looks, its angle and depth of field"),
+            EditorKind::RenderOutput => tr!("Exposure and bounces; save the view as an image up to 8K"),
+            EditorKind::Timeline => tr!("Keyframes of the camera and the sun, to scrub and play"),
         }
     }
 
@@ -132,6 +152,11 @@ impl EditorKind {
             EditorKind::RenderSettings => tr!("Render Settings"),
             EditorKind::Developer => tr!("Developer"),
             EditorKind::Versions => tr!("Versions"),
+            EditorKind::RenderView => tr!("Render Viewport"),
+            EditorKind::RenderSky => tr!("Sun and Sky"),
+            EditorKind::RenderCamera => tr!("Camera"),
+            EditorKind::RenderOutput => tr!("Render Output"),
+            EditorKind::Timeline => tr!("Timeline"),
         }
     }
 
@@ -159,6 +184,11 @@ impl EditorKind {
             EditorKind::RenderSettings => Icon::Sun,
             EditorKind::Developer => Icon::Activity,
             EditorKind::Versions => Icon::History,
+            EditorKind::RenderView => Icon::Aperture,
+            EditorKind::RenderSky => Icon::SunMedium,
+            EditorKind::RenderCamera => Icon::Video,
+            EditorKind::RenderOutput => Icon::ImageDown,
+            EditorKind::Timeline => Icon::Film,
         }
     }
 }
@@ -437,6 +467,45 @@ pub struct Workspace {
     /// map editor (WorldPainter's side).
     #[serde(default)]
     pub terrain: bool,
+    /// A workspace of the renderer (the Render side).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub render: bool,
+    /// Panels taken out of the layout, in windows of their own over it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub floating: Vec<Floating>,
+}
+
+/// A panel floating over the workspace: its area's id (its view state goes
+/// with it), what it shows, where and how large, in points.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Floating {
+    pub id: AreaId,
+    pub editor: EditorKind,
+    pub pos: [f32; 2],
+    pub size: [f32; 2],
+}
+
+impl Workspace {
+    /// The side it belongs to.
+    pub fn side(&self) -> Side {
+        match (self.render, self.terrain) {
+            (true, _) => Side::Render,
+            (false, true) => Side::Terrain,
+            (false, false) => Side::World,
+        }
+    }
+
+    /// What area `id` shows, docked or floating.
+    #[cfg(test)]
+    pub fn editor_of(&self, id: AreaId) -> Option<EditorKind> {
+        self.root.editor_of(id).or_else(|| self.floating.iter().find(|f| f.id == id).map(|f| f.editor))
+    }
+
+    /// Whether an area of it, docked or floating, shows `kind`.
+    #[cfg(test)]
+    pub fn shows(&self, kind: EditorKind) -> bool {
+        self.root.shows(kind) || self.floating.iter().any(|f| f.editor == kind)
+    }
 }
 
 /// All workspaces of the window.
@@ -448,13 +517,12 @@ pub struct Layout {
     /// The workspace last used on each side: map editor, terrain generator.
     #[serde(default)]
     pub last: [usize; 2],
+    /// The workspace last used on the Render side.
+    #[serde(default)]
+    pub last_render: usize,
     /// Which workspaces of later versions it has had added: 1, 3D Sculpt.
     #[serde(default)]
     version: u32,
-    /// The Render side is shown, over the workspaces of the side left. Not
-    /// kept: Massif opens on the side of the workspace it was left in.
-    #[serde(skip)]
-    pub render: bool,
     /// What each 3D View area shows (its mode, its water), by area: an
     /// area missing here shows the defaults.
     #[serde(default)]
@@ -487,7 +555,7 @@ pub enum Side {
 
 /// The workspaces a layout saved by an older version lacks are added to it
 /// once: this is the version they come with.
-const LAYOUT_VERSION: u32 = 7;
+const LAYOUT_VERSION: u32 = 8;
 
 /// The share of the window's width the column of the tools takes on the
 /// left of the Layout, Sculpting and Painting workspaces: the same in all
@@ -548,6 +616,32 @@ fn sculpt_workspace(b: &mut Builder) -> Node {
     b.row(SIDEBAR, left, centre)
 }
 
+/// The Render side's workspaces: Still, the view with its sky, camera and
+/// output beside; Animation, the view over the timeline.
+fn render_workspaces(b: &mut Builder) -> Vec<Workspace> {
+    use EditorKind::*;
+    let view = b.area(RenderView);
+    let side = {
+        let (sky, camera, output) = (b.area(RenderSky), b.area(RenderCamera), b.area(RenderOutput));
+        let lower = b.column(0.42, camera, output);
+        b.column(0.52, sky, lower)
+    };
+    let still = b.row(0.76, view, side);
+    let left = {
+        let (view, timeline) = (b.area(RenderView), b.area(Timeline));
+        b.column(0.74, view, timeline)
+    };
+    let side = {
+        let (camera, sky) = (b.area(RenderCamera), b.area(RenderSky));
+        b.column(0.58, camera, sky)
+    };
+    let animation = b.row(0.76, left, side);
+    [(tn!("Still"), still), (tn!("Animation"), animation)]
+        .into_iter()
+        .map(|(name, root)| Workspace { name: name.into(), root, maximized: None, terrain: false, render: true, floating: Vec::new() })
+        .collect()
+}
+
 /// The WorldPainter workspace, for those who come from it: the map big in
 /// the middle, the tools on the left as WorldPainter's tool palette (and
 /// the tool's and the brush's settings under them), the terrain, the
@@ -600,6 +694,8 @@ impl Default for Layout {
                 root,
                 maximized: None,
                 terrain: false,
+                render: false,
+                floating: Vec::new(),
             });
         };
 
@@ -692,16 +788,18 @@ impl Default for Layout {
         // WorldPainter: laid out as WorldPainter is. Last in the list, so
         // that the others keep their place; its tab is the map editor's
         // last.
-        workspaces.push(Workspace { name: WORLDPAINTER.into(), root: worldpainter_workspace(&mut b), maximized: None, terrain: false });
+        workspaces.push(Workspace { name: WORLDPAINTER.into(), root: worldpainter_workspace(&mut b), maximized: None, terrain: false, render: false, floating: Vec::new() });
+        workspaces.extend(render_workspaces(&mut b));
 
         let first_terrain = workspaces.iter().position(|w| w.terrain).unwrap_or(0);
+        let first_render = workspaces.iter().position(|w| w.render).unwrap_or(0);
         Layout {
             workspaces,
             active: 0,
             next_id,
             last: [0, first_terrain],
+            last_render: first_render,
             version: LAYOUT_VERSION,
-            render: false,
             view3d: BTreeMap::new(),
         }
     }
@@ -714,10 +812,10 @@ impl Layout {
             return Self::default();
         }
         self.active = self.active.min(self.workspaces.len() - 1);
-        for l in &mut self.last {
+        for l in self.last.iter_mut().chain([&mut self.last_render]) {
             *l = (*l).min(self.workspaces.len() - 1);
         }
-        let max = self.workspaces.iter().map(|w| w.root.max_id()).max();
+        let max = self.workspaces.iter().map(|w| w.floating.iter().map(|f| f.id).fold(w.root.max_id(), AreaId::max)).max();
         self.next_id = self.next_id.max(max.unwrap_or(0));
         if self.version < 1 && !self.workspaces.iter().any(|w| w.root.shows(EditorKind::Sculpt3d)) {
             // Laid out before the 3D Sculpt editor: its workspace, after
@@ -736,9 +834,11 @@ impl Layout {
                     root,
                     maximized: None,
                     terrain: false,
+                    render: false,
+                    floating: Vec::new(),
                 },
             );
-            for k in [&mut self.active].into_iter().chain(self.last.iter_mut()) {
+            for k in [&mut self.active, &mut self.last_render].into_iter().chain(self.last.iter_mut()) {
                 if *k >= at {
                     *k += 1;
                 }
@@ -792,16 +892,104 @@ impl Layout {
         // the map editor's others).
         if self.version < 7 && !self.workspaces.iter().any(|w| !w.terrain && w.name == WORLDPAINTER) {
             let root = worldpainter_workspace(&mut Builder(&mut self.next_id));
-            self.workspaces.push(Workspace { name: WORLDPAINTER.into(), root, maximized: None, terrain: false });
+            // Before the Render side's, as a new layout has it.
+            let at = self.workspaces.iter().position(|w| w.render).unwrap_or(self.workspaces.len());
+            self.workspaces.insert(at, Workspace { name: WORLDPAINTER.into(), root, maximized: None, terrain: false, render: false, floating: Vec::new() });
+            for k in [&mut self.active, &mut self.last_render].into_iter().chain(self.last.iter_mut()) {
+                if *k >= at && self.workspaces.len() > at + 1 {
+                    *k += 1;
+                }
+            }
+        }
+        // Version 8: the Render side is made of workspaces, as the others.
+        if self.version < 8 && !self.workspaces.iter().any(|w| w.render) {
+            self.last_render = self.workspaces.len();
+            let added = render_workspaces(&mut Builder(&mut self.next_id));
+            self.workspaces.extend(added);
+        }
+        // A floating panel whose id an area has too: a new id.
+        for k in 0..self.workspaces.len() {
+            for f in 0..self.workspaces[k].floating.len() {
+                let id = self.workspaces[k].floating[f].id;
+                let twice = self.workspaces[k].root.editor_of(id).is_some() || self.workspaces[k].floating[..f].iter().any(|o| o.id == id);
+                if twice {
+                    self.next_id += 1;
+                    self.workspaces[k].floating[f].id = self.next_id;
+                }
+            }
         }
         self.version = LAYOUT_VERSION;
         // The looks of 3D View areas no longer there.
         let mut kept = Vec::new();
         for w in &self.workspaces {
             w.root.areas(&mut kept);
+            kept.extend(w.floating.iter().map(|f| (f.id, f.editor)));
         }
         self.view3d.retain(|id, _| kept.iter().any(|(k, e)| k == id && *e == EditorKind::View3d));
         self
+    }
+
+    /// Take area `id` of the current workspace out of its layout, into a
+    /// window floating at `rect` (`[x, y, w, h]`). Not the last area.
+    pub fn detach(&mut self, id: AreaId, rect: [f32; 4]) -> bool {
+        let ws = self.current_mut();
+        let Some(Node::Area { editor, .. }) = ws.root.remove(id) else { return false };
+        if ws.maximized == Some(id) {
+            ws.maximized = None;
+        }
+        ws.floating.push(Floating { id, editor, pos: [rect[0], rect[1]], size: [rect[2], rect[3]] });
+        true
+    }
+
+    /// Put floating panel `id` back into the layout: by area `dst` at
+    /// `zone`, or, with none, beside the largest area (`areas` the areas'
+    /// rectangles, `[x, y, w, h]`).
+    pub fn dock_back(&mut self, id: AreaId, dst: Option<(AreaId, Zone)>, areas: &[(AreaId, [f32; 4])]) -> bool {
+        let ws = self.current_mut();
+        let Some(k) = ws.floating.iter().position(|f| f.id == id) else { return false };
+        let editor = ws.floating[k].editor;
+        let (dst, zone) = match dst.filter(|(d, _)| ws.root.editor_of(*d).is_some()) {
+            Some(d) => d,
+            None => {
+                let largest = areas.iter().filter(|(a, _)| ws.root.editor_of(*a).is_some()).max_by(|a, b| (a.1[2] * a.1[3]).total_cmp(&(b.1[2] * b.1[3])));
+                let mut all = Vec::new();
+                ws.root.areas(&mut all);
+                match largest {
+                    // Split the long way of the largest.
+                    Some((a, r)) => (*a, if r[2] >= r[3] { Zone::Right } else { Zone::Bottom }),
+                    None => (all.first().map_or(0, |a| a.0), Zone::Right),
+                }
+            }
+        };
+        let (dir, first) = match zone {
+            Zone::Left => (Dir::Row, true),
+            Zone::Right | Zone::Center => (Dir::Row, false),
+            Zone::Top => (Dir::Column, true),
+            Zone::Bottom => (Dir::Column, false),
+        };
+        if !ws.root.split(dst, dir, first, Node::Area { id, editor }) {
+            return false;
+        }
+        let window = ws.floating.remove(k);
+        if zone == Zone::Center
+            && let Some(Node::Area { editor: other, .. }) = ws.root.remove(dst)
+        {
+            // Onto an area: in its place, and that one floating where the
+            // window was.
+            ws.floating.push(Floating { id: dst, editor: other, ..window });
+        }
+        ws.maximized = None;
+        true
+    }
+
+    /// Show `kind` in area `id` of the current workspace, docked or floating.
+    pub fn set_editor(&mut self, id: AreaId, kind: EditorKind) {
+        let ws = self.current_mut();
+        if !ws.root.set_editor(id, kind)
+            && let Some(f) = ws.floating.iter_mut().find(|f| f.id == id)
+        {
+            f.editor = kind;
+        }
     }
 
     /// The WorldPainter workspace, shown (made again if it was removed).
@@ -810,7 +998,7 @@ impl Layout {
             Some(k) => k,
             None => {
                 let root = worldpainter_workspace(&mut Builder(&mut self.next_id));
-                self.workspaces.push(Workspace { name: WORLDPAINTER.into(), root, maximized: None, terrain: false });
+                self.workspaces.push(Workspace { name: WORLDPAINTER.into(), root, maximized: None, terrain: false, render: false, floating: Vec::new() });
                 self.workspaces.len() - 1
             }
         };
@@ -842,53 +1030,51 @@ impl Layout {
 
     /// Is the terrain generator's side shown?
     pub fn terrain(&self) -> bool {
-        !self.render && self.current().terrain
+        self.side() == Side::Terrain
     }
 
     /// The side shown.
     pub fn side(&self) -> Side {
-        match (self.render, self.current().terrain) {
-            (true, _) => Side::Render,
-            (false, true) => Side::Terrain,
-            (false, false) => Side::World,
-        }
+        self.current().side()
     }
 
     /// Go to a side, where it was left.
     pub fn show_side(&mut self, side: Side) {
-        match side {
-            Side::Render => self.render = true,
-            Side::Terrain => self.switch_side(true),
-            Side::World => self.switch_side(false),
+        if self.side() == side {
+            return;
         }
+        let last = match side {
+            Side::Render => self.last_render,
+            Side::Terrain => self.last[1],
+            Side::World => self.last[0],
+        };
+        let index = if self.workspaces.get(last).is_some_and(|w| w.side() == side) {
+            last
+        } else {
+            match self.workspaces.iter().position(|w| w.side() == side) {
+                Some(i) => i,
+                None => return,
+            }
+        };
+        self.activate(index);
     }
 
     /// Show a workspace, remembering it as the last of its side.
     pub fn activate(&mut self, index: usize) {
         if index < self.workspaces.len() {
-            self.render = false;
             self.active = index;
-            self.last[self.workspaces[index].terrain as usize] = index;
+            match self.workspaces[index].side() {
+                Side::Render => self.last_render = index,
+                Side::Terrain => self.last[1] = index,
+                Side::World => self.last[0] = index,
+            }
         }
     }
 
     /// Go to the map editor's side or the terrain generator's, where it was
     /// left.
     pub fn switch_side(&mut self, terrain: bool) {
-        self.render = false;
-        if self.terrain() == terrain {
-            return;
-        }
-        let last = self.last[terrain as usize];
-        let index = if self.workspaces.get(last).is_some_and(|w| w.terrain == terrain) {
-            last
-        } else {
-            match self.workspaces.iter().position(|w| w.terrain == terrain) {
-                Some(i) => i,
-                None => return,
-            }
-        };
-        self.activate(index);
+        self.show_side(if terrain { Side::Terrain } else { Side::World });
     }
 
     pub fn current_mut(&mut self) -> &mut Workspace {
@@ -938,8 +1124,10 @@ impl Layout {
         }
     }
 
+    /// Close an area, or a floating panel.
     pub fn close(&mut self, target: AreaId) {
         let ws = self.current_mut();
+        ws.floating.retain(|f| f.id != target);
         if ws.root.remove(target).is_some() && ws.maximized == Some(target) {
             ws.maximized = None;
         }
@@ -967,6 +1155,13 @@ impl Layout {
                 self.view3d.insert(*n, look);
             }
         }
+        for f in &mut copy.floating {
+            self.next_id += 1;
+            if let Some(look) = self.view3d.get(&f.id).copied() {
+                self.view3d.insert(self.next_id, look);
+            }
+            f.id = self.next_id;
+        }
         copy.maximized = None;
         let base = copy.name.trim_end_matches(|c: char| c.is_ascii_digit() || c == ' ').to_owned();
         let taken = |name: &str| self.workspaces.iter().any(|w| w.name == name);
@@ -984,7 +1179,7 @@ impl Layout {
         Layout::default()
             .workspaces
             .into_iter()
-            .find(|d| d.terrain == w.terrain && (d.name == w.name || d.name == base))
+            .find(|d| d.side() == w.side() && (d.name == w.name || d.name == base))
     }
 
     /// Whether workspace `index` has a first state to go back to.
@@ -999,12 +1194,13 @@ impl Layout {
         let w = &mut self.workspaces[index];
         w.root = fresh.root;
         w.maximized = None;
+        w.floating.clear();
     }
 
     /// How many workspaces the side of workspace `index` has.
     pub fn side_len(&self, index: usize) -> usize {
         match self.workspaces.get(index) {
-            Some(w) => self.workspaces.iter().filter(|o| o.terrain == w.terrain).count(),
+            Some(w) => self.workspaces.iter().filter(|o| o.side() == w.side()).count(),
             None => 0,
         }
     }
@@ -1014,10 +1210,10 @@ impl Layout {
         if self.side_len(index) < 2 {
             return;
         }
-        let side = self.workspaces[index].terrain;
+        let side = self.workspaces[index].side();
         let was_active = self.active == index;
         // The tab before it, on its side, takes its place.
-        let before = self.workspaces[..index].iter().rposition(|w| w.terrain == side);
+        let before = self.workspaces[..index].iter().rposition(|w| w.side() == side);
         self.workspaces.remove(index);
         let shift = |i: &mut usize| {
             if *i > index {
@@ -1025,20 +1221,30 @@ impl Layout {
             }
         };
         shift(&mut self.active);
-        for l in &mut self.last {
+        for l in self.last.iter_mut().chain([&mut self.last_render]) {
             shift(l);
         }
         // A side's last workspace may be the one removed.
-        for t in [false, true] {
-            let l = self.last[t as usize];
-            if self.workspaces.get(l).is_none_or(|w| w.terrain != t) {
-                self.last[t as usize] = self.workspaces.iter().position(|w| w.terrain == t).unwrap_or(0);
-            }
-        }
+        let first = |s: Side| self.workspaces.iter().position(|w| w.side() == s).unwrap_or(0);
+        let fixed = [Side::World, Side::Terrain, Side::Render].map(|s| {
+            let l = match s {
+                Side::World => self.last[0],
+                Side::Terrain => self.last[1],
+                Side::Render => self.last_render,
+            };
+            if self.workspaces.get(l).is_none_or(|w| w.side() != s) { first(s) } else { l }
+        });
+        (self.last, self.last_render) = ([fixed[0], fixed[1]], fixed[2]);
         if was_active {
             match before {
                 Some(i) => self.activate(i),
-                None => self.active = self.last[side as usize],
+                None => {
+                    self.active = match side {
+                        Side::World => self.last[0],
+                        Side::Terrain => self.last[1],
+                        Side::Render => self.last_render,
+                    }
+                }
             }
         }
     }
@@ -1072,7 +1278,7 @@ mod tests {
     }
     use super::*;
 
-    fn ids(node: &Node) -> Vec<AreaId> {
+    pub(super) fn ids(node: &Node) -> Vec<AreaId> {
         let mut v = Vec::new();
         node.areas(&mut v);
         v.into_iter().map(|(id, _)| id).collect()
@@ -1100,10 +1306,11 @@ mod tests {
     #[test]
     fn default_layout_is_well_formed() {
         let layout = Layout::default();
-        assert_eq!(layout.workspaces.len(), 10);
-        // Two sides: eight workspaces to edit the map, two to generate
-        // terrain (the WorldPainter workspace last, after them).
+        assert_eq!(layout.workspaces.len(), 12);
+        // Three sides: eight workspaces to edit the map (the WorldPainter
+        // workspace last), two to generate terrain, two to render.
         assert_eq!(layout.workspaces.iter().filter(|w| w.terrain).count(), 2);
+        assert_eq!(layout.workspaces.iter().filter(|w| w.render).count(), 2);
         let mut seen = std::collections::HashSet::new();
         for ws in &layout.workspaces {
             for id in ids(&ws.root) {
@@ -1119,25 +1326,106 @@ mod tests {
         assert_eq!(back.sanitize(), layout);
     }
 
-    /// The Render side lies over the workspaces: leaving it goes back to
-    /// the workspace of the side asked for, and it is not kept.
+    /// The Render side has workspaces of its own, as the others: going to
+    /// it and back goes where each side was left, and it is kept.
     #[test]
-    fn the_render_side_lies_over_the_workspaces() {
+    fn the_render_side_has_its_workspaces() {
         let mut layout = Layout::default();
         let world = layout.active;
         layout.show_side(Side::Render);
         assert_eq!(layout.side(), Side::Render);
+        assert_eq!(layout.current().name, "Still");
+        assert!(layout.current().root.shows(EditorKind::RenderView) && layout.current().root.shows(EditorKind::RenderSky));
         assert!(!layout.terrain(), "the graph's undo is not the Render side's");
+        let animation = layout.workspaces.iter().position(|w| w.name == "Animation").unwrap();
+        assert!(layout.workspaces[animation].root.shows(EditorKind::Timeline));
+        layout.activate(animation);
         let back: Layout = serde_json::from_str(&serde_json::to_string(&layout).unwrap()).unwrap();
-        assert_eq!(back.side(), Side::World, "opens on the side of its workspace");
+        assert_eq!((back.side(), back.current().name.as_str()), (Side::Render, "Animation"), "kept");
         layout.show_side(Side::World);
         assert_eq!((layout.side(), layout.active), (Side::World, world));
-        layout.show_side(Side::Render);
         layout.show_side(Side::Terrain);
         assert_eq!(layout.side(), Side::Terrain);
         layout.show_side(Side::Render);
-        layout.activate(world);
-        assert_eq!(layout.side(), Side::World, "a workspace shown leaves the Render side");
+        assert_eq!(layout.active, animation, "back where the Render side was left");
+        // Its own workspaces only: the last one stays.
+        assert_eq!(layout.side_len(animation), 2);
+        layout.remove_workspace(animation);
+        assert_eq!(layout.current().name, "Still");
+        let still = layout.active;
+        layout.remove_workspace(still);
+        assert_eq!(layout.current().name, "Still", "the last of its side stays");
+    }
+
+    /// A layout of an older version gets the Render side's workspaces once,
+    /// after the others, with ids of their own.
+    #[test]
+    fn old_layouts_get_the_render_workspaces() {
+        let mut old = Layout::default();
+        old.workspaces.retain(|w| !w.render);
+        old.version = 7;
+        let json = serde_json::to_string(&old).unwrap();
+        let layout = serde_json::from_str::<Layout>(&json).unwrap().sanitize();
+        let names: Vec<&str> = layout.workspaces.iter().filter(|w| w.render).map(|w| w.name.as_str()).collect();
+        assert_eq!(names, ["Still", "Animation"]);
+        assert_eq!(layout.active, 0);
+        let mut ids = Vec::new();
+        for w in &layout.workspaces {
+            ids.extend(super::tests::ids(&w.root));
+        }
+        let n = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), n, "fresh area ids");
+        let again = layout.clone().sanitize();
+        assert_eq!(again.workspaces.len(), layout.workspaces.len(), "once");
+    }
+
+    /// A panel floats out of its layout, keeps its id, survives being saved
+    /// and read back, and docks back, beside an area or in its place.
+    #[test]
+    fn panels_float_and_dock_back() {
+        let mut layout = Layout::default();
+        let before = layout.current().root.count();
+        let mut areas = Vec::new();
+        layout.current().root.areas(&mut areas);
+        let (info, _) = *areas.iter().find(|a| a.1 == EditorKind::Info).unwrap();
+        assert!(layout.detach(info, [300.0, 200.0, 320.0, 240.0]));
+        assert_eq!(layout.current().root.count(), before - 1);
+        assert_eq!(layout.current().editor_of(info), Some(EditorKind::Info));
+        assert!(layout.current().shows(EditorKind::Info) && !layout.current().root.shows(EditorKind::Info));
+        layout.set_editor(info, EditorKind::Versions);
+        assert_eq!(layout.current().floating[0].editor, EditorKind::Versions);
+        // Saved and read back, as it was.
+        let back = serde_json::from_str::<Layout>(&serde_json::to_string(&layout).unwrap()).unwrap().sanitize();
+        assert_eq!(back.current().floating, layout.current().floating);
+        // A copy of the workspace floats a panel of its own.
+        let mut copy = back.clone();
+        copy.duplicate_current();
+        assert_ne!(copy.current().floating[0].id, info);
+        // Docked back beside the largest area.
+        let map = areas.iter().find(|a| a.1 == EditorKind::Map).unwrap().0;
+        let rects = [(map, [0.0, 0.0, 800.0, 600.0])];
+        assert!(layout.dock_back(info, None, &rects));
+        assert!(layout.current().floating.is_empty());
+        assert_eq!(layout.current().root.count(), before);
+        assert_eq!(layout.current().root.sibling(info).map(|s| (s.0, s.2, s.3)), Some((map, Dir::Row, false)));
+        // Onto an area: in its place, that one floating.
+        layout.detach(info, [10.0, 10.0, 200.0, 200.0]);
+        assert!(layout.dock_back(info, Some((map, Zone::Center)), &[]));
+        assert_eq!(layout.current().root.editor_of(info), Some(EditorKind::Versions));
+        assert_eq!(layout.current().floating.iter().map(|f| (f.id, f.editor)).collect::<Vec<_>>(), [(map, EditorKind::Map)]);
+        // The last area does not float; a floating panel closes.
+        layout.close(map);
+        assert!(layout.current().floating.is_empty());
+        let mut minimal = Layout { active: 6, ..Layout::default() };
+        let first = minimal.current().root.first_area();
+        let second = first + 1;
+        assert!(minimal.detach(first, [0.0; 4]));
+        assert!(!minimal.detach(second, [0.0; 4]), "the last area stays");
+        // Reset: the panels back as they were.
+        minimal.reset_workspace(6);
+        assert!(minimal.current().floating.is_empty());
     }
 
     /// The WorldPainter workspace: the map big in the middle, the tools on

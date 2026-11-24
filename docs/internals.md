@@ -195,3 +195,50 @@ compressed and 1.4 GB of memory at most; a brush 400 blocks across applies
 in 2 ms; the whole map read by a graph's Map node, at 512 × 512, in 2
 seconds. WorldPainter worlds are imported as a stream: each tile is
 converted and freed as it is read.
+
+## Areas, floating panels and the Render side
+
+A workspace (`layout::Workspace`) is a tree of areas plus `floating`, the
+panels taken out of it: each keeps its area id (so a map view or a 3D view
+keeps its state), its editor, and its place and size in points. They are
+drawn after the tree, each in an `egui::Area` of the middle order over the
+central panel, through the same `area()` as a docked area (its header, its
+menu, its editor), with a corner to size it. `Layout::detach` and
+`Layout::dock_back` move an area between the two; floating panels are
+serialised with the workspace, renumbered when it is duplicated and cleared
+when it is reset. They live in the main window rather than in OS windows
+(egui viewports): one wgpu renderer and one set of native textures (the 3D
+views, the path tracer) serve them, and the kittest harness drives them.
+
+Each workspace belongs to a side (`Workspace::side`: `render`, else
+`terrain`, else the World side). The Render side's editors are
+`RenderView`, `RenderSky`, `RenderCamera`, `RenderOutput` and `Timeline`,
+all drawn from one `render_side::RenderSide`; only one area draws the
+viewport in a frame (the first), the others say where it is.
+
+### Camera paths
+
+`massif_core::animation::Animation` (kept in `WorldMeta::animation`, so in
+the `.massif` file) holds keyframes: a time in seconds and a `Pose` (eye,
+target, vertical field of view, hour). `Animation::sample(t)` gives the pose
+at any time: the eye and the target on a centripetal Catmull-Rom spline
+through the keys (ends mirrored), the field of view and the hour eased
+between neighbouring keys (the hour the short way round midnight). The
+Timeline panel edits it; moving its playhead puts the Render side's orbit,
+field of view and hour at `sample(playhead)`.
+
+Left to do, in order:
+
+- **Render a sequence**: for frame `n` of `frames()`, `sample(time_of(n))`,
+  put it on the camera and the sun, draw a still to the samples asked (the
+  still path of `RenderSide` does one), write `name_0001.png`…; progress
+  and Cancel as for a still; then MP4/ProRes through `ffmpeg` when it is on
+  PATH. The same loop in `massif-cli` for batch renders.
+- **Speed along the path**: arc-length parameterisation, so that the
+  camera moves at an even speed, with an ease curve per key.
+- **Orientation keys**: roll, and orientation independent of the target
+  (quaternion squad) for free-flying shots.
+- **More animated values**: focus distance and aperture, day of the year,
+  clouds' wind (their drift), exposure.
+- **Undo** of keyframe edits, and a camera path drawn in the viewport
+  and on the 2D map.

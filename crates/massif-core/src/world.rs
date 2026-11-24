@@ -42,6 +42,9 @@ pub struct WorldMeta {
     /// is exported (see [`crate::shapes`]).
     #[serde(default, skip_serializing_if = "crate::shapes::SmoothSettings::is_off")]
     pub smooth: crate::shapes::SmoothSettings,
+    /// The camera path of the Render side's animation, when one was made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub animation: Option<crate::animation::Animation>,
 }
 
 impl Default for WorldMeta {
@@ -58,6 +61,7 @@ impl Default for WorldMeta {
             fill: None,
             palette: Default::default(),
             smooth: Default::default(),
+            animation: None,
         }
     }
 }

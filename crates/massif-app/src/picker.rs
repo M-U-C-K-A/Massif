@@ -1,8 +1,8 @@
 //! The editors an area can show, as one page: in the popover of an area's
 //! header and in an empty area. They stand in columns by what they are
 //! for — the World side's views, tools and paint, then the Terrain side's
-//! generator — and the line under them says what the one under the pointer
-//! is for.
+//! generator and the Render side's — and the line under them says what the
+//! one under the pointer is for.
 
 use crate::layout::{EditorKind, Section};
 use crate::theme::{self, Palette, RichTextExt};
@@ -28,10 +28,12 @@ pub fn width(columns: usize) -> f32 {
     n * COLUMN_W + (n - 1.0) * GAP
 }
 
-/// How many columns fit in `room` points: four, two or one.
+/// How many columns fit in `room` points: five, three, two or one.
 pub fn columns_for(room: f32) -> usize {
-    if room >= width(4) {
-        4
+    if room >= width(5) {
+        5
+    } else if room >= width(3) {
+        3
     } else if room >= width(2) {
         2
     } else {
@@ -39,21 +41,22 @@ pub fn columns_for(room: f32) -> usize {
     }
 }
 
-/// The sections in `columns` columns: the four as they are, or two by two
-/// (views and paint, tools and the generator), or one after the other.
+/// The sections in `columns` columns: the five as they are (views and the
+/// world, tools, paint, terrain, render); in three, the World side's tools
+/// under its views and the Render side's beside the terrain's; in two, the
+/// World side's and the other two sides'; or one after the other.
 fn arrange(columns: usize, developer: bool) -> Vec<Vec<Section>> {
-    let mut four: Vec<Vec<Section>> = EditorKind::COLUMNS.iter().map(|c| c.to_vec()).collect();
+    let mut five: Vec<Vec<Section>> = EditorKind::COLUMNS.iter().map(|c| c.to_vec()).collect();
     if developer {
-        four[3].push(EditorKind::DEVELOPER);
+        five[0].push(EditorKind::DEVELOPER);
     }
+    let mut it = five.clone().into_iter();
+    let [a, b, c, d, e] = std::array::from_fn(|_| it.next().unwrap());
     match columns {
-        4.. => four,
-        2 | 3 => {
-            let mut it = four.into_iter();
-            let (a, b, c, d) = (it.next().unwrap(), it.next().unwrap(), it.next().unwrap(), it.next().unwrap());
-            vec![[a, c].concat(), [b, d].concat()]
-        }
-        _ => vec![four.concat()],
+        5.. => five,
+        3 | 4 => vec![[a, b].concat(), c, [d, e].concat()],
+        2 => vec![[a, c].concat(), [b, d, e].concat()],
+        _ => vec![five.concat()],
     }
 }
 
@@ -188,7 +191,7 @@ mod tests {
     /// whatever number of columns.
     #[test]
     fn every_editor_is_offered_once() {
-        for columns in [1, 2, 4] {
+        for columns in [1, 2, 3, 5] {
             let sections = arrange(columns, true);
             assert_eq!(sections.len(), columns);
             let mut offered: Vec<EditorKind> = sections.iter().flatten().flat_map(|(_, kinds)| kinds.iter().copied()).collect();
@@ -196,16 +199,20 @@ mod tests {
             let before = offered.len();
             offered.dedup();
             assert_eq!(offered.len(), before, "an editor offered twice");
-            assert_eq!(offered.len(), 21, "every editor but the empty area");
+            assert_eq!(offered.len(), 26, "every editor but the empty area");
             assert!(!offered.contains(&EditorKind::Empty));
         }
-        assert!(!arrange(4, false).iter().flatten().any(|(_, kinds)| kinds.contains(&EditorKind::Developer)));
+        assert!(!arrange(5, false).iter().flatten().any(|(_, kinds)| kinds.contains(&EditorKind::Developer)));
+        // The Render side's editors in a section of their own.
+        let render = arrange(5, false).concat().into_iter().find(|(title, _)| *title == "Render").unwrap();
+        assert_eq!(render.1, [EditorKind::RenderView, EditorKind::RenderSky, EditorKind::RenderCamera, EditorKind::RenderOutput, EditorKind::Timeline]);
     }
 
     #[test]
     fn columns_follow_the_room() {
-        assert_eq!(columns_for(width(4)), 4);
-        assert_eq!(columns_for(width(4) - 1.0), 2);
+        assert_eq!(columns_for(width(5)), 5);
+        assert_eq!(columns_for(width(5) - 1.0), 3);
+        assert_eq!(columns_for(width(3) - 1.0), 2);
         assert_eq!(columns_for(width(2)), 2);
         assert_eq!(columns_for(width(2) - 1.0), 1);
     }
