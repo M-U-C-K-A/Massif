@@ -309,6 +309,11 @@ pub fn export(
         }
         massif_core::atomic::write(&path, &bytes, true)?;
     }
+    // On a drive formatted for Windows (exFAT, FAT), macOS keeps a file's
+    // extended attributes in a "._" file beside it: the game reads
+    // `._overworld.json` in a data pack as an entry, fails on it and opens
+    // the world without the pack. None is left in the world.
+    strip_apple_double(dir)?;
 
     Ok(ExportStats {
         regions: regions.len(),
@@ -406,6 +411,41 @@ pub fn overworld_type(target: &Target, bottom: i32, height: i32) -> String {
 }}
 "##
     )
+}
+
+/// The first bytes of an AppleDouble file.
+const APPLE_DOUBLE: [u8; 4] = [0x00, 0x05, 0x16, 0x07];
+
+/// Remove the AppleDouble files ("._" and a name, holding another file's
+/// extended attributes, which macOS writes on drives without them) from the
+/// folder `dir` and everything in it. A file whose name starts with "._" but
+/// is no AppleDouble file is kept. How many were removed.
+pub fn strip_apple_double(dir: &Path) -> io::Result<usize> {
+    let mut removed = 0;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(folder) = stack.pop() {
+        let entries = match std::fs::read_dir(&folder) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
+        for entry in entries {
+            let entry = entry?;
+            let kind = entry.file_type()?;
+            let path = entry.path();
+            if entry.file_name().to_string_lossy().starts_with("._") && kind.is_file() {
+                let mut head = [0u8; 4];
+                let is_apple_double = std::fs::File::open(&path).and_then(|mut f| io::Read::read_exact(&mut f, &mut head)).is_ok() && head == APPLE_DOUBLE;
+                if is_apple_double {
+                    std::fs::remove_file(&path)?;
+                    removed += 1;
+                }
+            } else if kind.is_dir() {
+                stack.push(path);
+            }
+        }
+    }
+    Ok(removed)
 }
 
 /// Copy a file, or a folder and everything in it.

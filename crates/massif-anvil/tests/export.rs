@@ -1222,6 +1222,51 @@ fn the_height_pack_has_each_versions_overworld() {
     }
 }
 
+/// On a drive formatted for Windows, macOS writes "._" files beside every
+/// file it writes, holding their extended attributes; the game reads
+/// `._overworld.json` in a data pack as an entry, fails, and opens the world
+/// without the pack. The export leaves none: neither the ones the drive
+/// adds, nor those in a data pack copied in. A file named "._" that is no
+/// AppleDouble file stays.
+#[test]
+fn the_export_leaves_no_apple_double_files() {
+    let apple_double = |path: &std::path::Path| {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, [0x00, 0x05, 0x16, 0x07, 0x00, 0x02, 0x00, 0x00, b'M', b'a', b'c']).unwrap();
+    };
+    // A data pack carried on such a drive: its "._" files come with it.
+    let pack = temp_dir("pack-with-apple-double").join("my_pack");
+    std::fs::create_dir_all(pack.join("data/minecraft/dimension_type")).unwrap();
+    std::fs::write(pack.join("pack.mcmeta"), r#"{"pack": {"pack_format": 48, "description": "x"}}"#).unwrap();
+    apple_double(&pack.join("._pack.mcmeta"));
+    apple_double(&pack.join("data/._minecraft"));
+    std::fs::write(pack.join("._notes.txt"), "not an AppleDouble file").unwrap();
+    let mut world = generate(&GenParams { tiles_x: 1, tiles_z: 1, min_y: -64, max_y: 512, ..GenParams::default() });
+    world.meta.spawn = [0, 100, 0];
+    let dir = temp_dir("apple-double");
+    // What the drive added to an export before.
+    apple_double(&dir.join("datapacks/massif_build_limits/data/minecraft/dimension_type/._overworld.json"));
+    apple_double(&dir.join("._level.dat"));
+    let options = ExportOptions { target: Target::release("26.3").unwrap(), datapacks: vec![pack.clone()], overwrite: true, ..ExportOptions::default() };
+    export(&world.snapshot(), &dir, &options, &Progress::default()).unwrap();
+    let mut left = Vec::new();
+    let mut stack = vec![dir.clone()];
+    while let Some(folder) = stack.pop() {
+        for entry in std::fs::read_dir(folder).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_dir() {
+                stack.push(entry.path());
+            } else if entry.file_name().to_string_lossy().starts_with("._") {
+                left.push(entry.path());
+            }
+        }
+    }
+    assert_eq!(left, vec![dir.join("datapacks/my_pack/._notes.txt")], "only the file that is no AppleDouble file is left");
+    assert!(dir.join("datapacks/my_pack/pack.mcmeta").exists() && dir.join("datapacks/massif_build_limits/data/minecraft/dimension_type/overworld.json").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(pack.parent().unwrap());
+}
+
 #[test]
 fn unusual_worlds_are_handled() {
     // An empty map has nothing to export.
