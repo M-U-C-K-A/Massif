@@ -95,6 +95,11 @@ pub struct ImportReport {
     pub custom_terrains: usize,
     /// The JPEG thumbnail stored in the file, if any.
     pub thumbnail: Option<Vec<u8>>,
+    /// The surface's overlay images, now reference images.
+    pub overlays: usize,
+    /// The files of those not found (by their path, or by their name beside
+    /// the world): kept with their place, to find again.
+    pub missing_images: Vec<String>,
 }
 
 impl ImportReport {
@@ -111,6 +116,12 @@ impl ImportReport {
         if !self.layers.is_empty() {
             let names: Vec<&str> = self.layers.iter().map(|l| l.0.as_str()).collect();
             s += &format!("; layers not imported yet: {}", names.join(", "));
+        }
+        if self.overlays > 0 {
+            s += &format!("; {} overlay images", self.overlays);
+        }
+        if !self.missing_images.is_empty() {
+            s += &format!(" ({} not found)", self.missing_images.len());
         }
         if !self.skipped_dimensions.is_empty() {
             s += &format!("; skipped: {}", self.skipped_dimensions.join(", "));
@@ -191,6 +202,19 @@ pub fn import_world(path: &Path, progress: Option<&ImportProgress>) -> Result<(W
     });
     if let Ok((world, report)) = &mut result {
         report.thumbnail = thumbnail;
+        // The overlays' files, where they are or beside the world.
+        let dir = path.parent();
+        for r in &mut world.meta.references {
+            let name = r.path.rsplit(['/', '\\']).next().unwrap_or(&r.path).to_owned();
+            let found = [Some(std::path::PathBuf::from(&r.path)), dir.filter(|_| !name.is_empty()).map(|d| d.join(&name))].into_iter().flatten().find(|p| p.is_file());
+            match found.as_deref().and_then(|f| massif_core::reference::image_size(f).map(|size| (f, size))) {
+                Some((file, size)) => {
+                    r.path = file.to_string_lossy().into_owned();
+                    r.set_size(size);
+                }
+                None => report.missing_images.push(r.path.clone()),
+            }
+        }
         if world.meta.name.is_empty() {
             world.meta.name = path
                 .file_stem()
@@ -582,6 +606,38 @@ fn encode(raw: RawTile, beaches: &crate::terrains::Beaches) -> (Handle, TilePos,
     (raw.handle, raw.pos, Blob::from(tile.encode()), after)
 }
 
+/// A dimension's overlay images (WorldPainter's View ▸ Overlays) as
+/// reference images: at the same place (their top left corner, in blocks),
+/// scale and opacity, shown if they were; placed by their corner until
+/// their size is read. Before WorldPainter 2.10 a dimension held one, in
+/// fields of its own.
+fn overlays(arena: &Arena, dimension: Value) -> Vec<massif_core::reference::ReferenceImage> {
+    use massif_core::reference::ReferenceImage;
+    let all_on = arena.field(dimension, "overlayEnabled").and_then(|v| arena.bool(v)).unwrap_or(true);
+    let path = |file: Option<Value>| file.filter(|f| *f != Value::Null).and_then(|f| arena.field(f, "path")).and_then(|p| arena.string(p)).map(str::to_owned);
+    let image = |path: String, x: i64, z: i64, scale: f64, transparency: f64, shown: bool| {
+        let mut r = ReferenceImage::at_corner(&path, x as f64, z as f64, if scale > 0.0 { scale as f32 } else { 1.0 }, None);
+        r.opacity = (1.0 - if transparency > 0.0 { transparency } else { 0.5 } as f32).clamp(0.05, 1.0);
+        r.shown = shown && all_on;
+        r
+    };
+    let mut out = Vec::new();
+    if let Some(items) = arena.field(dimension, "overlays").filter(|l| *l != Value::Null).and_then(|l| arena.list_items(l)) {
+        for o in items {
+            let Some(file) = path(arena.field(o, "file")) else { continue };
+            let int = |n: &str| arena.field(o, n).and_then(|v| arena.int(v)).unwrap_or(0);
+            let float = |n: &str, default: f64| arena.field(o, n).and_then(|v| arena.float(v)).unwrap_or(default);
+            let enabled = arena.field(o, "enabled").and_then(|v| arena.bool(v)).unwrap_or(true);
+            out.push(image(file, int("offsetX"), int("offsetY"), float("scale", 1.0), float("transparency", 0.5), enabled));
+        }
+    } else if let Some(file) = path(arena.field(dimension, "overlay")) {
+        let int = |n: &str| arena.field(dimension, n).and_then(|v| arena.int(v)).unwrap_or(0);
+        let float = |n: &str| arena.field(dimension, n).and_then(|v| arena.float(v)).unwrap_or(0.0);
+        out.push(image(file, int("overlayOffsetX"), int("overlayOffsetY"), float("overlayScale"), float("overlayTransparency"), true));
+    }
+    out
+}
+
 fn damaged(e: JavaError, progress: &ImportProgress) -> ImportError {
     if progress.cancel.load(Ordering::Relaxed) {
         return ImportError::Cancelled;
@@ -788,6 +844,7 @@ pub fn import_stream<R: Read + Send>(reader: R, progress: &ImportProgress) -> Re
     let world_max = arena.field(world2, "maxheight").and_then(|v| arena.int(v)).unwrap_or(256) as i32;
     let mut dims = Vec::new();
     let mut overworld: Option<Value> = None;
+    let mut references = Vec::new();
     for f in &found {
         let label = match f.dim {
             0 => "Surface",
@@ -855,6 +912,7 @@ pub fn import_stream<R: Read + Send>(reader: R, progress: &ImportProgress) -> Re
             .push(format!("{} ({count} tiles, Y {min_y} to {})", kind.label(), max_y - 1));
         if kind == DimensionKind::Overworld {
             overworld = Some(f.dimension);
+            references = overlays(&arena, f.dimension);
         }
         // Every tile stored as a file holds it, none decoded: the map as
         // light and quick as when it is opened again (a map with layers
@@ -898,6 +956,7 @@ pub fn import_stream<R: Read + Send>(reader: R, progress: &ImportProgress) -> Re
     let spawn_y = massif_core::ops::height_at(&dims[0], 0, sx, sz, massif_core::ops::Surface::Top)
         .map_or(sea_level + 1, block_top);
 
+    report.overlays = references.len();
     report.layers = layers.into_iter().collect();
     report.layers.sort_by_key(|l| std::cmp::Reverse(l.1));
     report.converted = converted_layers.into_iter().collect();
@@ -936,6 +995,7 @@ pub fn import_stream<R: Read + Send>(reader: R, progress: &ImportProgress) -> Re
             fill: None,
             palette: Default::default(),
             smooth: Default::default(),
+            references,
             ..Default::default()
         },
         registry: mapper.registry,
@@ -1309,6 +1369,12 @@ mod tests {
     /// custom ground covers, each `(name, thickness, block, rows)` set on
     /// the rows `rows` of the tile.
     fn layered_world(covers: &[(&str, i32, &str, std::ops::Range<usize>)]) -> Vec<u8> {
+        layered_world_with(covers, &[])
+    }
+
+    /// [`layered_world`] with overlay images on the surface, each `(path,
+    /// offset x, offset z, scale, transparency, enabled)`.
+    fn layered_world_with(covers: &[(&str, i32, &str, std::ops::Range<usize>)], overlays: &[(&str, i32, i32, f32, f32, bool)]) -> Vec<u8> {
         let mut w = StreamWriter::new();
         let null = |w: &mut StreamWriter| {
             w.u8(TC_NULL);
@@ -1343,11 +1409,48 @@ mod tests {
         w.u8(TC_OBJECT).class(
             "org.pepsoft.worldpainter.Dimension",
             SC_SERIALIZABLE,
-            &[(b'I', "borderLevel", None), (b'I', "maxHeight", None), (b'I', "minHeight", None), (b'L', "tiles", Some("Ljava/util/Map;"))],
+            &[(b'I', "borderLevel", None), (b'I', "maxHeight", None), (b'I', "minHeight", None), (b'Z', "overlayEnabled", None), (b'L', "overlays", Some("Ljava/util/List;")), (b'L', "tiles", Some("Ljava/util/Map;"))],
             null,
         );
         w.handle();
-        w.i32(62).i32(320).i32(-64);
+        w.i32(62).i32(320).i32(-64).u8(1);
+        // overlays: ArrayList of Overlay { Z enabled, I offsetX, I offsetY,
+        // F scale, F transparency, L file (java.io.File { L path }) }
+        w.u8(TC_OBJECT).class("java.util.ArrayList", SC_SERIALIZABLE | SC_WRITE_METHOD, &[(b'I', "size", None)], null);
+        w.handle();
+        w.i32(overlays.len() as i32).u8(TC_BLOCKDATA).u8(4).i32(overlays.len() as i32);
+        let (mut overlay_desc, mut file_desc) = (None, None);
+        for &(path, x, z, scale, transparency, enabled) in overlays {
+            match overlay_desc {
+                None => {
+                    overlay_desc = Some(w.next);
+                    w.u8(TC_OBJECT).class(
+                        "org.pepsoft.worldpainter.Overlay",
+                        SC_SERIALIZABLE,
+                        &[(b'Z', "enabled", None), (b'I', "offsetX", None), (b'I', "offsetY", None), (b'F', "scale", None), (b'F', "transparency", None), (b'L', "file", Some("Ljava/io/File;"))],
+                        null,
+                    );
+                }
+                Some(d) => {
+                    w.u8(TC_OBJECT).reference(d);
+                }
+            }
+            w.handle();
+            w.u8(enabled as u8).i32(x).i32(z).i32(scale.to_bits() as i32).i32(transparency.to_bits() as i32);
+            match file_desc {
+                None => {
+                    file_desc = Some(w.next);
+                    w.u8(TC_OBJECT).class("java.io.File", SC_SERIALIZABLE | SC_WRITE_METHOD, &[(b'L', "path", Some("Ljava/lang/String;"))], null);
+                }
+                Some(d) => {
+                    w.u8(TC_OBJECT).reference(d);
+                }
+            }
+            w.handle();
+            w.string(path);
+            w.u8(TC_BLOCKDATA).u8(2).u16(b'\\' as u16).u8(TC_ENDBLOCKDATA);
+        }
+        w.u8(TC_ENDBLOCKDATA);
         w.u8(TC_OBJECT).reference(hashmap_desc);
         w.handle();
         w.i32(0x3F40_0000).i32(12).u8(TC_BLOCKDATA).u8(8).i32(16).i32(1);
@@ -1530,6 +1633,59 @@ mod tests {
         world.dims[0].ground_mut().freeze();
         let (tiles, hot, bytes) = stats(&world);
         eprintln!("every tile decoded, as before: {tiles} tiles, {hot} decoded, {:.1} MB", bytes as f64 / 1e6);
+    }
+
+    /// WorldPainter's overlay images come in as reference images at the
+    /// same place, scale and opacity: one written with a Windows path found
+    /// by its name beside the world, its middle set from its corner and its
+    /// size; one whose file is nowhere kept by its corner, hidden as it was,
+    /// and named in the report.
+    #[test]
+    fn overlays_become_reference_images() {
+        let dir = std::env::temp_dir().join(format!("massif-overlays-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A PNG of 40 × 20 transparent pixels.
+        let chunk = |png: &mut Vec<u8>, kind: &[u8], data: &[u8]| {
+            let mut crc = flate2::Crc::new();
+            crc.update(kind);
+            crc.update(data);
+            png.extend((data.len() as u32).to_be_bytes());
+            png.extend(kind);
+            png.extend(data);
+            png.extend(crc.sum().to_be_bytes());
+        };
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        let mut ihdr = Vec::new();
+        ihdr.extend(40u32.to_be_bytes());
+        ihdr.extend(20u32.to_be_bytes());
+        ihdr.extend([8, 6, 0, 0, 0]);
+        chunk(&mut png, b"IHDR", &ihdr);
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+        std::io::Write::write_all(&mut z, &vec![0u8; 20 * (1 + 40 * 4)]).unwrap();
+        chunk(&mut png, b"IDAT", &z.finish().unwrap());
+        chunk(&mut png, b"IEND", &[]);
+        std::fs::write(dir.join("plan.png"), &png).unwrap();
+        let bytes = layered_world_with(&[], &[("C:\\Users\\Jack\\maps\\plan.png", 100, -50, 2.0, 0.25, true), ("/nowhere/gone.png", -10, 5, 1.5, 0.0, false)]);
+        let world_file = dir.join("Layered.world");
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        std::io::Write::write_all(&mut gz, &bytes).unwrap();
+        std::fs::write(&world_file, gz.finish().unwrap()).unwrap();
+        let (world, report) = import_world(&world_file, None).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        let refs = &world.meta.references;
+        assert_eq!((report.overlays, refs.len()), (2, 2));
+        let plan = &refs[0];
+        assert_eq!(Path::new(&plan.path), dir.join("plan.png"));
+        assert_eq!((plan.size, plan.x, plan.z, plan.scale, plan.corner), ([40, 20], 140.0, -30.0, 2.0, None));
+        assert!((plan.opacity - 0.75).abs() < 1e-6 && plan.shown);
+        let gone = &refs[1];
+        assert_eq!((gone.path.as_str(), gone.size, gone.corner, gone.scale, gone.shown), ("/nowhere/gone.png", [0, 0], Some([-10.0, 5.0]), 1.5, false));
+        assert!((gone.opacity - 0.5).abs() < 1e-6, "WorldPainter's default transparency");
+        assert_eq!(report.missing_images, ["/nowhere/gone.png"]);
+        // Found again, it takes its place from its corner.
+        let mut found = gone.clone();
+        assert!(found.set_size([10, 10]));
+        assert_eq!((found.x, found.z, found.corner), (-2.5, 12.5, None));
     }
 
     #[test]

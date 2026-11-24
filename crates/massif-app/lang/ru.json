@@ -3575,5 +3575,15 @@
  "Density of each size": "Плотность каждого размера",
  "A share of the layer's density for its trees of this size: where it is painted, and among the others where no size is": "Доля плотности слоя для его деревьев этого размера: там, где он нарисован, и среди остальных, где размер не задан",
  "Remove this size": "Удалить размер",
- "How far apart trees stand, by their canopies or on a grid, and the density of each size are set in each object layer's settings.": "Расстояние между деревьями, по кронам или по сетке, и плотность каждого размера задаются в настройках каждого слоя объектов."
+ "How far apart trees stand, by their canopies or on a grid, and the density of each size are set in each object layer's settings.": "Расстояние между деревьями, по кронам или по сетке, и плотность каждого размера задаются в настройках каждого слоя объектов.",
+ "Overlays": "Наложения",
+ "{n} overlay images, now reference images of the map": {
+  "one": "{n} наложенное изображение, теперь опорное изображение карты",
+  "few": "{n} наложенных изображения, теперь опорные изображения карты",
+  "many": "{n} наложенных изображений, теперь опорные изображения карты",
+  "other": "{n} наложенного изображения, теперь опорные изображения карты"
+ },
+ "Not found, kept in their place: pick each with Find its file… among the reference images.": "Не найдены, оставлены на месте: выберите каждое через «Найти файл…» среди опорных изображений.",
+ "Find its file…": "Найти файл…",
+ "Find its file": "Найти файл"
 }

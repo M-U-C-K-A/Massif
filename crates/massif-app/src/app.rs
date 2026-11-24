@@ -6246,6 +6246,17 @@ impl MassifApp {
                                 });
                                 ui.end_row();
                             }
+                            if report.overlays > 0 {
+                                ui.label(RichText::new(tr!("Overlays")).color(pal.weak));
+                                ui.vertical(|ui| {
+                                    ui.label(trn!("{n} overlay image, now a reference image of the map", "{n} overlay images, now reference images of the map", n = report.overlays));
+                                    if !report.missing_images.is_empty() {
+                                        ui.label(RichText::new(tr!("Not found, kept in their place: pick each with Find its file… among the reference images.")).size(11.5).color(pal.danger));
+                                        ui.label(RichText::new(report.missing_images.join(", ")).size(11.5).color(pal.weak));
+                                    }
+                                });
+                                ui.end_row();
+                            }
                             if !report.skipped_dimensions.is_empty() {
                                 ui.label(RichText::new(tr!("Skipped")).color(pal.weak));
                                 ui.label(report.skipped_dimensions.join(", "));

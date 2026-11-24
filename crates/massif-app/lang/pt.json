@@ -3419,5 +3419,13 @@
  "Density of each size": "Densidade de cada tamanho",
  "A share of the layer's density for its trees of this size: where it is painted, and among the others where no size is": "Uma parte da densidade da camada para suas árvores deste tamanho: onde está pintado, e entre as outras onde nenhum tamanho está",
  "Remove this size": "Remover este tamanho",
- "How far apart trees stand, by their canopies or on a grid, and the density of each size are set in each object layer's settings.": "A distância entre as árvores, por copa ou em grade, e a densidade de cada tamanho são definidas nas configurações de cada camada de objetos."
+ "How far apart trees stand, by their canopies or on a grid, and the density of each size are set in each object layer's settings.": "A distância entre as árvores, por copa ou em grade, e a densidade de cada tamanho são definidas nas configurações de cada camada de objetos.",
+ "Overlays": "Sobreposições",
+ "{n} overlay images, now reference images of the map": {
+  "one": "{n} imagem sobreposta, agora imagem de referência do mapa",
+  "other": "{n} imagens sobrepostas, agora imagens de referência do mapa"
+ },
+ "Not found, kept in their place: pick each with Find its file… among the reference images.": "Não encontradas, mantidas no lugar: escolha cada uma com Encontrar o arquivo… nas imagens de referência.",
+ "Find its file…": "Encontrar o arquivo…",
+ "Find its file": "Encontrar o arquivo"
 }

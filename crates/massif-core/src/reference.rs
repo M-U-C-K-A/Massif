@@ -29,15 +29,40 @@ pub struct ReferenceImage {
     pub shown: bool,
     /// Locked: its handles do not move it.
     pub locked: bool,
+    /// Where its top left corner lies, in blocks, while its size is not
+    /// known (a WorldPainter overlay whose file was not found): once its
+    /// size is read, its middle is set from there.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub corner: Option<[f64; 2]>,
 }
 
 impl Default for ReferenceImage {
     fn default() -> Self {
-        Self { path: String::new(), size: [0, 0], x: 0.0, z: 0.0, scale: 1.0, rotation: 0.0, opacity: 0.6, above: true, shown: true, locked: false }
+        Self { path: String::new(), size: [0, 0], x: 0.0, z: 0.0, scale: 1.0, rotation: 0.0, opacity: 0.6, above: true, shown: true, locked: false, corner: None }
     }
 }
 
 impl ReferenceImage {
+    /// A picture placed by its top left corner, at `(x, z)` in blocks, as
+    /// WorldPainter places its overlays; `size` in pixels when known.
+    pub fn at_corner(path: &str, x: f64, z: f64, scale: f32, size: Option<[u32; 2]>) -> Self {
+        let mut r = Self { path: path.to_owned(), scale: scale.max(1e-4), corner: Some([x, z]), ..Self::default() };
+        if let Some(size) = size {
+            r.set_size(size);
+        }
+        r
+    }
+
+    /// Its size in pixels, as read: one placed by its corner gets its
+    /// middle from it. True when it moved.
+    pub fn set_size(&mut self, size: [u32; 2]) -> bool {
+        self.size = size;
+        let Some([x, z]) = self.corner.take() else { return false };
+        let s = self.scale.max(1e-4) as f64;
+        (self.x, self.z) = (x + size[0] as f64 * s / 2.0, z + size[1] as f64 * s / 2.0);
+        true
+    }
+
     /// The name of its file.
     pub fn name(&self) -> &str {
         self.path.rsplit(['/', '\\']).next().unwrap_or(&self.path)
@@ -113,6 +138,11 @@ impl ReferenceImage {
         self.x = (x0 + x1) / 2.0;
         self.z = (z0 + z1) / 2.0;
     }
+}
+
+/// The size in pixels of the picture at `path`, read from its header.
+pub fn image_size(path: &std::path::Path) -> Option<[u32; 2]> {
+    image::image_dimensions(path).ok().map(|(w, h)| [w, h])
 }
 
 #[cfg(test)]

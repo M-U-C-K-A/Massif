@@ -110,7 +110,9 @@ impl References {
                     Ok((image, size)) => {
                         let options = TextureOptions { mipmap_mode: Some(TextureFilter::Linear), ..TextureOptions::LINEAR };
                         let texture = ctx.load_texture(format!("reference {}", r.path), image, options);
-                        r.size = size;
+                        // One placed by its corner (a WorldPainter
+                        // overlay) takes its place now its size is known.
+                        changed |= r.set_size(size);
                         if let Some(k) = self.pending.iter().position(|p| *p == r.path) {
                             self.pending.remove(k);
                             if let Some([x0, z0, x1, z1]) = map
@@ -364,8 +366,16 @@ impl References {
         }
         if let Some(r) = self.selected.and_then(|k| list.get_mut(k)) {
             ui.add_space(4.0);
-            if let Some(e) = self.problem(&r.path) {
+            if let Some(e) = self.problem(&r.path).map(str::to_owned) {
                 ui.label(RichText::new(tr!("Not read: {e}", e)).size(11.0).color(pal.danger));
+                // Its file moved: found again, it keeps its place.
+                if crate::widgets::button(ui, theme::with_icon(Icon::ImagePlus, tr!("Find its file…"))).clicked()
+                    && let Some(file) = rfd::FileDialog::new().set_title(tr!("Find its file")).add_filter(tr!("Images"), &IMAGE_EXTENSIONS).pick_file()
+                {
+                    self.textures.remove(&r.path);
+                    r.path = file.to_string_lossy().into_owned();
+                    changed = true;
+                }
             }
             let before = r.clone();
             well(ui, |ui| {
@@ -426,8 +436,11 @@ fn locate(path: &str, map_dir: Option<&Path>) -> PathBuf {
     if p.exists() {
         return p;
     }
-    match (map_dir, p.file_name()) {
-        (Some(dir), Some(name)) if dir.join(name).exists() => dir.join(name),
+    // Its name, whichever system wrote the path (a Windows one in a
+    // WorldPainter world).
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    match map_dir {
+        Some(dir) if !name.is_empty() && dir.join(name).exists() => dir.join(name),
         _ => p,
     }
 }

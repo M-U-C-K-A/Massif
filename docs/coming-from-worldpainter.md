@@ -88,7 +88,13 @@ becomes a layer of the Layers panel, painted where it was:
   layers, caves, tunnels and River** come as described in
   [Layers](layers.md).
 
-The import report lists any layer that was not carried over.
+Your **overlay images** (View ▸ Overlays) become reference images, at the
+same place, scale and opacity. Their files are looked for where WorldPainter
+had them, then by name beside the `.world`; one not found keeps its place,
+and **Find its file…** in its settings links it again.
+
+The import report lists any layer that was not carried over, and any
+overlay image not found.
 
 ## What Massif adds
 
