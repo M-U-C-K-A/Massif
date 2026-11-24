@@ -735,10 +735,14 @@ impl Job {
                 Ok(w) => w,
                 Err(e) => return Outcome::Failed(tr!("{file} cannot be read: {e}", file = display_name(&path), e)),
             };
-            let from = match massif_core::region_map::patch_from_map(&map, &theirs, massif_core::versions::now()) {
+            let mut from = match massif_core::region_map::patch_from_map(&map, &theirs, massif_core::versions::now()) {
                 Ok(f) => f,
                 Err(e) => return Outcome::Failed(e.to_string()),
             };
+            // Signed by nobody: the file's name says whose work it is.
+            if from.patch.manifest.author.is_empty() {
+                from.patch.manifest.author = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            }
             Outcome::Review(Box::new(crate::collab::ReviewReady::of(from.patch, &map, display_name(&path), from.common, revision)))
         })
     }

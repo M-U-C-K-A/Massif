@@ -328,7 +328,9 @@ mod tests {
         let (patch, remap) = from.patch.remapped(&mut registry);
         assert_eq!(remap.added, ["Jack's moss", "Moss"]);
         let review = classify(&mine, &patch);
-        let (meta, registry, dims) = apply(&mine, &patch, &take_all(&review));
+        // The map's registry with what the contribution brings, as the app
+        // keeps it for the merge.
+        let (meta, _, dims) = apply(&mine, &patch, &take_all(&review));
         let merged = World { meta, registry, dims, points: Vec::new() };
         let moss = merged.registry.terrain_by_name("Jack's moss").unwrap();
         assert!(merged.registry.cover_by_name("Moss").is_some());

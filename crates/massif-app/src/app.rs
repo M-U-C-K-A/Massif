@@ -11565,6 +11565,12 @@ mod tests {
         assert!(matches!(h.state().dialog, Some(Dialog::ExportRegion(_))));
         if let Some(dir) = &dir {
             h.render().unwrap().save(dir.join("dialog-export-region.png")).unwrap();
+            // As a map of its own, for someone to work on in Massif.
+            if let Some(Dialog::ExportRegion(form)) = &mut h.state_mut().dialog {
+                form.as_map = true;
+            }
+            h.run_steps(3);
+            h.render().unwrap().save(dir.join("dialog-export-region-map.png")).unwrap();
         }
         h.state_mut().dialog = None;
         let rect = massif_core::BlockRect::new(-200, -150, 100, 110);
@@ -18904,7 +18910,7 @@ mod tests {
         let tile = h.state().doc.dimension().ground().view(TilePos::containing(40, 40)).unwrap();
         assert_eq!(tile.terrain.get(massif_core::coords::local_index(40, 40)), moss.0);
         assert_eq!(world.points.len(), 2);
-        assert_eq!(world.points[1].name, "Merged from Jack.massif");
+        assert_eq!(world.points[1].name, "Merged from Jack");
         assert_eq!(world.points[1].parents, vec![sent], "the region stood on the version it went out at");
         // One step to undo.
         assert_eq!(h.state().doc.history.undo_count(), undo_before + 1);
