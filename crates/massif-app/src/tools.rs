@@ -435,9 +435,13 @@ pub struct ToolState {
     pub cover: u16,
     /// The object layer painted, by its number (0: none yet).
     pub object_layer: u16,
-    /// The colour annotations are painted in, 1 to 15 (see
-    /// [`massif_core::tile::ANNOTATION_COLORS`]).
+    /// The colour annotations are painted in: 1 to 15, WorldPainter's, or
+    /// one of the map's own (see [`massif_core::annotations`]).
     pub annotation: u16,
+    /// The annotations show, on the map and in 3D (the eye of the
+    /// Annotations tool, the pen of the map's header, View ▸ Show
+    /// Annotations).
+    pub show_annotations: bool,
     /// The tree size painted, 1 (bushes) to 4 (large trees).
     pub tree_size: u16,
     /// The layer of underground pockets painted, by its number (0: none
@@ -1084,6 +1088,7 @@ impl Default for ToolState {
             cover: 1,
             object_layer: 0,
             annotation: 14,
+            show_annotations: true,
             tree_size: 2,
             pocket_layer: 0,
             slab_block: None,

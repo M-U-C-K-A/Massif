@@ -1,3 +1,3 @@
-**Sharper contour lines, with their settings**
+**Annotations in any colour, each with its opacity, shown in 3D; sharper contour lines**
 
-The contour lines are now WorldPainter's: a solid dark line every 10 blocks and a finer one halfway, readable at every zoom; the arrow beside their button sets the interval (5, 10, 20, 50 or any), their strength, black or white lines, crisp or smooth edges.
+Annotations now show in the 3D views too, and an eye in the Annotations tool's settings (also the pen button in the map's header, and View ▸ Show Annotations) shows or hides them all at once; each colour has its own opacity in the tool's settings. Besides WorldPainter's fifteen colours, the Colour button picks any colour, which the map keeps with its own. The contour lines are now WorldPainter's: a solid dark line every 10 blocks and a finer one halfway, readable at every zoom; the arrow beside their button sets the interval (5, 10, 20, 50 or any), their strength, black or white lines, crisp or smooth edges.

@@ -1324,10 +1324,21 @@ before has them in Packs ▸ Plants & ground cover and Water plants. The map
 shows the ice white and the lava orange, and the 3D view the same.
 
 **Annotations** (the **Annotations** tool, in the Paint group) mark the map
-in one of fifteen colours, as WorldPainter's do — where a town goes, a road
-to build, a river to dig — to plan a map. They are drawn over the map in
-every view mode, whatever the level being edited, and never exported. The
-right button rubs them out; the pen button in the map's header hides them.
+in colour, as WorldPainter's do — where a town goes, a road to build, a river
+to dig — to plan a map. They are drawn over the map in every view mode,
+whatever the level being edited, and on the land of the 3D views, and never
+exported. The right button rubs them out.
+
+- **Colours**: WorldPainter's fifteen, and any other: the **Colour** button
+  of the tool's settings opens a colour picker. Picked from one of the
+  fifteen, it adds a colour of the map's own (kept with the map, up to 240 of
+  them, shown after the fifteen); picked from one of the map's own, it
+  changes it, and the marks painted with it change too.
+- **Opacity**: each colour has its own (75 % unless set otherwise), in the
+  tool's settings.
+- **Show or hide them all**, on the map and in 3D alike: the eye in the
+  tool's settings and beside the colours of the Layers panel, the pen button
+  in the map's header, or **View ▸ Show Annotations**.
 
 ### Base layers, sub-canopy and tree sizes
 

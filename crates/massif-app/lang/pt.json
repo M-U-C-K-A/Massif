@@ -2670,14 +2670,12 @@
  "Green": "Verde",
  "Red": "Vermelho",
  "Black": "Preto",
- "Shown on the map, as in WorldPainter, and never exported. The pen button in the map's header hides them.": "Aparecem no mapa, como no WorldPainter, e nunca são exportadas. O botão da caneta no cabeçalho do mapa as esconde.",
  "Annotations": "Anotações",
  "Mark the map in colour, to plan it: never exported. Right button: rub out.": "Marque o mapa em cores para planejá-lo: nunca é exportado. Botão direito: apagar.",
  "Marks the map in colour, as WorldPainter's annotations: where a town goes, a road, a river to dig.": "Marca o mapa em cores, como as anotações do WorldPainter: onde vai uma vila, uma estrada, um rio para cavar.",
  "Mark": "Marcar",
  "Rub out": "Apagar",
  "Annotations show on the map only: the export leaves them out.": "As anotações só aparecem no mapa: a exportação as deixa de fora.",
- "Annotations: the marks painted with the Annotations tool. They are never exported": "Anotações: as marcas pintadas com a ferramenta Anotações. Nunca são exportadas",
  "Marks on the map, to plan it, as in WorldPainter: never exported.": "Marcas no mapa para planejá-lo, como no WorldPainter: nunca exportadas.",
  "Imported as object layers, ground covers, terrains, levels and caves:": "Importadas como camadas de objetos, coberturas do solo, terrenos, níveis e cavernas:",
  "Tree sizes": "Tamanhos de árvores",
@@ -3440,5 +3438,11 @@
  "Edges": "Bordas",
  "Fine lines between": "Linhas finas entre elas",
  "Interval": "Intervalo",
- "Lines": "Linhas"
+ "Lines": "Linhas",
+ "Annotations, on the map and in 3D: the marks painted with the Annotations tool. They are never exported": "Anotações, no mapa e em 3D: as marcas pintadas com a ferramenta Anotações. Nunca são exportadas",
+ "Any colour: the map keeps it with its own colours": "Qualquer cor: o mapa a guarda entre as suas próprias cores",
+ "Show Annotations": "Mostrar anotações",
+ "Hide all the annotations, on the map and in 3D": "Ocultar todas as anotações, no mapa e em 3D",
+ "Show all the annotations, on the map and in 3D": "Mostrar todas as anotações, no mapa e em 3D",
+ "Shown on the map and in 3D, as in WorldPainter, and never exported. The eye, the pen button in the map's header and View ▸ Show Annotations show or hide them all.": "Mostradas no mapa e em 3D, como no WorldPainter, e nunca exportadas. O olho, o botão da caneta no cabeçalho do mapa e Exibir ▸ Mostrar anotações mostram ou ocultam todas."
 }

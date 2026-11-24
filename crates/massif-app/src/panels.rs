@@ -533,7 +533,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
         Tool::Gradient => crate::gradient_ui::tool_settings(ui, tools, doc),
         Tool::Cover => cover_settings(ui, tools, doc, blocks),
         Tool::Objects => object_settings(ui, tools, doc, blocks),
-        Tool::Annotate => annotation_settings(ui, tools),
+        Tool::Annotate => annotation_settings(ui, tools, doc),
         Tool::TreeSize => tree_size_settings(ui, tools, doc),
         Tool::Pockets => pocket_settings(ui, tools, doc, blocks),
         Tool::Slabs => {
@@ -1642,6 +1642,16 @@ fn tree_size_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
     hint(ui, tr!("How far apart trees stand, by their canopies or on a grid, and the density of each size are set in each object layer's settings."));
 }
 
+/// The name of annotation colour `n`: one of the fifteen's, or for one of
+/// the map's own, its colour in hexadecimal.
+pub fn annotation_label(n: u16, palette: &massif_core::annotations::AnnotationPalette) -> String {
+    if n <= massif_core::annotations::PRESETS {
+        return annotation_name(n).to_owned();
+    }
+    let c = palette.color(n).unwrap_or([0; 3]);
+    format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2])
+}
+
 /// The name of annotation colour `n` (1 to 15).
 pub fn annotation_name(n: u16) -> &'static str {
     match n {
@@ -1663,16 +1673,18 @@ pub fn annotation_name(n: u16) -> &'static str {
     }
 }
 
-/// The fifteen colours of annotations as swatches `size` points wide, the
-/// one of `picked` ringed; returns the one clicked.
-pub fn annotation_swatches(ui: &mut Ui, size: f32, picked: Option<u16>) -> Option<u16> {
+/// The colours of annotations as swatches `size` points wide, the fifteen
+/// then the map's own, the one of `picked` ringed; returns the one clicked.
+pub fn annotation_swatches(ui: &mut Ui, size: f32, picked: Option<u16>, palette: &massif_core::annotations::AnnotationPalette) -> Option<u16> {
     let pal = Palette::of(ui);
     let mut clicked = None;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(size / 6.0, size / 6.0);
-        for (k, color) in massif_core::tile::ANNOTATION_COLORS.iter().enumerate() {
-            let n = k as u16 + 1;
-            let name = annotation_name(n);
+        for n in palette.numbers() {
+            let Some(color) = palette.color(n) else { continue };
+            let color = &color;
+            let name = annotation_label(n, palette);
+            let name = name.as_str();
             let (rect, response) = ui.allocate_exact_size(vec2(size, size), Sense::click());
             response.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, picked == Some(n), name));
             let painter = ui.painter();
@@ -1693,13 +1705,65 @@ pub fn annotation_swatches(ui: &mut Ui, size: f32, picked: Option<u16>) -> Optio
     clicked
 }
 
-/// The colours to annotate with: a click picks one.
-fn annotation_settings(ui: &mut Ui, tools: &mut ToolState) {
-    if let Some(n) = annotation_swatches(ui, 24.0, Some(tools.annotation)) {
+/// The Annotations tool: the colours to annotate with (a click picks one;
+/// the map's own made with the colour picker), the opacity of the one
+/// picked, and the eye that shows or hides them all.
+fn annotation_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
+    use massif_core::annotations::PRESETS;
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| annotations_eye(ui, tools));
+    });
+    ui.add_space(8.0);
+    let palette = &mut doc.world.registry.annotations;
+    if palette.color(tools.annotation).is_none() {
+        tools.annotation = 14;
+    }
+    if let Some(n) = annotation_swatches(ui, 24.0, Some(tools.annotation), palette) {
         tools.annotation = n;
     }
-    hint(ui, tr!("Shown on the map, as in WorldPainter, and never exported. The pen button in the map's header hides them."));
+    ui.add_space(6.0);
+    let mut changed = false;
+    crate::widgets::well(ui, |ui| {
+        let n = tools.annotation;
+        crate::widgets::row(ui, tr!("Colour"), |ui| {
+            // One of the map's own changes in place (its marks with it);
+            // from one of the fifteen, a new colour of the map's.
+            let mut rgb = palette.color(n).unwrap_or([255; 3]);
+            let edited = egui::widgets::color_picker::color_edit_button_srgb(ui, &mut rgb).on_hover_text(tr!("Any colour: the map keeps it with its own colours")).changed();
+            if edited {
+                if n > PRESETS {
+                    palette.set_color(n, rgb);
+                } else if let Some(k) = palette.number_of(rgb) {
+                    tools.annotation = k;
+                }
+                changed = true;
+            }
+            ui.label(RichText::new(annotation_label(tools.annotation, palette)).weak());
+        });
+        crate::widgets::row(ui, tr!("Opacity"), |ui| {
+            let mut o = palette.opacity(tools.annotation);
+            if ui.add(crate::widgets::Field::new(&mut o, 0..=100).suffix("%").width(96.0)).changed() {
+                palette.set_opacity(tools.annotation, o);
+                changed = true;
+            }
+        });
+    });
+    if changed {
+        doc.mark_changed();
+    }
+    hint(ui, tr!("Shown on the map and in 3D, as in WorldPainter, and never exported. The eye, the pen button in the map's header and View ▸ Show Annotations show or hide them all."));
 }
+
+/// The eye that shows or hides every annotation, on the map and in 3D.
+pub fn annotations_eye(ui: &mut Ui, tools: &mut ToolState) {
+    let pal = Palette::of(ui);
+    let (icon, color) = if tools.show_annotations { (Icon::Eye, pal.text) } else { (Icon::EyeOff, pal.weak) };
+    let tip = if tools.show_annotations { tr!("Hide all the annotations, on the map and in 3D") } else { tr!("Show all the annotations, on the map and in 3D") };
+    if ui.add(egui::Button::new(RichText::new(theme::glyph(icon).to_string()).size(13.0).color(color)).frame(false)).on_hover_text(tip).clicked() {
+        tools.show_annotations = !tools.show_annotations;
+    }
+}
+
 
 /// What a cover grows, in a line.
 pub fn describe_cover(def: &massif_core::registry::CoverDef) -> String {

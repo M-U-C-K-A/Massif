@@ -528,8 +528,11 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
 
     // Annotations: a click on a colour paints with it.
     ui.add_space(8.0);
-    title(ui, Icon::PenLine, tr!("Annotations"));
-    if let Some(n) = crate::panels::annotation_swatches(ui, 20.0, (tools.tool == Tool::Annotate).then_some(tools.annotation)) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(format!("{}  {}", theme::glyph(Icon::PenLine), tr!("Annotations").to_uppercase())).size(10.5).strong().color(pal.weak));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| crate::panels::annotations_eye(ui, tools));
+    });
+    if let Some(n) = crate::panels::annotation_swatches(ui, 20.0, (tools.tool == Tool::Annotate).then_some(tools.annotation), &doc.world.registry.annotations) {
         tools.annotation = n;
         tools.select(Tool::Annotate);
     }

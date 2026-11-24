@@ -2694,14 +2694,12 @@
  "Green": "Зелёный",
  "Red": "Красный",
  "Black": "Чёрный",
- "Shown on the map, as in WorldPainter, and never exported. The pen button in the map's header hides them.": "Показываются на карте, как в WorldPainter, и никогда не экспортируются. Кнопка с пером в заголовке карты скрывает их.",
  "Annotations": "Пометки",
  "Mark the map in colour, to plan it: never exported. Right button: rub out.": "Помечайте карту цветом, чтобы планировать её: никогда не экспортируется. Правая кнопка: стереть.",
  "Marks the map in colour, as WorldPainter's annotations: where a town goes, a road, a river to dig.": "Помечает карту цветом, как пометки WorldPainter: где будет город, дорога, река, которую надо прокопать.",
  "Mark": "Пометить",
  "Rub out": "Стереть",
  "Annotations show on the map only: the export leaves them out.": "Пометки видны только на карте: экспорт их пропускает.",
- "Annotations: the marks painted with the Annotations tool. They are never exported": "Пометки: метки, нарисованные инструментом «Пометки». Они никогда не экспортируются",
  "Marks on the map, to plan it, as in WorldPainter: never exported.": "Метки на карте, чтобы планировать её, как в WorldPainter: никогда не экспортируются.",
  "Imported as object layers, ground covers, terrains, levels and caves:": "Импортировано как слои объектов, покровы, местности, уровни и пещеры:",
  "Tree sizes": "Размеры деревьев",
@@ -3598,5 +3596,11 @@
  "Edges": "Края",
  "Fine lines between": "Тонкие линии между",
  "Interval": "Шаг",
- "Lines": "Линии"
+ "Lines": "Линии",
+ "Annotations, on the map and in 3D: the marks painted with the Annotations tool. They are never exported": "Пометки, на карте и в 3D: метки, нарисованные инструментом «Пометки». Они никогда не экспортируются",
+ "Any colour: the map keeps it with its own colours": "Любой цвет: карта хранит его среди своих цветов",
+ "Show Annotations": "Показывать пометки",
+ "Hide all the annotations, on the map and in 3D": "Скрыть все пометки, на карте и в 3D",
+ "Show all the annotations, on the map and in 3D": "Показать все пометки, на карте и в 3D",
+ "Shown on the map and in 3D, as in WorldPainter, and never exported. The eye, the pen button in the map's header and View ▸ Show Annotations show or hide them all.": "Видны на карте и в 3D, как в WorldPainter, и никогда не экспортируются. Глаз, кнопка с пером в заголовке карты и Вид ▸ Показывать пометки показывают или скрывают их все."
 }

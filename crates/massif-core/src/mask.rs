@@ -1894,7 +1894,7 @@ pub fn export_region(dim: &crate::world::Dimension, reg: &crate::registry::Regis
                         let v = tiles[(x.div_euclid(TILE_SIZE) - tx0) as usize].as_ref().map_or(0, |t| part.value(t, local_index(x, z), lo, span));
                         match part {
                             Part::Height => out.extend_from_slice(&v.to_be_bytes()),
-                            Part::Annotations => out.extend_from_slice(&if (1..=15).contains(&v) { ANNOTATION_COLORS[v as usize - 1] } else { [0; 3] }),
+                            Part::Annotations => out.extend_from_slice(&reg.annotations.color(v).unwrap_or([0; 3])),
                             _ => out.push(v as u8),
                         }
                     }

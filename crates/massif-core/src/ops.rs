@@ -587,11 +587,13 @@ pub fn paint_cover(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, cover: u16,
     paint_plane(edit, brush, cx, cz, salt, cover, Some(crate::registry::Slot::Cover), None, |t| &mut t.cover);
 }
 
-/// Paint an annotation, one of [`crate::tile::ANNOTATION_COLORS`] by its
-/// number (1 to 15; 0 removes it). `salt` should change from dab to dab.
+/// Paint an annotation by its number (1 to 15, WorldPainter's colours, or
+/// one of the map's own up to [`crate::annotations::MAX`]; 0 removes it).
+/// `salt` should change from dab to dab.
 pub fn paint_annotation(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, color: u16, salt: u64) {
-    paint_plane(edit, brush, cx, cz, salt, color.min(15), None, None, |t| &mut t.annotations);
+    paint_plane(edit, brush, cx, cz, salt, color.min(crate::annotations::MAX), None, None, |t| &mut t.annotations);
 }
+
 
 /// Paint a sub-canopy object layer by its number (0 removes it): beside
 /// the base object layer of each column, not in its place. `salt` should
@@ -2037,11 +2039,16 @@ mod tests {
         paint_annotation(&mut hist.edit(&mut w, 0), &hard_brush(6.0), 10.0, 10.0, 14, 1);
         hist.commit();
         assert_eq!((at(&w, 10, 10), at(&w, 15, 10), at(&w, 30, 10)), (14, 14, 0));
-        // A colour past the fifteen is the last.
+        // One of the map's own colours, past the fifteen; past the last
+        // there can be, the last.
         hist.begin("mark", 0);
         paint_annotation(&mut hist.edit(&mut w, 0), &hard_brush(1.0), 40.0, 40.0, 99, 2);
         hist.commit();
-        assert_eq!(at(&w, 40, 40), 15);
+        assert_eq!(at(&w, 40, 40), 99);
+        hist.begin("mark", 0);
+        paint_annotation(&mut hist.edit(&mut w, 0), &hard_brush(1.0), 40.0, 40.0, 999, 2);
+        hist.commit();
+        assert_eq!(at(&w, 40, 40), crate::annotations::MAX);
         hist.begin("rub out", 0);
         paint_annotation(&mut hist.edit(&mut w, 0), &hard_brush(2.0), 10.0, 10.0, 0, 3);
         hist.commit();

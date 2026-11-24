@@ -243,8 +243,6 @@ pub struct MapView {
     /// Shading from the smooth heights rather than whole blocks.
     pub smooth: bool,
     pub grid: bool,
-    /// Annotations drawn over the map.
-    pub annotations: bool,
     /// The map framed by itself (see [`MapView::should_fit`]): for which
     /// document, and the view it gave, with the size of the canvas then.
     fitted: Option<u64>,
@@ -328,7 +326,6 @@ impl Default for MapView {
             contours: true,
             smooth: false,
             grid: false,
-            annotations: true,
             fitted: None,
             fit_view: None,
             stroke: None,
@@ -386,7 +383,8 @@ pub struct MapInput<'a> {
 }
 
 /// How the map views draw the contour lines: one choice for all of them,
-/// kept in the settings.
+/// kept in the settings. (Whether the annotations show is the tools'
+/// [`ToolState::show_annotations`].)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Overlays {
@@ -482,7 +480,7 @@ impl MapView {
     }
 
     /// Display-mode tabs and toggles, shown in the area header.
-    pub fn header(&mut self, ui: &mut Ui, overlays: &mut Overlays) {
+    pub fn header(&mut self, ui: &mut Ui, overlays: &mut Overlays, tools: &mut ToolState) {
         let narrow = ui.available_width() < 420.0;
         mode_selector(ui, &mut self.mode, narrow, "map mode");
         ui.separator();
@@ -501,8 +499,8 @@ impl MapView {
         }
         ui.toggle_value(&mut self.grid, theme::glyph(Icon::Grid3x3).to_string())
             .on_hover_text(tr!("Tile and chunk grid"));
-        ui.toggle_value(&mut self.annotations, theme::glyph(Icon::PenLine).to_string())
-            .on_hover_text(tr!("Annotations: the marks painted with the Annotations tool. They are never exported"));
+        ui.toggle_value(&mut tools.show_annotations, theme::glyph(Icon::PenLine).to_string())
+            .on_hover_text(tr!("Annotations, on the map and in 3D: the marks painted with the Annotations tool. They are never exported"));
     }
 
     /// What the pointer at `p` is over, on the river being laid out.
@@ -1653,7 +1651,8 @@ impl MapView {
             lava: doc.world.meta.lava,
             top: doc.dimension().max_y,
             seed: doc.world.meta.seed,
-            annotations: self.annotations,
+            annotations: tools.show_annotations,
+            notes: doc.world.registry.annotations.fingerprint(),
             contour: overlays.contour(theme::high_contrast(ui.ctx())),
             sizes: tools.show_sizes || tools.tool == tools::Tool::TreeSize,
             pockets: tools.tool == tools::Tool::Pockets,

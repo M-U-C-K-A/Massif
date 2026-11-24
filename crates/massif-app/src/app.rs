@@ -147,7 +147,7 @@ struct Settings {
     /// The card the first start picked the preset for, and how long its
     /// trial frame took: what Settings ▸ Graphics says of the choice.
     graphics_chosen_for: Option<(String, f32)>,
-    /// How the map views draw the contour lines.
+    /// How the views show the annotations and the contour lines.
     overlays: crate::map_view::Overlays,
 }
 
@@ -3791,6 +3791,7 @@ impl MassifApp {
             recent: &self.settings.recent,
             theme: self.settings.theme,
             selected: self.doc.selection().is_some(),
+            annotations: self.tools.show_annotations,
         }
     }
 
@@ -3893,6 +3894,7 @@ impl MassifApp {
                 ctx.send_viewport_cmd(ViewportCommand::Fullscreen(!full));
             }
             Command::FitMap => self.fit_map(),
+            Command::ShowAnnotations => self.tools.show_annotations = !self.tools.show_annotations,
             Command::ReportProblem => self.open_report(ctx, false),
             Command::JoinDiscord => ctx.open_url(egui::OpenUrl::new_tab(crate::menu::DISCORD)),
         }
@@ -4581,7 +4583,7 @@ impl MassifApp {
         match editor {
             EditorKind::Map => {
                 hui.add_space(8.0);
-                self.maps.entry(id).or_default().header(&mut hui, &mut self.settings.overlays);
+                self.maps.entry(id).or_default().header(&mut hui, &mut self.settings.overlays, &mut self.tools);
                 let mut add = false;
                 if self.references.header(&mut hui, &mut self.doc.world.meta.references, &mut add) {
                     self.doc.mark_changed();
@@ -4703,6 +4705,7 @@ impl MassifApp {
                 if view.wants_glimpse(&self.doc) {
                     view.give_glimpse(&self.doc, self.map_cache.summaries_of(self.doc.generation));
                 }
+                view.annotations = self.tools.show_annotations;
                 view.ui(&mut cui, frame, &mut self.doc, &mut self.tools, self.map_center, false);
                 // What it shows is kept with the layout.
                 let look = crate::layout::View3dLook { mode: view.mode, water: view.water };
@@ -4719,6 +4722,7 @@ impl MassifApp {
                 if called.inner {
                     self.call_brushes(cui.ctx());
                 }
+                self.sculpt3d.annotations = self.tools.show_annotations;
                 self.sculpt3d.ui(&mut cui, frame, &mut self.doc, &mut self.tools, self.map_center, true);
                 if let Some(note) = self.sculpt3d.feedback.take() {
                     self.feedback = Some(note);
@@ -11537,8 +11541,7 @@ mod tests {
         assert_eq!((refs[0].x, refs[0].z, refs[0].scale, refs[0].size), (0.0, 0.0, 1.0, [1024, 1024]));
         assert_eq!(refs[0].corners()[0], (-512.0, -512.0));
         if let Some(dir) = &dir {
-            let view = h.state_mut().maps.values_mut().next().unwrap();
-            view.annotations = true;
+            h.state_mut().tools.show_annotations = true;
             h.run_steps(20);
             h.render().unwrap().save(dir.join("import-mask-annotations.png")).unwrap();
         }

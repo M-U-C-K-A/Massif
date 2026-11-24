@@ -452,6 +452,9 @@ fn compose_area(dim: &Dimension, x0: i32, z0: i32, w: usize, d: usize, mode: Map
                     }
                     if mode == MapMode::Biome {
                         top = sampler.sample(stack, cell);
+                    } else {
+                        // The annotation, which tints the top in any mode.
+                        top.annotation = stack.ground().annotations.get(cell) as u8;
                     }
                     if let Some(t) = sp.last() {
                         cover = stack.surface_cover(cell, t);
@@ -521,6 +524,24 @@ pub struct Style {
     pub water: bool,
     /// The world's fluid is lava.
     pub lava: bool,
+    /// The annotations shown on the land: the fingerprint of the map's
+    /// colours of annotations; `None`: hidden.
+    pub notes: Option<u64>,
+}
+
+/// The colour of each annotation by number and how opaque it is drawn (0
+/// to 1), for `notes` (see [`Style::notes`]); empty when hidden.
+fn note_colors(reg: &Registry, notes: Option<u64>) -> Vec<Option<([u8; 3], f32)>> {
+    if notes.is_none() {
+        return Vec::new();
+    }
+    let p = &reg.annotations;
+    (0..=massif_core::annotations::MAX)
+        .map(|n| {
+            let alpha = p.opacity(n) as f32 / 100.0;
+            p.color(n).filter(|_| alpha > 0.0).map(|c| (c, alpha))
+        })
+        .collect()
 }
 
 struct Colors<'a> {
@@ -535,6 +556,8 @@ struct Colors<'a> {
     seed: u64,
     /// The world's fluid is lava: nothing grows in it.
     lava: bool,
+    /// The annotations' colours (see [`note_colors`]).
+    notes: Vec<Option<([u8; 3], f32)>>,
 }
 
 impl Colors<'_> {
@@ -567,8 +590,21 @@ impl Colors<'_> {
     /// blocks they are. On the column's top, what the cover numbered
     /// `cover` grows there shows over the ground (`wet`: the top is under
     /// water).
+    ///
+    /// An annotation shows over the top, in its colour, without the
+    /// texture of its block.
     #[allow(clippy::too_many_arguments)]
     fn top(&self, terrain: u16, y0: i32, y1: i32, x: i32, z: i32, slope: f32, sample: &Sample, cover: u16, wet: bool) -> Skin {
+        let mut skin = self.bare_top(terrain, y0, y1, x, z, slope, sample, cover, wet);
+        if let Some(Some((c, alpha))) = self.notes.get(sample.annotation as usize) {
+            skin.top = std::array::from_fn(|k| (skin.top[k] as f32 + (c[k] as f32 - skin.top[k] as f32) * alpha).round() as u8);
+            skin.top_mat = 0;
+        }
+        skin
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn bare_top(&self, terrain: u16, y0: i32, y1: i32, x: i32, z: i32, slope: f32, sample: &Sample, cover: u16, wet: bool) -> Skin {
         let flat = |c: [u8; 3]| Skin::flat(c, c);
         match self.mode {
             MapMode::Terrain => {
@@ -805,6 +841,7 @@ fn build_tile_part(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: T
         mat: Materializer::new(reg, seed, dim.min_y),
         seed: seed as u64,
         lava: style.lava,
+        notes: note_colors(reg, style.notes),
     };
     let (min_y, max_y) = (dim.min_y, dim.max_y);
     let clamp16 = |v: i32| v.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
@@ -4241,6 +4278,7 @@ fn build_glimpse(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, cell: Til
         mat: Materializer::new(reg, seed, dim.min_y),
         seed: seed as u64,
         lava: style.lava,
+        notes: note_colors(reg, style.notes),
     };
     let mut pair = |skin: Skin| *index.entry(skin).or_insert_with(|| {
         pairs.push(skin);
@@ -4511,6 +4549,8 @@ type Cells = ((u64, usize, i32), std::sync::Arc<[TilePos]>);
 pub struct View3d {
     pub mode: MapMode,
     pub water: bool,
+    /// The annotations show (the tools', set every frame).
+    pub annotations: bool,
     pub camera: Camera,
     renderer: Option<Renderer3d>,
     texture: Option<egui::TextureId>,
@@ -4730,6 +4770,7 @@ impl Default for View3d {
         Self {
             mode: MapMode::Terrain,
             water: true,
+            annotations: true,
             camera: Camera::default(),
             renderer: None,
             texture: None,
@@ -4777,6 +4818,11 @@ impl Default for View3d {
 }
 
 impl View3d {
+    /// The annotations as the style shows them (see [`Style::notes`]).
+    fn notes(&self, doc: &Document) -> Option<u64> {
+        self.annotations.then(|| doc.world.registry.annotations.fingerprint())
+    }
+
     /// A view of its own beside this one: looking where it looks, with
     /// the game's blocks it has, nothing built yet.
     pub fn beside(&self) -> Self {
@@ -4828,6 +4874,7 @@ impl View3d {
             mode: self.mode,
             water: self.water,
             lava: doc.world.meta.lava,
+            notes: self.notes(doc),
         };
         let eye = self.camera.eye();
         let low = stride > 1 && ground_at(doc, eye[0], eye[2]).is_some_and(|g| eye[1] - g < NEAR_HEIGHT);
@@ -5616,6 +5663,7 @@ impl View3d {
             mode: self.mode,
             water: self.water,
             lava: doc.world.meta.lava,
+            notes: self.notes(doc),
         };
         let stride = self.grid.as_ref().map_or(1, |g| g.stride);
         // A builder for another map, colouring or grid stops.
@@ -6029,6 +6077,7 @@ impl View3d {
             mode: self.mode,
             water: self.water,
             lava: doc.world.meta.lava,
+            notes: self.notes(doc),
         };
         let smooth_changed = set_smooth(&doc.world.meta.smooth);
         if self.style != Some(style) || smooth_changed {
@@ -6798,7 +6847,7 @@ mod tests {
         t.bottom = Some(massif_core::Plane::Uniform(150.0));
         t.terrain = massif_core::Plane::Uniform(1);
         w.dims[0].levels[slab].insert(tile, t);
-        let style = Style { mode: MapMode::Terrain, water: true, lava: false };
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false, notes: None };
         let dim = &w.dims[0];
         for stride in [2, 4] {
             let cell = grid_tile(tile, stride);
@@ -6856,6 +6905,7 @@ mod tests {
         mode: MapMode::Terrain,
         water: true,
         lava: false,
+        notes: None,
     };
 
     /// A coarse cell of the grid keeps, of each tile, the columns at the
@@ -7130,6 +7180,27 @@ mod tests {
         assert!(empty.heights.iter().all(|&h| h == 0));
     }
 
+    /// Annotations tint the tops of the columns they are painted on, in
+    /// their colour, while shown; hidden, the tops are the ground's.
+    #[test]
+    fn annotations_tint_the_tops_in_3d() {
+        use massif_core::generate::{GenParams, Landform, generate};
+        let mut w = generate(&GenParams { tiles_x: 2, tiles_z: 2, landform: Landform::Plains, seed: 5, ..GenParams::default() });
+        let brush = massif_core::Brush { shape: massif_core::BrushShape::Circle, radius: 30.0, profile: massif_core::Profile::Constant, strength: 1.0, rotation: 0.0, mask: None, filter: None };
+        let mut h = massif_core::history::History::default();
+        h.begin("mark", 0);
+        massif_core::ops::paint_annotation(&mut h.edit(&mut w, 0), &brush, 64.0, 64.0, 11, 1);
+        h.commit();
+        let dim = &w.dims[0];
+        let tile = TilePos::new(0, 0);
+        let shown = build_tile(dim, &w.registry, 63.0, w.meta.seed, tile, Style { notes: Some(w.registry.annotations.fingerprint()), ..STYLE });
+        let hidden = build_tile(dim, &w.registry, 63.0, w.meta.seed, tile, STYLE);
+        let at = |b: &TileBuild| b.pairs[b.colors[64 * 128 + 64] as usize].top;
+        let (blue, ground) = (at(&shown), at(&hidden));
+        assert!(blue[2] as i32 > ground[2] as i32 + 40, "blue over the land: {blue:?} against {ground:?}");
+        assert_eq!(shown.pairs[shown.colors[5] as usize].top, hidden.pairs[hidden.colors[5] as usize].top, "only where painted");
+    }
+
     /// The walls of the meshed columns close every step toward their
     /// neighbours: their area equals the height differences.
     #[test]
@@ -7137,7 +7208,7 @@ mod tests {
         let w = world();
         let dim = &w.dims[0];
         let tile = TilePos::new(0, -1);
-        let b = build_tile(dim, &w.registry, 63.0, w.meta.seed, tile, Style { mode: MapMode::Height, water: false, lava: false });
+        let b = build_tile(dim, &w.registry, 63.0, w.meta.seed, tile, Style { mode: MapMode::Height, water: false, lava: false, notes: None });
         let grid = compose_area(dim, -1, -129, 130, 130, MapMode::Height, false, None);
         let mut expected = 0i64;
         let mut gaps = Vec::new();
@@ -7444,7 +7515,7 @@ mod perf {
         let world = massif_format::load(std::path::Path::new(&path)).unwrap();
         let dim = &world.dims[0];
         let mut renderer = Renderer3d::new(&device, &queue);
-        let style = Style { mode: MapMode::Terrain, water: true, lava: false };
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false, notes: None };
         let shape = GridShape::of(dim, PAGE_BUDGET).unwrap();
         renderer.set_grid(shape.stride, shape.page0, shape.pages, &shape.present).unwrap();
         let stride = shape.stride;
@@ -7529,7 +7600,7 @@ mod perf {
             massif_assets::apply_colors(&mut world.registry, cat);
         }
         let mut renderer = Renderer3d::new(&device, &queue);
-        let style = Style { mode: MapMode::Terrain, water: true, lava: false };
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false, notes: None };
         let dim = &world.dims[0];
         let shape = GridShape::of(dim, PAGE_BUDGET).unwrap();
         renderer.set_grid(shape.stride, shape.page0, shape.pages, &shape.present).unwrap();
@@ -7596,7 +7667,7 @@ mod perf {
         let dim = &world.dims[0];
         eprintln!("chunks sculpted: {}", dim.voxels.len());
         let tile = TilePos::new(0, 0);
-        let style = Style { mode: MapMode::Terrain, water: true, lava: false };
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false, notes: None };
         let reg = &world.registry;
         let n = TILE_SIZE as usize;
         let t = Instant::now();
@@ -7622,7 +7693,7 @@ pub fn probe_ms(device: &wgpu::Device, queue: &wgpu::Queue) -> f32 {
     use massif_core::generate::{GenParams, Landform, generate};
     let world = generate(&GenParams { tiles_x: 8, tiles_z: 8, landform: Landform::Hills, seed: 3, ..GenParams::default() });
     let dim = &world.dims[0];
-    let style = Style { mode: MapMode::Terrain, water: true, lava: false };
+    let style = Style { mode: MapMode::Terrain, water: true, lava: false, notes: None };
     let mut renderer = Renderer3d::with_samples(device, queue, SAMPLES);
     let Some(shape) = GridShape::of(dim, 64) else { return 0.0 };
     if renderer.set_grid(shape.stride, shape.page0, shape.pages, &shape.present).is_err() {
@@ -7715,7 +7786,7 @@ mod graphics_perf {
             massif_assets::apply_colors(&mut world.registry, cat);
         }
         let dim = &world.dims[0];
-        let style = Style { mode: MapMode::Terrain, water: true, lava: false };
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false, notes: None };
         let (lo, hi) = dim.bounds().unwrap();
         let (x0, z0, x1, z1) = ((lo.x * 128) as f64, (lo.z * 128) as f64, ((hi.x + 1) * 128) as f64, ((hi.z + 1) * 128) as f64);
         let extent = (x1 - x0).max(z1 - z0);
@@ -7832,7 +7903,7 @@ mod gradient_shots {
     /// The world drawn as the game's look draws it, from `camera`.
     fn game_look(device: &wgpu::Device, queue: &wgpu::Queue, world: &World, cat: &massif_assets::Catalogue, camera: Camera, size: [u32; 2]) -> image::RgbImage {
         let mut renderer = Renderer3d::new(device, queue);
-        let style = Style { mode: MapMode::Terrain, water: true, lava: false };
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false, notes: None };
         let dim = &world.dims[0];
         let shape = GridShape::of(dim, PAGE_BUDGET).unwrap();
         renderer.set_grid(shape.stride, shape.page0, shape.pages, &shape.present).unwrap();

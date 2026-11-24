@@ -333,6 +333,7 @@ impl Default for MapStyle {
             top: 320,
             seed: 0,
             annotations: true,
+            notes: 0,
             contour: ContourStyle::default(),
             sizes: false,
             pockets: false,
@@ -385,6 +386,10 @@ pub struct MapStyle {
     pub seed: i64,
     /// Annotations are drawn over the map.
     pub annotations: bool,
+    /// The fingerprint of the map's annotation colours
+    /// ([`massif_core::annotations::AnnotationPalette::fingerprint`]): a
+    /// colour changed, the map is drawn again.
+    pub notes: u64,
     /// How the contour lines are drawn.
     pub contour: ContourStyle,
     /// The tree sizes are drawn over the map.
@@ -634,6 +639,9 @@ pub struct Colorizer<'a> {
     pockets: Vec<Option<[u8; 3]>>,
     auto: AutoBiome,
     light: [f32; 3],
+    /// Each annotation's colour and how opaque it is drawn (0 to 1), by
+    /// number; `None` for none.
+    notes: Vec<Option<(Rgb, f32)>>,
 }
 
 impl<'a> Colorizer<'a> {
@@ -653,6 +661,12 @@ impl<'a> Colorizer<'a> {
                 .map(|t| t.strata.first().is_some_and(|s| s.blocks.iter().any(|(b, _)| massif_core::registry::is_soil(&reg.block(*b).state))))
                 .collect(),
             auto: AutoBiome::new(reg),
+            notes: (0..=massif_core::annotations::MAX)
+                .map(|n| {
+                    let alpha = reg.annotations.opacity(n) as f32 / 100.0;
+                    reg.annotations.color(n).filter(|_| alpha > 0.0).map(|c| (rgb(c), alpha))
+                })
+                .collect(),
         }
     }
 
@@ -799,9 +813,9 @@ impl<'a> Colorizer<'a> {
         }
         // Annotations: marks of colour over everything else.
         if self.style.annotations
-            && let Some(&color) = c.annotation.checked_sub(1).and_then(|k| massif_core::tile::ANNOTATION_COLORS.get(k as usize))
+            && let Some(Some((color, alpha))) = self.notes.get(c.annotation as usize)
         {
-            out = mix(out, color.map(|v| v as f32), 0.75);
+            out = mix(out, *color, *alpha);
         }
 
         if let Some(lines) = contour {
@@ -2174,6 +2188,43 @@ mod tests {
         }
         let (none, _) = cover_bands(&[(1.0, Some(0.0)), (0.5, Some(0.0)), (0.0, Some(0.0))]);
         assert!(none.1.iter().all(|&d| d < 0.5), "none of it: {:?}", none.1);
+    }
+
+    /// Annotations are drawn as opaque as their colour says; a colour of
+    /// the map's own shows like the fifteen; at 0 % a colour is gone.
+    #[test]
+    fn annotations_fade_with_their_opacity() {
+        let mut w = generate(&GenParams { tiles_x: 2, tiles_z: 2, landform: Landform::Plains, seed: 3, ..GenParams::default() });
+        let hard = |radius: f32| Brush { shape: BrushShape::Circle, radius, profile: Profile::Constant, strength: 1.0, rotation: 0.0, mask: None, filter: None };
+        let own = w.registry.annotations.number_of([20, 80, 255]).unwrap();
+        let mut h = History::default();
+        h.begin("mark", 0);
+        {
+            let mut e = h.edit(&mut w, 0);
+            ops::paint_annotation(&mut e, &hard(18.0), -60.0, 0.0, 14, 1);
+            ops::paint_annotation(&mut e, &hard(18.0), 0.0, 0.0, own, 2);
+            ops::paint_annotation(&mut e, &hard(18.0), 60.0, 0.0, 5, 3);
+        }
+        h.commit();
+        w.registry.annotations.set_opacity(5, 0);
+        w.registry.annotations.set_opacity(14, 100);
+        let mut faint_reg = w.registry.clone();
+        faint_reg.annotations.set_opacity(14, 30);
+        let dim = &w.dims[0];
+        let at = |img: &ColorImage, x: i32, z: i32| img.pixels[(z + 128) as usize * img.width() + (x + 128) as usize];
+        let style = |reg: &Registry| MapStyle { notes: reg.annotations.fingerprint(), ..MapStyle::default() };
+        let full = render_region(dim, &w.registry, 63.0, style(&w.registry), 0, -128, -128, 2, 2);
+        let faint = render_region(dim, &faint_reg, 63.0, style(&faint_reg), 0, -128, -128, 2, 2);
+        let none = render_region(dim, &w.registry, 63.0, MapStyle { annotations: false, ..style(&w.registry) }, 0, -128, -128, 2, 2);
+        save("map-annotations-opacity-100.png", &full);
+        save("map-annotations-opacity-30.png", &faint);
+        let (red, red_faint, land) = (at(&full, -60, 0), at(&faint, -60, 0), at(&none, -60, 0));
+        assert!(red.r() > red.g() + 60, "red at 100 %: {red:?}");
+        let redness = |c: Color32| c.r() as i32 - c.g() as i32;
+        assert!(redness(red_faint) < redness(red) - 30 && redness(red_faint) > redness(land) + 5, "between: {land:?} < {red_faint:?} < {red:?}");
+        let blue = at(&full, 0, 0);
+        assert!(blue.b() > blue.r() + 60, "the map's own colour: {blue:?}");
+        assert_eq!(at(&full, 60, 0), at(&none, 60, 0), "a colour at 0 % shows nothing");
     }
 
     /// The contour lines' intervals follow the zoom: the one chosen close

@@ -20,6 +20,7 @@
 
 pub mod analysis;
 pub mod animation;
+pub mod annotations;
 pub mod atomic;
 pub mod auto;
 pub mod brush;

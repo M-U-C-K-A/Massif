@@ -76,6 +76,8 @@ pub enum Command {
     FullScreen,
     /// The whole map in the map view.
     FitMap,
+    /// View ▸ Show Annotations: on the map and in 3D, or hidden.
+    ShowAnnotations,
     /// A report of a problem to save and send (see `report`).
     ReportProblem,
     /// Massif's Discord server, in the browser.
@@ -166,6 +168,8 @@ pub struct State<'a> {
     pub theme: ThemeChoice,
     /// The map has a selection: it can be inverted or dropped.
     pub selected: bool,
+    /// The annotations are shown.
+    pub annotations: bool,
 }
 
 /// An item: a command under a name.
@@ -317,6 +321,10 @@ pub fn menus(state: &State) -> Vec<Menu> {
     view.extend([
         Entry::Separator,
         item(Command::FitMap, Icon::Maximize2, tr!("Fit the whole map"), map),
+        Entry::Item(Item {
+            checked: Some(state.annotations),
+            ..Item::new(Command::ShowAnnotations, None, tr!("Show Annotations"), map)
+        }),
         Entry::Separator,
         Entry::Item(Item::new(Command::ResetWorkspaces, None, tr!("Reset workspaces"), free)),
     ]);
@@ -498,6 +506,7 @@ mod tests {
             recent,
             theme: ThemeChoice::Dark,
             selected: true,
+            annotations: true,
         }
     }
 
@@ -558,7 +567,7 @@ mod tests {
         assert!(redo.label == "Redo" && !redo.enabled, "nothing to redo");
         assert_eq!(items(&menus[2].entries).iter().filter(|i| matches!(i.command, Command::WholeMap(_))).count(), WholeOp::ALL.len());
         let checked: Vec<&Command> = items(&menus[3].entries).iter().filter(|i| i.checked == Some(true)).map(|i| &i.command).collect();
-        assert_eq!(checked, [&Command::Theme(ThemeChoice::Dark)]);
+        assert_eq!(checked, [&Command::Theme(ThemeChoice::Dark), &Command::ShowAnnotations]);
         assert!(all(&menus).iter().all(|i| i.enabled || matches!(i.command, Command::Redo)));
     }
 

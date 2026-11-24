@@ -32,7 +32,7 @@ two plants or two tree species never pile up on a block.
 | Sub-canopy | Bushes, hazel, holly growing under the trees | Under the trees |
 | Underground pockets | Gravel, clay, a mod's stone: blobs of other blocks in the rock | Underground |
 | Tree sizes | Where bushes, small, medium or large trees grow | Size |
-| Annotations | Marks in fifteen colours, to plan the map | Notes |
+| Annotations | Marks in colour (WorldPainter's fifteen and the map's own), to plan the map | Notes |
 
 The **Trees** slot is WorldPainter's "base tree" and the **Cover** slot its
 "base plant", as the Conquest Reforged team uses them: a block has one of
@@ -261,7 +261,9 @@ but other settings stays as it is, the file's becoming a layer of its own
   (Trees), `understory` (Under the trees), `pockets` (Underground), `sizes`
   (Size) and `annotations` (Notes); a plane holds 0 for none, or the
   layer's number in the registry (`TerrainId`, `BiomeId`,
-  `Registry::covers`, `Registry::object_layers`, `Registry::pockets`). A plane is written only where it holds
+  `Registry::covers`, `Registry::object_layers`, `Registry::pockets`; for
+  annotations 1 to 15, WorldPainter's colours, then the map's own in
+  `Registry::annotations`, up to 255, each with its opacity). A plane is written only where it holds
   something, so maps without it are unchanged, and a version that does not
   know a plane keeps it as it read it.
 - Every slot is painted by `ops::paint_plane`: the brush, its dab, the

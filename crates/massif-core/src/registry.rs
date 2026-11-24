@@ -576,6 +576,10 @@ pub struct Registry {
     /// map (Bushes, Small, Medium and Large trees), then the map's own.
     #[serde(default = "vanilla_tree_sizes", skip_serializing_if = "is_vanilla_tree_sizes")]
     pub tree_sizes: Vec<TreeSize>,
+    /// What the annotations look like: the opacity of each colour, and
+    /// the map's own colours after WorldPainter's fifteen.
+    #[serde(default, skip_serializing_if = "crate::annotations::AnnotationPalette::is_default")]
+    pub annotations: crate::annotations::AnnotationPalette,
 }
 
 /// A size of tree: a mask Tree sizes paints, and that each object of a
@@ -733,6 +737,7 @@ impl Registry {
             combined: Vec::new(),
             palettes: Vec::new(),
             tree_sizes: vanilla_tree_sizes(),
+            annotations: Default::default(),
             well_known: WellKnown {
                 stone: BlockId(0),
                 deepslate: BlockId(0),
