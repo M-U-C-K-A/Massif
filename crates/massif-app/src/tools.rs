@@ -363,6 +363,34 @@ pub enum Unpaint {
     ByHeight,
 }
 
+/// Zones of one's own, saved under a name in the settings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SavedZones {
+    pub name: String,
+    pub rules: massif_core::paint_rules::ZoneRules,
+}
+
+impl ToolState {
+    /// Note a terrain picked, first among the recent ones.
+    pub fn picked_terrain(&mut self, name: &str) {
+        self.recent_terrains.retain(|n| !n.eq_ignore_ascii_case(name));
+        self.recent_terrains.insert(0, name.to_owned());
+        self.recent_terrains.truncate(12);
+    }
+}
+
+/// The map's zones, ready to paint with: the terrains its preset names
+/// that it has not are made from the game's blocks the first time.
+pub fn zones_of(doc: &mut Document) -> massif_core::paint_rules::Resolved {
+    let rules = doc.world.meta.paint_rules.clone().unwrap_or_default();
+    let before = doc.world.registry.terrains.len();
+    let zones = rules.resolve(&mut doc.world.registry, doc.world.meta.seed);
+    if doc.world.registry.terrains.len() != before {
+        doc.mark_changed();
+    }
+    zones
+}
+
 /// The terrain Paint terrain's right button puts back, `None`: the one the
 /// height calls for.
 pub fn unpaint_to(doc: &Document, tools: &ToolState) -> Option<TerrainId> {
@@ -426,6 +454,14 @@ pub struct ToolState {
     pub flatten_theme: bool,
     /// What Paint terrain's right button puts back.
     pub unpaint: Unpaint,
+    /// Paint terrain's left button paints the map's zones (by height,
+    /// slope and water) rather than one terrain.
+    pub zones_left: bool,
+    /// The terrains picked lately in Paint terrain's picker, by name, the
+    /// last first.
+    pub recent_terrains: Vec<String>,
+    /// Zones of one's own saved under a name, for any map.
+    pub saved_zones: Vec<SavedZones>,
     /// The new tools ([`Tool::NEW`]) tried once: no longer marked.
     pub tried: Vec<Tool>,
     pub roughness: f32,
@@ -1121,6 +1157,9 @@ impl Default for ToolState {
             flatten_mode: ops::FlattenMode::Both,
             flatten_theme: false,
             unpaint: Unpaint::MapTerrain,
+            zones_left: false,
+            recent_terrains: Vec::new(),
+            saved_zones: Vec::new(),
             tried: Vec::new(),
             roughness: 4.0,
             terrain: 1,
@@ -1557,6 +1596,10 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
     profiling::scope!("brush stroke");
     keep_step(doc, &mut stroke.step, &stroke.label);
     let invert = stroke.inverse;
+    // The zones: Paint terrain's left button in Zones, and the right
+    // button back to what the height calls for.
+    let zones = ((matches!(stroke.tool, Tool::PaintTerrain | Tool::Combined) && invert && stroke.back.is_none()) || (stroke.tool == Tool::PaintTerrain && !invert && tools.zones_left && !tools.pattern.on)).then(|| zones_of(doc));
+    let (sea, lava) = (doc.world.meta.sea_level, doc.world.meta.lava);
     // The automatic tools read the land with the rules of the settings.
     let reader = matches!(stroke.tool, Tool::AutoBiome | Tool::AutoPaint)
         .then(|| massif_core::auto::Reader::new(&tools.auto, &doc.world.registry, doc.world.meta.sea_level).with_base(doc.auto_base()));
@@ -1576,7 +1619,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
         let reg = &doc.world.registry;
         (if invert { c.to_rub_out(reg) } else { c.to_paint(reg) }, c.terrain().is_some())
     });
-    let theme = ((matches!(stroke.tool, Tool::PaintTerrain | Tool::Combined) && invert && stroke.back.is_none()) || (stroke.tool == Tool::AutoPaint && invert) || (stroke.tool == Tool::Flatten && tools.flatten_theme)).then(|| {
+    let theme = ((stroke.tool == Tool::AutoPaint && invert) || (stroke.tool == Tool::Flatten && tools.flatten_theme)).then(|| {
         (
             massif_core::generate::Theme::new(&doc.world.registry),
             doc.world.meta.sea_level as f32,
@@ -1676,11 +1719,11 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
                 let amp = tools.roughness * brush.strength * dt * 4.0 * share;
                 ops::roughen(&mut edit, brush, x, z, if invert { -amp } else { amp }, stroke.salt >> 7, surface);
             }
-            Tool::PaintTerrain => match (stroke.back.filter(|_| invert), &theme, &pattern) {
+            Tool::PaintTerrain => match (stroke.back.filter(|_| invert), &zones, &pattern) {
                 // The inverse puts back the map's own terrain, or the one
-                // the height calls for.
+                // the zones call for.
                 (Some(back), _, _) => ops::paint_terrain(&mut edit, brush, x, z, back, stroke.salt),
-                (None, Some((theme, sea)), _) => ops::paint_terrain_with(&mut edit, brush, x, z, stroke.salt, |h| theme.terrain(h - 1.0, 0.0, *sea, 0.0)),
+                (None, Some(zones), _) => ops::paint_by_zones(&mut edit, brush, x, z, stroke.salt, zones, (sea, lava)),
                 (None, None, Some(pattern)) => ops::paint_pattern(&mut edit, brush, x, z, stroke.salt, pattern),
                 (None, None, None) => ops::paint_terrain(&mut edit, brush, x, z, TerrainId(tools.terrain), stroke.salt),
             },
@@ -1710,9 +1753,9 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
                 ops::paint_parts(&mut edit, brush, x, z, &parts, stroke.salt);
                 // The terrain put back as Paint terrain's right button does.
                 if invert && combined.as_ref().is_some_and(|c| c.1) {
-                    match (stroke.back, &theme) {
+                    match (stroke.back, &zones) {
                         (Some(back), _) => ops::paint_terrain(&mut edit, brush, x, z, back, stroke.salt),
-                        (None, Some((theme, sea))) => ops::paint_terrain_with(&mut edit, brush, x, z, stroke.salt, |h| theme.terrain(h - 1.0, 0.0, *sea, 0.0)),
+                        (None, Some(zones)) => ops::paint_by_zones(&mut edit, brush, x, z, stroke.salt, zones, (sea, lava)),
                         (None, None) => {}
                     }
                 }
@@ -1913,9 +1956,10 @@ pub fn sculpt_dab(doc: &mut Document, tools: &ToolState, stroke: &mut SculptStro
             voxel::displace_at(&mut edit, &brush, frame.center, frame.normal, brush.strength * speed * dt, mode)
         }
         &mut Stroke3d::Paint { inverse, back } => {
+            let zones = ((inverse && back.is_none()) || (!inverse && tools.zones_left && !tools.pattern.on)).then(|| zones_of(doc));
+            let (sea, lava) = (doc.world.meta.sea_level, doc.world.meta.lava);
             let reg = &doc.world.registry;
             let pattern = (!inverse && tools.pattern.on).then(|| tools.pattern.sampler(reg)).flatten();
-            let theme = (inverse && back.is_none()).then(|| (massif_core::generate::Theme::new(reg), doc.world.meta.sea_level as f32));
             let brush = Brush {
                 filter: tools.filter.is_active().then(|| std::sync::Arc::new(tools.filter.clone())),
                 ..brush
@@ -1923,9 +1967,9 @@ pub fn sculpt_dab(doc: &mut Document, tools: &ToolState, stroke: &mut SculptStro
             let level = doc.active_level.min(doc.dimension().levels.len() - 1);
             let (x, z) = (frame.center[0], frame.center[2]);
             let mut edit = doc.history.edit(&mut doc.world, level);
-            match (back.filter(|_| inverse), &theme, &pattern) {
+            match (back.filter(|_| inverse), &zones, &pattern) {
                 (Some(back), _, _) => ops::paint_terrain(&mut edit, &brush, x, z, back, stroke.salt),
-                (None, Some((theme, sea)), _) => ops::paint_terrain_with(&mut edit, &brush, x, z, stroke.salt, |h| theme.terrain(h - 1.0, 0.0, *sea, 0.0)),
+                (None, Some(zones), _) => ops::paint_by_zones(&mut edit, &brush, x, z, stroke.salt, zones, (sea, lava)),
                 (None, None, Some(pattern)) => ops::paint_pattern(&mut edit, &brush, x, z, stroke.salt, pattern),
                 (None, None, None) => ops::paint_terrain(&mut edit, &brush, x, z, TerrainId(tools.terrain), stroke.salt),
             }
@@ -2655,6 +2699,79 @@ mod tests {
         probe(doc, x, z).unwrap().height
     }
 
+    /// Paint terrain's left button in Zones paints the map's preset: sand
+    /// on the flat of a desert, the zones kept with the map.
+    #[test]
+    fn zones_paint_the_preset_of_the_map() {
+        use massif_core::paint_rules::{Preset, ZoneRules};
+        let mut d = doc();
+        let mut tools = ToolState::default();
+        tools.select(Tool::PaintTerrain);
+        tools.zones_left = true;
+        tools.brush.strength = 1.0;
+        tools.brush.radius = 6.0;
+        tools.brush.profile = massif_core::Profile::Constant;
+        d.world.meta.paint_rules = Some(ZoneRules::of(Preset::Desert));
+        let sand = d.world.registry.terrain_by_name("Sand").unwrap();
+        assert_ne!(TerrainId(probe(&d, 20, 20).unwrap().terrain), sand);
+        let (stroke, _) = begin_stroke(&mut d, &tools, (20.5, 20.5), false, false);
+        let mut stroke = stroke.unwrap();
+        continue_stroke(&mut d, &tools, &mut stroke, (20.5, 20.5), 0.1);
+        end_stroke(&mut d, stroke);
+        assert_eq!(TerrainId(probe(&d, 20, 20).unwrap().terrain), sand);
+        let saved: massif_core::WorldMeta = serde_json::from_str(&serde_json::to_string(&d.world.meta).unwrap()).unwrap();
+        assert_eq!(saved.paint_rules.map(|r| r.preset), Some(Preset::Desert), "kept with the map");
+    }
+
+    /// Grass is never painted under water: not by the right button back to
+    /// what the height calls for, on a lake above the sea where the height
+    /// alone said grass, nor by zones of one's own that ask for it there.
+    #[test]
+    fn grass_is_never_painted_under_water() {
+        use massif_core::paint_rules::{Preset, Water, Zone, ZoneRules};
+        let mut d = doc();
+        // A lake over the land, above the sea.
+        let ground = massif_core::compose::block_top(height(&d, 20, 20));
+        d.world.meta.sea_level = ground - 20;
+        assert!(ground > d.world.meta.sea_level + 1, "a lake above the sea");
+        d.history.begin("lake", d.dim);
+        {
+            let mut edit = d.history.edit(&mut d.world, 0);
+            edit.par_tiles(massif_core::coords::BlockRect::around(20.0, 20.0, 12.0).tiles(), massif_core::coords::BlockRect::around(20.0, 20.0, 12.0), false, |_, clip, tile| {
+                for z in clip.z0..clip.z1 {
+                    for x in clip.x0..clip.x1 {
+                        tile.fluid.set(massif_core::coords::local_index(x, z), (ground + 3) as i16);
+                    }
+                }
+            });
+        }
+        d.commit();
+        let mut tools = ToolState::default();
+        tools.select(Tool::PaintTerrain);
+        tools.unpaint = Unpaint::ByHeight;
+        tools.brush.strength = 1.0;
+        tools.brush.radius = 6.0;
+        tools.brush.profile = massif_core::Profile::Constant;
+        let grass_zones = ZoneRules { preset: Preset::Custom, custom: vec![Zone { terrain: "Grass".into(), water: Water::Under, low: 0, high: 100, min_slope: 0.0, max_slope: 90.0 }, Zone { terrain: "Grass".into(), water: Water::Dry, low: -100, high: 300, min_slope: 0.0, max_slope: 90.0 }], ragged: 3.0 };
+        for rules in Preset::ALL.map(ZoneRules::of).into_iter().chain([grass_zones]) {
+            d.world.meta.paint_rules = Some(rules.clone());
+            for (inverse, zones_left) in [(true, false), (false, true)] {
+                tools.zones_left = zones_left;
+                let (stroke, _) = begin_stroke(&mut d, &tools, (20.5, 20.5), inverse, inverse);
+                let mut stroke = stroke.unwrap();
+                continue_stroke(&mut d, &tools, &mut stroke, (20.5, 20.5), 0.1);
+                end_stroke(&mut d, stroke);
+                for (x, z) in [(18, 20), (20, 20), (22, 22)] {
+                    let p = probe(&d, x, z).unwrap();
+                    let def = d.world.registry.terrain(TerrainId(p.terrain));
+                    assert!(!massif_core::paint_rules::air_only(def), "{:?}: {} under water at {x}, {z}", rules.preset, def.name);
+                }
+            }
+        }
+        let bed = ["Sand", "Clay"].map(|n| d.world.registry.terrain_by_name(n).unwrap().0);
+        assert!(bed.contains(&probe(&d, 20, 20).unwrap().terrain), "the game's bed, 3 blocks deep: sand, or clay where the edge is ragged");
+    }
+
     /// Paint terrain's right button puts back the map's own terrain: on a
     /// map filled with rock, rock, not the grass (or snow) its height calls
     /// for; on a map saved before it kept its terrain, the one covering
@@ -2684,7 +2801,12 @@ mod tests {
             }
             TerrainId(probe(d, 20, 20).unwrap().terrain)
         };
-        let by_height = |d: &Document| massif_core::generate::Theme::new(&d.world.registry).terrain(height(d, 20, 20) - 1.0, 0.0, d.world.meta.sea_level as f32, 0.0);
+        let by_height = |d: &Document| {
+            let mut reg = d.world.registry.clone();
+            let zones = d.world.meta.paint_rules.clone().unwrap_or_default().resolve(&mut reg, d.world.meta.seed);
+            let column = massif_core::paint_rules::Column { x: 20, z: 20, y: massif_core::compose::block_top(height(d, 20, 20)) - 1, slope: 0.0, fluid: None };
+            zones.terrain(column, d.world.meta.sea_level, false).unwrap()
+        };
         let mut tools = ToolState::default();
         assert_eq!(tools.unpaint, Unpaint::MapTerrain);
 

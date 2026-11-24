@@ -414,6 +414,7 @@ pub fn generate(params: &GenParams) -> World {
         ores: Default::default(),
         gradients: Vec::new(),
         fill: params.surface,
+        paint_rules: None,
         palette: params.palette.clone(),
         smooth: Default::default(),
         ..Default::default()
@@ -475,6 +476,7 @@ pub fn from_heightmap(map: &crate::heightmap::Heightmap, how: &FromHeightmap) ->
         ores: Default::default(),
         gradients: Vec::new(),
         fill: None,
+        paint_rules: None,
         palette: Default::default(),
         smooth: Default::default(),
         ..Default::default()

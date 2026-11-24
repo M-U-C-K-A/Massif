@@ -395,13 +395,16 @@ fn water_settings(ui: &mut Ui, tools: &mut ToolState, doc: &Document, tool: Tool
 /// Gradient (the Gradient brush, which shows the same choice).
 pub(crate) fn paint_modes(ui: &mut Ui, tools: &mut ToolState) {
     let gradient = tools.tool == Tool::Gradient;
-    let on = [!gradient && !tools.pattern.on, !gradient && tools.pattern.on, gradient];
-    if let Some(k) = crate::widgets::button_group(ui, "paint what", &[tr!("One terrain"), tr!("Noise"), tr!("Gradient")], &on) {
-        if k == 2 {
+    let (noise, zones) = (!gradient && tools.pattern.on, !gradient && !tools.pattern.on && tools.zones_left);
+    let on = [!gradient && !noise && !zones, noise, zones, gradient];
+    let labels = [tr!("One terrain"), tr!("Noise"), tr!("Zones"), tr!("Gradient")];
+    if let Some(k) = crate::widgets::button_rows(ui, "paint what", &labels, &on) {
+        if k == 3 {
             tools.select(Tool::Gradient);
         } else {
             tools.select(Tool::PaintTerrain);
             tools.pattern.on = k == 1;
+            tools.zones_left = k == 2;
         }
     }
 }
@@ -417,38 +420,17 @@ fn unpaint_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     }
     ui.add_space(4.0);
     if tools.unpaint == Unpaint::ByHeight {
-        hint(ui, tr!("Right button: back to the terrain the height calls for, as a new map is painted: grass, sand by the water, rock and snow up high."));
+        hint(ui, tr!("Right button: back to the terrain the zones call for (below), by height, slope and water."));
         return;
     }
     let known = doc.map_terrain();
-    let mut chosen = None;
-    ui.horizontal(|ui| {
-        match known {
-            Some(t) => {
-                let (r, _) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::hover());
-                terrain_icon(ui, r, &doc.world.registry, t.0, blocks);
-                // The room the Change menu leaves it.
-                let room = (ui.available_width() - 90.0).max(0.0);
-                ui.allocate_ui(vec2(room, 26.0), |ui| ui.add(egui::Label::new(RichText::new(crate::i18n::tr_name(&doc.world.registry.terrain(t).name)).bold()).truncate()));
-            }
-            None => {
-                let room = (ui.available_width() - 90.0).max(0.0);
-                ui.allocate_ui(vec2(room, 26.0), |ui| ui.add(egui::Label::new(RichText::new(tr!("By height, for now")).color(Palette::of(ui).weak)).truncate()));
-            }
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            crate::widgets::combo("unpaint terrain").selected_text(tr!("Change")).width(40.0).height(320.0).show_ui(ui, |ui| {
-                for (i, def) in doc.world.registry.terrains.iter().enumerate() {
-                    let t = TerrainId(i as u16);
-                    if ui.selectable_label(known == Some(t), crate::i18n::tr_name(&def.name)).clicked() {
-                        chosen = Some(t);
-                    }
-                }
-            })
-            .response
-            .on_hover_text(tr!("The terrain the map is made of, kept with it"));
-        });
-    });
+    let label = match known {
+        Some(t) => crate::i18n::tr_name(&doc.world.registry.terrain(t).name).to_owned(),
+        None => tr!("By height, for now").to_owned(),
+    };
+    let chip = terrain_chip(ui, &doc.world.registry, known.map(|t| t.0), &label, blocks, 280.0).on_hover_text(tr!("The terrain the map is made of, kept with it"));
+    let current = known.map(|t| doc.world.registry.terrain(t).name.clone());
+    let chosen = terrain_popup(&chip, egui::Id::unique("unpaint terrain pick"), tools, doc, blocks, current.as_deref());
     if let Some(t) = chosen {
         doc.world.meta.fill = Some(t);
         doc.mark_changed();
@@ -512,19 +494,21 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
             ui.add_space(4.0);
             if tools.pattern.on {
                 pattern_settings(ui, tools, doc, blocks);
+            } else if tools.zones_left {
+                hint(ui, tr!("The left button paints each column with the terrain its zone calls for (below): by its height, its slope and the water over it."));
             } else {
-                let def = doc.world.registry.terrain(TerrainId(tools.terrain));
-                ui.horizontal(|ui| {
-                    let (r, _) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::hover());
-                    terrain_icon(ui, r, &doc.world.registry, tools.terrain, blocks);
-                    ui.label(RichText::new(&def.name).bold());
-                });
-                hint(
-                    ui,
-                    tr!("Pick it in Terrain or Blocks; Alt-click picks it on the map."),
-                );
+                let name = crate::i18n::tr_name(&doc.world.registry.terrain(TerrainId(tools.terrain)).name).to_owned();
+                let chip = terrain_chip(ui, &doc.world.registry, Some(tools.terrain), &name, blocks, 280.0);
+                let chip = chip.on_hover_text(tr!("Pick another terrain, or any block of the game"));
+                if let Some(t) = terrain_popup(&chip, egui::Id::unique("paint terrain pick"), tools, doc, blocks, Some(&doc.world.registry.terrain(TerrainId(tools.terrain)).name.clone())) {
+                    tools.terrain = t.0;
+                }
+                hint(ui, tr!("Click it to pick another, among the terrains and blocks; Alt-click picks one on the map."));
             }
             unpaint_settings(ui, tools, doc, blocks);
+            if tools.zones_left || tools.unpaint == crate::tools::Unpaint::ByHeight {
+                crate::zones_ui::settings(ui, tools, doc, blocks);
+            }
         }
         Tool::Gradient => crate::gradient_ui::tool_settings(ui, tools, doc),
         Tool::Cover => cover_settings(ui, tools, doc, blocks),
@@ -2590,9 +2574,60 @@ pub(crate) fn picked_terrain(pick: Pick, doc: &mut Document) -> String {
     }
 }
 
+/// The terrain painted, as a button: its picture, its name, a chevron. A
+/// click opens [`terrain_popup`] under it. `terrain` `None`: no picture.
+pub(crate) fn terrain_chip(ui: &mut Ui, reg: &Registry, terrain: Option<u16>, name: &str, blocks: &mut BlockLibrary, max_width: f32) -> egui::Response {
+    let pal = Palette::of(ui);
+    let font = egui::FontId::proportional(13.0);
+    let chevron = ui.painter().layout_no_wrap(theme::glyph(Icon::ChevronDown).to_string(), egui::FontId::proportional(12.0), pal.weak);
+    let pic = if terrain.is_some() { 26.0 } else { 0.0 };
+    let room = (max_width.min(ui.available_width()) - pic - chevron.size().x - 22.0).max(30.0);
+    let mut job = egui::text::LayoutJob::simple_singleline(name.to_owned(), font, pal.text);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(room);
+    let text = ui.painter().layout_job(job);
+    let size = vec2(pic + text.size().x + chevron.size().x + 22.0, 30.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
+    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&response));
+    let fill = if open || response.hovered() { theme::mix(pal.panel, pal.text, 0.08) } else { theme::mix(pal.panel, pal.text, 0.04) };
+    ui.painter().rect(rect, theme::PILL, fill, Stroke::new(1.0, pal.border), StrokeKind::Inside);
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let mut x = rect.left() + 8.0;
+    if let Some(t) = terrain {
+        let r = Rect::from_center_size(pos2(x + 10.0, rect.center().y), vec2(20.0, 20.0));
+        terrain_icon(ui, r, reg, t, blocks);
+        x += pic;
+    }
+    let w = text.size().x;
+    ui.painter().galley(pos2(x, rect.center().y - text.size().y / 2.0), text, pal.text);
+    ui.painter().galley(pos2(x + w + 6.0, rect.center().y - chevron.size().y / 2.0), chevron, pal.weak);
+    response
+}
+
+/// The picker of [`ground_picker`] in a popup under `chip`: the terrain
+/// picked (made from its block the first time), noted among the recent
+/// ones.
+pub(crate) fn terrain_popup(chip: &egui::Response, id: egui::Id, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary, current: Option<&str>) -> Option<TerrainId> {
+    let recent = tools.recent_terrains.clone();
+    let pick = egui::Popup::from_toggle_button_response(chip)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| ground_picker_with(ui, id, &doc.world.registry, blocks, current, &recent))
+        .and_then(|r| r.inner)?;
+    let name = picked_terrain(pick, doc);
+    tools.picked_terrain(&name);
+    doc.world.registry.terrain_by_name(&name)
+}
+
 /// A list to pick from, with a search field: the terrains of the map, then
 /// the game's whole blocks that are not terrains yet.
 pub(crate) fn ground_picker(ui: &mut Ui, id: egui::Id, reg: &Registry, blocks: &mut BlockLibrary, current: Option<&str>) -> Option<Pick> {
+    ground_picker_with(ui, id, reg, blocks, current, &[])
+}
+
+/// [`ground_picker`], the terrains picked lately (`recent`, by name) first.
+pub(crate) fn ground_picker_with(ui: &mut Ui, id: egui::Id, reg: &Registry, blocks: &mut BlockLibrary, current: Option<&str>, recent: &[String]) -> Option<Pick> {
     let pal = Palette::of(ui);
     let ctx = ui.ctx().clone();
     ui.set_max_width(300.0);
@@ -2611,6 +2646,17 @@ pub(crate) fn ground_picker(ui: &mut Ui, id: egui::Id, reg: &Registry, blocks: &
             })
             .inner
         };
+        let lately: Vec<TerrainId> = if needle.is_empty() { recent.iter().filter_map(|n| reg.terrain_by_name(n)).collect() } else { Vec::new() };
+        if !lately.is_empty() {
+            ui.label(RichText::new(tr!("RECENT")).size(10.5).bold().color(pal.weak));
+            for t in lately {
+                let def = reg.terrain(t);
+                if entry(ui, current == Some(def.name.as_str()), crate::i18n::tr_name(&def.name), &def.group, &mut |ui, r| terrain_icon(ui, r, reg, t.0, blocks)) {
+                    picked = Some(Pick::Terrain(def.name.clone()));
+                }
+            }
+            ui.add_space(4.0);
+        }
         ui.label(RichText::new(tr!("IN THIS MAP")).size(10.5).bold().color(pal.weak));
         for (k, t) in reg.terrains.iter().enumerate() {
             if matches(&t.name, &t.group.to_lowercase()) && entry(ui, current == Some(t.name.as_str()), &t.name, &t.group, &mut |ui, r| terrain_icon(ui, r, reg, k as u16, blocks)) {

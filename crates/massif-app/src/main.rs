@@ -17,6 +17,7 @@ mod collab;
 mod devtools;
 mod doc;
 mod gradient_ui;
+mod zones_ui;
 mod graphics;
 mod finder;
 mod graph_editor;

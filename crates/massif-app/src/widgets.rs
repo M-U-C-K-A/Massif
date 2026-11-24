@@ -927,6 +927,27 @@ pub fn button_group(ui: &mut Ui, id: &str, labels: &[&str], on: &[bool]) -> Opti
     button_group_named(ui, id, labels, labels, on)
 }
 
+/// A [`button_group`] of many choices: in one row where it fits, else in
+/// rows of as many as fit (the same number in each but the last), rather
+/// than all stacked. The choice clicked, by its index in `labels`.
+pub fn button_rows(ui: &mut Ui, id: &str, labels: &[&str], on: &[bool]) -> Option<usize> {
+    let font = FontId::proportional(12.5);
+    let widths: Vec<f32> = labels.iter().map(|t| ui.painter().layout_no_wrap((*t).to_owned(), font.clone(), Color32::WHITE).size().x + 26.0).collect();
+    let room = ui.available_width() - 6.0;
+    // The most per row such that every row fits.
+    let per_row = (1..=labels.len()).rev().find(|n| widths.chunks(*n).all(|c| c.iter().sum::<f32>() <= room)).unwrap_or(1);
+    let mut clicked = None;
+    for (r, (names, ons)) in labels.chunks(per_row).zip(on.chunks(per_row)).enumerate() {
+        if r > 0 {
+            ui.add_space(2.0);
+        }
+        if let Some(k) = button_group(ui, &format!("{id} {r}"), names, ons) {
+            clicked = Some(r * per_row + k);
+        }
+    }
+    clicked
+}
+
 /// A [`button_group`] whose choices show `labels` (icons, say) and are
 /// named `names` for the screen reader and under the pointer.
 pub fn button_group_named(ui: &mut Ui, id: &str, labels: &[&str], names: &[&str], on: &[bool]) -> Option<usize> {

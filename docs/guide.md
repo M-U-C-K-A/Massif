@@ -1277,11 +1277,60 @@ Merge Massif Map… brings their work back: see
 Paint terrain's right button takes the land back to the map's own terrain:
 the one a new map was filled with (**One terrain** in the new map's
 settings), or, on a map made before Massif kept it, the one covering nearly
-all of its dry land. Tool Settings ▸ **Right button** shows it, and
-**Change** chooses another, kept with the map. On a map whose terrains came
-from its height, or with **By height**, the right button puts back what the
-height calls for, as a new map is painted: grass, sand by the water, rock
-and snow up high. In 3D Sculpt, Paint's inverse does the same.
+all of its dry land. Tool Settings ▸ **Right button** shows it; a click on
+it opens the list of terrains and blocks to choose another, kept with the
+map. On a map whose terrains came from its height, or with **By height**,
+the right button puts back what the map's zones call for (see
+[Zones](#zones)). In 3D Sculpt, Paint's inverse does the same.
+
+## Picking the terrain
+
+The terrain Paint terrain lays is shown at the top of its Tool Settings,
+with its picture: a click on it opens a list to search, the terrains picked
+lately first, then the terrains of the map, then every whole block of the
+game (a block becomes a terrain of the map the first time it is picked).
+The Terrain and Blocks panels pick it too, and Alt-click picks the one under
+the cursor on the map.
+
+## Zones
+
+Paint terrain's **Zones** (among **One terrain**, **Noise**, **Zones**,
+**Gradient**) paints each column with the terrain its zone calls for: by the
+height of its top block, its slope and the water over it. The right button
+with **By height** puts back the same. The zones show under **Zones** in
+Tool Settings, each with where it goes (`y 140–200 · under 50°`, `under
+water, 4–6 deep`), read from the top: the first zone that takes a column
+paints it, and a column no zone takes keeps its terrain. **Ragged edges**
+breaks up the lines between zones, a few blocks up and down.
+
+Presets to start from:
+
+- **Classic**: as a new map is painted: grass, sand along the water, rock on
+  cliffs, rocky ground then snow up high.
+- **Plains**: grass, coarse dirt on the steeper slopes, rock on cliffs.
+- **Mountain**: grass below, gravel on the steep slopes, stone on cliffs and
+  above the tree line, snow on the peaks.
+- **Mesa**: red sand on the flat, bands of terracotta of every colour up the
+  slopes, coarse dirt on high plateaus.
+- **Desert**: sand, sandstone on the slopes and under the water.
+- **Taiga**: podzol, gravel along the water, coarse dirt on slopes, stone on
+  cliffs, snow up high.
+- **Coast**: sand along the water, gravel and stone on the sea cliffs, grass
+  inland.
+
+**Edit these zones** makes the preset the map's own (**Custom**): click a zone
+to change its terrain (the same list as above), whether it is on dry land or
+under water, its heights (Y on the map) or its depth under the water, and
+its slope in degrees; move it up or down, take it out, or **Add a zone**.
+The zones are saved with the map; the disk button saves them under a name in
+the settings, to paint other maps with (**Saved**).
+
+Under the water, nothing that only grows in the open air is ever painted —
+grass, podzol, mycelium, moss, snow — whatever a zone says: the zones made
+for under the water take it, or else the game's beds by depth: sand, then
+clay, dirt, and gravel deep down. A lake above the sea is under water too.
+Under a sea of lava, blackstone and basalt. (The export already lays dirt
+rather than grass, podzol or mycelium wherever water stands on them.)
 
 ## Noise painting
 

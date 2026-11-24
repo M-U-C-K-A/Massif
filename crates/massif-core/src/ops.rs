@@ -584,6 +584,38 @@ pub fn paint_terrain_with(
     });
 }
 
+/// Paint the terrains the zones call for ([`crate::paint_rules`]): by the
+/// height of each column, its slope and the water over it. Columns no zone
+/// takes keep theirs.
+pub fn paint_by_zones(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, salt: u64, zones: &crate::paint_rules::Resolved, (sea, lava): (i32, bool)) {
+    let dab = Dab::new(edit, brush, cx, cz);
+    if dab.idle {
+        return;
+    }
+    let footprint = BlockRect::around(cx, cz, brush.reach());
+    edit.par_tiles(footprint.tiles(), footprint, false, |_, clip, tile| {
+        let slab = tile.bottom.is_some();
+        for z in clip.z0..clip.z1 {
+            for x in dab.row(z, &clip) {
+                let w = dab.weight(x, z);
+                if w <= 0.0 || !paint_hit(w, brush.strength, x, z, salt) {
+                    continue;
+                }
+                let i = local_index(x, z);
+                if slab && !tile.present(i) {
+                    continue;
+                }
+                let top = tile.top.get(i);
+                let fluid = tile.fluid.get(i);
+                let column = crate::paint_rules::Column { x, z, y: crate::compose::block_top(top) - 1, slope: crate::paint_rules::slope_in(&tile.top, x, z), fluid: (fluid != crate::tile::NO_FLUID).then_some(fluid as i32) };
+                if let Some(t) = zones.terrain(column, sea, lava) {
+                    tile.terrain.set(i, t.0);
+                }
+            }
+        }
+    });
+}
+
 /// Paint a terrain. `salt` should change from dab to dab.
 pub fn paint_terrain(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, terrain: TerrainId, salt: u64) {
     paint_plane(edit, brush, cx, cz, salt, terrain.0, None, None, |t| &mut t.terrain);

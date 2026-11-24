@@ -13817,6 +13817,87 @@ mod tests {
         }
     }
 
+    /// Paint terrain's terrain is picked right in Tool Settings: a click on
+    /// it opens a list to search, the terrains picked lately first. Zones:
+    /// a click on Mountain makes it the map's, its zones listed, and a
+    /// stroke paints them. Renders each (MASSIF_SNAPSHOT_DIR).
+    #[test]
+    fn paint_terrain_picks_its_terrain_and_paints_zones() {
+        use egui_kittest::kittest::Queryable;
+        use massif_core::paint_rules::Preset;
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let mut h = harness(ThemeChoice::Dark);
+        h.state_mut().layout.active = 2; // Painting
+        h.state_mut().tools.select(Tool::PaintTerrain);
+        let grass = h.state().doc.world.registry.terrain_by_name("Grass").unwrap();
+        h.state_mut().tools.terrain = grass.0;
+        h.state_mut().tools.recent_terrains = vec!["Rocky".into(), "Snow".into()];
+        h.run_steps(5);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("paint-terrain-chip.png")).unwrap();
+        }
+        // The chip in Tool Settings (the palettes name Grass too): 30 high.
+        h.query_all_by_label("Grass").find(|n| (n.rect().height() - 30.0).abs() < 0.5).expect("the chip").click();
+        h.run_steps(3);
+        assert!(egui::Popup::is_any_open(&h.ctx), "the picker opens");
+        assert!(h.query_by_label("RECENT").is_some());
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("paint-terrain-picker.png")).unwrap();
+        }
+        h.event(egui::Event::Text("red sa".into()));
+        h.run_steps(3);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("paint-terrain-picker-search.png")).unwrap();
+        }
+        h.get_by_label("Red Sand").click();
+        h.run_steps(3);
+        let red_sand = h.state().doc.world.registry.terrain_by_name("Red Sand").unwrap();
+        assert_eq!(h.state().tools.terrain, red_sand.0, "picked");
+        assert_eq!(h.state().tools.recent_terrains.first().map(String::as_str), Some("Red Sand"), "first of the recent ones");
+        assert!(!egui::Popup::is_any_open(&h.ctx), "closed once picked");
+
+        // Zones, Mountain.
+        h.get_by_label("Zones").click();
+        h.run_steps(3);
+        assert!(h.state().tools.zones_left);
+        h.get_by_label("Mountain").scroll_to_me();
+        h.run_steps(3);
+        h.get_by_label("Mountain").click();
+        h.run_steps(3);
+        assert_eq!(h.state().doc.world.meta.paint_rules.as_ref().map(|r| r.preset), Some(Preset::Mountain));
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("paint-terrain-zones-mountain.png")).unwrap();
+        }
+        // A stroke paints the zone the land is in.
+        let app = h.state_mut();
+        let (x, z) = (40.5, 40.5);
+        let (stroke, _) = crate::tools::begin_stroke(&mut app.doc, &app.tools, (x, z), false, false);
+        let mut stroke = stroke.unwrap();
+        crate::tools::continue_stroke(&mut app.doc, &app.tools, &mut stroke, (x, z), 0.1);
+        crate::tools::end_stroke(&mut app.doc, stroke);
+        let p = crate::tools::probe(&app.doc, 40, 40).unwrap();
+        let mut reg = app.doc.world.registry.clone();
+        let zones = app.doc.world.meta.paint_rules.clone().unwrap().resolve(&mut reg, app.doc.world.meta.seed);
+        let slope = { let a = |x, z| crate::tools::probe(&app.doc, x, z).unwrap().height; (((a(41, 40) - a(39, 40)) / 2.0).hypot((a(40, 41) - a(40, 39)) / 2.0)).atan().to_degrees() };
+        let fluid = (p.fluid != massif_core::tile::NO_FLUID).then_some(p.fluid as i32);
+        let want = zones.terrain(massif_core::paint_rules::Column { x: 40, z: 40, y: massif_core::compose::block_top(p.height) - 1, slope, fluid }, app.doc.world.meta.sea_level, false);
+        assert_eq!(Some(massif_core::TerrainId(p.terrain)), want, "the stroke painted the Mountain's zone");
+        // Edit: the map's own zones, one chosen to change.
+        h.get_by_label_contains("Edit these zones").scroll_to_me();
+        h.run_steps(3);
+        h.get_by_label_contains("Edit these zones").click();
+        h.run_steps(3);
+        assert_eq!(h.state().doc.world.meta.paint_rules.as_ref().map(|r| r.preset), Some(Preset::Custom));
+        h.get_by_label_contains("Snow: from y").scroll_to_me();
+        h.run_steps(3);
+        h.get_by_label_contains("Snow: from y").click();
+        h.run_steps(3);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("paint-terrain-zones-custom.png")).unwrap();
+        }
+        assert!(h.query_by_label("Slope from").is_some(), "the zone's editor");
+    }
+
     /// A first-time user finds the Gradient brush: in the Paint row, its
     /// own icon marked with a dot until it is tried, its card saying it is
     /// new; and among Paint terrain's ways to paint (One terrain, Noise,

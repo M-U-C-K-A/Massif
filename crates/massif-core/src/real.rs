@@ -985,6 +985,7 @@ pub fn new_world(name: &str, samples: &Samples, fit: &Fit, area: &Area, sea_leve
         ores: Default::default(),
         gradients: Vec::new(),
         fill: None,
+        paint_rules: None,
         palette: Default::default(),
         smooth: Default::default(),
         ..Default::default()
