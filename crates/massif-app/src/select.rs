@@ -428,6 +428,10 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: 
     // Clearing it, right under what shapes do: where it is looked for.
     ui.add_space(4.0);
     ui.horizontal_wrapped(|ui| {
+        // Each button whole: one that does not fit goes to the next line,
+        // rather than fold its words inside it (Invert in Russian, in a
+        // wide typeface, at the narrowest sidebar).
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
         if ui
             .add_enabled(any, egui::Button::new(theme::with_icon(Icon::SquareX, tr!("Clear"))))
             .on_hover_text(if cfg!(target_os = "macos") { tr!("Clear the selection: the tools act on the whole map again (Esc, a right-click, ⌘D)") } else { tr!("Clear the selection: the tools act on the whole map again (Esc, a right-click, Ctrl+D)") })

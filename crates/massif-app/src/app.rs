@@ -7226,6 +7226,12 @@ fn origin_ui(ui: &mut Ui) -> Option<bool> {
     choice
 }
 
+/// The height a dialog's content has in the window: taller, it scrolls
+/// (see [`Modal`]).
+pub(crate) fn modal_room(ctx: &egui::Context) -> f32 {
+    (ctx.content_rect().height() - 2.0 * 22.0 - 24.0).max(120.0)
+}
+
 pub(crate) fn modal(ctx: &egui::Context, id: &str) -> Modal {
     let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::same(22));
     Modal { modal: egui::Modal::new(Id::unique(id)).frame(frame), id: Id::unique(id) }
@@ -7242,7 +7248,7 @@ pub(crate) struct Modal {
 impl Modal {
     pub fn show<R>(self, ctx: &egui::Context, add: impl FnOnce(&mut Ui) -> R) -> egui::ModalResponse<R> {
         // The room inside the frame's margins, and a little air.
-        let room = (ctx.content_rect().height() - 2.0 * 22.0 - 24.0).max(120.0);
+        let room = modal_room(ctx);
         let key = self.id.with("content height");
         let tall = ctx.data(|d| d.get_temp::<f32>(key)).is_some_and(|h| h > room + 0.5);
         self.modal.show(ctx, |ui| {
@@ -20811,13 +20817,25 @@ mod tests {
         }
     }
 
+    /// In the system's typeface, the interface's until another is chosen.
+    #[test]
+    fn every_panel_fits_the_narrowest_sidebar() {
+        panels_fit_the_narrowest_sidebar(theme::Typeface::System);
+    }
+
+    /// In a wide typeface (see `wide_typeface`), where some words take
+    /// more room.
+    #[test]
+    fn every_panel_fits_the_narrowest_sidebar_in_a_wide_typeface() {
+        panels_fit_the_narrowest_sidebar(wide_typeface());
+    }
+
     /// Every panel of the sidebar, at its narrowest (the window at its
     /// smallest, 960 points), in every language: no text or control runs
     /// past the panel's right edge. Tool Settings and Brush Settings for
     /// every tool, then each other panel in Tool Settings' place. With
     /// MASSIF_SNAPSHOT_DIR, each panel is saved, cropped.
-    #[test]
-    fn every_panel_fits_the_narrowest_sidebar() {
+    fn panels_fit_the_narrowest_sidebar(face: theme::Typeface) {
         use crate::i18n::{Language, set_language};
         use egui_kittest::kittest::{NodeT, Queryable};
         let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
@@ -20842,6 +20860,10 @@ mod tests {
                 app
             });
         h.run_steps(3);
+        theme::set_typeface(&h.ctx, face);
+        h.run_steps(3);
+        // The typeface's own name in the renders' (none for the system's).
+        let shown = if face == theme::Typeface::System { String::new() } else { format!("-{}", face.name().to_lowercase().replace(' ', "-")) };
         // The game's blocks read, which change the panels: the same whenever
         // they come in.
         let started = std::time::Instant::now();
@@ -20908,7 +20930,7 @@ mod tests {
                 let ppp = h.ctx.pixels_per_point();
                 let area = areas_of(h).into_iter().find(|a| a.0 == settings).unwrap().2;
                 let crop = image::imageops::crop_imm(&image, (area.left() * ppp) as u32, (area.top() * ppp) as u32, (area.width() * ppp) as u32, (area.height() * ppp) as u32).to_image();
-                crop.save(dir.join(format!("narrow-{}-{name}.png", crate::i18n::current().code()))).unwrap();
+                crop.save(dir.join(format!("narrow-{}-{name}{shown}.png", crate::i18n::current().code()))).unwrap();
             }
         };
         for language in Language::ALL {
@@ -20916,7 +20938,7 @@ mod tests {
             h.state_mut().layout.current_mut().root.set_editor(settings, EditorKind::ToolSettings);
             h.run_steps(3);
             if let Some(dir) = &dir {
-                h.render().unwrap().save(dir.join(format!("narrow-{}-window.png", crate::i18n::current().code()))).unwrap();
+                h.render().unwrap().save(dir.join(format!("narrow-{}-window{shown}.png", crate::i18n::current().code()))).unwrap();
             }
             for &tool in Tool::GROUPS.iter().flat_map(|g| g.2.iter()) {
                 h.state_mut().tools.select(tool);
@@ -20956,7 +20978,7 @@ mod tests {
             }
         }
         set_language(Language::English);
-        assert!(faults.is_empty(), "{} past the panel's edge:\n{}", faults.len(), faults.join("\n"));
+        assert!(faults.is_empty(), "{} past the panel's edge in {face:?}:\n{}", faults.len(), faults.join("\n"));
     }
 
     /// A map of one tile, and a map with no tiles at all, show in every
@@ -20998,11 +21020,23 @@ mod tests {
         }
     }
 
+    /// In the system's typeface, the interface's until another is chosen.
+    #[test]
+    fn every_dialog_fits_the_smallest_window() {
+        dialogs_fit_the_smallest_window(theme::Typeface::System);
+    }
+
+    /// In a wide typeface (see `wide_typeface`), where some words take
+    /// more room.
+    #[test]
+    fn every_dialog_fits_the_smallest_window_in_a_wide_typeface() {
+        dialogs_fit_the_smallest_window(wide_typeface());
+    }
+
     /// Every dialog in the smallest window (960 × 640), in every language:
     /// nothing past the window's sides. With MASSIF_SNAPSHOT_DIR, each is
     /// saved.
-    #[test]
-    fn every_dialog_fits_the_smallest_window() {
+    fn dialogs_fit_the_smallest_window(face: theme::Typeface) {
         use crate::i18n::{Language, set_language};
         use crate::menu::Command;
         use egui_kittest::kittest::{NodeT, Queryable};
@@ -21025,6 +21059,10 @@ mod tests {
                 app
             });
         h.run_steps(3);
+        theme::set_typeface(&h.ctx, face);
+        h.run_steps(3);
+        // The typeface's own name in the renders' (none for the system's).
+        let shown = if face == theme::Typeface::System { String::new() } else { format!("-{}", face.name().to_lowercase().replace(' ', "-")) };
         type Opener = Box<dyn Fn(&mut MassifApp, &egui::Context)>;
         let mut openers: Vec<(String, Opener)> = Vec::new();
         for command in [Command::Export, Command::ExportPack, Command::ExportRegion, Command::AutoRules, Command::Caves, Command::RealTerrain, Command::Ores, Command::Analyse, Command::Help, Command::Shortcuts, Command::About, Command::ReportProblem, Command::SavePoint, Command::NewWorld, Command::FromHeightMap] {
@@ -21099,7 +21137,7 @@ mod tests {
                     }
                 }
                 if let Some(dir) = &dir {
-                    h.render().unwrap().save(dir.join(format!("dialog-small-{}-{name}.png", crate::i18n::current().code()))).unwrap();
+                    h.render().unwrap().save(dir.join(format!("dialog-small-{}-{name}{shown}.png", crate::i18n::current().code()))).unwrap();
                 }
                 let app = h.state_mut();
                 app.dialog = None;
@@ -21109,7 +21147,7 @@ mod tests {
             }
         }
         set_language(Language::English);
-        assert!(faults.is_empty(), "{} past the window:\n{}", faults.len(), faults.join("\n"));
+        assert!(faults.is_empty(), "{} past the window in {face:?}:\n{}", faults.len(), faults.join("\n"));
     }
 
     /// The search fields, empty and with a long text typed: in the Blocks,
@@ -21293,12 +21331,24 @@ mod tests {
         assert_eq!(groups[1].1.iter().map(|c| (c.def.id.as_str(), c.known.is_some())).collect::<Vec<_>>(), [("regions_unexplored:bayou", true), ("regions_unexplored:alpha_grove", false)]);
     }
 
+    /// In the system's typeface, the interface's until another is chosen.
+    #[test]
+    fn menus_and_notes_fit_the_smallest_window() {
+        menus_and_notes_fit(theme::Typeface::System);
+    }
+
+    /// In a wide typeface (see `wide_typeface`), where some words take
+    /// more room.
+    #[test]
+    fn menus_and_notes_fit_the_smallest_window_in_a_wide_typeface() {
+        menus_and_notes_fit(wide_typeface());
+    }
+
     /// The menus, the map's status line under the pointer and a long note,
     /// in the smallest window in every language: nothing past the window,
     /// and the status line's words never under its zoom buttons. With
     /// MASSIF_SNAPSHOT_DIR, each is saved.
-    #[test]
-    fn menus_and_notes_fit_the_smallest_window() {
+    fn menus_and_notes_fit(face: theme::Typeface) {
         use crate::i18n::{Language, set_language};
         use egui_kittest::kittest::{NodeT, Queryable};
         let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
@@ -21318,6 +21368,10 @@ mod tests {
                 app
             });
         h.run_steps(3);
+        theme::set_typeface(&h.ctx, face);
+        h.run_steps(3);
+        // The typeface's own name in the renders' (none for the system's).
+        let shown = if face == theme::Typeface::System { String::new() } else { format!("-{}", face.name().to_lowercase().replace(' ', "-")) };
         let rects = |h: &egui_kittest::Harness<'_, MassifApp>| -> Vec<(egui::accesskit::Role, String, Rect)> {
             let ppp = h.ctx.pixels_per_point();
             h.query_all_by(|_| true)
@@ -21347,7 +21401,7 @@ mod tests {
                     }
                 }
                 if let Some(dir) = &dir {
-                    h.render().unwrap().save(dir.join(format!("menu-{}-{title}.png", language.code()))).unwrap();
+                    h.render().unwrap().save(dir.join(format!("menu-{}-{title}{shown}.png", language.code()))).unwrap();
                 }
                 h.key_press(egui::Key::Escape);
                 h.run_steps(3);
@@ -21370,11 +21424,18 @@ mod tests {
                 }
             }
             if let Some(dir) = &dir {
-                h.render().unwrap().save(dir.join(format!("status-{}.png", language.code()))).unwrap();
+                h.render().unwrap().save(dir.join(format!("status-{}{shown}.png", language.code()))).unwrap();
             }
         }
         set_language(Language::English);
-        assert!(faults.is_empty(), "{}:\n{}", faults.len(), faults.join("\n"));
+        assert!(faults.is_empty(), "{} in {face:?}:\n{}", faults.len(), faults.join("\n"));
+    }
+
+    /// The wide typeface the layout tests check besides the system's:
+    /// Manrope, or the one MASSIF_WIDE_TYPEFACE names (Inter, Geist,
+    /// IbmPlexSans).
+    fn wide_typeface() -> theme::Typeface {
+        std::env::var("MASSIF_WIDE_TYPEFACE").ok().and_then(|n| theme::Typeface::ALL.into_iter().find(|f| format!("{f:?}").eq_ignore_ascii_case(&n))).unwrap_or(theme::Typeface::Manrope)
     }
 
     /// Zooming in with the wheel in the 3D View of a huge map

@@ -1252,34 +1252,52 @@ fn link_row(ui: &mut Ui, links: &[(Icon, &str, &str, HomeAction)]) -> Option<Hom
         })
         .collect();
     let widths: Vec<f32> = parts.iter().map(|(i, n)| i.size().x + icon_gap + n.size().x).collect();
-    let total = widths.iter().sum::<f32>() + gap * (links.len() - 1) as f32;
-    let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
-    let mut x = row.center().x - total / 2.0;
+    // As many links a line as the room takes, each line centred: in a narrow
+    // window, in a long language or a wide typeface, the last ones go to a
+    // line of their own rather than past the window's edge.
+    let room = ui.available_width();
+    let mut lines: Vec<std::ops::Range<usize>> = Vec::new();
+    let (mut start, mut taken) = (0, 0.0);
+    for (k, w) in widths.iter().enumerate() {
+        if k > start && taken + gap + w > room {
+            lines.push(start..k);
+            (start, taken) = (k, *w);
+        } else {
+            taken += if k > start { gap + w } else { *w };
+        }
+    }
+    lines.push(start..widths.len());
     let mut chosen = None;
-    for (k, (((_, name, tip, act), (icon, label)), w)) in links.iter().zip(parts).zip(widths).enumerate() {
-        let h = icon.size().y.max(label.size().y);
-        let rect = Rect::from_min_size(pos2(x, row.center().y - h / 2.0), vec2(w, h));
-        let response = ui.interact(rect.expand(4.0), egui::Id::unique(("home link", k)), Sense::click()).on_hover_text(*tip);
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Link, true, *name));
-        let hovered = response.hovered();
-        let painter = ui.painter();
-        let icon_at = pos2(x, row.center().y - icon.size().y / 2.0);
-        let at = pos2(x + icon.size().x + icon_gap, row.center().y - label.size().y / 2.0);
-        let label_size = label.size();
-        paint_on_art(painter, icon_at, icon, &pal, Some(if hovered { pal.accent } else { art_weak(&pal) }));
-        paint_on_art(painter, at, label, &pal, Some(pal.text));
-        if hovered || pal.high {
-            let y = (at.y + label_size.y - 1.5).round() + 0.5;
-            painter.hline(at.x..=at.x + label_size.x, y, Stroke::new(3.0, backdrop_fill(&pal).gamma_multiply(0.6)));
-            painter.hline(at.x..=at.x + label_size.x, y, Stroke::new(1.0, pal.text));
+    for line in lines {
+        let total = widths[line.clone()].iter().sum::<f32>() + gap * (line.len().saturating_sub(1)) as f32;
+        let (row, _) = ui.allocate_exact_size(vec2(room, 22.0), Sense::hover());
+        let mut x = row.center().x - total / 2.0;
+        for k in line {
+            let ((_, name, tip, act), (icon, label), w) = (&links[k], &parts[k], widths[k]);
+            let h = icon.size().y.max(label.size().y);
+            let rect = Rect::from_min_size(pos2(x, row.center().y - h / 2.0), vec2(w, h));
+            let response = ui.interact(rect.expand(4.0), egui::Id::unique(("home link", k)), Sense::click()).on_hover_text(*tip);
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Link, true, *name));
+            let hovered = response.hovered();
+            let painter = ui.painter();
+            let icon_at = pos2(x, row.center().y - icon.size().y / 2.0);
+            let at = pos2(x + icon.size().x + icon_gap, row.center().y - label.size().y / 2.0);
+            let label_size = label.size();
+            paint_on_art(painter, icon_at, icon.clone(), &pal, Some(if hovered { pal.accent } else { art_weak(&pal) }));
+            paint_on_art(painter, at, label.clone(), &pal, Some(pal.text));
+            if hovered || pal.high {
+                let y = (at.y + label_size.y - 1.5).round() + 0.5;
+                painter.hline(at.x..=at.x + label_size.x, y, Stroke::new(3.0, backdrop_fill(&pal).gamma_multiply(0.6)));
+                painter.hline(at.x..=at.x + label_size.x, y, Stroke::new(1.0, pal.text));
+            }
+            if hovered {
+                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+            }
+            if response.clicked() {
+                chosen = Some(act.clone());
+            }
+            x += w + gap;
         }
-        if hovered {
-            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-        }
-        if response.clicked() {
-            chosen = Some(act.clone());
-        }
-        x += w + gap;
     }
     chosen
 }

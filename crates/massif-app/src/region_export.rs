@@ -77,12 +77,40 @@ impl RegionForm {
 
     pub fn ui(&mut self, ui: &mut Ui) -> Choice {
         let pal = Palette::of(ui);
-        let mut choice = Choice::Keep;
         ui.set_width(440.0);
+        let top = ui.min_rect().top();
         ui.horizontal(|ui| {
             ui.label(RichText::new(theme::glyph(Icon::ImageDown).to_string()).size(17.0).color(pal.accent));
             ui.label(RichText::new(tr!("Export Region")).size(16.0).bold());
         });
+        // Between the title and the buttons, what scrolls in a window too
+        // low for all of it, the buttons staying in view: in a wide
+        // typeface, the whole dialog was taller than a window of 640 points,
+        // and its buttons scrolled out of it with the rest.
+        let key = egui::Id::unique("export region buttons");
+        let buttons = ui.data(|d| d.get_temp::<f32>(key)).unwrap_or(44.0);
+        let room = (crate::app::modal_room(ui.ctx()) - (ui.min_rect().bottom() - top) - buttons).max(120.0);
+        let r = egui::ScrollArea::vertical().id_salt("export region settings").max_height(room).auto_shrink([false, true]).show(ui, |ui| self.settings(ui)).inner;
+        let from = ui.min_rect().bottom();
+        ui.add_space(12.0);
+        let mut choice = Choice::Keep;
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let ok = r.width() > 0 && r.depth() > 0 && (self.as_map || (r.width() <= 65_535 && r.depth() <= 65_535));
+            if ui.add_enabled(ok, theme::primary_button(ui, tr!("Export…"))).clicked() {
+                choice = if self.as_map { Choice::ExportMap(r, self.border) } else { Choice::Export(r, self.parts) };
+            }
+            if ui.button(tr!("Cancel")).clicked() {
+                choice = Choice::Close;
+            }
+        });
+        ui.data_mut(|d| d.insert_temp(key, ui.min_rect().bottom() - from));
+        choice
+    }
+
+    /// The settings, between the title and the buttons: what the region is
+    /// written as, where and what. The blocks to write.
+    fn settings(&mut self, ui: &mut Ui) -> BlockRect {
+        let pal = Palette::of(ui);
         let about = if self.as_map {
             tr!("A part of the map as a map of its own, at its place, for someone to work on in Massif: File ▸ Merge Massif Map… brings their work back, reviewed on the map before anything changes.")
         } else {
@@ -143,17 +171,7 @@ impl RegionForm {
                 .wrap(),
             );
             ui.add(egui::Label::new(RichText::new(tr!("Keeps a version of the map as it is, the one the work is compared with when it comes back.")).size(11.5).color(pal.weak)).wrap());
-            ui.add_space(12.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let ok = r.width() > 0 && r.depth() > 0;
-                if ui.add_enabled(ok, theme::primary_button(ui, tr!("Export…"))).clicked() {
-                    choice = Choice::ExportMap(r, self.border);
-                }
-                if ui.button(tr!("Cancel")).clicked() {
-                    choice = Choice::Close;
-                }
-            });
-            return choice;
+            return r;
         }
         ui.add(egui::Label::new(RichText::new(tr!("{w} × {d} blocks from x {x}, z {z}: images of {w} × {d} pixels.", w = r.width(), d = r.depth(), x = r.x0, z = r.z0)).size(11.5).color(pal.weak)).wrap());
         ui.add_space(10.0);
@@ -190,16 +208,6 @@ impl RegionForm {
             tr!("Brought back with Edit ▸ Import Mask…, the images are painted onto the map at once.")
         };
         ui.add(egui::Label::new(RichText::new(note).size(11.5).color(pal.weak)).wrap());
-        ui.add_space(12.0);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let ok = r.width() > 0 && r.depth() > 0 && r.width() <= 65_535 && r.depth() <= 65_535;
-            if ui.add_enabled(ok, theme::primary_button(ui, tr!("Export…"))).clicked() {
-                choice = Choice::Export(r, self.parts);
-            }
-            if ui.button(tr!("Cancel")).clicked() {
-                choice = Choice::Close;
-            }
-        });
-        choice
+        r
     }
 }
