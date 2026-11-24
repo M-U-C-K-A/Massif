@@ -22,8 +22,8 @@ const SOURCE_PATTERN: &str = "^[A-Za-z0-9_-]{1,64}(\\.[A-Za-z0-9_.-]{1,64})?$";
 
 /// How to build a graph, for a model (or a person) about to write one.
 pub const GUIDE: &str = "\
-- A graph is a JSON object: `{ \"format\": \"massif.terrain-graph\", \"version\": 2, \"terrain\": { … }, \"nodes\": { … } }`. Only `nodes` is needed; `terrain` may give the terrain's `size` (blocks a side, the map's own when left out), its `seed` and its `sea_level`.
-- Each node has a name of its own (letters, digits, `_` and `-`), by which the others refer to it, and a `type` from this catalogue. Their order does not matter.
+- A graph is a JSON object: `{ \"format\": \"massif.terrain-graph\", \"version\": 3, \"terrain\": { … }, \"nodes\": { … } }`. Only `nodes` is needed; `terrain` may give the terrain's `size` (blocks a side, the map's own when left out), its `seed` and its `sea_level`.
+- Each node has an id of its own (letters, digits, `_` and `-`), by which the others refer to it and which never changes, and a `type` from this catalogue. `name` is what the editor shows, free to change. Their order does not matter.
 - An input names what feeds it: a node's name (its first output), or `name.output` for another of its outputs. An optional input left out stands for what the catalogue says; a required one left out breaks the node, and what follows it.
 - Settings left out take their defaults; a number outside a setting's range is brought back into it, with a warning.
 - Positions (points, curves) are fractions of the terrain's side, from 0 (west, north) to 1 (east, south). Distances, widths and heights are in blocks, a block being a metre. Heights are absolute: the sea lies at the world's sea level (62 unless the map says otherwise), and Minecraft builds from y −64 to 320. A map of 16k is 16384 blocks a side.
@@ -31,8 +31,10 @@ pub const GUIDE: &str = "\
 - Sockets have types: height (blocks), mask (0 to 1), colour, vector, terrain and biome. A height and a mask feed each other as they are; a colour feeds a number by its brightness, a number feeds a colour as a grey; a terrain or a biome feeds only its own type.
 - A setting marked drivable can follow a field: connect a height or a mask to the input `@<setting>`, and each place takes the value the field has there.
 - Simulations (erosion, rainfall, humidity…) work over the whole terrain at the simulations' resolution; finer views of them carry the change they made.
-- A seed left out comes from the node's name, so that two nodes never repeat each other; `terrain.seed` changes them all.
-- `massif-cli terrain validate graph.json` says what is wrong, each mistake with its path (`nodes.hills.params.hieght`) and the name it probably meant. `massif-cli terrain patch` changes a graph a step at a time: `add`, `set`, `link`, `unlink`, `remove`, `rename`, or a JSON Patch.
+- A seed left out comes from the node's id, so that two nodes never repeat each other; `terrain.seed` changes them all.
+- A composite is a node that holds a graph: `massif:<name>` (shipped with Massif, such as `massif:mountain`) or `project:<name>` (defined under the document's `components`, each with its `label`, `inputs`, `outputs`, `exposed` settings and `nodes`; inside, `in.<name>` names its input). Its `params` are the settings it exposes. `\"bypass\": true` leaves a node out, what it feeds taking its first input.
+- `frames` gather nodes under a title and a colour (`#rrggbb`), and nest (`parent`); they never change the terrain.
+- `massif-cli terrain validate graph.json` says what is wrong, each mistake with its path (`nodes.hills.params.hieght`) and the name it probably meant. `massif-cli terrain patch` changes a graph a step at a time: `add`, `set`, `link`, `unlink`, `remove`, `rename` (the name shown), `bypass`, `frame`, `unframe`, `group` (nodes into a new composite), `ungroup`, `expose`, `unexpose`, `inside` (steps inside a composite), or a JSON Patch.
 ";
 
 /// The types of node a graph can name, every version, in the library's order.
@@ -168,18 +170,42 @@ pub fn schema() -> Value {
     }
     defs.insert(
         "node".into(),
-        json!({ "description": "A node: its type, what feeds its inputs, its settings.", "type": "object", "required": ["type"], "properties": { "type": { "enum": ids } }, "allOf": cases }),
+        json!({ "description": "A node: its type, what feeds its inputs, its settings.", "type": "object", "required": ["type"], "properties": { "type": { "anyOf": [{ "enum": ids }, { "$ref": "#/$defs/composite_type" }] } }, "allOf": cases }),
+    );
+    defs.insert(
+        "composite_type".into(),
+        json!({ "type": "string", "pattern": "^(project|massif):[a-z0-9_-]+(@[0-9]+)?$", "description": "A composite: project:<name> (one of the document's components) or massif:<name> (one Massif ships), with @N for a later version. Its params are the settings it exposes, its inputs and outputs those it declares." }),
+    );
+    defs.insert(
+        "frame".into(),
+        json!({ "type": "object", "additionalProperties": false, "required": ["title"], "description": "A frame round nodes in the editor; never read to evaluate.", "properties": {
+            "title": { "type": "string" }, "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" }, "description": { "type": "string" },
+            "parent": { "type": "string", "description": "The frame it sits in." }, "members": { "type": "array", "items": { "type": "string" }, "description": "The nodes it holds." },
+            "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 }, "collapsed": { "type": "boolean" } } }),
+    );
+    defs.insert(
+        "component".into(),
+        json!({ "type": "object", "additionalProperties": false, "required": ["label", "nodes"], "description": "A composite node: a graph of its own that runs as one node. Inside, in.<name> names its input <name>.", "properties": {
+            "version": { "type": "integer", "minimum": 1 }, "label": { "type": "string" }, "category": { "type": "string" }, "summary": { "type": "string" },
+            "inputs": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["name", "type"], "properties": { "name": { "type": "string" }, "label": { "type": "string" }, "type": { "enum": PortKind::ALL.iter().map(|k| k.id()).collect::<Vec<_>>() }, "optional": { "type": "boolean" }, "help": { "type": "string" } } } },
+            "outputs": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["name", "from"], "properties": { "name": { "type": "string" }, "label": { "type": "string" }, "from": { "$ref": "#/$defs/source" } } } },
+            "exposed": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["name", "targets"], "properties": {
+                "name": { "type": "string" }, "label": { "type": "string" }, "help": { "type": "string" }, "targets": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "The settings inside it stands for, each node.setting." },
+                "default": {}, "min": { "type": "number" }, "max": { "type": "number" }, "soft": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+                "unit": { "type": "string" }, "control": { "type": "string" }, "category": { "type": "string" }, "advanced": { "type": "boolean" } } } },
+            "nodes": { "type": "object", "additionalProperties": { "$ref": "#/$defs/node" } },
+            "ui": { "type": "object" }, "frames": { "type": "object", "additionalProperties": { "$ref": "#/$defs/frame" } } } }),
     );
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "urn:massif:terrain-graph:2",
+        "$id": "urn:massif:terrain-graph:3",
         "title": "Massif terrain graph",
         "description": "A terrain graph of Massif: named nodes, each of a type, its inputs naming the nodes that feed them. One output.map node says what the map gets.",
         "type": "object",
         "additionalProperties": false,
         "properties": {
             "format": { "const": FORMAT },
-            "version": { "type": "integer", "minimum": 2, "maximum": VERSION, "description": "The version of the format: 2." },
+            "version": { "type": "integer", "minimum": 2, "maximum": VERSION, "description": "The version of the format: 3 (2 is read and upgraded)." },
             "terrain": {
                 "type": "object",
                 "additionalProperties": false,
@@ -193,7 +219,7 @@ pub fn schema() -> Value {
             "nodes": {
                 "type": "object",
                 "description": "The nodes, by name.",
-                "propertyNames": { "pattern": "^[A-Za-z0-9_-]{1,64}$" },
+                "propertyNames": { "pattern": "^[A-Za-z0-9_-]{1,200}$" },
                 "additionalProperties": { "$ref": "#/$defs/node" }
             },
             "ui": {
@@ -209,7 +235,9 @@ pub fn schema() -> Value {
                     }
                 }
             },
-            "editor": { "description": "The rest of the editor's layout (frames, points on wires, the view); never read to evaluate the graph." }
+            "frames": { "type": "object", "description": "Frames round nodes, by id; frames nest.", "additionalProperties": { "$ref": "#/$defs/frame" } },
+            "components": { "type": "object", "description": "The composite nodes the document defines, by type (project:<name>).", "propertyNames": { "pattern": "^project:[a-z0-9_-]+$" }, "additionalProperties": { "$ref": "#/$defs/component" } },
+            "editor": { "description": "The rest of the editor's layout (points on wires, the view); never read to evaluate the graph." }
         },
         "$defs": defs
     })
@@ -254,7 +282,9 @@ fn node_schema(s: &NodeSpec) -> Value {
             "type": { "const": s.type_name() },
             "inputs": ins,
             "params": { "type": "object", "additionalProperties": false, "properties": params },
-            "note": { "type": "string", "description": "A note for whoever reads the graph." }
+            "note": { "type": "string", "description": "A note for whoever reads the graph." },
+            "name": { "type": "string", "description": "What the editor calls the node (its type's label when left out); its id never changes." },
+            "bypass": { "type": "boolean", "description": "Left out of the graph: what it feeds takes its first input instead." }
         }
     });
     if !required.is_empty() {
@@ -671,7 +701,7 @@ fn shape(v: &Value) -> Vec<Diagnostic> {
     let Some(top) = v.as_object() else {
         return vec![error("", "a terrain graph is a JSON object")];
     };
-    unknown_keys(top, "", &["format", "version", "terrain", "nodes", "ui", "editor"], "a graph", &mut d);
+    unknown_keys(top, "", &["format", "version", "terrain", "nodes", "ui", "frames", "components", "editor"], "a graph", &mut d);
     if let Some(f) = top.get("format")
         && f.as_str() != Some(FORMAT)
     {
@@ -714,7 +744,7 @@ fn shape(v: &Value) -> Vec<Diagnostic> {
                     d.push(error(path, "a node is an object: { \"type\": \"noise.fbm\" }"));
                     continue;
                 };
-                unknown_keys(o, &path, &["type", "inputs", "params", "note"], "a node", &mut d);
+                unknown_keys(o, &path, &["type", "inputs", "params", "note", "name", "bypass"], "a node", &mut d);
                 match o.get("type") {
                     None => d.push(error(format!("{path}.type"), "a node needs a type")),
                     Some(t) if !t.is_string() => d.push(error(format!("{path}.type"), "a node's type is a name, as “noise.fbm”")),
@@ -734,6 +764,12 @@ fn shape(v: &Value) -> Vec<Diagnostic> {
                 }
                 if o.get("note").is_some_and(|n| !n.is_string()) {
                     d.push(error(format!("{path}.note"), "a note is text"));
+                }
+                if o.get("name").is_some_and(|n| !n.is_string()) {
+                    d.push(error(format!("{path}.name"), "a node's name is text"));
+                }
+                if o.get("bypass").is_some_and(|n| !n.is_boolean()) {
+                    d.push(error(format!("{path}.bypass"), "bypass is true or false"));
                 }
             }
         }
@@ -777,7 +813,10 @@ pub fn validate(text: &str) -> Vec<Diagnostic> {
         return diags;
     }
     match serde_json::from_value::<Graph>(value) {
-        Ok(g) => diags.extend(check(&g)),
+        Ok(mut g) => {
+            g.upgrade();
+            diags.extend(check(&g))
+        }
         Err(e) => diags.push(error("", e.to_string())),
     }
     diags
@@ -809,13 +848,60 @@ pub enum Op {
     Unlink { to: String, input: String },
     /// Removes a node, and the links from it.
     Remove { node: String },
-    /// Renames a node, and what links to it.
-    Rename { node: String, to: String },
+    /// Gives a node the name the editor shows (`null`: its type's); its id,
+    /// by which the others refer to it, never changes.
+    Rename { node: String, to: Option<String> },
+    /// Leaves a node out (`true`) or puts it back: what it feeds takes its
+    /// first input instead.
+    Bypass { node: String, on: bool },
+    /// Adds a frame round nodes, or changes one (`id` given): its title,
+    /// colour (`#rrggbb`), note, nodes and the frame it sits in.
+    Frame {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        title: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        color: Option<String>,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        description: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        members: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
+    },
+    /// Removes a frame, leaving its nodes (and the frames in it, which go
+    /// to its own parent).
+    Unframe { id: String },
+    /// Gathers nodes into a new composite of the document, one node of it
+    /// in their place.
+    Group { nodes: Vec<String>, label: String },
+    /// Puts a composite node's nodes back in its place.
+    Ungroup { node: String },
+    /// Shows a setting on a composite of the document, standing for
+    /// settings of its nodes (`targets`: `node.setting`).
+    Expose {
+        component: String,
+        #[serde(flatten)]
+        exposed: crate::model::Exposed,
+    },
+    /// Takes an exposed setting off a composite of the document.
+    Unexpose { component: String, name: String },
+    /// Edits inside a composite of the document: the same steps, on its
+    /// nodes (`in.<name>` names its inputs).
+    Inside { component: String, ops: Vec<Op> },
 }
 
 fn no_node(graph: &Graph, id: &str) -> String {
     let hint = closest(id, graph.nodes.keys().map(String::as_str)).map(|c| format!(" (did you mean “{c}”?)")).unwrap_or_default();
     format!("the graph has no node “{id}”{hint}")
+}
+
+/// Whether `kind` names a composite this document or Massif has.
+fn composite_known(graph: &Graph, kind: &str) -> Result<(), String> {
+    match crate::lower::component(graph, kind) {
+        Some(_) => Ok(()),
+        None => Err(format!("there is no composite “{kind}”")),
+    }
 }
 
 fn type_of(kind: &str) -> Result<&'static NodeSpec, String> {
@@ -833,8 +919,12 @@ fn type_of(kind: &str) -> Result<&'static NodeSpec, String> {
 pub fn apply(graph: &mut Graph, op: &Op) -> Result<String, String> {
     match op {
         Op::Add { id, kind, params, inputs } => {
-            type_of(kind)?;
-            let node = Node { kind: kind.clone(), inputs: inputs.clone(), params: params.clone(), note: None };
+            if crate::model::is_component_type(kind) {
+                composite_known(graph, kind)?;
+            } else {
+                type_of(kind)?;
+            }
+            let node = Node { kind: kind.clone(), inputs: inputs.clone(), params: params.clone(), ..Node::new("") };
             match id {
                 Some(id) if !valid_id(id) => Err(format!("“{id}” cannot name a node: letters, digits, “_” and “-”, at most 64")),
                 Some(id) if graph.nodes.contains_key(id) => Err(format!("the graph has a node “{id}” already")),
@@ -848,6 +938,12 @@ pub fn apply(graph: &mut Graph, op: &Op) -> Result<String, String> {
         Op::Set { node, param, value } => {
             if !graph.nodes.contains_key(node) {
                 return Err(no_node(graph, node));
+            }
+            if let Some(c) = graph.nodes.get(node).filter(|n| n.is_component()).and_then(|n| crate::lower::component(graph, &n.kind))
+                && !c.exposed.iter().any(|e| &e.name == param)
+            {
+                let hint = closest(param, c.exposed.iter().map(|e| e.name.as_str())).map(|c| format!(" (did you mean “{c}”?)")).unwrap_or_default();
+                return Err(format!("{} shows no setting “{param}”{hint}", c.label));
             }
             let n = graph.nodes.get_mut(node).expect("checked");
             if let Ok(spec) = type_of(&n.kind)
@@ -902,35 +998,92 @@ pub fn apply(graph: &mut Graph, op: &Op) -> Result<String, String> {
             for n in graph.nodes.values_mut() {
                 n.inputs.retain(|_, s| Source::parse(s).node != node.as_str());
             }
+            for f in graph.frames.values_mut() {
+                f.members.retain(|m| m != node);
+            }
             Ok(node.clone())
         }
         Op::Rename { node, to } => {
-            if !graph.nodes.contains_key(node) {
-                return Err(no_node(graph, node));
+            let Some(n) = graph.nodes.get_mut(node) else { return Err(no_node(graph, node)) };
+            n.name = to.clone().filter(|s| !s.trim().is_empty());
+            Ok(node.clone())
+        }
+        Op::Bypass { node, on } => {
+            let Some(n) = graph.nodes.get_mut(node) else { return Err(no_node(graph, node)) };
+            n.bypass = *on;
+            Ok(node.clone())
+        }
+        Op::Frame { id, title, color, description, members, parent } => {
+            if let Some(m) = members.iter().find(|m| !graph.nodes.contains_key(*m)) {
+                return Err(no_node(graph, m));
             }
-            if !valid_id(to) {
-                return Err(format!("“{to}” cannot name a node: letters, digits, “_” and “-”, at most 64"));
+            if let Some(c) = color
+                && crate::params::parse_color(c).is_none()
+            {
+                return Err(format!("“{c}” is not a colour: #rrggbb"));
             }
-            if graph.nodes.contains_key(to) {
-                return Err(format!("the graph has a node “{to}” already"));
-            }
-            let n = graph.nodes.remove(node).expect("checked");
-            graph.nodes.insert(to.clone(), n);
-            if let Some(at) = graph.ui.remove(node) {
-                graph.ui.insert(to.clone(), at);
-            }
-            for n in graph.nodes.values_mut() {
-                for s in n.inputs.values_mut() {
-                    let src = Source::parse(s);
-                    if src.node == node.as_str() {
-                        *s = match src.output {
-                            Some(port) => format!("{to}.{port}"),
-                            None => to.clone(),
-                        };
+            let id = match id {
+                Some(id) if !valid_id(id) => return Err(format!("“{id}” cannot name a frame: letters, digits, “_” and “-”")),
+                Some(id) => id.clone(),
+                None => {
+                    let mut k = graph.frames.len() + 1;
+                    while graph.frames.contains_key(&format!("frame_{k}")) {
+                        k += 1;
                     }
+                    format!("frame_{k}")
+                }
+            };
+            if let Some(p) = parent {
+                // A frame sits in a frame that exists, and never in itself.
+                let mut at = Some(p.clone());
+                while let Some(f) = at {
+                    if f == id {
+                        return Err(format!("frame “{id}” cannot sit in itself"));
+                    }
+                    let Some(fr) = graph.frames.get(&f) else { return Err(format!("the graph has no frame “{f}”")) };
+                    at = fr.parent.clone();
                 }
             }
-            Ok(to.clone())
+            let f = graph.frames.entry(id.clone()).or_default();
+            f.title = title.clone();
+            f.color = color.clone();
+            f.description = description.clone();
+            f.members = members.clone();
+            f.parent = parent.clone();
+            Ok(id)
+        }
+        Op::Unframe { id } => {
+            let Some(f) = graph.frames.remove(id) else { return Err(format!("the graph has no frame “{id}”")) };
+            for g in graph.frames.values_mut().filter(|g| g.parent.as_deref() == Some(id)) {
+                g.parent = f.parent.clone();
+            }
+            Ok(id.clone())
+        }
+        Op::Group { nodes, label } => crate::group::group(graph, nodes, label).map(|(id, _)| id),
+        Op::Ungroup { node } => crate::group::ungroup(graph, node).map(|_| node.clone()),
+        Op::Expose { component, exposed } => crate::group::expose(graph, component, exposed.clone()).map(|_| component.clone()),
+        Op::Unexpose { component, name } => {
+            let Some(c) = graph.components.get_mut(component) else { return Err(format!("the document has no composite “{component}”")) };
+            let before = c.exposed.len();
+            c.exposed.retain(|e| &e.name != name);
+            if c.exposed.len() == before {
+                return Err(format!("{} shows no setting “{name}”", c.label));
+            }
+            Ok(component.clone())
+        }
+        Op::Inside { component, ops } => {
+            let Some(c) = graph.components.get(component) else { return Err(format!("the document has no composite “{component}” (those of Massif are edited as a copy)")) };
+            // Its nodes as a graph of their own (the document's composites
+            // known), edited, then put back: all the steps, or none.
+            let mut inner = Graph { nodes: c.nodes.clone(), ui: c.ui.clone(), frames: c.frames.clone(), components: graph.components.clone(), ..Graph::default() };
+            for (k, op) in ops.iter().enumerate() {
+                apply(&mut inner, op).map_err(|e| format!("step {k}: {e}"))?;
+            }
+            let c = graph.components.get_mut(component).expect("checked");
+            c.nodes = inner.nodes;
+            c.ui = inner.ui;
+            c.frames = inner.frames;
+            Ok(component.clone())
         }
     }
 }

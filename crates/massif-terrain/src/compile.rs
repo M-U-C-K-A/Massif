@@ -198,6 +198,13 @@ pub fn compile(graph: &Graph, space: Space, sim_res: u32) -> (Compiled, Vec<Diag
 
 /// [`compile`] in a world: the map and files `env` gives.
 pub fn compile_in(graph: &Graph, mut space: Space, sim_res: u32, env: Arc<dyn Env>) -> (Compiled, Vec<Diagnostic>) {
+    // Composites and bypassed nodes first unfold into plain nodes.
+    if crate::lower::needed(graph) {
+        let (flat, mut diags) = crate::lower::lower(graph);
+        let (c, more) = compile_in(&flat, space, sim_res, env);
+        diags.extend(more);
+        return (c, diags);
+    }
     let mut diags = Vec::new();
     if graph.format != crate::model::FORMAT {
         diags.push(Diagnostic::warning("format", format!("expected “{}”", crate::model::FORMAT)));

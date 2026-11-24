@@ -4,6 +4,10 @@
       "additionalProperties": false,
       "description": "Smooths a relief: the detail smaller than Radius goes, the larger shapes stay. A Gaussian blur Radius blocks wide. Wide blurs are made at a coarser level of detail and brought back sharp, so that a blur of a thousand blocks costs as little as one of ten. Use it to soften noise before using it as a mask, to round off terraces, or to make broad uplifts from detailed shapes.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -17,6 +21,10 @@
             "in"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -57,6 +65,10 @@
       "additionalProperties": false,
       "description": "A relief held between two heights: nothing under Min, nothing over Max. Cuts the tops off at Max (flat plateaus, a mesa's cap) and fills the bottoms up to Min (a sea floor, a valley's flat).",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -70,6 +82,10 @@
             "in"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -124,6 +140,10 @@
       "additionalProperties": false,
       "description": "Reshapes a relief along a curve drawn from its low to its high values: flatten the valleys, sharpen the peaks, lift a plateau. The values from In low to In high go through the Curve (left: In low, right: In high; bottom: Out low, top: Out high). A curve sagging under the diagonal flattens the low ground and steepens the summits; one bulging over it rounds the tops and lifts the plains. Works on masks too, with values from 0 to 1.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -137,6 +157,10 @@
             "in"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -279,6 +303,10 @@
       "additionalProperties": false,
       "description": "Mirrors what rises over a level back down: ridges folded into crests and troughs. Everything above Level is reflected under it, as if the relief were folded there: a smooth hill becomes a ring of ridges, noise becomes sharp crests. Strength mixes the fold with the relief as it was.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -292,6 +320,10 @@
             "in"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -346,6 +378,10 @@
       "additionalProperties": false,
       "description": "Turns a relief upside down within its own range: its highest point where its lowest was. Valleys become ridges and peaks become pits, between the same lowest and highest heights, measured over the whole terrain. For a mask, Invert in Masks is 1 − the mask.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -359,6 +395,10 @@
             "in"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -384,6 +424,10 @@
       "additionalProperties": false,
       "description": "Maps one range of heights onto another, along a curve. What lies between In low and In high is spread between Out low and Out high; what lies outside is held at the ends. Gamma bends the way between them: above 1 lifts the low ground (rounded tops, wide valleys), below 1 flattens it (plains below sharp peaks). Works on masks too, with values from 0 to 1.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -397,6 +441,10 @@
             "in"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -493,6 +541,10 @@
       "additionalProperties": false,
       "description": "Stretches a relief so that its lowest point lies at Low and its highest at High. Measures the whole relief, then maps its lowest and highest points to Low and High: a relief of any range becomes one of known heights, or a mask from 0 to 1. Heights are measured at the simulation's resolution, so the finest peaks may touch the ends a little early; they are held there.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -506,6 +558,10 @@
             "in"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -560,6 +616,10 @@
       "additionalProperties": false,
       "description": "Brings out a relief's detail: what stands above its surroundings rises, what lies below sinks. The relief minus its blur over Radius, times Amount, is added back: crests and gullies about Radius wide stand out more. Large amounts make a relief look carved.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -573,6 +633,10 @@
             "in"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -627,6 +691,10 @@
       "additionalProperties": false,
       "description": "Layers of rock of uneven thickness cut into a relief: ledges on the slopes, as sedimentary rock weathers. Layers is how many beds the relief's range is cut into, of thicknesses that vary; Strength how flat their ledges are; Tilt leans the beds across the terrain, from west to east. Works over the input's own range.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -640,6 +708,10 @@
             "in"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -711,6 +783,10 @@
       "additionalProperties": false,
       "description": "Twists a relief around a point, most at the middle, not at all at Radius. Angle is how far the middle turns, in degrees; Radius how far the twist reaches, as a fraction of the terrain; X and Z where its middle is. Worked over the whole terrain at the simulations' resolution.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -724,6 +800,10 @@
             "in"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -806,6 +886,10 @@
       "additionalProperties": false,
       "description": "Steps cut into a relief between two heights: flat ledges joined by risers, as rock beds or rice terraces make them. Steps is how many ledges there are between Low and High; Sharpness how abrupt the risers are (0 a gentle ramp, 1 a wall). Outside Low and High the relief is left as it is.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -819,6 +903,10 @@
             "in"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -932,6 +1020,10 @@
       "additionalProperties": false,
       "description": "Scales, turns and moves a relief over the terrain. Scale above 1 enlarges the relief around the terrain's middle; Rotate turns it, in degrees clockwise; Offset moves it, as fractions of the terrain. Worked over the whole terrain at the simulations' resolution.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -945,6 +1037,10 @@
             "in"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -1027,6 +1123,10 @@
       "additionalProperties": false,
       "description": "Pushes a relief around by a noise: straight lines wander, round shapes twist, everything looks less made. Each place takes the height found up to Amount blocks away, in a direction that changes smoothly over Scale. Small amounts take the regularity off shapes; large ones swirl them like rock under pressure.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -1040,6 +1140,10 @@
             "in"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -1111,6 +1215,10 @@
       "additionalProperties": false,
       "description": "The game's biomes from the climate: oceans by their warmth, beaches, rivers, peaks and meadows by height, and on land a table of temperature against humidity. Connect Temperature and Humidity (and Height, Water for oceans, beaches, rivers and peaks). Above Peaks blocks over the sea lie frozen, jagged or stony peaks, meadows and groves just under them; within Beach blocks of the sea level, beaches. On land: snowy plains and taiga in the cold, plains and forests in the mild, savanna and swamp in the warm, desert, badlands and jungle in the hot. The Biome output goes to the Map Output; the Colour output shows them as maps do.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -1140,6 +1248,10 @@
             "humidity"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -1230,6 +1342,10 @@
       "additionalProperties": false,
       "description": "How humid each place is: damp by the sea, drying inland, wetter where rain falls. Inland is how far from the sea the air stays damp. Connect Rainfall for rain shadows and wet windward slopes; Rain weight is how much it counts against the sea's nearness. Variation adds slow patches; Irregularity lets the damp band by the coast widen and narrow along it, so that forests do not follow the shore at one width. Feed Biomes with it, and the Map Output's Humidity.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -1248,6 +1364,10 @@
             "height"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -1338,6 +1458,10 @@
       "additionalProperties": false,
       "description": "Where rain falls: air carries moisture from the sea downwind and loses it as it rises, so that slopes facing the wind are wet and the land behind mountains dry. Direction is where the wind blows to. Moisture is how wet the air comes in; Orographic how much rain rising air sheds (high: deep rain shadows behind ranges); Refill how quickly the air takes moisture back over the sea; Drying how quickly it rains out over flat land. Worked over the whole terrain at the simulations' resolution; the result is from 0 (driest) to 1 (wettest).",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -1351,6 +1475,10 @@
             "height"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -1447,6 +1575,10 @@
       "additionalProperties": false,
       "description": "How warm each place is: warmer toward one side of the terrain, colder with height, milder by the sea. Toward is the warm side (90 for the south, as in the northern hemisphere); the temperature goes from Cold on the far side to Warm on that one. Lapse takes degrees off for every 100 blocks over the sea, so that summits freeze; Sea moderation pulls the sea toward a mild 12 °C. Variation adds slow warmer and colder patches. Feed Biomes with it, and the Map Output's Temperature.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -1465,6 +1597,10 @@
             }
           },
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -1598,6 +1734,10 @@
       "additionalProperties": false,
       "description": "The prevailing wind over the terrain, bent around high ground. Direction is where the wind blows to (0 east, 90 south): the westerlies of Europe blow to the east. Deflection is how much the relief turns it aside instead of letting it climb. The output is a direction and a strength at each place, for dunes, rain and wind erosion.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -1608,6 +1748,10 @@
             }
           },
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -1675,6 +1819,10 @@
       "additionalProperties": false,
       "description": "A scatter of islands in the sea, many small and a few large, over the terrain or along a line. Count islands are scattered over the terrain, or along the Chain when one is drawn (an arc of islands), their sizes between Smallest and Largest (most of them small). Place islands by hand as Islands to set each one yourself; they come in addition. Shelf and Depth shape the sea around them, so that close islands share their shallows.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -1684,6 +1832,10 @@
             }
           },
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -2017,6 +2169,10 @@
       "additionalProperties": false,
       "description": "Land and sea across the terrain: continents and seas, a ragged coast with capes and bays, beaches, a shelf, fjords if wanted. Land is the share of the terrain above the sea, Scale the size of the landmasses. Draw an Outline to say where the coast runs (a closed line: land inside), or connect a mask to Shape (an imported or painted land map); otherwise noise decides. Inland is how far the land takes to rise to Height. Fjords cut long, deep inlets into the coast. The Land output is the mask to put mountains, forests and beaches through.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -2031,6 +2187,10 @@
             }
           },
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -2306,6 +2466,10 @@
       "additionalProperties": false,
       "description": "An island rising from the sea: a ragged coast, a beach, a shallow shelf around it, land rising inland. Place its centre on the viewer. Radius is its size, Height how high its middle rises over the sea, Coast roughness how ragged the shore is. Shelf and Depth shape the sea around it. Put mountains on it with Max (or Add with their Base at 0) through its Land mask.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -2315,6 +2479,10 @@
             }
           },
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -2576,6 +2744,10 @@
       "additionalProperties": false,
       "description": "Colours turned in hue, made more or less vivid, lighter or darker, with more or less contrast. Hue turns every colour around the wheel; Saturation 0 makes greys, 2 doubles the vividness; Brightness and Contrast as in a photo editor.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -2589,6 +2761,10 @@
             "color"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -2671,6 +2847,10 @@
       "additionalProperties": false,
       "description": "Colours from a value — a height, a mask — mapped from Low to High onto a gradient: one from nature, or one of your own. The input from Low to High picks a colour along the gradient (Auto takes the input's own lowest and highest values). Presets give gradients from nature; Custom uses the stops of Gradient. Feed it a height for bands of altitude, a slope mask for rock on steep ground, a strata noise for badlands. Variation jitters the colours a little so that large areas do not look flat.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -2684,6 +2864,10 @@
             "in"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -2886,6 +3070,10 @@
       "additionalProperties": false,
       "description": "Two colourings combined through a mask: B laid over A where the mask is 1, by a mode. The way to put rock colour on cliffs (a slope mask), snow on summits (a snow mask), sand on beaches (a distance mask from the sea). Strength fades the whole mix.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -2910,6 +3098,10 @@
             "b"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -2984,6 +3176,10 @@
       "additionalProperties": false,
       "description": "Colours the ground by its height, from one colour at Low to another at High. The simplest colouring: a colour for the low ground and one for the high ground, blended between. Feed the Map Output's Albedo with it, or mix several through masks.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -2997,6 +3193,10 @@
             "height"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -3095,10 +3295,18 @@
       "additionalProperties": false,
       "description": "One colour everywhere. A colour to mix in through a mask: snow white where the snow mask says, grey rock on cliffs.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {},
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -3146,6 +3354,10 @@
       "additionalProperties": false,
       "description": "Combines two reliefs, A and B, by a mode, through a mask where one is given. The result is A where the mask is 0 (or Strength is 0), and A combined with B by the mode where it is 1. Add raises mountains on a plain, Max sets landforms side by side, Replace with a mask puts one landscape inside another.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -3170,6 +3382,10 @@
             "b"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -3276,10 +3492,172 @@
       "title": "Blend",
       "type": "object"
     },
+    "component": {
+      "additionalProperties": false,
+      "description": "A composite node: a graph of its own that runs as one node. Inside, in.<name> names its input <name>.",
+      "properties": {
+        "category": {
+          "type": "string"
+        },
+        "exposed": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "advanced": {
+                "type": "boolean"
+              },
+              "category": {
+                "type": "string"
+              },
+              "control": {
+                "type": "string"
+              },
+              "default": {},
+              "help": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "max": {
+                "type": "number"
+              },
+              "min": {
+                "type": "number"
+              },
+              "name": {
+                "type": "string"
+              },
+              "soft": {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "targets": {
+                "description": "The settings inside it stands for, each node.setting.",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              "unit": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "targets"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "frames": {
+          "additionalProperties": {
+            "$ref": "#/$defs/frame"
+          },
+          "type": "object"
+        },
+        "inputs": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "help": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "optional": {
+                "type": "boolean"
+              },
+              "type": {
+                "enum": [
+                  "height",
+                  "mask",
+                  "color",
+                  "vector",
+                  "terrain",
+                  "biome"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "type"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "label": {
+          "type": "string"
+        },
+        "nodes": {
+          "additionalProperties": {
+            "$ref": "#/$defs/node"
+          },
+          "type": "object"
+        },
+        "outputs": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "from": {
+                "$ref": "#/$defs/source"
+              },
+              "label": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "from"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "ui": {
+          "type": "object"
+        },
+        "version": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "label",
+        "nodes"
+      ],
+      "type": "object"
+    },
+    "composite_type": {
+      "description": "A composite: project:<name> (one of the document's components) or massif:<name> (one Massif ships), with @N for a later version. Its params are the settings it exposes, its inputs and outputs those it declares.",
+      "pattern": "^(project|massif):[a-z0-9_-]+(@[0-9]+)?$",
+      "type": "string"
+    },
     "crater.field": {
       "additionalProperties": false,
       "description": "Impact craters: a bowl with a raised rim and its ejecta, a central peak in the large ones; placed by hand or scattered, many small and few large. Place craters on the viewer (each with its radius and depth) or let Count scatter them, from Smallest to Largest. Connect a relief to Height to dig them into it; otherwise they lie on a ground at Base. Large craters (over Peak size) get a central peak and a flat floor.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -3290,6 +3668,10 @@
             }
           },
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -3493,6 +3875,10 @@
       "additionalProperties": false,
       "description": "Raindrops run down the slopes, wearing gullies and rills where they speed up and laying soil where they slow down. The fine detail of erosion: each drop of rain runs downhill, picks up soil where it gathers speed and drops it where it slows, in hollows and at the feet of slopes. Use it after Stream erosion, or on its own on hills and cliffs, for gullies, rills, scree fans and soft valley floors. More Rain cuts deeper; Capacity is how much a drop carries; Radius how wide it wears.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -3516,6 +3902,10 @@
             "height"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -3648,6 +4038,10 @@
       "additionalProperties": false,
       "description": "Rivers cut valleys that branch up into every slope, leaving sharp ridges between them, and lay what they carry down where they slow. The erosion that makes mountains look like mountains: water gathers into streams, the more of it the deeper they cut (stream power), their walls fall back to the talus angle, and the sediment settles at the feet of slopes, on valley floors and at the sea. Use it after shapes and noise to turn lumps into ranges drained by real valleys; follow it with Particle erosion for small gullies and Thermal erosion for scree. Strength is how far the rivers cut back into the land; Hardness keeps some rock standing; Rain gives more water where it falls.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -3676,6 +4070,10 @@
             "height"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -3831,6 +4229,10 @@
       "additionalProperties": false,
       "description": "Loose rock slides down slopes steeper than its angle of repose, and gathers at their feet as scree. Wears cliffs back and fills the feet of slopes with talus, the way frost and gravity do: what is steeper than Talus angle sheds material to the lower neighbours until it is stable. More iterations go further towards that angle; Strength is how much moves at each; Hardness keeps cliffs of hard rock standing while soft beds crumble. The Talus output is where material came to rest: scree, gravel, rubble.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -3849,6 +4251,10 @@
             "height"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -3976,6 +4382,10 @@
       "additionalProperties": false,
       "description": "A fault along a line drawn on the terrain: the ground on one side lifted, a scarp between the two. Draw the fault's line on the viewer. Throw is how much higher the left side (of the way the line runs) stands; a negative throw lifts the right side. Width is the scarp's width, Ragged how broken its face is. Feed it the relief to break through Height.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -3990,6 +4400,10 @@
             }
           },
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -4121,10 +4535,56 @@
       "title": "Fault",
       "type": "object"
     },
+    "frame": {
+      "additionalProperties": false,
+      "description": "A frame round nodes in the editor; never read to evaluate.",
+      "properties": {
+        "collapsed": {
+          "type": "boolean"
+        },
+        "color": {
+          "pattern": "^#[0-9a-fA-F]{6}$",
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "members": {
+          "description": "The nodes it holds.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "parent": {
+          "description": "The frame it sits in.",
+          "type": "string"
+        },
+        "rect": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "type": "array"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "type": "object"
+    },
     "ice.glacier": {
       "additionalProperties": false,
       "description": "Ice gathers above the snow line, flows down the valleys and scours them into U-shapes, with cirques at their heads, fjords below the sea and moraines at their ends. Snow above the equilibrium line (ELA) turns to ice, which flows downhill and melts below the line. Where it slides it wears its bed: V-shaped river valleys become broad U-shaped troughs, their heads armchair cirques, side valleys left hanging, and valleys the ice carried below the sea become fjords. Moraines are laid along its edges and where it ends. Lower the line or raise Accumulation for larger glaciers; Strength is how deep they cut.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -4143,6 +4603,10 @@
             "height"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -4248,10 +4712,18 @@
       "additionalProperties": false,
       "description": "A heightmap image turned into relief: black at Low, white at High, laid over a rectangle of the terrain. Choose the file (PNG, TIFF, JPEG, BMP or a square RAW of 16-bit samples; 16-bit greys keep their precision), then where it lies: X, Z, Width and Depth as shares of the terrain, Rotation, and how its shape fits. Outside it, the relief is Low (or the image repeats when Tile is on); the Mask output says where the image lies, fading over Edge fade, to blend several heightmaps or a heightmap into a generated relief.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {},
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -4447,10 +4919,18 @@
       "additionalProperties": false,
       "description": "An image read as a mask (one of its channels, over a range) and as colours: a temperature or rainfall map, a painted mask, a satellite colour map. Choose the file and where it lies, as for a heightmap. Channel picks which of its values becomes the mask, Low and High the values read as 0 and 1 (a temperature map stored from −30 to 45 °C reads with Low −30 and High 45 into a temperature mask). The Colour output gives its colours, for the Map Output's Albedo.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {},
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -4684,10 +5164,18 @@
       "additionalProperties": false,
       "description": "The map as it is: its ground, its water, its terrains and biomes, read again whenever the map changes. Start from the map you painted or imported: run erosion over it, put rivers in its valleys, colour it from its relief, keep its terrains where a mask says. Water is 1 where water lies over the ground, Level the water's surface. The levels the graph writes itself are left out.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {},
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -4712,6 +5200,10 @@
       "additionalProperties": false,
       "description": "Sand shaped by the wind: transverse crests, linear ridges, crescent barchans or star dunes, with ripples over them. Direction is where the wind blows to (0 east, 90 south); Wavelength how far apart the crests are; Height how tall they stand. Irregularity breaks and bends the crests. Connect a mask to Sand to say where there is sand (the dunes fade where there is less). Ripples add the wind's small waves where the samples are fine enough to hold them.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -4726,6 +5218,10 @@
             }
           },
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -4878,6 +5374,10 @@
       "additionalProperties": false,
       "description": "Limestone dissolved by water: steep towers on a plain, crowded cones around hollows, or a plain pitted with sinkholes. Spacing is how far apart the towers, cones or sinkholes are, Height how tall the towers (or deep the sinkholes) are. Steepness makes the towers' walls sheer. Coverage is the share of places that hold one. Put it over a coastline for a drowned karst like Ha Long Bay.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -4887,6 +5387,10 @@
             }
           },
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -5033,6 +5537,10 @@
       "additionalProperties": false,
       "description": "Natural colours from the relief alone: valleys, meadows, rock on the steep slopes, snow on the peaks. Palette is the land's colours; Snow line where snow starts, in blocks; Rock slope the slope where rock shows, in degrees.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -5046,6 +5554,10 @@
             "height"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -5167,6 +5679,10 @@
       "additionalProperties": false,
       "description": "Water running down the slopes carries soil from the heights to the valleys: gullies, smoothed slopes, alluvial fans. Rain is how many drops fall on each sample; Erosion and Deposition how much soil a drop takes and leaves; Capacity how much it can carry; Evaporation how fast it dries; Radius the brush a drop wears with, in blocks.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -5180,6 +5696,10 @@
             "in"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -5299,10 +5819,18 @@
       "additionalProperties": false,
       "description": "A world brought in (WorldPainter's .world, Massif's .massif): its surface, its water and its colours. Path is the world's file; Fit stretches it over the terrain, or lays it at its own blocks. Low and High are the heights a height map's black and white stand for (Heightmap reads those better).",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {},
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -5376,10 +5904,18 @@
       "additionalProperties": false,
       "description": "Islands of rock floating in the air: a rolling top on sheer sides, over an underside hanging down to a point. Altitude is the height of their middles and Spread how much it varies; Size the radius of the largest; Coverage how many of the places one could float have one; Depth how far the underside hangs, as a multiple of the radius. Top and Bottom feed a layer of the Map Output.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {},
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -5484,6 +6020,10 @@
       "additionalProperties": false,
       "description": "Where the water of the terrain runs and gathers. Spread is how much small rills show beside the big rivers.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -5497,6 +6037,10 @@
             "in"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -5537,6 +6081,10 @@
       "additionalProperties": false,
       "description": "The hollows water would fill, filled: lakes and flat valley floors. Amount goes from nothing (0) to every hollow full (1); Sea is the level under which a hollow is the sea's, not a lake.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -5550,6 +6098,10 @@
             "in"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -5604,6 +6156,10 @@
       "additionalProperties": false,
       "description": "Rims jutting out from the top of cliffs over the void below: a slab of rock, as its top and bottom. Reach is how far the rims jut out, Thickness how thick they are where they leave the cliff, Drop the smallest drop that makes a cliff, Variation how unevenly they jut out along it. Top and Bottom feed a layer of the Map Output.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -5617,6 +6173,10 @@
             "in"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -5708,6 +6268,10 @@
       "additionalProperties": false,
       "description": "Rivers traced where the water of the whole terrain runs, wider and deeper downstream, dug into their valleys, with lakes in the hollows they cross. Threshold is how much land must drain to a place for a river to run there (higher: fewer, larger rivers); Depth and Width those of the largest; Sea the level where rivers end; Banks how far the banks slope down, in river widths; Lakes which hollows hold lakes.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -5726,6 +6290,10 @@
             "in"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -5836,10 +6404,18 @@
       "additionalProperties": false,
       "description": "Rocky detail around 0, to add to a relief. Scale is the size of the rocks, Height how high they stand, Sharpness from rounded boulders (0) to sharp crags (1). Add it to a relief with Blend.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {},
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -5916,6 +6492,10 @@
       "additionalProperties": false,
       "description": "A sea level: where the ground is under water, and its shore. Level is the sea's height; Shore how wide the shore is, in blocks of height around it.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -5929,6 +6509,10 @@
             "in"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -5983,10 +6567,18 @@
       "additionalProperties": false,
       "description": "Relief from tectonic plates: continents and oceans, mountains where plates collide, rifts where they pull apart. Plates are 1.2's plates, as JSON. Relief is the height of the highest ranges, Width how wide the belts along the boundaries are, Roughness how much the boundaries wind, Sea the sea level the oceans lie under.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {},
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -6084,6 +6676,10 @@
       "additionalProperties": false,
       "description": "Where the ground bulges into ridges or hollows into valleys, at the scale asked for. Compares the relief with its own smoothing over Scale blocks: higher than its surroundings is a ridge, lower a hollow. A small scale finds gullies and crests, a large one valleys and spurs. Sensitivity says how slight a bulge or hollow reaches 1. Ridges take rock and wind, hollows soil, water and snow drifts.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -6097,6 +6693,10 @@
             "height"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -6179,6 +6779,10 @@
       "additionalProperties": false,
       "description": "How far each place lies from where a mask is: 1 on the mask, fading to 0 Reach blocks away, and the distance itself in blocks. Feed it where something is — the sea, rivers, a road, a painted area — and get a band around it: beaches and reeds by the water, a margin along a cliff, forests thinning away from rivers. Threshold says where the mask counts as there. Worked over the whole terrain at the simulations' resolution.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -6192,6 +6796,10 @@
             "mask"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -6246,6 +6854,10 @@
       "additionalProperties": false,
       "description": "A mask grown outward by Radius blocks, or shrunk inward with a negative radius. Grow a river mask into its banks, a road into its verges; shrink a land mask away from the shore, a forest away from its edge. Wide radii are worked at a coarser level and come back smooth.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -6259,6 +6871,10 @@
             "mask"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -6299,6 +6915,10 @@
       "additionalProperties": false,
       "description": "How much sunlight the ground takes from a sun at a given direction and height: 1 facing it, 0 turned away. Azimuth is where the sun stands (0 east, 90 south, 180 west), Elevation how high above the horizon. Flat ground takes the sine of the elevation. Sunlit slopes dry out and lose their snow first; shaded ones keep moss, ice and forests that like the cold.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -6312,6 +6932,10 @@
             "height"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -6366,6 +6990,10 @@
       "additionalProperties": false,
       "description": "Where slopes face a direction: 1 on slopes turned toward it, fading within Spread degrees, 0 on flat ground. Direction is where the slopes look to (0 east, 90 south, 180 west, 270 north). North-facing slopes keep snow and moss in the northern hemisphere, south-facing ones are dry and sunny; slopes facing the prevailing wind take its rain. Ground flatter than Min slope counts as facing nowhere.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -6379,6 +7007,10 @@
             "height"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -6447,6 +7079,10 @@
       "additionalProperties": false,
       "description": "Where the ground lies between two heights: 1 from From to To, fading over Softness on either side. Picks bands of altitude: the snowy summits (From high, To at the top), the low ground by the sea, a band of forest. Heights are in blocks, as the relief's; Softness fades the edges so that what is painted through it mixes.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -6460,6 +7096,10 @@
             "height"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -6528,6 +7168,10 @@
       "additionalProperties": false,
       "description": "A mask turned over: 1 where it was 0, 0 where it was 1. Everywhere the mask is not: gentle ground from a slope mask, open ground from a forest mask, land from a sea mask.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -6541,6 +7185,10 @@
             "mask"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -6566,6 +7214,10 @@
       "additionalProperties": false,
       "description": "How open to the sky the ground is: 1 on summits and plains, lower in gorges, gullies and at the feet of cliffs. Looks around each place in Directions directions up to Radius blocks, and takes how high the horizon rises. Narrow valleys, crevices and the feet of walls are dark; the dark is where moss, shade plants and old snow keep. Wide radii are worked at a coarser level.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -6579,6 +7231,10 @@
             "height"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -6628,6 +7284,10 @@
       "additionalProperties": false,
       "description": "Where the ground is steep: 0 below From degrees, 1 above To, a smooth step between (and back to 0 above Upper, when set). Picks slopes by their steepness: cliffs for rock, gentle ground for grass and snow (inverted). Upper keeps only a band of slopes (scree between 30° and 40°, say). The slope is measured between neighbouring samples, so a coarse preview shows slopes a little gentler than the final build.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -6641,6 +7301,10 @@
             "height"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -6709,6 +7373,10 @@
       "additionalProperties": false,
       "description": "Where snow lies: above a snow line, lower on slopes facing north and in hollows where it drifts, never on slopes too steep to hold it. Line is the height above which snow lies on open ground, Softness how gradually it fades in. North bias lowers the line on north-facing slopes (the shady side), Drift fills hollows, Breakup frays the edge into patches. Max slope keeps cliffs bare. Depth, when above 0, also raises the Height output by the snow's depth.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -6726,6 +7394,10 @@
             "height"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -6859,6 +7531,10 @@
       "additionalProperties": false,
       "description": "A mask made sharp: 1 above At, 0 below, over Softness. Turns a soft mask (or any field) into a crisp one. Softness 0 gives a hard edge; a little softness keeps it from stair-stepping.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -6872,6 +7548,10 @@
             "mask"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -6926,6 +7606,10 @@
       "additionalProperties": false,
       "description": "Where the ground stays wet: where much water gathers and it is flat (with a Flow mask), or in flat hollows. With a Flow mask from erosion connected, this is the topographic wetness index: the more water flows through a place and the flatter it is, the wetter. Without one, flat hollows of Scale blocks count as wet. Wet ground takes moss, mud, reeds, swamps and dense forest.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -6944,6 +7628,10 @@
             "height"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -6998,6 +7686,10 @@
       "additionalProperties": false,
       "description": "Young, sharp mountains: pyramidal summits, knife-edge ridges and deep valleys, like the Alps or the Himalaya. Mountains over an area: summits about Peak spacing apart joined by ridges, valleys between them, and the relief of Detail size on their slopes. Connect a mask to Area to say where they stand (a painted area, a coastline's land), or let Coverage spread them. Height is the summits' height over Base; the Profile shapes the massif from its edges to its heart. Run erosion after them for valleys carved by water.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -7012,6 +7704,10 @@
             }
           },
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -7200,10 +7896,18 @@
       "additionalProperties": false,
       "description": "Summits placed by hand, each with its height and reach: horns with ridges (arêtes) running down from the top. Place the peaks on the viewer; each has its own height and radius. Arêtes is how many main ridges run down from each summit (3 or 4 for a horn like the Matterhorn), Arête strength how deep the faces between them are cut. Where peaks meet, the higher one wins, with a saddle between. Add them to a range or a massif for the mountain everyone must recognise.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {},
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -7449,6 +8153,10 @@
       "additionalProperties": false,
       "description": "A range of mountains along a line drawn on the terrain: a crest of summits and saddles, with side ridges running down to its feet. Draw the Spine on the viewer: the crest follows it, summits about Peak spacing apart with saddles between (Saddles: how deep), and side ridges (Spurs) run down the flanks every Spur spacing, valleys between them. Width is the range's width from foot to foot; each point of the spine can make it higher or wider there. Asymmetry makes one side steeper (positive: the left of the way the spine runs). Combine with a coastline or a plain with Max, or Add with Base 0.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -7458,6 +8166,10 @@
             }
           },
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -7779,6 +8491,10 @@
       "additionalProperties": false,
       "description": "Old, worn mountains: rounded summits, broad shoulders and gentle valleys, like the Appalachians or the Vosges. Mountains over an area: summits about Peak spacing apart joined by ridges, valleys between them, and the relief of Detail size on their slopes. Connect a mask to Area to say where they stand (a painted area, a coastline's land), or let Coverage spread them. Height is the summits' height over Base; the Profile shapes the massif from its edges to its heart. Run erosion after them for valleys carved by water.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -7793,6 +8509,10 @@
             }
           },
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -7981,10 +8701,18 @@
       "additionalProperties": false,
       "description": "Volcanoes placed by hand: steep stratovolcanoes, broad shields, calderas or cinder cones, with a crater, gullies down their flanks and smaller cones on them. Place each volcano on the viewer with its height and radius. The kind sets its profile; Crater is the crater's width as a share of the radius (a caldera's is wider), Crater depth how far below the rim its floor lies. Gullies are the channels old flows cut down the flanks; Cones adds smaller vents on them. On an island, take the Max with the sea floor.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {},
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -9479,91 +10207,98 @@
       "description": "A node: its type, what feeds its inputs, its settings.",
       "properties": {
         "type": {
-          "enum": [
-            "input.map",
-            "input.heightmap",
-            "input.image",
-            "pattern.constant",
-            "noise.fbm",
-            "noise.eroded",
-            "noise.cells",
-            "pattern.gradient",
-            "pattern.shape",
-            "mountain.alpine",
-            "mountain.rounded",
-            "mountain.range",
-            "mountain.peaks",
-            "mountain.volcano",
-            "plateau.mesa",
-            "valley.canyon",
-            "valley.glacial",
-            "fault.scarp",
-            "land.dunes",
-            "land.karst",
-            "crater.field",
-            "coast.island",
-            "coast.archipelago",
-            "coast.coastline",
-            "adjust.levels",
-            "adjust.curve",
-            "adjust.terrace",
-            "adjust.stratify",
-            "adjust.clamp",
-            "adjust.fold",
-            "adjust.invert",
-            "adjust.normalize",
-            "adjust.blur",
-            "adjust.sharpen",
-            "adjust.warp",
-            "adjust.transform",
-            "adjust.swirl",
-            "erosion.stream",
-            "erosion.particle",
-            "erosion.thermal",
-            "sediment.deposit",
-            "ice.glacier",
-            "wind.erosion",
-            "water.flow",
-            "water.rivers",
-            "water.lakes",
-            "water.sea",
-            "climate.temperature",
-            "climate.wind",
-            "climate.rainfall",
-            "climate.humidity",
-            "climate.biomes",
-            "mask.height",
-            "mask.slope",
-            "mask.curvature",
-            "mask.facing",
-            "mask.exposure",
-            "mask.occlusion",
-            "mask.snow",
-            "mask.wetness",
-            "mask.distance",
-            "mask.threshold",
-            "mask.invert",
-            "mask.expand",
-            "color.ramp",
-            "color.gradient",
-            "color.solid",
-            "color.mix",
-            "color.adjust",
-            "terrain.layers",
-            "terrain.select",
-            "combine.blend",
-            "legacy.floating_islands",
-            "legacy.overhang",
-            "legacy.rocks",
-            "legacy.tectonic",
-            "legacy.file_input",
-            "legacy.erosion",
-            "legacy.rivers",
-            "legacy.lakes",
-            "legacy.sea",
-            "legacy.flow",
-            "legacy.auto_color",
-            "output.map"
+          "anyOf": [
+            {
+              "enum": [
+                "input.map",
+                "input.heightmap",
+                "input.image",
+                "pattern.constant",
+                "noise.fbm",
+                "noise.eroded",
+                "noise.cells",
+                "pattern.gradient",
+                "pattern.shape",
+                "mountain.alpine",
+                "mountain.rounded",
+                "mountain.range",
+                "mountain.peaks",
+                "mountain.volcano",
+                "plateau.mesa",
+                "valley.canyon",
+                "valley.glacial",
+                "fault.scarp",
+                "land.dunes",
+                "land.karst",
+                "crater.field",
+                "coast.island",
+                "coast.archipelago",
+                "coast.coastline",
+                "adjust.levels",
+                "adjust.curve",
+                "adjust.terrace",
+                "adjust.stratify",
+                "adjust.clamp",
+                "adjust.fold",
+                "adjust.invert",
+                "adjust.normalize",
+                "adjust.blur",
+                "adjust.sharpen",
+                "adjust.warp",
+                "adjust.transform",
+                "adjust.swirl",
+                "erosion.stream",
+                "erosion.particle",
+                "erosion.thermal",
+                "sediment.deposit",
+                "ice.glacier",
+                "wind.erosion",
+                "water.flow",
+                "water.rivers",
+                "water.lakes",
+                "water.sea",
+                "climate.temperature",
+                "climate.wind",
+                "climate.rainfall",
+                "climate.humidity",
+                "climate.biomes",
+                "mask.height",
+                "mask.slope",
+                "mask.curvature",
+                "mask.facing",
+                "mask.exposure",
+                "mask.occlusion",
+                "mask.snow",
+                "mask.wetness",
+                "mask.distance",
+                "mask.threshold",
+                "mask.invert",
+                "mask.expand",
+                "color.ramp",
+                "color.gradient",
+                "color.solid",
+                "color.mix",
+                "color.adjust",
+                "terrain.layers",
+                "terrain.select",
+                "combine.blend",
+                "legacy.floating_islands",
+                "legacy.overhang",
+                "legacy.rocks",
+                "legacy.tectonic",
+                "legacy.file_input",
+                "legacy.erosion",
+                "legacy.rivers",
+                "legacy.lakes",
+                "legacy.sea",
+                "legacy.flow",
+                "legacy.auto_color",
+                "output.map"
+              ]
+            },
+            {
+              "$ref": "#/$defs/composite_type"
+            }
           ]
         }
       },
@@ -9576,6 +10311,10 @@
       "additionalProperties": false,
       "description": "Cellular (Voronoi) noise: points scattered one per cell, and a value from where a sample lies among them — pits, pillows, ridges along the edges, or a mosaic. Scale is how far apart the points are, Jitter how far they stray from a grid. Distance makes round pits around the points, Edges ridges between cells (dried mud, crazed rock), Cells a mosaic of flat pieces (terraces, fields). Height and Base place the result in blocks; for a mask, 1 and 0.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -9589,6 +10328,10 @@
             }
           },
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -9714,6 +10457,10 @@
       "additionalProperties": false,
       "description": "Fractal noise whose fine detail fades on slopes and gathers on heights: smooth flanks, branching valleys, the look of an eroded relief without simulating it. Each octave is weakened where the coarser ones slope (after Iñigo Quilez), so slopes stay smooth and detail stays on crests and in hollows. Erosion is how strongly. A quick base for hills and old mountains, or a mask that follows the relief's structure.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -9727,6 +10474,10 @@
             }
           },
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -9832,6 +10583,10 @@
       "additionalProperties": false,
       "description": "Fractal noise: relief at every scale, from its largest features down to fine detail. The base of most landscapes. Scale is the size of the largest features; each octave adds detail half as large (lacunarity) and weaker (roughness). Rolling makes hills, Ridged mountain crests, Billowy rounded mounds. Height is how far the lowest and highest points lie apart, Base where the lowest lies.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -9845,6 +10600,10 @@
             }
           },
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -10015,6 +10774,10 @@
       "additionalProperties": false,
       "description": "What the graph gives the map: its ground, water, surface, climate, life, underground and masks, each input optional. The graph's final node, like a material output in Blender: one node with an input for each thing the map can take. Connect only what the graph makes; an input left empty keeps what the map has (or takes the default it shows). A graph can keep several Map Outputs to compare variants: the one marked Active is used.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "patternProperties": {
@@ -10143,6 +10906,10 @@
           },
           "type": "object"
         },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
+        },
         "note": {
           "description": "A note for whoever reads the graph.",
           "type": "string"
@@ -10221,10 +10988,18 @@
       "additionalProperties": false,
       "description": "The same height everywhere. A flat ground at one height: a start to build on, or a level to combine with another relief.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {},
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -10264,10 +11039,18 @@
       "additionalProperties": false,
       "description": "A value rising from one point to another, straight or around the first: tilt a relief, fade a mask towards a coast, raise a dome. Place the two ends on the viewer: the value is 0 at the first and 1 at the second (Radial: 0 at the first, 1 at the second's distance from it), shaped by the Profile; Height and Base place it in blocks. Multiply a relief by it to make it fade out, or add it to tilt land towards the sea.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {},
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -10422,10 +11205,18 @@
       "additionalProperties": false,
       "description": "A geometric shape as a mask: a disc, a square, a polygon or a star, its edge as soft as wanted. Place its centre on the viewer; Radius is its size, Softness how far its edge fades (0 sharp), Angle turns it. Use it to keep something within an area, to raise a platform, to cut a crater-like hollow.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {},
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -10581,6 +11372,10 @@
       "additionalProperties": false,
       "description": "Flat-topped tablelands cut by cliffs: mesas, buttes standing alone, stepped walls of rock layers, talus at their feet. Coverage is the share of the ground left high, Scale the size of the mesas: small ones stand alone as buttes. Cliff is how sheer their walls are, Layers how many steps the rock beds make in them, Talus how far the scree spreads at their feet. Dissection cuts canyons into the tablelands. Connect a mask to Area to say where they rise.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -10595,6 +11390,10 @@
             }
           },
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -10750,6 +11549,10 @@
       "additionalProperties": false,
       "description": "Loose rock and soil shed by steep slopes run down with the water and settle where it slows: fans at the feet of mountains, filled valleys and basins, deltas at the sea. Lays down what the mountains shed, without cutting anything: the steep slopes of Source give Amount blocks of material over the run, the water carries it down its ways and drops it where they flatten, spreading alluvial fans at the mouths of valleys, flat floors in the valleys and basins, and deltas where rivers meet the sea. Use it after Stream erosion, or on any range, to soften its feet into the plains.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -10768,6 +11571,10 @@
             "height"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -10858,6 +11665,10 @@
       "additionalProperties": false,
       "description": "The terrain (block material) of each place, from masks: a base terrain, and up to six layers laid over it where their masks say. Base is the terrain everywhere (or Under, where connected); each layer lays its terrain where its mask passes Threshold, later layers over earlier ones (rock on slopes, then gravel on scree, then sand on beaches, then snow). Dither frays the edges so that terrains mix block by block. Terrains are named as in the world's terrain list (Grass, Rock, Gravel, Sand, Snow…). Feed the Map Output's Terrain with it.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -10898,6 +11709,10 @@
             }
           },
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -11000,6 +11815,10 @@
       "additionalProperties": false,
       "description": "A mask of where a terrain lies: 1 where the terrain is the one named. Picks a terrain out of a terrain map (from Terrain layers, or the map's own through a Map input), to put plants on grass only, to raise snow where there is snow.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -11013,6 +11832,10 @@
             "terrain"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -11046,6 +11869,10 @@
       "additionalProperties": false,
       "description": "A canyon cut into the relief: along a line drawn on the terrain, or a network of them winding across it, with a flat floor and stepped walls. Draw the Path on the viewer for one canyon (each point can make it deeper or wider there), or leave it empty for a network of canyons, Scale apart, winding across the terrain with side canyons (Branches). Width is the canyon's width at the rim, Floor the share of it that is flat bottom, Steps how many ledges the rock beds make in its walls. Feed it a plateau (a Mesas node, a Constant) through Height.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -11060,6 +11887,10 @@
             }
           },
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -11278,6 +12109,10 @@
       "additionalProperties": false,
       "description": "A U-shaped valley a glacier carved, along a line drawn on the terrain: a wide flat floor gently descending between steep walls. Draw the Path on the viewer (each point can make it wider there). Floor height is the height of its flat floor where the path starts, Drop how much lower it lies at the end; Width is the valley's width from rim to rim, Floor the share of it that is flat, Steepness how sheer its walls are. Cut it into mountains through Height for a valley like Yosemite or Lauterbrunnen; a floor under the sea level makes a fjord.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -11292,6 +12127,10 @@
             }
           },
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -11485,6 +12324,10 @@
       "additionalProperties": false,
       "description": "Where the rain runs off, as a mask: bright in the rivers, fading up every rill. Follows the rain down the relief, across hollows and flats to the sea or the terrain's edge, and measures how much land drains through each place. Use it to paint river beds, wet valley floors and gullies, or to drive vegetation. Small streams shows more of the rills next to the rivers.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -11503,6 +12346,10 @@
             "height"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -11551,6 +12398,10 @@
       "additionalProperties": false,
       "description": "Every hollow fills up to where it spills: with water, or with ground. Finds every hollow of the relief, where rain would gather, and fills it to the level where it overflows. Amount 0 makes them lakes; 1 fills them with ground, as sediment would, smoothing the land; between, both. What lies under the sea level is the sea's, not a lake.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -11564,6 +12415,10 @@
             "height"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -11618,6 +12473,10 @@
       "additionalProperties": false,
       "description": "Rivers where enough of the land drains, their beds and banks dug into the relief, wider and deeper downstream, holding lakes in deep hollows. Follows the rain to the sea or the terrain's edge and lays a river wherever enough land drains: a thread at its source, wider and deeper as water joins it. Its water only ever goes down, cutting through the rims of shallow hollows and filling deep ones with lakes. Threshold sets how many rivers there are; Width and Depth those of the largest; Banks how gently the land slopes down to them. Water already on the map (wired to Water) is kept, and rivers end where they reach it.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -11636,6 +12495,10 @@
             "height"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -11768,6 +12631,10 @@
       "additionalProperties": false,
       "description": "The sea up to a level, where the terrain's edge lets it in, and the shore around it. Floods the relief up to Level from the terrain's edge: low ground behind higher ground stays dry unless Connected is off. Its Shore mask follows the coast, a band of height around the level, for beaches and cliffs' feet.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -11781,6 +12648,10 @@
             "height"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -11842,6 +12713,10 @@
       "additionalProperties": false,
       "description": "The wind blows loose sand into dunes, ridged where sand is plenty and crescents where it is scarce, and wears bare rock that faces it. Spreads Sand blocks of loose sand (where the Sand mask says) and lets the wind work it: it lifts sand in the open, carries it a hop downwind, and drops it in the lee of every rise, so that dunes grow with gentle backs to the wind and steep slip faces away from it. Plenty of sand makes transverse ridges; little makes barchans. Abrasion wears rock facing the wind into streamlined ridges (yardangs). Connect a wind vector (Climate's wind) to make the wind turn over the land.",
       "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
         "inputs": {
           "additionalProperties": false,
           "properties": {
@@ -11865,6 +12740,10 @@
             "height"
           ],
           "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
         },
         "note": {
           "description": "A note for whoever reads the graph.",
@@ -11975,16 +12854,33 @@
       "type": "object"
     }
   },
-  "$id": "urn:massif:terrain-graph:2",
+  "$id": "urn:massif:terrain-graph:3",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "A terrain graph of Massif: named nodes, each of a type, its inputs naming the nodes that feed them. One output.map node says what the map gets.",
   "properties": {
+    "components": {
+      "additionalProperties": {
+        "$ref": "#/$defs/component"
+      },
+      "description": "The composite nodes the document defines, by type (project:<name>).",
+      "propertyNames": {
+        "pattern": "^project:[a-z0-9_-]+$"
+      },
+      "type": "object"
+    },
     "editor": {
-      "description": "The rest of the editor's layout (frames, points on wires, the view); never read to evaluate the graph."
+      "description": "The rest of the editor's layout (points on wires, the view); never read to evaluate the graph."
     },
     "format": {
       "const": "massif.terrain-graph"
+    },
+    "frames": {
+      "additionalProperties": {
+        "$ref": "#/$defs/frame"
+      },
+      "description": "Frames round nodes, by id; frames nest.",
+      "type": "object"
     },
     "nodes": {
       "additionalProperties": {
@@ -11992,7 +12888,7 @@
       },
       "description": "The nodes, by name.",
       "propertyNames": {
-        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+        "pattern": "^[A-Za-z0-9_-]{1,200}$"
       },
       "type": "object"
     },
@@ -12042,8 +12938,8 @@
       "type": "object"
     },
     "version": {
-      "description": "The version of the format: 2.",
-      "maximum": 2,
+      "description": "The version of the format: 3 (2 is read and upgraded).",
+      "maximum": 3,
       "minimum": 2,
       "type": "integer"
     }

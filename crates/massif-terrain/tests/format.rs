@@ -95,8 +95,8 @@ fn edits_a_step_at_a_time() {
         { "op": "link", "from": "hill", "to": "out", "input": "height" },
         { "op": "add", "type": "noise.fmb" },
         { "op": "add", "type": "noise.fbm", "id": "hills" },
-        { "op": "rename", "node": "hills", "to": "alps" },
-        { "op": "link", "from": "fbm", "to": "alps", "input": "@height" }
+        { "op": "rename", "node": "hills", "to": "Alps" },
+        { "op": "link", "from": "fbm", "to": "hills", "input": "@height" }
     ]"#,
     )
     .unwrap();
@@ -108,13 +108,14 @@ fn edits_a_step_at_a_time() {
     says(&d, "ops.8", "did you mean “noise.fbm”");
     says(&d, "ops.9", "already");
     assert_eq!(errors(&d).len(), 5, "{d:#?}");
-    assert_eq!(g.nodes["alps"].params["height"], 300);
-    assert_eq!(g.nodes["out"].inputs["height"], "alps", "renaming follows the links");
-    assert_eq!(g.nodes["alps"].inputs["@height"], "fbm");
+    assert_eq!(g.nodes["hills"].params["height"], 300);
+    assert_eq!(g.nodes["hills"].name.as_deref(), Some("Alps"), "renamed, its id kept");
+    assert_eq!(g.nodes["out"].inputs["height"], "hills");
+    assert_eq!(g.nodes["hills"].inputs["@height"], "fbm");
     // Unlinking, setting back to the default, removing with the links.
-    let mut more = vec![Op::Unlink { to: "alps".into(), input: "@height".into() }, Op::Set { node: "alps".into(), param: "height".into(), value: serde_json::Value::Null }, Op::Remove { node: "alps".into() }];
+    let mut more = vec![Op::Unlink { to: "hills".into(), input: "@height".into() }, Op::Set { node: "hills".into(), param: "height".into(), value: serde_json::Value::Null }, Op::Remove { node: "hills".into() }];
     assert!(errors(&format::patch(&mut g, &more)).is_empty());
-    assert!(!g.nodes.contains_key("alps") && !g.nodes["out"].inputs.contains_key("height"));
+    assert!(!g.nodes.contains_key("hills") && !g.nodes["out"].inputs.contains_key("height"));
     more = vec![Op::Unlink { to: "out".into(), input: "height".into() }];
     says(&format::patch(&mut g, &more), "ops.0", "nothing feeds");
     // An operation misspelt is not taken.
@@ -123,6 +124,55 @@ fn edits_a_step_at_a_time() {
     let mut g = Graph::from_json(r#"{ "nodes": { "a": { "type": "noise.fbm" }, "b": { "type": "adjust.levels", "inputs": { "in": "a" } }, "out": { "type": "output.map", "inputs": { "height": "b" } } } }"#).unwrap();
     format::lay_out(&mut g);
     assert!(g.ui["a"].pos[0] < g.ui["b"].pos[0] && g.ui["b"].pos[0] < g.ui["out"].pos[0]);
+}
+
+/// Version 3's steps: frames, bypass, composites made, shown, edited inside
+/// and unmade.
+#[test]
+fn edits_frames_and_composites() {
+    let mut g = Graph::from_json(
+        r#"{ "nodes": {
+            "hills": { "type": "noise.fbm", "params": { "height": 120 } },
+            "lift": { "type": "adjust.levels", "inputs": { "in": "hills" } },
+            "out": { "type": "output.map", "inputs": { "height": "lift" } }
+        } }"#,
+    )
+    .unwrap();
+    let ops: Vec<Op> = serde_json::from_str(
+        r##"[
+        { "op": "frame", "title": "Base terrain", "color": "#347a52", "members": ["hills", "lift"] },
+        { "op": "frame", "id": "outer", "title": "All", "members": ["out"] },
+        { "op": "frame", "id": "frame_1", "title": "Base terrain", "members": ["hills", "lift"], "parent": "outer" },
+        { "op": "frame", "id": "outer", "title": "All", "parent": "frame_1" },
+        { "op": "bypass", "node": "lift", "on": true },
+        { "op": "bypass", "node": "lift", "on": false },
+        { "op": "group", "nodes": ["hills", "lift"], "label": "My hills" },
+        { "op": "expose", "component": "project:my_hills", "name": "tall", "label": "Height", "targets": ["hills.height"], "unit": "blocks" },
+        { "op": "set", "node": "my_hills", "param": "tall", "value": 200 },
+        { "op": "set", "node": "my_hills", "param": "tal", "value": 200 },
+        { "op": "inside", "component": "project:my_hills", "ops": [{ "op": "set", "node": "lift", "param": "gamma", "value": 1.3 }] },
+        { "op": "add", "type": "massif:mountain", "id": "alps", "params": { "height": 400 } },
+        { "op": "add", "type": "massif:nothing" }
+    ]"##,
+    )
+    .unwrap();
+    let d = format::patch(&mut g, &ops);
+    says(&d, "ops.3", "cannot sit in itself");
+    says(&d, "ops.9", "did you mean “tall”");
+    says(&d, "ops.12", "no composite");
+    assert_eq!(errors(&d).len(), 3, "{d:#?}");
+    assert_eq!(g.frames["frame_1"].parent.as_deref(), Some("outer"));
+    assert!(g.frames["frame_1"].members.is_empty(), "its nodes went into the composite");
+    assert_eq!(g.nodes["my_hills"].params["tall"], 200);
+    assert_eq!(g.components["project:my_hills"].nodes["lift"].params["gamma"], 1.3);
+    assert_eq!(g.nodes["out"].inputs["height"], "my_hills.lift");
+    // The document reads back as it was written.
+    assert_eq!(Graph::from_json(&g.to_json()).unwrap(), g);
+    assert!(format::validate(&g.to_json()).iter().all(|d| d.severity != Severity::Error), "{:#?}", format::validate(&g.to_json()));
+    let d = format::patch(&mut g, &[Op::Ungroup { node: "my_hills".into() }, Op::Unframe { id: "outer".into() }]);
+    assert!(errors(&d).is_empty(), "{d:#?}");
+    assert_eq!(g.nodes["my_hills_hills"].params["height"], 200);
+    assert_eq!(g.frames["frame_1"].parent, None);
 }
 
 #[test]

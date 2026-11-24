@@ -1,0 +1,35 @@
+{
+  "label": "Mountain",
+  "category": "Shapes",
+  "summary": "Alpine mountains grown by their rivers: sharp crests, valleys branching up every slope, scree under the cliffs and snow above a line.",
+  "inputs": [
+    { "name": "area", "label": "Area", "type": "mask", "optional": true, "help": "Where the mountains stand; everywhere when left empty." }
+  ],
+  "outputs": [
+    { "name": "height", "label": "Height", "from": "settle.height" },
+    { "name": "snow", "label": "Snow", "from": "snow.mask" },
+    { "name": "flow", "label": "Flow", "from": "erode.flow" },
+    { "name": "wear", "label": "Wear", "from": "erode.wear" }
+  ],
+  "exposed": [
+    { "name": "seed", "label": "Seed", "help": "Another seed gives other mountains of the same kind.", "targets": ["shape.seed", "erode.seed", "snow.seed"] },
+    { "name": "height", "label": "Mountain height", "help": "How high the summits rise over the foot, in blocks.", "targets": ["shape.height"], "default": 180, "min": 0, "max": 2000, "soft": [20, 320], "unit": "blocks", "category": "Shape" },
+    { "name": "base", "label": "Foot", "help": "The height of the ground at the mountains' foot, in blocks.", "targets": ["shape.base"], "unit": "blocks", "category": "Shape" },
+    { "name": "spacing", "label": "Peak spacing", "help": "How far apart the summits stand, in blocks: smaller makes more, narrower mountains.", "targets": ["shape.peak_spacing"], "unit": "blocks", "category": "Shape" },
+    { "name": "roughness", "label": "Roughness", "help": "How much small relief the slopes carry before the rivers wear them.", "targets": ["shape.roughness"], "category": "Shape" },
+    { "name": "erosion", "label": "Erosion strength", "help": "How deep the rivers cut their valleys.", "targets": ["erode.strength"], "category": "Erosion" },
+    { "name": "snowline", "label": "Snow line", "help": "The height above which snow lies on open ground, in blocks.", "targets": ["snow.line"], "default": 200, "unit": "blocks", "category": "Snow" }
+  ],
+  "nodes": {
+    "shape": { "type": "mountain.alpine", "inputs": { "area": "in.area" } },
+    "erode": { "type": "erosion.stream", "inputs": { "height": "shape.height" }, "params": { "rebuild": 0.6 } },
+    "settle": { "type": "erosion.thermal", "inputs": { "height": "erode.height" }, "params": { "angle": 38, "iterations": 15 } },
+    "snow": { "type": "mask.snow", "inputs": { "height": "settle.height" } }
+  },
+  "ui": {
+    "shape": { "pos": [0, 0] },
+    "erode": { "pos": [260, 0] },
+    "settle": { "pos": [520, 0] },
+    "snow": { "pos": [780, 120] }
+  }
+}

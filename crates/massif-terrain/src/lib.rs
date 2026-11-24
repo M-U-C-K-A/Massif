@@ -22,14 +22,17 @@
 //! ```
 
 pub mod compile;
+pub mod components;
 pub mod engine;
 pub mod files;
 pub mod filters;
 pub mod format;
 pub mod geom;
 pub mod gpu;
+pub mod group;
 pub mod kernel;
 pub mod live;
+pub mod lower;
 pub mod migrate;
 pub mod model;
 pub mod noise;

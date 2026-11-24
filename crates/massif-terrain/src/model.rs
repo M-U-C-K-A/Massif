@@ -13,11 +13,21 @@
 //! }
 //! ```
 //!
-//! Nodes are named (the names are the ids), an input names the node it
-//! comes from and, after a dot, which of its outputs (the first when left
-//! out). Parameters left out take their defaults. The editor's layout is
-//! kept apart, under `ui` (where nodes sit) and `editor` (the rest, as the
-//! editor writes it), so that reading or writing a graph never needs it. [`crate::registry`] says what every type of node takes.
+//! Nodes are keyed by their id, which never changes once the node exists
+//! (renaming a node changes its `name`, what the editor shows); an input
+//! names the node it comes from and, after a dot, which of its outputs (the
+//! first when left out). Parameters left out take their defaults. The
+//! editor's layout is kept apart, under `ui` (where nodes sit), `frames`
+//! and `editor` (the rest, as the editor writes it): moving a node, a frame
+//! or a colour never makes anything again. [`crate::registry`] says what
+//! every type of node takes.
+//!
+//! Version 3 adds composite nodes ([`Component`]): a graph of its own, with
+//! inputs, outputs and settings exposed, that a node of type
+//! `project:<name>` (one of the document's `components`) or `massif:<name>`
+//! (one shipped with Massif, see [`crate::components`]) runs as one node and
+//! that the editor opens. Inside a component, `in.<name>` is its input
+//! `<name>`. [`crate::lower`] unfolds them into plain nodes before compiling.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -25,7 +35,7 @@ use std::collections::BTreeMap;
 /// What the `format` field says.
 pub const FORMAT: &str = "massif.terrain-graph";
 /// The version of the format this crate writes.
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 fn format_name() -> String {
     FORMAT.to_owned()
@@ -49,6 +59,13 @@ pub struct Graph {
     /// Where nodes sit in the editor, by node.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub ui: BTreeMap<String, NodeUi>,
+    /// Frames gathering nodes under a title, by id; never read to evaluate.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub frames: BTreeMap<String, Frame>,
+    /// The composite nodes this document defines, by type
+    /// (`project:<name>`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub components: BTreeMap<String, Component>,
     /// The rest of the editor's layout (frames, points on wires, the
     /// view…), as the editor writes it; never read to evaluate the graph.
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
@@ -57,7 +74,7 @@ pub struct Graph {
 
 impl Default for Graph {
     fn default() -> Self {
-        Self { format: format_name(), version: VERSION, terrain: Terrain::default(), nodes: BTreeMap::new(), ui: BTreeMap::new(), editor: serde_json::Value::Null }
+        Self { format: format_name(), version: VERSION, terrain: Terrain::default(), nodes: BTreeMap::new(), ui: BTreeMap::new(), frames: BTreeMap::new(), components: BTreeMap::new(), editor: serde_json::Value::Null }
     }
 }
 
@@ -92,11 +109,25 @@ pub struct Node {
     /// A note for whoever reads the graph.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// What the editor calls it (its type's label when left out); free to
+    /// change, unlike its id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Left out of the graph: what it feeds takes its first input instead
+    /// (the first of the same type as its output).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bypass: bool,
 }
 
 impl Node {
     pub fn new(kind: &str) -> Self {
-        Self { kind: kind.to_owned(), inputs: BTreeMap::new(), params: BTreeMap::new(), note: None }
+        Self { kind: kind.to_owned(), inputs: BTreeMap::new(), params: BTreeMap::new(), note: None, name: None, bypass: false }
+    }
+
+    /// Whether its type is a composite (`project:…` or `massif:…`) rather
+    /// than a node of the registry (`family.name`).
+    pub fn is_component(&self) -> bool {
+        is_component_type(&self.kind)
     }
 
     /// With a setting.
@@ -120,6 +151,151 @@ pub struct NodeUi {
     pub collapsed: bool,
 }
 
+/// A frame around nodes in the editor: a title, a colour, a note, the
+/// nodes it holds, the frame it sits in. Frames nest.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Frame {
+    pub title: String,
+    /// `#rrggbb`, or the neutral grey when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// The frame it sits in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    /// The nodes it holds (moved with it).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<String>,
+    /// In graph units: x, y, width, height.
+    #[serde(default)]
+    pub rect: [f32; 4],
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub collapsed: bool,
+}
+
+/// A composite node: a graph of its own that runs as one node, with
+/// inputs, outputs and settings exposed. It opens in the editor.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Component {
+    /// Its version: a graph names a later one `project:name@N`; a released
+    /// version keeps its results, as nodes' do.
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub version: u16,
+    /// What the library and the node show.
+    pub label: String,
+    /// Where the library shows it (`Shapes`, `Erosion`…).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub category: String,
+    /// One sentence on what it makes.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<PortDecl>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outputs: Vec<OutputDecl>,
+    /// The settings a node of this type shows, each driving settings of
+    /// the nodes inside.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exposed: Vec<Exposed>,
+    #[serde(default)]
+    pub nodes: BTreeMap<String, Node>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub ui: BTreeMap<String, NodeUi>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub frames: BTreeMap<String, Frame>,
+}
+
+impl Default for Component {
+    fn default() -> Self {
+        Self { version: 1, label: String::new(), category: String::new(), summary: String::new(), inputs: Vec::new(), outputs: Vec::new(), exposed: Vec::new(), nodes: BTreeMap::new(), ui: BTreeMap::new(), frames: BTreeMap::new() }
+    }
+}
+
+fn one() -> u16 {
+    1
+}
+
+fn is_one(v: &u16) -> bool {
+    *v == 1
+}
+
+/// An input of a component: inside, `in.<name>`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PortDecl {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+    /// What it carries: a socket type's id (`height`, `mask`, `points`…).
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// It can be left unconnected (what reads it then reads nothing).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub optional: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub help: String,
+}
+
+/// An output of a component: the output of a node inside it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutputDecl {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+    /// `node` or `node.output`, inside the component.
+    pub from: String,
+}
+
+/// A setting a component shows, standing for settings of the nodes
+/// inside (`targets`, each `node.setting`, all of one kind). Its range,
+/// unit and default may narrow theirs; left out, the first target's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Exposed {
+    /// Its name, as the node's `params` write it.
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub help: String,
+    pub targets: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
+    /// The range the slider shows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soft: Option<[f64; 2]>,
+    /// A unit's id (`blocks`, `degrees`, `percent`…).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    /// How the panel shows it: `slider`, `field`, `switch`, `choice`…
+    /// (left out: as its first target's setting).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control: Option<String>,
+    /// The group it shows under.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub category: String,
+    /// Folded away until asked for.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub advanced: bool,
+}
+
+/// Whether a node type names a composite: `project:<name>` or
+/// `massif:<name>` (with `@N` for a later version).
+pub fn is_component_type(kind: &str) -> bool {
+    kind.starts_with("project:") || kind.starts_with("massif:")
+}
+
+/// The name inside a component that stands for its inputs: `in.<name>`.
+pub const INPUTS: &str = "in";
+
 /// An output of a node, as an input names it: `node` or `node.output`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Source<'a> {
@@ -138,7 +314,7 @@ impl<'a> Source<'a> {
 
 /// Whether `id` can name a node: letters, digits, `_` and `-`.
 pub fn valid_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    !id.is_empty() && id.len() <= 200 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 impl Graph {
@@ -148,8 +324,35 @@ impl Graph {
         self.terrain == other.terrain && self.nodes == other.nodes
     }
 
+    /// The graph `text` writes, brought up to this version (see
+    /// [`Graph::upgrade`]).
     pub fn from_json(text: &str) -> Result<Self, serde_json::Error> {
-        serde_json::from_str(text)
+        let mut g: Graph = serde_json::from_str(text)?;
+        g.upgrade();
+        Ok(g)
+    }
+
+    /// Brings a graph of an earlier version up to this one, losing
+    /// nothing: version 2's frames, which the editor kept under `editor`,
+    /// become the graph's own, holding the nodes that sit inside them. A
+    /// graph of a later version is left as it is (and not built).
+    pub fn upgrade(&mut self) {
+        if self.version >= 3 {
+            return;
+        }
+        if self.frames.is_empty()
+            && let Some(list) = self.editor.get("frames").and_then(|f| f.as_array())
+        {
+            for (k, f) in list.iter().enumerate() {
+                let rect: [f32; 4] = f.get("rect").and_then(|r| serde_json::from_value(r.clone()).ok()).unwrap_or_default();
+                let color = f.get("color").and_then(|c| serde_json::from_value::<[u8; 3]>(c.clone()).ok()).map(|[r, g, b]| format!("#{r:02x}{g:02x}{b:02x}"));
+                let inside = |p: [f32; 2]| p[0] >= rect[0] && p[1] >= rect[1] && p[0] <= rect[0] + rect[2] && p[1] <= rect[1] + rect[3];
+                let members = self.ui.iter().filter(|(_, u)| inside(u.pos)).map(|(id, _)| id.clone()).collect();
+                let title = f.get("title").and_then(|t| t.as_str()).unwrap_or_default().to_owned();
+                self.frames.insert(format!("frame_{}", k + 1), Frame { title, color, members, rect, ..Frame::default() });
+            }
+        }
+        self.version = VERSION;
     }
 
     pub fn to_json(&self) -> String {
@@ -227,6 +430,21 @@ mod tests {
         assert!(moved.same_terrain(&g) && moved != g);
         moved.set("hills", "scale", 900);
         assert!(!moved.same_terrain(&g));
+    }
+
+    #[test]
+    fn version_2_comes_up_to_3() {
+        let text = r#"{ "version": 2,
+            "nodes": { "a": { "type": "noise.fbm" }, "b": { "type": "noise.fbm" } },
+            "ui": { "a": { "pos": [10, 10] }, "b": { "pos": [500, 10] } },
+            "editor": { "frames": [{ "title": "Base", "rect": [0, 0, 100, 100], "color": [52, 122, 82] }] } }"#;
+        let g = Graph::from_json(text).unwrap();
+        assert_eq!(g.version, VERSION);
+        let f = &g.frames["frame_1"];
+        assert_eq!((f.title.as_str(), f.color.as_deref(), f.members.as_slice()), ("Base", Some("#347a52"), &["a".to_owned()][..]));
+        // A later version is left alone.
+        let later = Graph::from_json(r#"{ "version": 9, "nodes": {} }"#).unwrap();
+        assert_eq!(later.version, 9);
     }
 
     #[test]

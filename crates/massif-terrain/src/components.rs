@@ -1,0 +1,68 @@
+//! The composite nodes Massif ships (`massif:<name>`): graphs of plain
+//! nodes, written in JSON beside the crate, that a graph uses as one node
+//! and that the editor opens read-only (Edit a copy makes a `project:`
+//! composite of the document from one).
+//!
+//! A released version keeps its results, as a node's does: changing what
+//! one makes is a new file, `<name>@2.json`, listed below beside the old.
+
+use crate::model::Component;
+use std::sync::OnceLock;
+
+/// Each composite shipped: its type, version and JSON.
+const SHIPPED: &[(&str, u16, &str)] = &[("massif:mountain", 1, include_str!("../components/mountain.json"))];
+
+/// Every composite shipped, parsed once: type, version, definition.
+pub fn all() -> &'static [(&'static str, u16, Component)] {
+    static ALL: OnceLock<Vec<(&'static str, u16, Component)>> = OnceLock::new();
+    ALL.get_or_init(|| {
+        SHIPPED
+            .iter()
+            .map(|&(kind, version, text)| {
+                let mut c: Component = serde_json::from_str(text).unwrap_or_else(|e| panic!("{kind}: {e}"));
+                c.version = version;
+                (kind, version, c)
+            })
+            .collect()
+    })
+}
+
+/// The composite shipped as `kind` (`massif:name`) at `version`.
+pub fn builtin(kind: &str, version: u16) -> Option<Component> {
+    all().iter().find(|(k, v, _)| *k == kind && *v == version).map(|(_, _, c)| c.clone())
+}
+
+/// The latest version of the composite shipped as `kind`.
+pub fn latest(kind: &str) -> Option<(u16, &'static Component)> {
+    all().iter().filter(|(k, _, _)| *k == kind).max_by_key(|(_, v, _)| *v).map(|(_, v, c)| (*v, c))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::compile::{Severity, compile};
+    use crate::model::{Graph, Node};
+    use crate::space::Space;
+
+    /// Every composite shipped compiles with its defaults, its exposed
+    /// settings each standing for settings that exist.
+    #[test]
+    fn shipped_composites_hold_together() {
+        for (kind, version, c) in super::all() {
+            assert!(!c.label.is_empty() && !c.summary.is_empty() && !c.outputs.is_empty(), "{kind}");
+            for e in &c.exposed {
+                for t in &e.targets {
+                    let (n, p) = t.split_once('.').unwrap_or_else(|| panic!("{kind}: {t}"));
+                    let node = c.nodes.get(n).unwrap_or_else(|| panic!("{kind}: no node {n}"));
+                    let spec = crate::registry::spec(&node.kind).unwrap_or_else(|| panic!("{kind}: {}", node.kind));
+                    assert!(spec.param(p).is_some(), "{kind}: {t}");
+                }
+            }
+            let mut g = Graph::default();
+            let id = g.add(Node::new(&if *version == 1 { kind.to_string() } else { format!("{kind}@{version}") }));
+            let out = g.add(Node::new("output.map"));
+            g.link(&format!("{id}.{}", c.outputs[0].name), &out, "height");
+            let (_, d) = compile(&g, Space::new(1024), 256);
+            assert!(d.iter().all(|d| d.severity != Severity::Error), "{kind}: {d:#?}");
+        }
+    }
+}

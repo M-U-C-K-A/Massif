@@ -47,7 +47,10 @@ pub fn space_of(world: &World, dim: usize, graph: &Graph) -> Space {
 pub fn graph_of(world: &World) -> Option<(Graph, Vec<Diagnostic>)> {
     if let Some(v) = &world.meta.terrain_graph {
         return Some(match serde_json::from_value::<Graph>(v.clone()) {
-            Ok(g) => (g, Vec::new()),
+            Ok(mut g) => {
+                g.upgrade();
+                (g, Vec::new())
+            }
             Err(e) => (Graph::default(), vec![Diagnostic::error("", format!("the world's terrain graph cannot be read: {e}"))]),
         });
     }

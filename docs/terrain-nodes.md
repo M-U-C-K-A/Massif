@@ -6,8 +6,8 @@ Every type of node a terrain graph of Massif can use, with its inputs, outputs, 
 
 ## How a graph is built
 
-- A graph is a JSON object: `{ "format": "massif.terrain-graph", "version": 2, "terrain": { … }, "nodes": { … } }`. Only `nodes` is needed; `terrain` may give the terrain's `size` (blocks a side, the map's own when left out), its `seed` and its `sea_level`.
-- Each node has a name of its own (letters, digits, `_` and `-`), by which the others refer to it, and a `type` from this catalogue. Their order does not matter.
+- A graph is a JSON object: `{ "format": "massif.terrain-graph", "version": 3, "terrain": { … }, "nodes": { … } }`. Only `nodes` is needed; `terrain` may give the terrain's `size` (blocks a side, the map's own when left out), its `seed` and its `sea_level`.
+- Each node has an id of its own (letters, digits, `_` and `-`), by which the others refer to it and which never changes, and a `type` from this catalogue. `name` is what the editor shows, free to change. Their order does not matter.
 - An input names what feeds it: a node's name (its first output), or `name.output` for another of its outputs. An optional input left out stands for what the catalogue says; a required one left out breaks the node, and what follows it.
 - Settings left out take their defaults; a number outside a setting's range is brought back into it, with a warning.
 - Positions (points, curves) are fractions of the terrain's side, from 0 (west, north) to 1 (east, south). Distances, widths and heights are in blocks, a block being a metre. Heights are absolute: the sea lies at the world's sea level (62 unless the map says otherwise), and Minecraft builds from y −64 to 320. A map of 16k is 16384 blocks a side.
@@ -15,8 +15,10 @@ Every type of node a terrain graph of Massif can use, with its inputs, outputs, 
 - Sockets have types: height (blocks), mask (0 to 1), colour, vector, terrain and biome. A height and a mask feed each other as they are; a colour feeds a number by its brightness, a number feeds a colour as a grey; a terrain or a biome feeds only its own type.
 - A setting marked drivable can follow a field: connect a height or a mask to the input `@<setting>`, and each place takes the value the field has there.
 - Simulations (erosion, rainfall, humidity…) work over the whole terrain at the simulations' resolution; finer views of them carry the change they made.
-- A seed left out comes from the node's name, so that two nodes never repeat each other; `terrain.seed` changes them all.
-- `massif-cli terrain validate graph.json` says what is wrong, each mistake with its path (`nodes.hills.params.hieght`) and the name it probably meant. `massif-cli terrain patch` changes a graph a step at a time: `add`, `set`, `link`, `unlink`, `remove`, `rename`, or a JSON Patch.
+- A seed left out comes from the node's id, so that two nodes never repeat each other; `terrain.seed` changes them all.
+- A composite is a node that holds a graph: `massif:<name>` (shipped with Massif, such as `massif:mountain`) or `project:<name>` (defined under the document's `components`, each with its `label`, `inputs`, `outputs`, `exposed` settings and `nodes`; inside, `in.<name>` names its input). Its `params` are the settings it exposes. `"bypass": true` leaves a node out, what it feeds taking its first input.
+- `frames` gather nodes under a title and a colour (`#rrggbb`), and nest (`parent`); they never change the terrain.
+- `massif-cli terrain validate graph.json` says what is wrong, each mistake with its path (`nodes.hills.params.hieght`) and the name it probably meant. `massif-cli terrain patch` changes a graph a step at a time: `add`, `set`, `link`, `unlink`, `remove`, `rename` (the name shown), `bypass`, `frame`, `unframe`, `group` (nodes into a new composite), `ungroup`, `expose`, `unexpose`, `inside` (steps inside a composite), or a JSON Patch.
 
 ## Sockets
 
