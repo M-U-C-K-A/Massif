@@ -201,8 +201,12 @@ The view is drawn tile by tile in the background, as the other modes, and
 again where the map is edited, or when other blocks or packs are read.
 
 The 2D map's header picks what it shows (Terrain, Height, Slope, Biome,
-Relief, True Colour) and what goes over it: contour lines, **Block steps** and the tile and
-chunk grid.
+Relief, True Colour) and what goes over it: contour lines, **Block steps** and the grid
+of chunks (16 blocks), tiles (128 blocks) and region files (512 blocks).
+The region files' borders are the strong lines, each region named in its
+corner as the game names its file (`r.1.-2.mca`), and the map's footer adds
+the region of the column under the pointer: what to know to merge maps
+region by region.
 
 The **contour lines** are drawn as WorldPainter's: a solid dark line every 10
 blocks, and a finer, fainter one halfway between. The arrow beside their

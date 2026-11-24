@@ -498,7 +498,7 @@ impl MapView {
             self.smooth = !steps;
         }
         ui.toggle_value(&mut self.grid, theme::glyph(Icon::Grid3x3).to_string())
-            .on_hover_text(tr!("Tile and chunk grid"));
+            .on_hover_text(tr!("Grid of chunks, tiles and region files (r.x.z.mca, 512 blocks)"));
         ui.toggle_value(&mut tools.show_annotations, theme::glyph(Icon::PenLine).to_string())
             .on_hover_text(tr!("Annotations, on the map and in 3D: the marks painted with the Annotations tool. They are never exported"));
     }
@@ -2153,6 +2153,45 @@ impl MapView {
         let base = if pal.dark { Color32::WHITE } else { Color32::BLACK };
         lines(16.0, base.gamma_multiply(0.08));
         lines(TILE_SIZE as f64, base.gamma_multiply(0.22));
+        // The region files' borders (`r.x.z.mca`, 512 blocks a side), over
+        // the others, each named in its corner while there is room.
+        let region = REGION_SIZE as f64;
+        if region * (self.zoom as f64) < 6.0 {
+            return;
+        }
+        let ink = theme::mix(base, pal.accent, 0.35).gamma_multiply(0.75);
+        let mut x = (wx0 / region).floor() * region;
+        while x <= wx1 {
+            let a = self.to_screen(canvas, x, wz0);
+            painter.vline(a.x, canvas.y_range(), Line::new(1.5, ink));
+            x += region;
+        }
+        let mut z = (wz0 / region).floor() * region;
+        while z <= wz1 {
+            let a = self.to_screen(canvas, wx0, z);
+            painter.hline(canvas.x_range(), a.y, Line::new(1.5, ink));
+            z += region;
+        }
+        if region * (self.zoom as f64) < 70.0 {
+            return;
+        }
+        let font = FontId::proportional(10.5);
+        for rz in (wz0 / region).floor() as i64..=(wz1 / region).floor() as i64 {
+            for rx in (wx0 / region).floor() as i64..=(wx1 / region).floor() as i64 {
+                // In the corner of the region, or of the canvas where the
+                // corner is off it.
+                let corner = self.to_screen(canvas, rx as f64 * region, rz as f64 * region);
+                let end = self.to_screen(canvas, (rx + 1) as f64 * region, (rz + 1) as f64 * region);
+                let at = pos2(corner.x.max(canvas.left()) + 5.0, corner.y.max(canvas.top()) + 4.0);
+                let galley = painter.layout_no_wrap(region_name(rx, rz), font.clone(), pal.text);
+                let tag = Rect::from_min_size(at, galley.size() + vec2(8.0, 2.0));
+                if tag.right() > end.x - 2.0 || tag.bottom() > end.y - 2.0 {
+                    continue;
+                }
+                painter.rect_filled(tag, theme::TILE_RADIUS / 2, pal.panel.gamma_multiply(0.82));
+                painter.galley(tag.min + vec2(4.0, 1.0), galley, pal.text);
+            }
+        }
     }
 
     /// Over the scale, in True Colour: whose colours the map shows, the
@@ -2265,6 +2304,11 @@ impl MapView {
             }
             None => tr!("Location: –").to_owned(),
         };
+        // With the grid, the region file the column is written to.
+        let location = match hover {
+            Some((x, z)) if self.grid => format!("{location} · {}", region_name(x.div_euclid(REGION_SIZE) as i64, z.div_euclid(REGION_SIZE) as i64)),
+            _ => location,
+        };
         // The zoom's controls first, from the right; the location in the
         // room they leave, cut with an ellipsis (whole on hover).
         child.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -2311,6 +2355,14 @@ fn pointer_mark(ctx: &egui::Context, painter: &egui::Painter, p: Pos2) {
         crate::reticle::paint(painter, p, &reticle);
         ctx.set_cursor_icon(CursorIcon::None);
     }
+}
+
+/// Blocks along each side of a region file of the game.
+pub const REGION_SIZE: i32 = 512;
+
+/// The region file a region is written to, as the game names it.
+pub fn region_name(rx: i64, rz: i64) -> String {
+    format!("r.{rx}.{rz}.mca")
 }
 
 fn turns_brush(m: egui::Modifiers) -> bool {
