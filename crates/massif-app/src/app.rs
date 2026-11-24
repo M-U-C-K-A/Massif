@@ -423,7 +423,7 @@ type Finding = (massif_core::filter::Match, Vec<(i32, i32)>, usize);
 enum Dialog {
     /// "Coming from WorldPainter?", at the first start.
     Origin,
-    Export(ExportForm),
+    Export(Box<ExportForm>),
     Unsaved(Pending),
     About,
     /// The settings, at a section.
@@ -2972,7 +2972,7 @@ impl MassifApp {
                     form.test_area = TestArea::Regions;
                 }
                 form.testing = true;
-                self.dialog = Some(Dialog::Export(form));
+                self.dialog = Some(Dialog::Export(Box::new(form)));
             }
         }
     }
@@ -3317,7 +3317,7 @@ impl MassifApp {
         let name = unique.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| self.doc.world.meta.name.clone());
         // The rules this map was last exported with.
         let remembered = self.doc.world.meta.export_rules;
-        self.dialog = Some(Dialog::Export(ExportForm {
+        self.dialog = Some(Dialog::Export(Box::new(ExportForm {
             target,
             versions,
             heights: (self.doc.dimension().min_y, self.doc.dimension().max_y),
@@ -3356,7 +3356,7 @@ impl MassifApp {
                 let (x1, z1) = ((hi.x + 1) as f64 * 128.0, (hi.z + 1) as f64 * 128.0);
                 ([(x0 + x1) / 2.0, (z0 + z1) / 2.0], (x1 - x0).max(z1 - z0))
             }),
-        }));
+        })));
     }
 
     fn undo(&mut self, ctx: &egui::Context) {
@@ -6424,7 +6424,7 @@ impl MassifApp {
                     // The map takes the clicks until the regions are picked.
                     form.pick_regions = false;
                     self.tools.region_pick = Some(crate::tools::RegionPick { regions: form.test_regions.clone(), drag: None });
-                    self.region_form = Some(form);
+                    self.region_form = Some(*form);
                     self.layout.switch_side(false);
                     return;
                 }
