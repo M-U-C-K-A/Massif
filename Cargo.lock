@@ -2323,7 +2323,7 @@ dependencies = [
 
 [[package]]
 name = "massif-structures"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "fastnbt",
  "flate2",
@@ -2338,7 +2338,7 @@ dependencies = [
 
 [[package]]
 name = "massif-terrain"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "bytemuck",
  "image",

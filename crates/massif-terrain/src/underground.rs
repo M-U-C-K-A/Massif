@@ -59,8 +59,11 @@ pub fn apply(engine: &Engine, c: &Compiled, reg: &Registry, edit: &mut Edit, can
 #[derive(Default)]
 pub struct Prepared {
     grids: HashMap<((usize, u8), TilePos), Option<Grid>>,
-    bricks: HashMap<((usize, u8), [i32; 3]), Arc<Brick>>,
+    bricks: HashMap<BrickAt, Arc<Brick>>,
 }
+
+/// A brick of an output: the output, the brick's corner.
+type BrickAt = ((usize, u8), [i32; 3]);
 
 /// The costly part of [`apply`], off the interface's thread: everything
 /// the graph puts under the ground of `dim` (as it will be when written:
