@@ -35,6 +35,7 @@ pub mod filter;
 pub mod fingerprint;
 pub mod flow;
 pub mod generate;
+pub mod geometry;
 pub mod gradient;
 pub mod graph;
 pub mod heightmap;
