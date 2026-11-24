@@ -562,7 +562,7 @@ fn worldpainter_workspace(b: &mut Builder) -> Node {
     };
     let right = {
         let (terrain, layers, brushes) = (b.area(Terrain), b.area(Layers), b.area(Brushes));
-        let lower = b.column(0.55, layers, brushes);
+        let lower = b.column(0.45, brushes, layers);
         b.column(0.36, terrain, lower)
     };
     let map = b.area(Map);
@@ -1303,13 +1303,14 @@ mod tests {
     #[test]
     fn each_side_keeps_a_workspace() {
         let mut layout = Layout::default();
+        let n = layout.workspaces.len();
         layout.activate(8);
         layout.remove_workspace(8);
-        assert_eq!(layout.workspaces.len(), 8);
+        assert_eq!(layout.workspaces.len(), n - 1);
         assert!(layout.terrain(), "still on the terrain side");
         assert_eq!(layout.current().name, "Graph");
         layout.remove_workspace(7);
-        assert_eq!(layout.workspaces.len(), 8, "the last terrain workspace stays");
+        assert_eq!(layout.workspaces.len(), n - 1, "the last terrain workspace stays");
         layout.switch_side(false);
         layout.activate(1);
         layout.remove_workspace(0);
@@ -1407,7 +1408,7 @@ mod tests {
         assert!(a.iter().all(|id| !b.contains(id)));
         layout.remove_workspace(n);
         assert_eq!(layout.workspaces.len(), n);
-        assert_eq!(layout.current().name, "Minimal", "the tab before it, on the same side");
+        assert_eq!(layout.current().name, WORLDPAINTER, "the tab before it, on the same side");
     }
 
     /// A layout saved before the Layers panel gets it under the Terrain

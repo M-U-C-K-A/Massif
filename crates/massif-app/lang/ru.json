@@ -2949,7 +2949,6 @@
  "Pick the brush in the Brushes panel; its size, intensity and rotation in Brush Settings. 3D Sculpt shapes {most:.0} blocks around at most.": "Кисть выбирается в панели «Кисти»; её размер, интенсивность и поворот — в «Настройках кисти». 3D-лепка меняет не больше {most:.0} блоков вокруг.",
  "3D Sculpt takes {most:.0} at most": "3D-лепка занимает не больше {most:.0}",
  "Beta": "Бета",
- "Coming in the Massif 2.0 beta": "Появится в бете Massif 2.0",
  "Fill to y {level}": "Заполнить до y {level}",
  "Raise this water to y {level}": "Поднять эту воду до y {level}",
  "Height limit y {water_limit} reached": "Достигнут предел высоты y {water_limit}",
@@ -2968,7 +2967,6 @@
  "No hollow here: filled the nearest one, {n} columns up to {water_level}": "Здесь нет впадины: заполнена ближайшая, столбцов {n}, до {water_level}",
  "The land is above y {above}: filled the nearest hollow, {n} columns up to {water_level}": "Земля выше y {above}: заполнена ближайшая впадина, столбцов {n}, до {water_level}",
  "Path-traced images of the map, under a real sky": "Изображения карты с трассировкой пути под настоящим небом",
- "Photorealistic images of your map, path-traced on the graphics card with the game's textures and resource packs, under a sky with a sun, haze and fog. Then large stills, camera paths and Minecraft worlds opened as they are.": "Фотореалистичные изображения вашей карты с трассировкой пути на видеокарте, с текстурами игры и наборами ресурсов, под небом с солнцем, дымкой и туманом. Затем большие кадры, пути камеры и миры Minecraft, открытые как есть.",
  "Water raised by {n} blocks, to {level}: height limit reached": {
   "one": "Вода поднята на {n} блок, до {level}: достигнут предел высоты",
   "few": "Вода поднята на {n} блока, до {level}: достигнут предел высоты",
