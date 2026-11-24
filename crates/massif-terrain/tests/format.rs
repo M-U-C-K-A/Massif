@@ -169,8 +169,31 @@ fn edits_frames_and_composites() {
     // The document reads back as it was written.
     assert_eq!(Graph::from_json(&g.to_json()).unwrap(), g);
     assert!(format::validate(&g.to_json()).iter().all(|d| d.severity != Severity::Error), "{:#?}", format::validate(&g.to_json()));
+    // A composite's interface edited; inside, `in.<name>` links.
+    let ops: Vec<Op> = serde_json::from_str(
+        r#"[
+        { "op": "port", "component": "project:my_hills", "decl": { "name": "base", "type": "height", "optional": true } },
+        { "op": "inside", "component": "project:my_hills", "ops": [{ "op": "link", "from": "in.base", "to": "lift", "input": "in" }] },
+        { "op": "inside", "component": "project:my_hills", "ops": [{ "op": "link", "from": "in.nope", "to": "lift", "input": "in" }] },
+        { "op": "output", "component": "project:my_hills", "decl": { "name": "noise", "from": "hills" } },
+        { "op": "port", "component": "project:my_hills", "decl": { "name": "x", "type": "heigth" } },
+        { "op": "fork", "node": "alps", "label": "My mountain" }
+    ]"#,
+    )
+    .unwrap();
+    let d = format::patch(&mut g, &ops);
+    says(&d, "ops.2", "no input “nope”");
+    says(&d, "ops.4", "did you mean “height”");
+    assert_eq!(errors(&d).iter().filter(|e| e.path.starts_with("ops.")).count(), 2, "{d:#?}");
+    assert_eq!(g.components["project:my_hills"].nodes["lift"].inputs["in"], "in.base");
+    assert_eq!(g.nodes["alps"].kind, "project:my_mountain");
+    assert_eq!(g.components["project:my_mountain"].label, "My mountain");
+    let d = format::patch(&mut g, &[Op::Unport { component: "project:my_hills".into(), name: "base".into() }, Op::Unoutput { component: "project:my_hills".into(), name: "lift".into() }]);
+    assert!(errors(&d).iter().all(|e| !e.path.starts_with("ops.")), "{d:#?}");
+    assert!(!g.components["project:my_hills"].nodes["lift"].inputs.contains_key("in"));
+    assert!(!g.nodes["out"].inputs.contains_key("height"), "what read the output is unlinked");
     let d = format::patch(&mut g, &[Op::Ungroup { node: "my_hills".into() }, Op::Unframe { id: "outer".into() }]);
-    assert!(errors(&d).is_empty(), "{d:#?}");
+    assert!(errors(&d).iter().all(|e| !e.path.starts_with("ops.")), "{d:#?}");
     assert_eq!(g.nodes["my_hills_hills"].params["height"], 200);
     assert_eq!(g.frames["frame_1"].parent, None);
 }

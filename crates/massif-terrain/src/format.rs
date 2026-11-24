@@ -34,7 +34,7 @@ pub const GUIDE: &str = "\
 - A seed left out comes from the node's id, so that two nodes never repeat each other; `terrain.seed` changes them all.
 - A composite is a node that holds a graph: `massif:<name>` (shipped with Massif, such as `massif:mountain`) or `project:<name>` (defined under the document's `components`, each with its `label`, `inputs`, `outputs`, `exposed` settings and `nodes`; inside, `in.<name>` names its input). Its `params` are the settings it exposes. `\"bypass\": true` leaves a node out, what it feeds taking its first input.
 - `frames` gather nodes under a title and a colour (`#rrggbb`), and nest (`parent`); they never change the terrain.
-- `massif-cli terrain validate graph.json` says what is wrong, each mistake with its path (`nodes.hills.params.hieght`) and the name it probably meant. `massif-cli terrain patch` changes a graph a step at a time: `add`, `set`, `link`, `unlink`, `remove`, `rename` (the name shown), `bypass`, `frame`, `unframe`, `group` (nodes into a new composite), `ungroup`, `expose`, `unexpose`, `inside` (steps inside a composite), or a JSON Patch.
+- `massif-cli terrain validate graph.json` says what is wrong, each mistake with its path (`nodes.hills.params.hieght`) and the name it probably meant. `massif-cli terrain patch` changes a graph a step at a time: `add`, `set`, `link`, `unlink`, `remove`, `rename` (the name shown), `bypass`, `frame`, `unframe`, `group` (nodes into a new composite), `ungroup`, `expose`, `unexpose`, `inside` (steps inside a composite), `port`, `unport`, `output`, `unoutput` (a composite's inputs and outputs), `fork` (a copy of a shipped composite to edit), or a JSON Patch.
 ";
 
 /// The types of node a graph can name, every version, in the library's order.
@@ -903,6 +903,22 @@ pub enum Op {
     /// Edits inside a composite of the document: the same steps, on its
     /// nodes (`in.<name>` names its inputs).
     Inside { component: String, ops: Vec<Op> },
+    /// Adds an input to a composite of the document, or changes the one of
+    /// that name.
+    Port { component: String, decl: crate::model::PortDecl },
+    /// Takes an input off a composite of the document, and the links from
+    /// it inside.
+    Unport { component: String, name: String },
+    /// Adds an output to a composite of the document (`from`: `node` or
+    /// `node.output` inside), or changes the one of that name.
+    Output { component: String, decl: crate::model::OutputDecl },
+    /// Takes an output off a composite of the document, and what read it.
+    Unoutput { component: String, name: String },
+    /// Edit a copy: the shipped composite of node `node` (`massif:…`)
+    /// copied into the document as a new `project:` composite labelled
+    /// `label`, the node now of that type, its settings kept. Gives the
+    /// new type.
+    Fork { node: String, label: String },
 }
 
 fn no_node(graph: &Graph, id: &str) -> String {
@@ -931,6 +947,11 @@ fn type_of(kind: &str) -> Result<&'static NodeSpec, String> {
 /// Applies one step: gives the node it named or added, or why it cannot be
 /// done, the graph then unchanged.
 pub fn apply(graph: &mut Graph, op: &Op) -> Result<String, String> {
+    apply_in(graph, op, &[])
+}
+
+/// [`apply`] inside a composite whose inputs are `inputs` (`in.<name>`).
+fn apply_in(graph: &mut Graph, op: &Op, inputs: &[String]) -> Result<String, String> {
     match op {
         Op::Add { id, kind, params, inputs } => {
             if crate::model::is_component_type(kind) {
@@ -975,8 +996,15 @@ pub fn apply(graph: &mut Graph, op: &Op) -> Result<String, String> {
         }
         Op::Link { from, to, input } => {
             let src = Source::parse(from);
-            let Some(feeding) = graph.nodes.get(src.node) else { return Err(no_node(graph, src.node)) };
-            if let (Ok(spec), Some(port)) = (type_of(&feeding.kind), src.output)
+            let inside = src.node == crate::model::INPUTS && src.output.is_some_and(|o| inputs.iter().any(|i| i == o));
+            if src.node == crate::model::INPUTS && !inside && !inputs.is_empty() {
+                return Err(format!("the composite has no input “{}”", src.output.unwrap_or("")));
+            }
+            let feeding = graph.nodes.get(src.node);
+            if feeding.is_none() && !inside {
+                return Err(no_node(graph, src.node));
+            }
+            if let (Some(Ok(spec)), Some(port)) = (feeding.map(|f| type_of(&f.kind)), src.output)
                 && spec.output(port).is_none()
             {
                 let hint = closest(port, spec.outputs.iter().map(|p| p.name)).map(|c| format!(" (did you mean “{c}”?)")).unwrap_or_default();
@@ -1090,8 +1118,9 @@ pub fn apply(graph: &mut Graph, op: &Op) -> Result<String, String> {
             // Its nodes as a graph of their own (the document's composites
             // known), edited, then put back: all the steps, or none.
             let mut inner = Graph { nodes: c.nodes.clone(), ui: c.ui.clone(), frames: c.frames.clone(), components: graph.components.clone(), ..Graph::default() };
+            let names: Vec<String> = c.inputs.iter().map(|p| p.name.clone()).collect();
             for (k, op) in ops.iter().enumerate() {
-                apply(&mut inner, op).map_err(|e| format!("step {k}: {e}"))?;
+                apply_in(&mut inner, op, &names).map_err(|e| format!("step {k}: {e}"))?;
             }
             let c = graph.components.get_mut(component).expect("checked");
             c.nodes = inner.nodes;
@@ -1099,7 +1128,97 @@ pub fn apply(graph: &mut Graph, op: &Op) -> Result<String, String> {
             c.frames = inner.frames;
             Ok(component.clone())
         }
+        Op::Port { component, decl } => {
+            let c = own_component(graph, component)?;
+            if !valid_id(&decl.name) {
+                return Err(format!("“{}” cannot name an input: letters, digits, “_” and “-”", decl.name));
+            }
+            if PortKind::from_id(&decl.kind).is_none() {
+                let hint = closest(&decl.kind, PortKind::ALL.iter().map(|k| k.id())).map(|c| format!(" (did you mean “{c}”?)")).unwrap_or_default();
+                return Err(format!("“{}” is not a type of socket{hint}", decl.kind));
+            }
+            match c.inputs.iter_mut().find(|p| p.name == decl.name) {
+                Some(p) => *p = decl.clone(),
+                None => c.inputs.push(decl.clone()),
+            }
+            Ok(component.clone())
+        }
+        Op::Unport { component, name } => {
+            let c = own_component(graph, component)?;
+            let before = c.inputs.len();
+            c.inputs.retain(|p| &p.name != name);
+            if c.inputs.len() == before {
+                return Err(format!("{} has no input “{name}”", c.label));
+            }
+            let gone = format!("{}.{name}", crate::model::INPUTS);
+            for n in c.nodes.values_mut() {
+                n.inputs.retain(|_, s| *s != gone);
+            }
+            for n in graph.nodes.values_mut().filter(|n| &n.kind == component) {
+                n.inputs.remove(name);
+            }
+            Ok(component.clone())
+        }
+        Op::Output { component, decl } => {
+            let c = own_component(graph, component)?;
+            if !valid_id(&decl.name) {
+                return Err(format!("“{}” cannot name an output: letters, digits, “_” and “-”", decl.name));
+            }
+            let src = Source::parse(&decl.from);
+            let made = c.nodes.contains_key(src.node) || (src.node == crate::model::INPUTS && src.output.is_some_and(|o| c.inputs.iter().any(|p| p.name == o)));
+            if !made {
+                return Err(format!("{} has no node “{}” to give its output", c.label, src.node));
+            }
+            match c.outputs.iter_mut().find(|o| o.name == decl.name) {
+                Some(o) => *o = decl.clone(),
+                None => c.outputs.push(decl.clone()),
+            }
+            Ok(component.clone())
+        }
+        Op::Unoutput { component, name } => {
+            let c = own_component(graph, component)?;
+            let before = c.outputs.len();
+            c.outputs.retain(|o| &o.name != name);
+            if c.outputs.len() == before {
+                return Err(format!("{} has no output “{name}”", c.label));
+            }
+            let instances: Vec<String> = graph.nodes.iter().filter(|(_, n)| &n.kind == component).map(|(id, _)| id.clone()).collect();
+            for n in graph.nodes.values_mut() {
+                n.inputs.retain(|_, s| {
+                    let src = Source::parse(s);
+                    !(instances.iter().any(|i| i == src.node) && src.output == Some(name.as_str()))
+                });
+            }
+            Ok(component.clone())
+        }
+        Op::Fork { node, label } => {
+            let Some(n) = graph.nodes.get(node) else { return Err(no_node(graph, node)) };
+            if !n.kind.starts_with("massif:") {
+                return Err(format!("“{node}” is not a composite shipped with Massif (those of the document are edited as they are)"));
+            }
+            let Some(mut copy) = crate::lower::component(graph, &n.kind).map(|c| c.into_owned()) else { return Err(format!("there is no composite “{}”", n.kind)) };
+            let stem: String = label.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c.to_ascii_lowercase() } else { '_' }).collect();
+            let stem = stem.trim_matches('_').replace("__", "_");
+            let stem = if stem.is_empty() { "copy".to_owned() } else { stem };
+            let mut kind = format!("project:{stem}");
+            let mut k = 2;
+            while graph.components.contains_key(&kind) {
+                kind = format!("project:{stem}_{k}");
+                k += 1;
+            }
+            copy.version = 1;
+            copy.label = label.clone();
+            graph.components.insert(kind.clone(), copy);
+            graph.nodes.get_mut(node).expect("checked").kind = kind.clone();
+            Ok(kind)
+        }
     }
+}
+
+/// A composite of the document, to edit (those Massif ships are edited as
+/// a copy, see [`Op::Fork`]).
+fn own_component<'a>(graph: &'a mut Graph, kind: &str) -> Result<&'a mut crate::model::Component, String> {
+    graph.components.get_mut(kind).ok_or_else(|| format!("the document has no composite “{kind}” (those of Massif are edited as a copy)"))
 }
 
 /// Applies steps in order, each that can be done; gives why each other

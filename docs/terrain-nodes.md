@@ -18,7 +18,7 @@ Every type of node a terrain graph of Massif can use, with its inputs, outputs, 
 - A seed left out comes from the node's id, so that two nodes never repeat each other; `terrain.seed` changes them all.
 - A composite is a node that holds a graph: `massif:<name>` (shipped with Massif, such as `massif:mountain`) or `project:<name>` (defined under the document's `components`, each with its `label`, `inputs`, `outputs`, `exposed` settings and `nodes`; inside, `in.<name>` names its input). Its `params` are the settings it exposes. `"bypass": true` leaves a node out, what it feeds taking its first input.
 - `frames` gather nodes under a title and a colour (`#rrggbb`), and nest (`parent`); they never change the terrain.
-- `massif-cli terrain validate graph.json` says what is wrong, each mistake with its path (`nodes.hills.params.hieght`) and the name it probably meant. `massif-cli terrain patch` changes a graph a step at a time: `add`, `set`, `link`, `unlink`, `remove`, `rename` (the name shown), `bypass`, `frame`, `unframe`, `group` (nodes into a new composite), `ungroup`, `expose`, `unexpose`, `inside` (steps inside a composite), or a JSON Patch.
+- `massif-cli terrain validate graph.json` says what is wrong, each mistake with its path (`nodes.hills.params.hieght`) and the name it probably meant. `massif-cli terrain patch` changes a graph a step at a time: `add`, `set`, `link`, `unlink`, `remove`, `rename` (the name shown), `bypass`, `frame`, `unframe`, `group` (nodes into a new composite), `ungroup`, `expose`, `unexpose`, `inside` (steps inside a composite), `port`, `unport`, `output`, `unoutput` (a composite's inputs and outputs), `fork` (a copy of a shipped composite to edit), or a JSON Patch.
 
 ## Sockets
 

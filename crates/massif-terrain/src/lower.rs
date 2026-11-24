@@ -52,23 +52,42 @@ pub fn lower(graph: &Graph) -> (Graph, Vec<Diagnostic>) {
     l.scope(&graph.nodes, "", "nodes", &BTreeMap::new(), &BTreeMap::new(), 0);
     // Every input follows the aliases to the node that really makes it.
     for node in out.nodes.values_mut() {
-        node.inputs.retain(|_, src| {
-            let mut s = src.clone();
-            if s.is_empty() {
-                return false;
+        node.inputs.retain(|_, src| match chase(&alias, src) {
+            Some(s) => {
+                *src = s;
+                true
             }
-            for _ in 0..64 {
-                match alias.get(&s) {
-                    Some(next) if next.is_empty() => return false,
-                    Some(next) => s = next.clone(),
-                    None => break,
-                }
-            }
-            *src = s;
-            true
+            None => false,
         });
     }
     (out, diags)
+}
+
+/// Where `src` leads through the aliases: the source of the unfolded
+/// graph that makes it; `None` for nothing (an input left empty).
+fn chase(alias: &BTreeMap<String, String>, src: &str) -> Option<String> {
+    let mut s = src.to_owned();
+    for _ in 0..64 {
+        match alias.get(&s) {
+            Some(next) => s = next.clone(),
+            None => break,
+        }
+    }
+    (!s.is_empty()).then_some(s)
+}
+
+/// The source of the unfolded graph that makes `src` of `graph` (`node`,
+/// `node.output`, or a path inside composites, `inst__inner.output`): what
+/// the editor previews for a composite node, an output of one, or a
+/// bypassed node. `None` when it makes nothing.
+pub fn resolve(graph: &Graph, src: &str) -> Option<String> {
+    let mut out = Graph::default();
+    let mut diags = Vec::new();
+    let mut alias: BTreeMap<String, String> = BTreeMap::new();
+    let mut l = Lowering { graph, out: &mut out, alias: &mut alias, diags: &mut diags };
+    l.scope(&graph.nodes, "", "nodes", &BTreeMap::new(), &BTreeMap::new(), 0);
+    let s = chase(&alias, src)?;
+    out.nodes.contains_key(Source::parse(&s).node).then_some(s)
 }
 
 struct Lowering<'a> {
@@ -236,6 +255,21 @@ mod tests {
         let (_, diags) = crate::compile::compile(&g, crate::space::Space::new(1024), 256);
         let errors: Vec<&str> = diags.iter().filter(|d| d.severity == crate::compile::Severity::Error).map(|d| d.path.as_str()).collect();
         assert_eq!(errors, ["nodes.two__mix.inputs"]);
+    }
+
+    #[test]
+    fn sources_resolve_to_the_nodes_that_make_them() {
+        let g = graph(
+            r#"{
+            "components": { "project:c": { "label": "C", "outputs": [{ "name": "h", "from": "n" }, { "name": "m", "from": "s" }],
+                "nodes": { "n": { "type": "noise.fbm" }, "s": { "type": "mask.slope", "inputs": { "height": "n" } } } } },
+            "nodes": { "x": { "type": "project:c" }, "b": { "type": "adjust.levels", "inputs": { "in": "x.h" }, "bypass": true }, "e": { "type": "adjust.levels" , "bypass": true } } }"#,
+        );
+        assert_eq!(resolve(&g, "x").as_deref(), Some("x__n"));
+        assert_eq!(resolve(&g, "x.m").as_deref(), Some("x__s"));
+        assert_eq!(resolve(&g, "x__s.mask").as_deref(), Some("x__s.mask"));
+        assert_eq!(resolve(&g, "b").as_deref(), Some("x__n"));
+        assert_eq!(resolve(&g, "e"), None);
     }
 
     #[test]
