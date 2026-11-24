@@ -373,6 +373,15 @@ fn picture(engine: &Engine, c: &Compiled, what: &Shown, samples: u32, look: Opti
         (lod, whole)
     };
     let eval = |s: (usize, u8)| engine.region(c, s, lod, rect, cancel).map_err(|e| e.to_string());
+    // Geometry and volumes get previews of their own with the editor of
+    // 1.2; meanwhile the relief they stand on.
+    let (src, kind) = match kind.is_raster() {
+        true => (src, kind),
+        false => match relief_of(c, src) {
+            Some(r) => (r, PortKind::Height),
+            None => return Err(t!("Nothing to show here yet").to_owned()),
+        },
+    };
     let sea = c.space.sea_level;
     let main = eval(src)?;
     let range = main.range();
@@ -403,6 +412,14 @@ fn picture(engine: &Engine, c: &Compiled, what: &Shown, samples: u32, look: Opti
             let h = relief_of(c, src).map(eval).transpose()?.unwrap_or_else(|| shade::flat_like(&main, sea));
             (h, Some(vector_colors(&main)), None)
         }
+        PortKind::Layer => {
+            // The layer's strength, over the relief.
+            let h = relief_of(c, src).map(eval).transpose()?.unwrap_or_else(|| shade::flat_like(&main, sea));
+            let strength = Grid { planes: 1, data: main.plane(1).to_vec(), ..main.clone() };
+            let tint = super::sockets::color(PortKind::Layer).to_array();
+            (h, None, Some((strength, [tint[0], tint[1], tint[2]])))
+        }
+        PortKind::Points | PortKind::Splines | PortKind::Footprints | PortKind::Instances | PortKind::Density => unreachable!("shown above"),
         PortKind::Terrain | PortKind::Biome => {
             let h = relief_of(c, src).map(eval).transpose()?.unwrap_or_else(|| shade::flat_like(&main, sea));
             let table = if kind == PortKind::Terrain { &cats.terrains } else { &cats.biomes };

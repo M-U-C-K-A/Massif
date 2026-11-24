@@ -94,6 +94,12 @@ fn kind_words(kind: PortKind) -> &'static str {
         PortKind::Vector => "A direction and its strength at each place: wind, the way water flows.",
         PortKind::Terrain => "A terrain (the block material) at each place.",
         PortKind::Biome => "A biome of the game at each place.",
+        PortKind::Layer => "A painted layer of the world at each place (ground cover, objects, pockets, caves, annotations), and how strongly.",
+        PortKind::Points => "Where things stand: points with a turn, a scale, a kind and numbers of their own.",
+        PortKind::Splines => "Lines through the terrain: roads, rivers, walls, each with a width and a kind.",
+        PortKind::Footprints => "The ground things take: rectangles of columns, with the side they face and their entrance.",
+        PortKind::Instances => "What stands there: a pack's building, a structure of the game, an object, each placed and turned.",
+        PortKind::Density => "A field over the volume, negative inside matter: caves, arches, overhangs.",
     }
 }
 
@@ -444,6 +450,9 @@ fn node_json(s: &'static NodeSpec) -> Value {
     if matches!(s.kernel, Kernel::Global { .. }) {
         v["simulates"] = json!(true);
     }
+    if matches!(s.kernel, Kernel::Geometry { .. }) {
+        v["whole"] = json!(true);
+    }
     match s.reads {
         Reads::Map => v["reads"] = json!("map"),
         Reads::Files => v["reads"] = json!("files"),
@@ -549,6 +558,9 @@ fn node_markdown(md: &mut String, s: &'static NodeSpec) {
     if matches!(s.kernel, Kernel::Global { .. }) {
         md.push_str("\nA simulation: it works over the whole terrain at the simulations' resolution.\n");
     }
+    if matches!(s.kernel, Kernel::Geometry { .. }) {
+        md.push_str("\nIt makes geometry over the whole terrain at once, reading reliefs and masks at the simulations' resolution.\n");
+    }
     match s.reads {
         Reads::Map => md.push_str("\nIt reads the map as it is, and follows it when it changes.\n"),
         Reads::Files => md.push_str("\nIt reads the files its settings name, and follows them when they change.\n"),
@@ -615,6 +627,7 @@ fn feeder(g: &mut Graph, kind: PortKind) -> String {
         PortKind::Mask => ("slopes", fed("mask.slope")),
         PortKind::Color => ("colours", fed("color.gradient")),
         PortKind::Terrain => ("terrains", Node::new("terrain.layers")),
+        PortKind::Points => ("places", fed("points.scatter").input("height", "relief").with("spacing", 256)),
         _ => return "relief".into(),
     };
     g.nodes.entry(name.into()).or_insert(node);
@@ -668,7 +681,8 @@ pub fn example(spec: &'static NodeSpec) -> Graph {
             PortKind::Color => Some("albedo".to_owned()),
             PortKind::Terrain => Some("terrain".to_owned()),
             PortKind::Biome => Some("biome".to_owned()),
-            PortKind::Vector => None,
+            PortKind::Instances => Some("structures".to_owned()),
+            _ => None,
         },
     };
     if let Some(into) = &into {

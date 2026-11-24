@@ -5,7 +5,7 @@
 //! builds its panels from it, the format checks graphs against it, the
 //! schema and the catalogue a model reads are written from it.
 
-use crate::kernel::{FootprintFn, GlobalFn, GlobalGpuFn, GpuKernel, LocalFn, PointFn, StatsFn};
+use crate::kernel::{FootprintFn, GeometryFn, GlobalFn, GlobalGpuFn, GpuKernel, LocalFn, PointFn, StatsFn, VolumeFn};
 
 /// Families of nodes, in the order the library shows them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -19,6 +19,8 @@ pub enum Family {
     Mask,
     Color,
     Combine,
+    /// Points, lines, footprints and what stands on them.
+    Geometry,
     Output,
     /// Nodes a compiled graph adds itself (conversions): never in a graph's
     /// JSON nor in the library.
@@ -26,7 +28,7 @@ pub enum Family {
 }
 
 impl Family {
-    pub const ALL: [Family; 10] = [Family::Input, Family::Primitive, Family::Shape, Family::Adjust, Family::Simulate, Family::Climate, Family::Mask, Family::Color, Family::Combine, Family::Output];
+    pub const ALL: [Family; 11] = [Family::Input, Family::Primitive, Family::Shape, Family::Adjust, Family::Simulate, Family::Climate, Family::Mask, Family::Color, Family::Combine, Family::Geometry, Family::Output];
 
     pub const fn label(self) -> &'static str {
         match self {
@@ -39,6 +41,7 @@ impl Family {
             Family::Mask => "Masks",
             Family::Color => "Colours",
             Family::Combine => "Combine",
+            Family::Geometry => "Geometry",
             Family::Output => "Outputs",
             Family::Internal => "Internal",
         }
@@ -60,6 +63,25 @@ pub enum PortKind {
     Terrain,
     /// A biome of the game at each sample, by its id.
     Biome,
+    /// A painted layer of the world at each sample (ground cover, objects,
+    /// pockets, caves, annotations): its number in its family, then how
+    /// strongly (0 to 1).
+    Layer,
+    /// Where things stand: [`massif_core::geometry::Points`].
+    Points,
+    /// Lines through the terrain (roads, rivers, walls):
+    /// [`massif_core::geometry::Splines`].
+    Splines,
+    /// The ground things take: [`massif_core::geometry::Footprints`].
+    Footprints,
+    /// What stands there (a pack's building, a structure, an object):
+    /// [`massif_core::geometry::Instances`].
+    Instances,
+    /// A field over the volume, in bricks of 16³ blocks: negative inside
+    /// matter, positive in the air, its distance to the surface where it
+    /// can (a signed distance), which caves, arches and overhangs are made
+    /// of. See [`crate::kernel::Brick`].
+    Density,
 }
 
 /// What a value goes through to feed a socket of another type.
@@ -74,7 +96,41 @@ pub enum Conversion {
 }
 
 impl PortKind {
-    pub const ALL: [PortKind; 6] = [PortKind::Height, PortKind::Mask, PortKind::Color, PortKind::Vector, PortKind::Terrain, PortKind::Biome];
+    pub const ALL: [PortKind; 12] = [
+        PortKind::Height,
+        PortKind::Mask,
+        PortKind::Color,
+        PortKind::Vector,
+        PortKind::Terrain,
+        PortKind::Biome,
+        PortKind::Layer,
+        PortKind::Points,
+        PortKind::Splines,
+        PortKind::Footprints,
+        PortKind::Instances,
+        PortKind::Density,
+    ];
+
+    /// The type a socket's id names (`height`, `points`…).
+    pub fn from_id(id: &str) -> Option<PortKind> {
+        PortKind::ALL.into_iter().find(|k| k.id() == id)
+    }
+
+    /// Samples over the terrain, made by tiles: what every kernel but the
+    /// geometry and volume ones makes.
+    pub const fn is_raster(self) -> bool {
+        !self.is_geometry() && !self.is_volume()
+    }
+
+    /// Geometry, made and read whole ([`crate::kernel::Geo`]).
+    pub const fn is_geometry(self) -> bool {
+        matches!(self, PortKind::Points | PortKind::Splines | PortKind::Footprints | PortKind::Instances)
+    }
+
+    /// A field over the volume, made by bricks.
+    pub const fn is_volume(self) -> bool {
+        matches!(self, PortKind::Density)
+    }
 
     pub const fn id(self) -> &'static str {
         match self {
@@ -84,6 +140,12 @@ impl PortKind {
             PortKind::Vector => "vector",
             PortKind::Terrain => "terrain",
             PortKind::Biome => "biome",
+            PortKind::Layer => "layer",
+            PortKind::Points => "points",
+            PortKind::Splines => "splines",
+            PortKind::Footprints => "footprints",
+            PortKind::Instances => "instances",
+            PortKind::Density => "density",
         }
     }
 
@@ -91,14 +153,15 @@ impl PortKind {
     pub const fn planes(self) -> usize {
         match self {
             PortKind::Color => 3,
-            PortKind::Vector => 2,
+            PortKind::Vector | PortKind::Layer => 2,
+            PortKind::Points | PortKind::Splines | PortKind::Footprints | PortKind::Instances | PortKind::Density => 0,
             _ => 1,
         }
     }
 
     /// Ids rather than amounts: never averaged, resampled to the nearest.
     pub const fn categorical(self) -> bool {
-        matches!(self, PortKind::Terrain | PortKind::Biome)
+        matches!(self, PortKind::Terrain | PortKind::Biome | PortKind::Layer)
     }
 
     /// How a value of this type feeds a socket of type `to`; `None` when
@@ -352,6 +415,16 @@ pub enum Kernel {
     /// water. Finer tiles take the input's tile with the change the node
     /// made (`carry[output] = Some(input)`), or its output resampled.
     Global { cpu: GlobalFn, gpu: Option<GlobalGpuFn>, carry: &'static [Option<u8>] },
+    /// Geometry (points, splines, footprints, instances) made once over the
+    /// whole terrain, its raster inputs read whole at the simulations'
+    /// level, its geometry inputs whole; cached as one value.
+    Geometry { cpu: GeometryFn },
+    /// A field over the volume, one brick of 16³ blocks at a time from the
+    /// same bricks of its volume inputs and the columns under them of its
+    /// raster inputs (with `halo` samples around). Evaluated by the engine
+    /// from milestone T2; until then its nodes compile and can be called
+    /// directly.
+    Volume { cpu: VolumeFn, halo: u32 },
     /// What the graph gives the map: never evaluated, its inputs are.
     Output,
 }

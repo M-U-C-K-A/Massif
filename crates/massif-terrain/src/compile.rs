@@ -132,7 +132,7 @@ impl Compiled {
     /// fields driving its settings and where its inputs were read.
     pub fn ctx<'a>(&'a self, n: usize, lod: u8, rect: Rect, driven: &'a [Option<&'a [f32]>], reads: &'a [Option<(u8, Rect)>]) -> Ctx<'a> {
         let node = &self.nodes[n];
-        Ctx { space: &self.space, lod, rect, seed: node.seed, params: &node.params, driven, reads, env: &*self.env }
+        Ctx { space: &self.space, lod, rect, seed: node.seed, params: &node.params, driven, reads, env: &*self.env, geos: &[] }
     }
 
     /// The world outside the graph it was compiled with.
@@ -483,7 +483,7 @@ impl Builder {
         }
         h.write_u32(self.space.size);
         h.write_u32(self.space.sea_level.to_bits());
-        if matches!(spec.kernel, Kernel::Global { .. } | Kernel::Stats { .. }) {
+        if matches!(spec.kernel, Kernel::Global { .. } | Kernel::Stats { .. } | Kernel::Geometry { .. }) {
             h.write_u32(self.sim_res);
         }
         match spec.reads {

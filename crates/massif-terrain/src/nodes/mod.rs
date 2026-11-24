@@ -9,6 +9,7 @@ mod color;
 mod combine;
 mod convert;
 mod erosion;
+mod geometry;
 mod inputs;
 mod legacy;
 mod masks;
@@ -27,7 +28,7 @@ pub const WGSL_COMMON: &str = include_str!("wgsl/common.wgsl");
 pub fn all() -> &'static [&'static NodeSpec] {
     static ALL: OnceLock<Vec<&'static NodeSpec>> = OnceLock::new();
     ALL.get_or_init(|| {
-        [inputs::NODES, primitives::NODES, shapes::NODES, adjust::NODES, erosion::NODES, climate::NODES, masks::NODES, color::NODES, combine::NODES, legacy::NODES, output::NODES, convert::NODES].concat()
+        [inputs::NODES, primitives::NODES, shapes::NODES, adjust::NODES, erosion::NODES, climate::NODES, masks::NODES, color::NODES, combine::NODES, geometry::NODES, legacy::NODES, output::NODES, convert::NODES].concat()
     })
 }
 

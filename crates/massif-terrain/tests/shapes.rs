@@ -123,17 +123,22 @@ fn every_node_evaluates_with_its_defaults() {
                 let src = match port.kind {
                     registry::PortKind::Color => "paint",
                     registry::PortKind::Terrain => "lay",
+                    registry::PortKind::Points => "pts",
                     _ => "feed",
                 };
                 inputs.push_str(&format!(r#"{}"{}": "{}""#, if k > 0 && !inputs.is_empty() { ", " } else { "" }, port.name, src));
             }
         }
         let json = format!(
-            r#"{{ "nodes": {{ "feed": {{ "type": "noise.fbm" }}, "paint": {{ "type": "color.ramp", "inputs": {{ "height": "feed" }} }}, "lay": {{ "type": "terrain.layers" }}, "n": {{ "type": "{}", "inputs": {{ {inputs} }} }} }} }}"#,
+            r#"{{ "nodes": {{ "feed": {{ "type": "noise.fbm" }}, "paint": {{ "type": "color.ramp", "inputs": {{ "height": "feed" }} }}, "lay": {{ "type": "terrain.layers" }}, "pts": {{ "type": "points.scatter", "params": {{ "spacing": 256 }} }}, "n": {{ "type": "{}", "inputs": {{ {inputs} }} }} }} }}"#,
             spec.id
         );
         let c = compiled(&json);
         for (p, port) in spec.outputs.iter().enumerate() {
+            if port.kind.is_geometry() {
+                assert!(Engine::new(Settings::default()).geometry(&c, c.source("n", Some(port.name)).unwrap(), &never).is_ok(), "{}.{}", spec.id, port.name);
+                continue;
+            }
             let g = whole(&c, "n", Some(port.name), 4);
             assert!(g.data.iter().all(|v| v.is_finite()), "{}.{}", spec.id, port.name);
             let _ = p;

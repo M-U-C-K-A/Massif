@@ -24,13 +24,14 @@ fn fingerprints() -> BTreeMap<String, Vec<f64>> {
             let src = match port.kind {
                 PortKind::Color => "paint",
                 PortKind::Terrain => "lay",
+                PortKind::Points => "pts",
                 _ => "feed",
             };
             inputs.push(format!(r#""{}": "{src}""#, port.name));
         }
         let json = format!(
             r#"{{ "nodes": {{ "feed": {{ "type": "noise.fbm", "params": {{ "scale": 400, "height": 120, "base": 40, "seed": 1 }} }},
-            "paint": {{ "type": "color.gradient", "inputs": {{ "in": "feed" }} }}, "lay": {{ "type": "terrain.layers" }},
+            "paint": {{ "type": "color.gradient", "inputs": {{ "in": "feed" }} }}, "lay": {{ "type": "terrain.layers" }}, "pts": {{ "type": "points.scatter", "inputs": {{ "height": "feed" }}, "params": {{ "spacing": 128, "seed": 2 }} }},
             "n": {{ "type": "{}", "inputs": {{ {} }}, "params": {{ "seed": 3 }} }} }} }}"#,
             spec.type_name(),
             inputs.join(", ")
@@ -42,6 +43,21 @@ fn fingerprints() -> BTreeMap<String, Vec<f64>> {
         let (c, _) = compile(&g, Space::new(2048), 256);
         let e = Engine::new(Default::default());
         for port in spec.outputs {
+            if port.kind.is_geometry() {
+                // Geometry: how many, and where they are on the whole.
+                let geo = e.geometry(&c, c.source("n", Some(port.name)).unwrap(), &never).unwrap();
+                let pos: Vec<[f64; 3]> = match &*geo {
+                    massif_terrain::kernel::Geo::Points(p) => p.items.iter().map(|p| p.pos).collect(),
+                    massif_terrain::kernel::Geo::Splines(s) => s.lines.iter().flat_map(|l| l.points.iter().copied()).collect(),
+                    massif_terrain::kernel::Geo::Footprints(f) => f.items.iter().map(|f| [f.min[0] as f64, 0.0, f.min[1] as f64]).collect(),
+                    massif_terrain::kernel::Geo::Instances(i) => i.items.iter().map(|i| i.origin.map(f64::from)).collect(),
+                };
+                let n = pos.len().max(1) as f64;
+                let mut f = vec![pos.len() as f64];
+                f.extend((0..3).map(|k| pos.iter().map(|p| p[k]).sum::<f64>() / n));
+                out.insert(format!("{}.{}", spec.type_name(), port.name), f);
+                continue;
+            }
             let grid = e.whole(&c, c.source("n", Some(port.name)).unwrap(), 4, &never).unwrap();
             let d = &grid.data;
             let mean = d.iter().map(|v| *v as f64).sum::<f64>() / d.len() as f64;

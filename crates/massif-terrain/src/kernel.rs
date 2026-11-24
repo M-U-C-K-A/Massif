@@ -22,9 +22,17 @@ pub struct Ctx<'a> {
     pub reads: &'a [Option<(u8, Rect)>],
     /// The world outside the graph: the map, files.
     pub env: &'a dyn Env,
+    /// For each input (by its index), the geometry feeding it, made whole
+    /// (see [`Ctx::geo`]); empty when none of its inputs is geometry.
+    pub geos: &'a [Option<Arc<Geo>>],
 }
 
 impl Ctx<'_> {
+    /// The geometry feeding input `k`, when it is connected.
+    pub fn geo(&self, k: usize) -> Option<&Geo> {
+        self.geos.get(k).and_then(Option::as_deref)
+    }
+
     /// Number setting `name` at sample `k` of `rect`: the field driving it
     /// there, or its value.
     #[inline]
@@ -196,6 +204,92 @@ pub struct Footprint {
 
 /// Fills the outputs (each `ctx.rect.area()` samples) from the inputs'
 /// samples at the same places.
+/// Geometry, as nodes make and read it (whole, never by tiles).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Geo {
+    Points(massif_core::geometry::Points),
+    Splines(massif_core::geometry::Splines),
+    Footprints(massif_core::geometry::Footprints),
+    Instances(massif_core::geometry::Instances),
+}
+
+impl Geo {
+    /// What it is, as a socket type.
+    pub fn kind(&self) -> crate::registry::PortKind {
+        use crate::registry::PortKind;
+        match self {
+            Geo::Points(_) => PortKind::Points,
+            Geo::Splines(_) => PortKind::Splines,
+            Geo::Footprints(_) => PortKind::Footprints,
+            Geo::Instances(_) => PortKind::Instances,
+        }
+    }
+
+    /// Nothing of its kind, for a kernel that has nothing to make.
+    pub fn empty(kind: crate::registry::PortKind) -> Option<Geo> {
+        use crate::registry::PortKind;
+        Some(match kind {
+            PortKind::Points => Geo::Points(Default::default()),
+            PortKind::Splines => Geo::Splines(Default::default()),
+            PortKind::Footprints => Geo::Footprints(Default::default()),
+            PortKind::Instances => Geo::Instances(Default::default()),
+            _ => return None,
+        })
+    }
+
+    pub fn points(&self) -> Option<&massif_core::geometry::Points> {
+        if let Geo::Points(p) = self { Some(p) } else { None }
+    }
+
+    pub fn splines(&self) -> Option<&massif_core::geometry::Splines> {
+        if let Geo::Splines(p) = self { Some(p) } else { None }
+    }
+
+    pub fn footprints(&self) -> Option<&massif_core::geometry::Footprints> {
+        if let Geo::Footprints(p) = self { Some(p) } else { None }
+    }
+
+    pub fn instances(&self) -> Option<&massif_core::geometry::Instances> {
+        if let Geo::Instances(p) = self { Some(p) } else { None }
+    }
+}
+
+/// A geometry kernel: from its raster inputs over the whole terrain (at
+/// `ctx.lod`, the simulations' level; `None` where unconnected or
+/// geometry) and its geometry inputs (`ctx.geos`), one value per output, of
+/// the output's type; `Err` says why it made nothing. It may stop early
+/// when `cancel` says so (giving `Err`).
+pub type GeometryFn = fn(&Ctx, &[Option<&Grid>], &(dyn Fn() -> bool + Sync)) -> Result<Vec<Geo>, String>;
+
+/// Blocks a side of a brick of a volume.
+pub const BRICK: i32 = 16;
+
+/// A brick of a volume field: 16³ values from `origin` (its west, bottom,
+/// north block), `x` fastest, then `z`, then `y`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Brick {
+    pub origin: [i32; 3],
+    pub data: Vec<f32>,
+}
+
+impl Brick {
+    pub fn filled(origin: [i32; 3], v: f32) -> Self {
+        Self { origin, data: vec![v; (BRICK * BRICK * BRICK) as usize] }
+    }
+
+    /// The value at block `(x, y, z)` of the world, inside the brick.
+    #[inline]
+    pub fn at(&self, x: i32, y: i32, z: i32) -> f32 {
+        let (i, j, k) = (x - self.origin[0], y - self.origin[1], z - self.origin[2]);
+        self.data[((j * BRICK + k) * BRICK + i) as usize]
+    }
+}
+
+/// A volume kernel: the brick at `origin` of each output, from the same
+/// brick of its volume inputs and, for its raster inputs, the columns under
+/// it at one sample a block (with the node's halo around).
+pub type VolumeFn = fn(&Ctx, [i32; 3], &[Option<&Grid>], &[Option<&Brick>], &mut [Brick]);
+
 pub type PointFn = fn(&Ctx, &[Option<&[f32]>], &mut [Vec<f32>]);
 /// Fills the outputs from the inputs read where their footprint says.
 pub type LocalFn = fn(&Ctx, &[Option<&Grid>], &mut [Vec<f32>]);

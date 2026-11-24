@@ -377,5 +377,12 @@
   "the map's ground as it is": "le sol de la carte tel quel",
   "{name}: drag the points, double-click to add one, right-click to remove one": "{name} : glissez les points, double-clic pour en ajouter un, clic droit pour en retirer un",
   "{node}: {why}": "{node} : {why}",
-  "{n} points": "{n} points"
+  "{n} points": "{n} points",
+  "Layer": "Couche",
+  "Points": "Points",
+  "Lines": "Lignes",
+  "Footprints": "Emprises",
+  "Instances": "Instances",
+  "Volume": "Volume",
+  "Nothing to show here yet": "Rien à montrer ici pour l'instant"
 }

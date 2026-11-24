@@ -3585,7 +3585,13 @@
                   "color",
                   "vector",
                   "terrain",
-                  "biome"
+                  "biome",
+                  "layer",
+                  "points",
+                  "splines",
+                  "footprints",
+                  "instances",
+                  "density"
                 ]
               }
             },
@@ -10027,6 +10033,36 @@
           "if": {
             "properties": {
               "type": {
+                "const": "points.scatter"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/points.scatter"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "points.mask"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/points.mask"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
                 "const": "legacy.floating_islands"
               }
             },
@@ -10282,6 +10318,8 @@
                 "terrain.layers",
                 "terrain.select",
                 "combine.blend",
+                "points.scatter",
+                "points.mask",
                 "legacy.floating_islands",
                 "legacy.overhang",
                 "legacy.rocks",
@@ -10793,10 +10831,25 @@
               "description": "The colour of the ground: the blocks nearest to it are chosen when Terrain is left empty. (color) Left empty: none.",
               "title": "Albedo"
             },
+            "annotations": {
+              "$ref": "#/$defs/source",
+              "description": "The annotation colour of each column. (layer) Left empty: the map's.",
+              "title": "Annotations"
+            },
             "biome": {
               "$ref": "#/$defs/source",
               "description": "The game's biome of each column. (biome) Left empty: from Temperature and Humidity when given, else the map's biomes.",
               "title": "Biome"
+            },
+            "caves": {
+              "$ref": "#/$defs/source",
+              "description": "The cave layer of each column, by its number among the world's cave layers, and how much of the area it takes. (layer) Left empty: the map's.",
+              "title": "Caves"
+            },
+            "cover": {
+              "$ref": "#/$defs/source",
+              "description": "The ground cover layer of each column (grass, flowers, moss…), by its number among the world's covers, and how strongly. (layer) Left empty: the map's.",
+              "title": "Ground cover"
             },
             "height": {
               "$ref": "#/$defs/source",
@@ -10888,6 +10941,26 @@
               "description": "Where the ground was worn away, written as the mask “wear”. (mask) Left empty: none.",
               "title": "Wear"
             },
+            "objects": {
+              "$ref": "#/$defs/source",
+              "description": "The object layer of each column (trees, rocks…), and how dense. (layer) Left empty: the map's.",
+              "title": "Objects"
+            },
+            "pockets": {
+              "$ref": "#/$defs/source",
+              "description": "The pocket layer of each column (ores, clay, gravel in the rock), and how strongly. (layer) Left empty: the map's.",
+              "title": "Pockets"
+            },
+            "roads": {
+              "$ref": "#/$defs/source",
+              "description": "Roads and paths laid along their lines, with their width and kind. (splines) Left empty: none.",
+              "title": "Roads"
+            },
+            "structures": {
+              "$ref": "#/$defs/source",
+              "description": "Buildings, villages and the game's structures to place, each built on the generated ground; a re-Apply replaces those the graph placed, never those placed by hand. (instances) Left empty: none.",
+              "title": "Structures"
+            },
             "temperature": {
               "$ref": "#/$defs/source",
               "description": "The climate's temperature: 0 is −30 °C, 1 is +45 °C. (mask) Left empty: none.",
@@ -10897,6 +10970,11 @@
               "$ref": "#/$defs/source",
               "description": "The terrain (the block material) of each column. (terrain) Left empty: from Albedo when it is given, else the map's terrains.",
               "title": "Terrain"
+            },
+            "understory": {
+              "$ref": "#/$defs/source",
+              "description": "The understory layer of each column (bushes, ferns…), and how dense. (layer) Left empty: the map's.",
+              "title": "Understory"
             },
             "water": {
               "$ref": "#/$defs/source",
@@ -11543,6 +11621,165 @@
         "type"
       ],
       "title": "Mesas and buttes",
+      "type": "object"
+    },
+    "points.mask": {
+      "additionalProperties": false,
+      "description": "A mask of discs round points: 1 within Radius of one, fading to 0 over Softness. Where points stand, as a mask: keep the forest off the places a village takes, raise a mound under each ruin, paint the ground round each tree.",
+      "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "points": {
+              "$ref": "#/$defs/source",
+              "description": "The points. (points)",
+              "title": "Points"
+            }
+          },
+          "required": [
+            "points"
+          ],
+          "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "radius": {
+              "default": 8.0,
+              "description": "How far round each point the mask is 1, in blocks (times the point's scale). Usually 0 to 128.",
+              "maximum": 4096.0,
+              "minimum": 0.0,
+              "title": "Radius",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                128.0
+              ],
+              "x-unit": "blocks"
+            },
+            "softness": {
+              "default": 4.0,
+              "description": "How far beyond Radius it fades to 0, in blocks. Usually 0 to 64.",
+              "maximum": 4096.0,
+              "minimum": 0.0,
+              "title": "Softness",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                64.0
+              ],
+              "x-unit": "blocks"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "points.mask"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Points to mask",
+      "type": "object"
+    },
+    "points.scatter": {
+      "additionalProperties": false,
+      "description": "Points spread over the terrain, as many as a density mask asks, never closer than a spacing. One point at most in each square of Spacing blocks, at a place of its own inside it: kept where a random draw falls under the density there. Trees, rocks, ruins or the places villages may start: give it the mask of where they may stand, and the relief for the points' heights.",
+      "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "density": {
+              "$ref": "#/$defs/source",
+              "description": "How likely a point is at each place, from 0 to 1. (mask) Left empty: 1 everywhere.",
+              "title": "Density"
+            },
+            "height": {
+              "$ref": "#/$defs/source",
+              "description": "The relief the points stand on: their height. (height) Left empty: the sea level.",
+              "title": "Height"
+            }
+          },
+          "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "jitter": {
+              "default": 0.8,
+              "description": "How far a point wanders inside its square: 0 lines them up on a grid.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Jitter",
+              "type": "number",
+              "x-section": "shape",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "seed": {
+              "description": "Another seed gives another variation of the same settings. Left out, it comes from the node's name.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer",
+              "x-section": "detail"
+            },
+            "spacing": {
+              "default": 64.0,
+              "description": "The size of the squares the points are drawn in: no two points are much closer than half of it. In blocks. Usually 4 to 1024.",
+              "maximum": 16384.0,
+              "minimum": 2.0,
+              "title": "Spacing",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                4.0,
+                1024.0
+              ],
+              "x-unit": "blocks"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "points.scatter"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Scatter",
       "type": "object"
     },
     "sediment.deposit": {

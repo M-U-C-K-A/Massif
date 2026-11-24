@@ -15,6 +15,9 @@ pub fn color(kind: PortKind) -> Color32 {
         PortKind::Vector => Color32::from_rgb(99, 99, 199),
         PortKind::Terrain => Color32::from_rgb(99, 199, 99),
         PortKind::Biome => Color32::from_rgb(0, 214, 163),
+        PortKind::Layer => Color32::from_rgb(140, 170, 90),
+        PortKind::Points | PortKind::Splines | PortKind::Footprints | PortKind::Instances => Color32::from_rgb(0, 214, 214),
+        PortKind::Density => Color32::from_rgb(180, 120, 220),
     }
 }
 
@@ -72,6 +75,7 @@ pub fn family(f: Family) -> Color32 {
         Family::Mask => Color32::from_rgb(236, 192, 64),
         Family::Color => Color32::from_rgb(236, 96, 164),
         Family::Combine => Color32::from_rgb(168, 124, 255),
+        Family::Geometry => Color32::from_rgb(0, 214, 214),
         Family::Output => Color32::from_rgb(244, 84, 104),
         Family::Internal => Color32::GRAY,
     }
@@ -90,6 +94,7 @@ pub fn family_icon(f: Family) -> crate::theme::Icon {
         Family::Mask => Icon::SquareDashed,
         Family::Color => Icon::Palette,
         Family::Combine => Icon::Layers,
+        Family::Geometry => Icon::Shrub,
         Family::Output => Icon::Flag,
         Family::Internal => Icon::Circle,
     }
@@ -104,5 +109,11 @@ pub fn kind_label(kind: PortKind) -> &'static str {
         PortKind::Vector => t!("Vector"),
         PortKind::Terrain => t!("Terrain"),
         PortKind::Biome => t!("Biome"),
+        PortKind::Layer => t!("Layer"),
+        PortKind::Points => t!("Points"),
+        PortKind::Splines => t!("Lines"),
+        PortKind::Footprints => t!("Footprints"),
+        PortKind::Instances => t!("Instances"),
+        PortKind::Density => t!("Volume"),
     }
 }

@@ -30,6 +30,12 @@ Every type of node a terrain graph of Massif can use, with its inputs, outputs, 
 | `vector` | A direction and its strength at each place: wind, the way water flows. | `vector` |
 | `terrain` | A terrain (the block material) at each place. | `terrain` |
 | `biome` | A biome of the game at each place. | `biome` |
+| `layer` | A painted layer of the world at each place (ground cover, objects, pockets, caves, annotations), and how strongly. | `layer` |
+| `points` | Where things stand: points with a turn, a scale, a kind and numbers of their own. | `points` |
+| `splines` | Lines through the terrain: roads, rivers, walls, each with a width and a kind. | `splines` |
+| `footprints` | The ground things take: rectangles of columns, with the side they face and their entrance. | `footprints` |
+| `instances` | What stands there: a pack's building, a structure of the game, an object, each placed and turned. | `instances` |
+| `density` | A field over the volume, negative inside matter: caves, arches, overhangs. | `density` |
 
 ## Inputs
 
@@ -2705,6 +2711,69 @@ Outputs:
 }
 ```
 
+## Geometry
+
+### Scatter — `points.scatter`
+
+Points spread over the terrain, as many as a density mask asks, never closer than a spacing. One point at most in each square of Spacing blocks, at a place of its own inside it: kept where a random draw falls under the density there. Trees, rocks, ruins or the places villages may start: give it the mask of where they may stand, and the relief for the points' heights.
+
+It makes geometry over the whole terrain at once, reading reliefs and masks at the simulations' resolution.
+
+Inputs:
+
+- `density` (mask, optional) — How likely a point is at each place, from 0 to 1. Left empty: 1 everywhere.
+- `height` (height, optional) — The relief the points stand on: their height. Left empty: the sea level.
+
+Outputs:
+
+- `points` (points) — The points, each standing on the relief, turned at random.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `spacing` | number | 64 | 2 to 16384 blocks | The size of the squares the points are drawn in: no two points are much closer than half of it. In blocks. Usually 4 to 1024. |
+| `jitter` | number | 0.8 | 0 to 1 | How far a point wanders inside its square: 0 lines them up on a grid. |
+| `seed` | seed | — | 0 to 4294967295 | Another seed gives another variation of the same settings. Left out, it comes from the node's name. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "out": { "type": "output.map", "inputs": { "height": "relief" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } },
+    "scatter": { "type": "points.scatter" }
+  }
+}
+```
+
+### Points to mask — `points.mask`
+
+A mask of discs round points: 1 within Radius of one, fading to 0 over Softness. Where points stand, as a mask: keep the forest off the places a village takes, raise a mound under each ruin, paint the ground round each tree.
+
+Inputs:
+
+- `points` (points) — The points.
+
+Outputs:
+
+- `mask` (mask) — 1 near the points.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `radius` | number | 8 | 0 to 4096 blocks | How far round each point the mask is 1, in blocks (times the point's scale). Usually 0 to 128. |
+| `softness` | number | 4 | 0 to 4096 blocks | How far beyond Radius it fades to 0, in blocks. Usually 0 to 64. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "mask": { "type": "points.mask", "inputs": { "points": "places" } },
+    "out": { "type": "output.map", "inputs": { "height": "relief", "mask.mask": "mask" } },
+    "places": { "type": "points.scatter", "inputs": { "height": "relief" }, "params": { "spacing": 256 } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } }
+  }
+}
+```
+
 ## Outputs
 
 ### Map output — `output.map`
@@ -2732,6 +2801,14 @@ Inputs:
 - `level.4.top` (height, optional) — The top of a level of rock over the ground (a Solid level of its own): floating islands, overhangs, arches. Left empty: none.
 - `level.4.bottom` (height, optional) — The underside of that level: where it is above the ground, the void lies between. Left empty: none.
 - `level.4.color` (color, optional) — The colour of that level's rock: the blocks nearest to it are chosen, from the Albedo palette. Left empty: the colour of the rock.
+- `cover` (layer, optional) — The ground cover layer of each column (grass, flowers, moss…), by its number among the world's covers, and how strongly. Left empty: the map's.
+- `objects` (layer, optional) — The object layer of each column (trees, rocks…), and how dense. Left empty: the map's.
+- `understory` (layer, optional) — The understory layer of each column (bushes, ferns…), and how dense. Left empty: the map's.
+- `pockets` (layer, optional) — The pocket layer of each column (ores, clay, gravel in the rock), and how strongly. Left empty: the map's.
+- `caves` (layer, optional) — The cave layer of each column, by its number among the world's cave layers, and how much of the area it takes. Left empty: the map's.
+- `annotations` (layer, optional) — The annotation colour of each column. Left empty: the map's.
+- `structures` (instances, optional) — Buildings, villages and the game's structures to place, each built on the generated ground; a re-Apply replaces those the graph placed, never those placed by hand. Left empty: none.
+- `roads` (splines, optional) — Roads and paths laid along their lines, with their width and kind. Left empty: none.
 - `mask.flow` (mask, optional) — Where water runs, written to the map as the mask “flow”. Left empty: none.
 - `mask.wear` (mask, optional) — Where the ground was worn away, written as the mask “wear”. Left empty: none.
 - `mask.deposition` (mask, optional) — Where sediment settled, written as the mask “deposition”. Left empty: none.

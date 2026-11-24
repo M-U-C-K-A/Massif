@@ -24,7 +24,7 @@
 
 use crate::compile::Compiled;
 use crate::gpu::{Gpu, GpuGrid, GpuTile, Job};
-use crate::kernel::{Grid, Stats};
+use crate::kernel::{Geo, Grid, Stats};
 use crate::registry::Kernel;
 use crate::space::{Rect, Space, TILE};
 use rayon::prelude::*;
@@ -145,6 +145,8 @@ enum Key {
     Whole { hash: u64, port: u8, lod: u8 },
     /// Figures over a whole output.
     Stats { hash: u64, port: u8, lod: u8 },
+    /// Geometry a node made, whole.
+    Geo { hash: u64, port: u8 },
 }
 
 #[derive(Clone)]
@@ -152,6 +154,7 @@ enum Entry {
     Tile(Arc<TileData>),
     Whole(Arc<Grid>),
     Stats(Stats),
+    Geo(Arc<Geo>),
 }
 
 impl Entry {
@@ -160,6 +163,7 @@ impl Entry {
             Entry::Tile(t) => (TILE * TILE * 4) as usize * t.planes.max(1),
             Entry::Whole(g) => g.data.len() * 4,
             Entry::Stats(_) => 64,
+            Entry::Geo(g) => geo_bytes(g),
         }
     }
 }
@@ -319,6 +323,12 @@ impl Engine {
             return self.evaluate(c, src, lod, keys, cancel);
         }
 
+        let kind = c.kind(out);
+        if !kind.is_raster() {
+            let why = if kind.is_geometry() { "its geometry is made whole (Engine::geometry), not by tiles" } else { "volumes are made by bricks, from the engine's next milestone" };
+            return Err(EvalError::Broken { node: node.id.clone(), why: why.to_owned() });
+        }
+
         // Plan: what each node must make, walking back from the root.
         let mut need: Vec<BTreeSet<(u8, i32, i32)>> = vec![BTreeSet::new(); root + 1];
         let mut todo: Vec<Vec<(u8, i32, i32)>> = vec![Vec::new(); root + 1];
@@ -387,12 +397,14 @@ impl Engine {
     /// Makes `tiles` of node `n`, what feeds them in `have`.
     fn make(&self, c: &Compiled, n: usize, tiles: &[(u8, i32, i32)], have: &HashMap<At, Arc<TileData>>, cancel: Cancel) -> Result<Vec<Vec<Arc<TileData>>>, EvalError> {
         let node = &c.nodes[n];
+        let geos = self.geos(c, n, cancel)?;
         let area = (TILE * TILE) as usize;
         let planes: Vec<usize> = node.spec.outputs.iter().map(|o| o.kind.planes()).collect();
         let fresh = || planes.iter().map(|p| vec![0.0f32; area * p]).collect::<Vec<_>>();
         let ninputs = node.inputs.len();
         // A tile fed at its own place: point kernels' inputs and driving fields.
-        let same = |src: Option<(usize, u8)>, l: u8, x: i32, z: i32| src.map(|(s, p)| &have[&(s, p, l, x, z)]);
+        // (Geometry is no tile: kernels read it through `Ctx::geo`.)
+        let same = |src: Option<(usize, u8)>, l: u8, x: i32, z: i32| src.filter(|&s| c.kind(s).is_raster()).map(|(s, p)| &have[&(s, p, l, x, z)]);
         let driving = |i: usize| node.driven.get(i).copied().flatten();
         let done = |outs: Vec<Vec<f32>>| outs.into_iter().map(|o| Arc::new(TileData::cpu(o))).collect::<Vec<_>>();
         match node.spec.kernel {
@@ -409,7 +421,7 @@ impl Engine {
                     let jobs: Vec<Job> = tiles
                         .iter()
                         .zip(&fed)
-                        .map(|(&(l, x, z), row)| ((kernel.uniforms)(&c.ctx(n, l, Rect::tile(x, z), &[], &[]), &connected), row.iter().map(|t| t.and_then(TileData::gpu_buffer)).collect()))
+                        .map(|(&(l, x, z), row)| ((kernel.uniforms)(&ctx_of(c, &geos, n, l, Rect::tile(x, z), &[], &[]), &connected), row.iter().map(|t| t.and_then(TileData::gpu_buffer)).collect()))
                         .collect();
                     if let Some(made) = g.run_tiles(kernel.name, kernel.source, &jobs, &planes) {
                         self.counters.gpu_tiles.fetch_add(tiles.len() as u64, Ordering::Relaxed);
@@ -426,7 +438,7 @@ impl Engine {
                         let ins: Vec<Option<&[f32]>> = (0..ninputs).map(|k| same(node.inputs[k], l, x, z).map(|t| t.values().expect("fed on the CPU"))).collect();
                         let driven: Vec<Option<&[f32]>> = (0..node.spec.params.len()).map(|i| same(driving(i), l, x, z).map(|t| t.values().expect("fed on the CPU"))).collect();
                         let mut outs = fresh();
-                        cpu(&c.ctx(n, l, Rect::tile(x, z), &driven, &[]), &ins, &mut outs);
+                        cpu(&ctx_of(c, &geos, n, l, Rect::tile(x, z), &driven, &[]), &ins, &mut outs);
                         Ok(done(outs))
                     })
                     .collect()
@@ -442,7 +454,7 @@ impl Engine {
                         }
                         let ins: Vec<Option<&[f32]>> = (0..ninputs).map(|k| same(node.inputs[k], l, x, z).map(|t| t.values().expect("fed on the CPU"))).collect();
                         let mut outs = fresh();
-                        cpu(&c.ctx(n, l, Rect::tile(x, z), &[], &[]), &stats, &ins, &mut outs);
+                        cpu(&ctx_of(c, &geos, n, l, Rect::tile(x, z), &[], &[]), &stats, &ins, &mut outs);
                         Ok(done(outs))
                     })
                     .collect()
@@ -468,7 +480,7 @@ impl Engine {
                         .iter()
                         .map(|&(l, x, z)| {
                             let (reads, grids) = regions(l, x, z);
-                            let uniforms = (kernel.uniforms)(&c.ctx(n, l, Rect::tile(x, z), &[], &reads), &connected);
+                            let uniforms = (kernel.uniforms)(&ctx_of(c, &geos, n, l, Rect::tile(x, z), &[], &reads), &connected);
                             let mut bound: Vec<Option<wgpu::Buffer>> = grids.iter().map(|gr| gr.as_ref().map(|gr| g.upload_grid(gr).buffer)).collect();
                             bound.extend(drivable.iter().map(|&i| same(driving(i), l, x, z).and_then(|t| t.gpu_buffer().cloned())));
                             (uniforms, bound)
@@ -490,7 +502,7 @@ impl Engine {
                         let ins: Vec<Option<&Grid>> = grids.iter().map(Option::as_ref).collect();
                         let driven: Vec<Option<&[f32]>> = (0..node.spec.params.len()).map(|i| same(driving(i), l, x, z).map(|t| t.values().expect("fed on the CPU"))).collect();
                         let mut outs = fresh();
-                        cpu(&c.ctx(n, l, Rect::tile(x, z), &driven, &reads), &ins, &mut outs);
+                        cpu(&ctx_of(c, &geos, n, l, Rect::tile(x, z), &driven, &reads), &ins, &mut outs);
                         Ok(done(outs))
                     })
                     .collect()
@@ -544,7 +556,53 @@ impl Engine {
                     .collect()
             }
             Kernel::Output => unreachable!("outputs are not made"),
+            Kernel::Geometry { .. } | Kernel::Volume { .. } => unreachable!("not made by tiles"),
         }
+    }
+
+    /// For each input of node `n`, the geometry feeding it, made whole;
+    /// empty when none of its inputs is geometry.
+    fn geos(&self, c: &Compiled, n: usize, cancel: Cancel) -> Result<Vec<Option<Arc<Geo>>>, EvalError> {
+        let node = &c.nodes[n];
+        if !node.inputs.iter().flatten().any(|&src| c.kind(src).is_geometry()) {
+            return Ok(Vec::new());
+        }
+        node.inputs.iter().map(|i| i.filter(|&src| c.kind(src).is_geometry()).map(|src| self.geometry(c, src, cancel)).transpose()).collect()
+    }
+
+    /// Geometry output `out` (points, splines, footprints, instances),
+    /// made whole: its raster inputs read over the whole terrain at the
+    /// simulations' level, its geometry inputs whole.
+    pub fn geometry(&self, c: &Compiled, out: (usize, u8), cancel: Cancel) -> Result<Arc<Geo>, EvalError> {
+        let out = resolve(c, out);
+        let (n, port) = out;
+        let node = &c.nodes[n];
+        if let Some(why) = &node.broken {
+            return Err(EvalError::Broken { node: node.id.clone(), why: why.clone() });
+        }
+        let Kernel::Geometry { cpu } = node.spec.kernel else {
+            return Err(EvalError::Broken { node: node.id.clone(), why: "it makes no geometry".to_owned() });
+        };
+        if let Some(Entry::Geo(g)) = self.get(&Key::Geo { hash: node.hash, port }) {
+            self.counters.hits.fetch_add(1, Ordering::Relaxed);
+            return Ok(g);
+        }
+        let run = c.sim_lod();
+        let whole = c.space.whole(run);
+        let geos = self.geos(c, n, cancel)?;
+        let rasters: Vec<Option<Grid>> = node.inputs.iter().map(|i| i.filter(|&src| c.kind(src).is_raster()).map(|src| self.region(c, src, run, whole, cancel)).transpose()).collect::<Result<_, _>>()?;
+        let refs: Vec<Option<&Grid>> = rasters.iter().map(Option::as_ref).collect();
+        let started = std::time::Instant::now();
+        let made = cpu(&ctx_of(c, &geos, n, run, whole, &[], &[]), &refs, cancel).map_err(|why| if cancel() { EvalError::Cancelled } else { EvalError::Broken { node: node.id.clone(), why } })?;
+        self.counters.add(&node.id, 1, started.elapsed().as_secs_f64() * 1000.0);
+        if made.len() != node.spec.outputs.len() || made.iter().zip(node.spec.outputs).any(|(g, o)| g.kind() != o.kind) {
+            return Err(EvalError::Broken { node: node.id.clone(), why: "its kernel gave other types than its outputs".to_owned() });
+        }
+        let made: Vec<Arc<Geo>> = made.into_iter().map(Arc::new).collect();
+        for (p, g) in made.iter().enumerate() {
+            self.put(Key::Geo { hash: node.hash, port: p as u8 }, Entry::Geo(g.clone()));
+        }
+        Ok(made[port as usize].clone())
     }
 
     /// A simulation over the whole terrain at level `run`: for each output,
@@ -565,10 +623,11 @@ impl Engine {
             return Ok(found);
         }
         let whole = c.space.whole(run);
-        let inputs: Vec<Option<Grid>> = node.inputs.iter().map(|i| i.map(|src| self.region(c, src, run, whole, cancel)).transpose()).collect::<Result<_, _>>()?;
+        let geos = self.geos(c, n, cancel)?;
+        let inputs: Vec<Option<Grid>> = node.inputs.iter().map(|i| i.filter(|&src| c.kind(src).is_raster()).map(|src| self.region(c, src, run, whole, cancel)).transpose()).collect::<Result<_, _>>()?;
         let driven_grids: Vec<Option<Grid>> = (0..node.spec.params.len()).map(|i| node.driven.get(i).copied().flatten().map(|src| self.region(c, src, run, whole, cancel)).transpose()).collect::<Result<_, _>>()?;
         let driven: Vec<Option<&[f32]>> = driven_grids.iter().map(|g| g.as_ref().map(|g| g.plane(0))).collect();
-        let ctx = c.ctx(n, run, whole, &driven, &[]);
+        let ctx = ctx_of(c, &geos, n, run, whole, &driven, &[]);
         let mut outs: Option<Vec<Vec<f32>>> = None;
         if let (Some(g), Some(kernel)) = (&self.gpu, gpu)
             && g.takes(node.spec.id)
@@ -670,7 +729,8 @@ impl Engine {
 fn feeds(c: &Compiled, n: usize, l: u8, x: i32, z: i32) -> Vec<Option<Feed>> {
     let node = &c.nodes[n];
     let tile = Rect::tile(x, z);
-    let at_tile = |src: Option<(usize, u8)>| src.map(|src| Feed { src, lod: l, rect: tile });
+    // Geometry is read whole (see `Engine::geometry`), never by tiles.
+    let at_tile = |src: Option<(usize, u8)>| src.filter(|&s| c.kind(s).is_raster()).map(|src| Feed { src, lod: l, rect: tile });
     let driven = (0..node.spec.params.len()).map(|i| node.driven.get(i).copied().flatten());
     match node.spec.kernel {
         Kernel::Point { .. } | Kernel::Stats { .. } => node.inputs.iter().map(|i| at_tile(*i)).chain(driven.map(at_tile)).collect(),
@@ -679,7 +739,7 @@ fn feeds(c: &Compiled, n: usize, l: u8, x: i32, z: i32) -> Vec<Option<Feed>> {
             .iter()
             .enumerate()
             .map(|(k, i)| {
-                i.map(|src| {
+                i.filter(|&s| c.kind(s).is_raster()).map(|src| {
                     let f = footprint(&node.params, l, k);
                     Feed { src, lod: f.lod, rect: tile.at_lod(l, f.lod).expand(f.halo) }
                 })
@@ -693,7 +753,24 @@ fn feeds(c: &Compiled, n: usize, l: u8, x: i32, z: i32) -> Vec<Option<Feed>> {
             .map(|(k, i)| if carry.contains(&Some(k as u8)) { at_tile(*i) } else { None })
             .chain(driven.map(|_| None))
             .collect(),
-        Kernel::Output => Vec::new(),
+        Kernel::Output | Kernel::Geometry { .. } | Kernel::Volume { .. } => Vec::new(),
+    }
+}
+
+/// The context of node `n`'s kernel, with the geometry feeding it.
+fn ctx_of<'a>(c: &'a Compiled, geos: &'a [Option<Arc<Geo>>], n: usize, lod: u8, rect: Rect, driven: &'a [Option<&'a [f32]>], reads: &'a [Option<(u8, Rect)>]) -> crate::kernel::Ctx<'a> {
+    let mut ctx = c.ctx(n, lod, rect, driven, reads);
+    ctx.geos = geos;
+    ctx
+}
+
+/// About how many bytes geometry takes in the cache.
+fn geo_bytes(g: &Geo) -> usize {
+    match g {
+        Geo::Points(p) => 64 + p.items.len() * 96,
+        Geo::Splines(s) => 64 + s.lines.iter().map(|l| 96 + l.points.len() * 24).sum::<usize>(),
+        Geo::Footprints(f) => 64 + f.items.len() * 96,
+        Geo::Instances(i) => 64 + i.items.iter().map(|x| 128 + x.asset.len()).sum::<usize>(),
     }
 }
 
