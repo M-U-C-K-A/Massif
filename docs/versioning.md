@@ -73,7 +73,7 @@ The simplest way to work on a large map with others needs no shared
 version list and no extra file format: send each person the part they work
 on, as a map of its own.
 
-1. **File ▸ Export Region…**, **As: Massif map**: the selection (or the
+1. **File ▸ Export Region…**, **Massif map** (rather than Images): the selection (or the
    whole map, or blocks typed in) and a **Border** of tiles of 128 blocks
    around it (1 by default) are written as a `.massif` of their own, at
    their coordinates, with the map's terrains, layers, objects, settings and

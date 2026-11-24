@@ -89,9 +89,7 @@ impl RegionForm {
             tr!("A part of the map as images of 1 pixel a block, to work on in another tool: Edit ▸ Import Mask… puts them back in their place, with the region.txt written beside them.")
         };
         ui.add(egui::Label::new(RichText::new(about).size(12.0).color(pal.weak)).wrap());
-        ui.add_space(12.0);
-        ui.label(RichText::new(tr!("As")).size(11.5).color(pal.weak).medium());
-        ui.add_space(4.0);
+        ui.add_space(10.0);
         if let Some(i) = button_group(ui, "region as", &[tr!("Images"), tr!("Massif map")], &[!self.as_map, self.as_map]) {
             self.as_map = i == 1;
         }
@@ -181,14 +179,11 @@ impl RegionForm {
             row(ui, tr!("Annotations"), |ui| {
                 switch(ui, &mut p.annotations);
             });
-        });
-        ui.add(egui::Label::new(RichText::new(tr!("Each terrain, layer or biome found there gets an image: white where it is, black elsewhere. The images go in a folder of their own.")).size(11.5).color(pal.weak)).wrap());
-        ui.add_space(10.0);
-        well(ui, |ui| {
             row(ui, tr!("Review it when it comes back"), |ui| {
                 switch(ui, &mut self.review);
             });
         });
+        ui.add(egui::Label::new(RichText::new(tr!("Each terrain, layer or biome found there gets an image: white where it is, black elsewhere. The images go in a folder of their own.")).size(11.5).color(pal.weak)).wrap());
         let note = if self.review {
             tr!("Keeps a version of the map as it is and writes zone.json beside the images: brought back with Versions ▸ Import a contribution…, the zone is compared with that version and reviewed on the map before anything changes.")
         } else {

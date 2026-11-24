@@ -1129,7 +1129,7 @@ the images. Brought back, the images are then painted onto that version and
 what they change is shown on the map to accept or reject, as a contribution:
 see [A zone through another tool](versioning.md#a-zone-through-another-tool).
 
-**As: Massif map** writes the region as a `.massif` of its own instead, with
+**Massif map** (rather than Images) writes the region as a `.massif` of its own instead, with
 a border of whole tiles around it, for someone to work on in Massif; File ▸
 Merge Massif Map… brings their work back: see
 [A region of the map for someone else](versioning.md#a-region-of-the-map-for-someone-else).
