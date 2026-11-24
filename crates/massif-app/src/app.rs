@@ -6799,6 +6799,7 @@ mod brush_edge_tests;
 #[cfg(test)]
 #[path = "reference_tests.rs"]
 mod reference_tests;
+#[cfg(test)]
 #[path = "diorama_tests.rs"]
 mod diorama_tests;
 
