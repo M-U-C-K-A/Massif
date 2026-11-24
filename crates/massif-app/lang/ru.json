@@ -610,7 +610,6 @@
  "Reading “{name}”": "Чтение «{name}»",
  "Region exported": "Область экспортирована",
  "Remove it from the saved gradients": "Удалить из сохранённых градиентов",
- "Remove the guide": "Удалить направляющую",
  "Replace: the ground takes the image's height.": "Замена: земля принимает высоту изображения.",
  "Replace: the terrain goes where the image is on; elsewhere the terrain stays, as a column always has one.": "Замена: местность ложится там, где изображение включено; в остальных местах местность остаётся, ведь у столбца она есть всегда.",
  "Replace: where the image lies, it alone decides; what was painted where it is off goes.": "Замена: там, где лежит изображение, решает только оно; нарисованное там, где оно выключено, исчезает.",
@@ -622,8 +621,6 @@
  "Shift or Ctrl+drag": "Shift или Ctrl+перетаскивание",
  "Shift or ⌘ + drag adds to the selection, Alt + drag takes out of it, both keep what both hold. A right-click or Esc clears it.": "Shift или ⌘ + перетаскивание добавляет к выделению, Alt + перетаскивание вычитает из него, оба — оставляют общее. Правый щелчок или Esc снимает его.",
  "Shift or ⌘+drag": "Shift или ⌘+перетаскивание",
- "Show the guide": "Показать направляющую",
- "Show the image on the map as a guide": "Показать изображение на карте как направляющую",
  "Shown over the map while the tool is in hand. Edit ▸ Smooth terrain… sets it for the whole map, terrain by terrain.": "Показывается поверх карты, пока инструмент в руке. «Правка ▸ Сглаживание местности…» задаёт его для всей карты, местность за местностью.",
  "Slabs": "Плиты",
  "Slant": "Наклон",
@@ -643,9 +640,7 @@
  "The edge: where the boundary between the two terrains falls, painted across it": "Край: где проходит граница между двумя местностями, рисуется поперёк неё",
  "The gradient the other way round": "Градиент наоборот",
  "The gradient's name": "Имя градиента",
- "The guide is only shown on the 2D map, to trace over: it is never saved in the map nor exported.": "Направляющая видна только на 2D-карте, чтобы обводить её: она никогда не сохраняется в карте и не экспортируется.",
  "The image's lowest to highest": "От самого низкого до самого высокого значения изображения",
- "The imported image shown on the map to trace over: never exported": "Импортированное изображение на карте для обводки: никогда не экспортируется",
  "The map has no layers": "У карты нет слоёв",
  "The map's terrain": "Местность карты",
  "The region could not be exported: {e}": "Не удалось экспортировать область: {e}",
@@ -3172,5 +3167,8 @@
   "few": "{w} × {d} блоков от x {x}, z {z}: {n} плитки по 128 блоков, которых она касается.",
   "many": "{w} × {d} блоков от x {x}, z {z}: {n} плиток по 128 блоков, которых она касается.",
   "other": "{w} × {d} блоков от x {x}, z {z}: {n} плитки по 128 блоков, которых она касается."
- }
+ },
+ "Keep the image as a reference image": "Оставить изображение как эталонное",
+ "The image shown stays on the 2D map where it lands, to see under what it painted: kept with the map, never exported. The map's Reference images button shows, moves or removes it.": "Показанное изображение остаётся на 2D-карте там, где легло, чтобы видеть под ним то, что оно нарисовало: хранится с картой, никогда не экспортируется. Кнопка эталонных изображений карты показывает, двигает или убирает его.",
+ "The image stays on the 2D map where it lands, to see under what it painted: kept with the map, never exported. The map's Reference images button shows, moves or removes it.": "Изображение остаётся на 2D-карте там, где легло, чтобы видеть под ним то, что оно нарисовало: хранится с картой, никогда не экспортируется. Кнопка эталонных изображений карты показывает, двигает или убирает его."
 }

@@ -460,9 +460,6 @@ pub struct MassifApp {
     next_generation: u64,
     /// The settings caves were last carved with (per run of the app).
     caves: Option<massif_core::caves::CaveSettings>,
-    /// An imported image kept on the 2D map to trace over, and the map
-    /// it was for (see `import_mask`).
-    guide: Option<(crate::import_mask::Guide, u64)>,
     /// The reference images' textures and handles on the map.
     references: crate::references::References,
     /// The place, scale and heights the relief of a real place was last
@@ -1095,7 +1092,6 @@ impl MassifApp {
             covers_key: None,
             next_generation: 1,
             caves: None,
-            guide: None,
             references: Default::default(),
             real: None,
             real_parked: None,
@@ -4107,12 +4103,6 @@ impl MassifApp {
             EditorKind::Map => {
                 hui.add_space(8.0);
                 self.maps.entry(id).or_default().header(&mut hui);
-                if let Some((guide, generation)) = &mut self.guide
-                    && *generation == self.doc.generation
-                    && !guide.header(&mut hui)
-                {
-                    self.guide = None;
-                }
                 let mut add = false;
                 if self.references.header(&mut hui, &mut self.doc.world.meta.references, &mut add) {
                     self.doc.mark_changed();
@@ -4199,7 +4189,6 @@ impl MassifApp {
                     self.active_map = Some(id);
                 }
                 let overlay = self.versions.overlay(cui.ctx(), &self.doc);
-                let guide = self.guide.as_ref().filter(|(g, generation)| g.shown && *generation == self.doc.generation).map(|(g, _)| (g.texture.id(), g.rect, g.opacity));
                 let shows_3d = self.layout.current().root.shows(EditorKind::View3d);
                 let view = self.maps.entry(id).or_default();
                 view.follow_tool(self.tools.tool, self.settings.map_follows_tool);
@@ -4215,7 +4204,6 @@ impl MassifApp {
                         pan_key,
                         light: self.settings.light,
                         overlay,
-                        guide,
                         view3d: shows_3d.then_some(&mut self.view3d),
                         references: &mut self.references,
                     },
@@ -5109,8 +5097,11 @@ impl MassifApp {
                     Choice::AddImages => self.pick_mask(ctx, true),
                     Choice::Import(images) => {
                         keep = false;
-                        if form.guide {
-                            self.guide = Some((crate::import_mask::Guide::new(ctx, &form), self.doc.generation));
+                        // The image stays where it lands, to see under
+                        // what it painted.
+                        if form.reference {
+                            self.doc.world.meta.references.push(form.reference_image());
+                            self.doc.mark_changed();
                         }
                         let snapshot = self.doc.world.snapshot();
                         let locks = massif_core::registry::Locks::of(&self.doc.world.registry);
@@ -10842,7 +10833,7 @@ mod tests {
         };
         assert!(form.info.colour, "a colour image");
         assert_eq!(form.kind, crate::import_mask::Kind::Annotations);
-        form.guide = true;
+        assert!(form.reference, "the image is kept as a reference image unless told otherwise");
         h.run_steps(3);
         if let Some(dir) = &dir {
             h.render().unwrap().save(dir.join("dialog-import-mask-colours.png")).unwrap();
@@ -10863,7 +10854,13 @@ mod tests {
         assert_eq!(at(&h, -512 + 60, -512 + 60).0, 5, "yellow");
         assert_eq!(at(&h, 300, 450).0, 11, "blue");
         assert_eq!(at(&h, 200, 0).0, 0, "black is none");
-        assert!(h.state().guide.is_some(), "the image is kept as a guide");
+        // The image stays on the map as a reference image, exactly where it
+        // landed: fitted to the map of 1,024 blocks from -512.
+        let refs = &h.state().doc.world.meta.references;
+        assert_eq!(refs.len(), 1, "kept as a reference image");
+        assert!(refs[0].path.ends_with("plan.png"));
+        assert_eq!((refs[0].x, refs[0].z, refs[0].scale, refs[0].size), (0.0, 0.0, 1.0, [1024, 1024]));
+        assert_eq!(refs[0].corners()[0], (-512.0, -512.0));
         if let Some(dir) = &dir {
             let view = h.state_mut().maps.values_mut().next().unwrap();
             view.annotations = true;
@@ -10881,7 +10878,7 @@ mod tests {
         {
             let ctx = h.ctx.clone();
             let app = h.state_mut();
-            app.guide = None;
+            app.doc.world.meta.references.clear();
             let snapshot = app.doc.world.snapshot();
             app.jobs.push(Job::read_mask(&ctx, vec![ramp.clone()], Some(snapshot)).on(app.doc.generation));
         }

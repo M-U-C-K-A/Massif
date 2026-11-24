@@ -995,11 +995,13 @@ memory (JPEG and compressed BMP excepted, decoded whole at 8 bits). On an
 M4, a 16,384 × 16,384 greyscale PNG onto a map of the same size is read in
 1.7 s and painted in 2.2 to 2.6 s, the whole process below 0.5 GB.
 
-**Show the image on the map as a guide** keeps the image over the 2D map
-at the opacity set, to trace over with the brushes, as annotations are often
-used. Its button in the map's header (a picture) shows or hides it, sets its
-opacity, or removes it. A guide is only shown: it is not saved with the map
-and never exported.
+**Keep the image as a reference image** (on to start with) leaves the image
+on the 2D map as a [reference image](#reference-images), exactly where it
+lands (its middle, its scale), at the opacity set, so that you see the
+source under what it painted. It is kept with the map and never exported;
+the map's Reference images button shows, fades, moves or removes it like
+any other. With several images, the one shown when **Import** is pressed
+stays.
 
 ### A region out and back
 

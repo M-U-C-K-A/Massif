@@ -5,7 +5,7 @@
 //! height), where it lands, how its values are read and how it goes with
 //! what is painted, with a picture of where it lands; the import runs in
 //! the background, as one step to undo. The image may stay on the 2D map
-//! as a guide to trace over, never exported.
+//! as a reference image, where it landed, to see under what it painted.
 //!
 //! Several images can go in at once, each with what it paints and how,
 //! all in the same place, as one step to undo: the heightmap and masks of
@@ -116,8 +116,8 @@ pub struct MaskForm {
     z: i32,
     /// Blocks a pixel.
     scale: f32,
-    /// Keep the image on the map to trace over, at this opacity.
-    pub guide: bool,
+    /// Keep the image on the map as a reference image, at this opacity.
+    pub reference: bool,
     pub opacity: f32,
     preview: Option<(egui::TextureHandle, u64)>,
     /// Every image, the one shown (`current`) as it was when last left:
@@ -195,7 +195,7 @@ impl MaskForm {
             x: 0,
             z: 0,
             scale: 1.0,
-            guide: false,
+            reference: true,
             opacity: 0.5,
             preview: None,
             entries: Vec::new(),
@@ -533,7 +533,7 @@ impl MaskForm {
                         ui.set_width(440.0);
                         self.placement_ui(ui);
                         ui.add_space(10.0);
-                        self.guide_ui(ui);
+                        self.reference_ui(ui);
                     });
                 });
             } else {
@@ -543,7 +543,7 @@ impl MaskForm {
                 ui.add_space(10.0);
                 self.values_ui(ui);
                 ui.add_space(10.0);
-                self.guide_ui(ui);
+                self.reference_ui(ui);
             }
         });
 
@@ -561,15 +561,15 @@ impl MaskForm {
         choice
     }
 
-    fn guide_ui(&mut self, ui: &mut Ui) {
+    fn reference_ui(&mut self, ui: &mut Ui) {
         let pal = Palette::of(ui);
         ui.label(RichText::new(tr!("Keep")).size(11.5).color(pal.weak).medium());
         ui.add_space(4.0);
         well(ui, |ui| {
-            row(ui, tr!("Show the image on the map as a guide"), |ui| {
-                switch(ui, &mut self.guide);
+            row(ui, tr!("Keep the image as a reference image"), |ui| {
+                switch(ui, &mut self.reference);
             });
-            if self.guide {
+            if self.reference {
                 row(ui, tr!("Opacity"), |ui| {
                     let mut percent = (self.opacity * 100.0).round();
                     if ui.add(Field::new(&mut percent, 5.0..=100.0).max_decimals(0).suffix(" %")).changed() {
@@ -578,7 +578,28 @@ impl MaskForm {
                 });
             }
         });
-        ui.add(egui::Label::new(RichText::new(tr!("The guide is only shown on the 2D map, to trace over: it is never saved in the map nor exported.")).size(11.5).color(pal.weak)).wrap());
+        let note = if self.entries.len() > 1 {
+            tr!("The image shown stays on the 2D map where it lands, to see under what it painted: kept with the map, never exported. The map's Reference images button shows, moves or removes it.")
+        } else {
+            tr!("The image stays on the 2D map where it lands, to see under what it painted: kept with the map, never exported. The map's Reference images button shows, moves or removes it.")
+        };
+        ui.add(egui::Label::new(RichText::new(note).size(11.5).color(pal.weak)).wrap());
+    }
+
+    /// The image shown as a reference image, exactly where it lands.
+    pub fn reference_image(&self) -> massif_core::reference::ReferenceImage {
+        let (w, h) = (self.info.header.width, self.info.header.height);
+        let p = self.placement();
+        massif_core::reference::ReferenceImage {
+            path: self.path.to_string_lossy().into_owned(),
+            size: [w as u32, h as u32],
+            x: p.x as f64 + w as f64 * p.scale as f64 / 2.0,
+            z: p.z as f64 + h as f64 * p.scale as f64 / 2.0,
+            scale: p.scale,
+            rotation: 0.0,
+            opacity: self.opacity,
+            ..Default::default()
+        }
     }
 
     fn target_ui(&mut self, ui: &mut Ui) {
@@ -895,64 +916,6 @@ impl MaskForm {
         if self.kind != Kind::Height && !colours && self.mapping.threshold.is_none() {
             ui.add(egui::Label::new(RichText::new(tr!("Strength: a grey of 30 % paints about 30 % of the columns, scattered as a spray does.")).size(11.5).color(pal.weak)).wrap());
         }
-    }
-}
-
-/// The image kept on the 2D map to trace over: never saved nor exported.
-pub struct Guide {
-    pub name: String,
-    pub texture: egui::TextureHandle,
-    /// The blocks it covers: west, north, east, south.
-    pub rect: [i32; 4],
-    pub opacity: f32,
-    pub shown: bool,
-}
-
-impl Guide {
-    pub fn new(ctx: &egui::Context, form: &MaskForm) -> Self {
-        let g = &form.info.guide;
-        let pixels: Vec<Color32> = g.grey.iter().zip(&g.rgb).map(|(v, c)| if v.is_nan() { Color32::TRANSPARENT } else { Color32::from_rgb(c[0], c[1], c[2]) }).collect();
-        let image = egui::ColorImage::new([g.width, g.height], pixels);
-        let texture = ctx.load_texture("import mask guide", image, egui::TextureOptions::LINEAR);
-        let r = form.placement().rect(form.info.header.width, form.info.header.height);
-        Self {
-            name: form.path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
-            texture,
-            rect: [r.x0, r.z0, r.x1, r.z1],
-            opacity: form.opacity,
-            shown: true,
-        }
-    }
-
-    /// Its button in the map's header: show it or not, how strongly, or
-    /// let it go. False once let go.
-    pub fn header(&mut self, ui: &mut Ui) -> bool {
-        let mut keep = true;
-        let icon = theme::glyph(Icon::Image).to_string();
-        ui.menu_button(icon, |ui| {
-            ui.set_min_width(220.0);
-            ui.label(RichText::new(&self.name).medium());
-            ui.add_space(4.0);
-            well(ui, |ui| {
-                row(ui, tr!("Show the guide"), |ui| {
-                    switch(ui, &mut self.shown);
-                });
-                row(ui, tr!("Opacity"), |ui| {
-                    let mut percent = (self.opacity * 100.0).round();
-                    if ui.add(Field::new(&mut percent, 5.0..=100.0).max_decimals(0).suffix(" %")).changed() {
-                        self.opacity = percent / 100.0;
-                    }
-                });
-            });
-            ui.add_space(4.0);
-            if ui.button(theme::with_icon(Icon::Trash2, tr!("Remove the guide"))).clicked() {
-                keep = false;
-                ui.close();
-            }
-        })
-        .response
-        .on_hover_text(tr!("The imported image shown on the map to trace over: never exported"));
-        keep
     }
 }
 
