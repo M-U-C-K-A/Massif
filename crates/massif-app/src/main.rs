@@ -71,6 +71,7 @@ mod theme;
 mod tools;
 mod tour;
 mod tree_sizes;
+mod true_color;
 mod update;
 mod versions;
 mod view3d;

@@ -6526,6 +6526,7 @@ impl MassifApp {
         // The player's view draws the game's own textures.
         self.view3d.catalogue.clone_from(&self.blocks.catalogue);
         crate::blocks::note_catalogue(self.blocks.catalogue.as_ref());
+        crate::true_color::note_catalogue(self.blocks.catalogue.as_ref());
         self.sculpt3d.catalogue.clone_from(&self.blocks.catalogue);
         for v in &mut self.extra3d {
             v.catalogue.clone_from(&self.blocks.catalogue);
@@ -11958,7 +11959,7 @@ mod tests {
         // A catalogue with only the mod's name in it, as in
         // block_palettes_in_the_app.
         let mods = vec![massif_assets::ModInfo { name: "Conquest Reforged".to_owned(), namespaces: vec!["conquest".to_owned()], kind: massif_assets::SourceKind::Mod, ..Default::default() }];
-        let cat = massif_assets::Catalogue { version: "1.20.1".into(), source: PathBuf::new(), blocks: Vec::new(), textures: Default::default(), mods, skipped: Vec::new(), definitions: Default::default(), registered: Default::default(), biomes: Vec::new() };
+        let cat = massif_assets::Catalogue { version: "1.20.1".into(), source: PathBuf::new(), blocks: Vec::new(), textures: Default::default(), mods, skipped: Vec::new(), definitions: Default::default(), registered: Default::default(), biomes: Vec::new(), colors: Default::default() };
         h.state_mut().blocks.catalogue = Some(std::sync::Arc::new(cat));
 
         // Into the whole map.
@@ -18145,7 +18146,7 @@ mod tests {
         if !h.state().blocks.namespaces().iter().any(|n| n == "conquest") {
             assert!(!h.state().all_palettes().iter().any(|p| p.name == "Conquest Reforged"), "not offered while the mod is not read");
             let mods = vec![massif_assets::ModInfo { name: "Conquest Reforged".to_owned(), namespaces: vec!["conquest".to_owned()], kind: massif_assets::SourceKind::Mod, ..Default::default() }];
-            let cat = massif_assets::Catalogue { version: "1.20.1".into(), source: PathBuf::new(), blocks: Vec::new(), textures: Default::default(), mods, skipped: Vec::new(), definitions: Default::default(), registered: Default::default(), biomes: Vec::new() };
+            let cat = massif_assets::Catalogue { version: "1.20.1".into(), source: PathBuf::new(), blocks: Vec::new(), textures: Default::default(), mods, skipped: Vec::new(), definitions: Default::default(), registered: Default::default(), biomes: Vec::new(), colors: Default::default() };
             h.state_mut().blocks.catalogue = Some(std::sync::Arc::new(cat));
         }
         assert!(h.state().blocks.namespaces().iter().any(|n| n == "conquest"), "{:?}", h.state().blocks.error);
@@ -20553,7 +20554,7 @@ mod tests {
             h.step();
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        let biome = |id: &str, name: &str, source: &str| massif_assets::BiomeInfo { id: id.into(), name: name.into(), source: source.into(), grass: [90, 120, 60], foliage: [70, 110, 50], water: [40, 80, 160], color: massif_core::registry::biome_hash_color(id) };
+        let biome = |id: &str, name: &str, source: &str| massif_assets::BiomeInfo { id: id.into(), name: name.into(), source: source.into(), grass: [90, 120, 60], foliage: [70, 110, 50], water: [40, 80, 160], color: massif_core::registry::biome_hash_color(id), climate: massif_assets::true_color::Climate { id: id.into(), ..massif_assets::true_color::Climate::plains() } };
         let biomes = vec![
             biome("minecraft:plains", "Plains", massif_assets::MINECRAFT),
             biome("minecraft:ice_spikes", "Ice Spikes", massif_assets::MINECRAFT),
@@ -20561,7 +20562,7 @@ mod tests {
             biome("regions_unexplored:alpha_grove", "Alpha Grove", "Regions Unexplored"),
             biome("biomesoplenty:mystic_grove", "Mystic Grove", "Biomes O' Plenty"),
         ];
-        let cat = massif_assets::Catalogue { version: "1.21.1".into(), source: PathBuf::new(), blocks: Vec::new(), textures: Default::default(), mods: Vec::new(), skipped: Vec::new(), definitions: Default::default(), registered: Default::default(), biomes };
+        let cat = massif_assets::Catalogue { version: "1.21.1".into(), source: PathBuf::new(), blocks: Vec::new(), textures: Default::default(), mods: Vec::new(), skipped: Vec::new(), definitions: Default::default(), registered: Default::default(), biomes, colors: Default::default() };
         h.state_mut().blocks.catalogue = Some(std::sync::Arc::new(cat));
         let mut areas = Vec::new();
         h.state().layout.current().root.areas(&mut areas);
@@ -21127,5 +21128,124 @@ mod tests {
             std::fs::write(dir.join("layout-report.txt"), &report).unwrap();
         }
         assert!(faults.is_empty() || std::env::var_os("MASSIF_LAYOUT_LENIENT").is_some(), "{} faults:\n{report}", faults.len());
+    }
+
+    /// A resource pack as a tester's: OptiFine's maps for grass by biome and
+    /// height (`format=grid`), leaves in autumn colours (the game's own
+    /// foliage map replaced), teal water. Written as a folder pack.
+    fn autumn_pack(dir: &std::path::Path) -> PathBuf {
+        let root = dir.join("Autumn Test Pack");
+        let png = |path: &str, w: u32, h: u32, f: &dyn Fn(u32, u32) -> [u8; 3]| {
+            let p = root.join(path);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            image::RgbaImage::from_fn(w, h, |x, y| {
+                let c = f(x, y);
+                image::Rgba([c[0], c[1], c[2], 255])
+            })
+            .save(p)
+            .unwrap();
+        };
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("pack.mcmeta"), br#"{"pack":{"pack_format":34,"description":"Autumn test"}}"#).unwrap();
+        png("assets/minecraft/textures/colormap/foliage.png", 256, 256, &|x, y| [(230 - x / 4) as u8, (60 + y / 3) as u8, 30]);
+        let props = root.join("assets/minecraft/optifine/colormap/custom/grass.properties");
+        std::fs::create_dir_all(props.parent().unwrap()).unwrap();
+        std::fs::write(props, "format=grid\nblocks=grass_block short_grass tall_grass fern large_fern\nyOffset=0\n").unwrap();
+        // A column a biome: golden grass, greener where it rains; lighter
+        // higher up.
+        png("assets/minecraft/optifine/colormap/custom/grass.png", 256, 256, &|x, y| {
+            let wet = [6, 7, 21, 22, 23, 29, 168, 184].contains(&x);
+            let base = if wet { [96, 150, 70] } else { [196, 170, 84] };
+            base.map(|v| (v as u32 + y / 6).min(255) as u8)
+        });
+        png("assets/minecraft/optifine/colormap/water.png", 256, 256, &|_, _| [40, 170, 150]);
+        root
+    }
+
+    /// Jack's True Colour view: the same map in Terrain and in True Colour,
+    /// with the game's colours and with a resource pack's (OptiFine maps),
+    /// in bands of biomes. Renders with MASSIF_SNAPSHOT_DIR (and
+    /// MASSIF_SNAPSHOT_PPP=2), needs the game's jar.
+    #[test]
+    fn true_colour_view() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        if massif_assets::find_jars().is_empty() {
+            eprintln!("needs Minecraft: skipping");
+            return;
+        }
+        let ppp: f32 = std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
+        let suffix = if ppp > 1.0 { "-2x" } else { "" };
+        let packs = dir.join("true-colour-packs");
+        let pack = autumn_pack(&packs);
+        for (label, mods) in [("vanilla", Vec::new()), ("pack", vec![pack.clone()])] {
+            let mut h = egui_kittest::Harness::builder()
+                .with_size(vec2(1600.0, 1000.0))
+                .with_pixels_per_point(ppp)
+                .with_accessibility_check(false)
+                .wgpu()
+                .build_eframe(move |cc| {
+                    theme::install(&cc.egui_ctx);
+                    let mut world = generate(&GenParams { tiles_x: 8, tiles_z: 8, landform: Landform::Islands, ..GenParams::default() });
+                    // Bands of biomes, west to east.
+                    let bands: Vec<u16> = ["minecraft:plains", "minecraft:swamp", "minecraft:jungle", "minecraft:badlands", "minecraft:snowy_plains", "minecraft:dark_forest", "minecraft:desert", "minecraft:cherry_grove"]
+                        .iter()
+                        .filter_map(|id| world.registry.biome_by_id(id).map(|b| b.0))
+                        .collect();
+                    let ground = world.dims[0].ground_mut();
+                    let positions: Vec<TilePos> = ground.positions().collect();
+                    let x0 = positions.iter().map(|p| p.x).min().unwrap_or(0);
+                    for pos in positions {
+                        let band = bands[((pos.x - x0) as usize).min(bands.len() - 1) % bands.len()];
+                        let tile = ground.tile_mut(pos).unwrap();
+                        for i in 0..128 * 128 {
+                            tile.biome.set(i, band);
+                        }
+                    }
+                    let mut app = MassifApp::for_tests(world);
+                    app.settings.theme = ThemeChoice::Dark;
+                    app
+                });
+            h.run_steps(3);
+            let ctx = h.ctx.clone();
+            h.state_mut().blocks.load(&ctx, None, mods);
+            let started = std::time::Instant::now();
+            while h.state().blocks.catalogue.is_none() {
+                assert!(started.elapsed().as_secs() < 90, "the blocks did not load: {:?}", h.state().blocks.error);
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            if label == "pack" {
+                let cat = h.state().blocks.catalogue.clone().unwrap();
+                assert_eq!(cat.colors.packs, ["Autumn Test Pack"], "the pack's colours were read");
+            }
+            for mode in [crate::map_render::MapMode::Terrain, crate::map_render::MapMode::TrueColour] {
+                h.state_mut().maps.values_mut().for_each(|m| m.mode = mode);
+                // The 3D view in the same mode.
+                {
+                    let app = h.state_mut();
+                    app.view3d.mode = mode;
+                    for v in &mut app.extra3d {
+                        v.mode = mode;
+                    }
+                    let areas: Vec<_> = app.slots3d.keys().copied().collect();
+                    for id in areas {
+                        app.slot3d(id).mode = mode;
+                        app.layout.view3d.insert(id, crate::layout::View3dLook { mode, water: true });
+                    }
+                }
+                let mut waited = 0;
+                let busy3d = |app: &MassifApp| [&app.view3d].into_iter().chain(&app.extra3d).any(|v| v.pending() > 0 || v.building());
+                while (waited < 30 || h.state().map_cache.busy() || busy3d(h.state())) && waited < 6000 {
+                    h.step();
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                    waited += 1;
+                }
+                h.run_steps(4);
+                let name = format!("true-colour-{label}-{}{suffix}.png", if mode == crate::map_render::MapMode::Terrain { "terrain" } else { "true" });
+                h.render().unwrap().save(dir.join(name)).unwrap();
+            }
+        }
     }
 }

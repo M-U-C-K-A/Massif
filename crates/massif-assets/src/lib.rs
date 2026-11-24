@@ -9,6 +9,7 @@
 
 pub mod instance;
 pub mod materials;
+pub mod true_color;
 pub mod zip;
 
 use rayon::prelude::*;
@@ -401,6 +402,9 @@ pub struct Catalogue {
     /// (`data/<namespace>/worldgen/biome/`), the game's first, then each
     /// source's, by name.
     pub biomes: Vec<BiomeInfo>,
+    /// The biome colour maps of the game and the resource packs, and the
+    /// packs' maps for blocks (OptiFine's): see [`true_color`].
+    pub colors: Arc<true_color::Rules>,
 }
 
 /// A biome as the game or a mod defines it.
@@ -420,6 +424,9 @@ pub struct BiomeInfo {
     /// or a lake), mixed with a colour of its own drawn from its id so
     /// that biomes of the same grass stay apart.
     pub color: [u8; 3],
+    /// What the game reads to colour it: its temperature, downfall and
+    /// own colours (see [`true_color`]).
+    pub climate: true_color::Climate,
 }
 
 impl BiomeInfo {
@@ -454,17 +461,6 @@ const PLANT_TAGS: [&str; 10] = [
     "minecraft:climbable",
 ];
 
-/// The biome colour of a colour map (`colormap/grass.png`, 256 × 256) at a
-/// temperature and a downfall, as the game reads it.
-fn colormap(map: Option<&image::RgbaImage>, temperature: f32, downfall: f32, default: [u8; 3]) -> [u8; 3] {
-    let Some(map) = map.filter(|m| m.width() >= 256 && m.height() >= 256) else { return default };
-    let t = temperature.clamp(0.0, 1.0);
-    let d = downfall.clamp(0.0, 1.0) * t;
-    let (x, y) = (((1.0 - t) * 255.0) as u32, ((1.0 - d) * 255.0) as u32);
-    let p = map.get_pixel(x, y).0;
-    [p[0], p[1], p[2]]
-}
-
 /// A colour as a biome's file gives it: a number (`6975545`), or since
 /// 26.1 a hex string (`"#6a7039"`).
 fn rgb_of(v: Option<&Value>) -> Option<[u8; 3]> {
@@ -478,28 +474,34 @@ fn rgb_of(v: Option<&Value>) -> Option<[u8; 3]> {
 
 /// A biome read from its file (`id`, `source`), with its name and the
 /// game's colour maps.
-fn biome_info(id: &str, source: &str, json: &Value, name: Option<&String>, maps: [Option<&image::RgbaImage>; 2]) -> BiomeInfo {
+fn biome_info(id: &str, source: &str, json: &Value, name: Option<&String>, rules: &true_color::Rules) -> BiomeInfo {
     let effects = json.get("effects");
     let temperature = json.get("temperature").and_then(Value::as_f64).unwrap_or(0.8) as f32;
     let downfall = json.get("downfall").and_then(Value::as_f64).unwrap_or(0.4) as f32;
-    let mut grass = rgb_of(effects.and_then(|e| e.get("grass_color"))).unwrap_or_else(|| colormap(maps[0], temperature, downfall, Tint::Grass.color()));
-    match effects.and_then(|e| e.get("grass_color_modifier")).and_then(Value::as_str) {
-        Some("swamp") => grass = [0x6a, 0x70, 0x39],
-        Some("dark_forest") => {
-            let c = ((grass[0] as u32) << 16 | (grass[1] as u32) << 8 | grass[2] as u32) & 0xfefefe;
-            let c = (c + 0x28340a) >> 1;
-            grass = [(c >> 16) as u8, (c >> 8) as u8, c as u8];
-        }
-        _ => {}
-    }
-    let foliage = rgb_of(effects.and_then(|e| e.get("foliage_color"))).unwrap_or_else(|| colormap(maps[1], temperature, downfall, Tint::Foliage.color()));
-    let water = rgb_of(effects.and_then(|e| e.get("water_color"))).unwrap_or(Tint::Water.color());
+    let modifier = match effects.and_then(|e| e.get("grass_color_modifier")).and_then(Value::as_str) {
+        Some("swamp") => true_color::Modifier::Swamp,
+        Some("dark_forest") => true_color::Modifier::DarkForest,
+        _ => true_color::Modifier::None,
+    };
+    let climate = true_color::Climate {
+        id: id.to_owned(),
+        temperature,
+        downfall,
+        grass: rgb_of(effects.and_then(|e| e.get("grass_color"))),
+        foliage: rgb_of(effects.and_then(|e| e.get("foliage_color"))),
+        dry_foliage: rgb_of(effects.and_then(|e| e.get("dry_foliage_color"))),
+        water: rgb_of(effects.and_then(|e| e.get("water_color"))).unwrap_or(true_color::WATER),
+        modifier,
+    };
+    let grass = rules.grass(&climate, 64);
+    let foliage = rules.foliage(&climate, 64);
+    let water = rules.water(&climate, 62);
     let path = id.rsplit(':').next().unwrap_or(id);
     let wet = path.split(['_', '/']).any(|w| ["ocean", "river", "lake", "sea", "reef", "lagoon"].contains(&w));
     let own = massif_core::registry::biome_hash_color(id);
     let base = if wet { water } else { grass };
     let color = std::array::from_fn(|k| ((base[k] as u32 * 3 + own[k] as u32 * 2) / 5) as u8);
-    BiomeInfo { id: id.to_owned(), name: name.cloned().unwrap_or_else(|| massif_core::registry::biome_display_name(id)), source: source.to_owned(), grass, foliage, water, color }
+    BiomeInfo { id: id.to_owned(), name: name.cloned().unwrap_or_else(|| massif_core::registry::biome_display_name(id)), source: source.to_owned(), grass, foliage, water, color, climate }
 }
 
 /// `data/<ns>/worldgen/biome/<path>.json` → `<ns>:<path>`.
@@ -537,6 +539,29 @@ fn folder_files(dir: &Path) -> Vec<FolderFile> {
             } else if let Ok(rel) = p.strip_prefix(dir) {
                 let name = rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
                 if (biome_key(&name).is_some() || block_tag_key(&name).is_some()) && let Ok(bytes) = std::fs::read(&p) {
+                    out.push((name, bytes));
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// The files of a resource pack left as a folder that say something of
+/// colours (see [`true_color::wanted`]), by their names in it.
+fn color_files(dir: &Path) -> Vec<FolderFile> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.join("assets/minecraft")];
+    while let Some(d) = stack.pop() {
+        let Ok(read) = std::fs::read_dir(&d) else { continue };
+        for e in read.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if let Ok(rel) = p.strip_prefix(dir) {
+                let name = rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
+                if true_color::wanted(&name) && let Ok(bytes) = std::fs::read(&p) {
                     out.push((name, bytes));
                 }
             }
@@ -672,6 +697,37 @@ impl Catalogue {
 
     /// The mod a block comes from, when it is a mod's.
     /// A biome the game or a mod read defines, by its id.
+    /// The colour of a block's top as its texture has it, before any tint
+    /// (grass and leaves grey), and the tint the game gives that top: the
+    /// two halves of its colour in the game (see [`true_color`]).
+    pub fn true_top(&self, id: &str) -> Option<([u8; 3], Option<true_color::Kind>)> {
+        let b = self.block(id)?;
+        let key = b.top.as_ref().or(b.side.as_ref());
+        let mean = key.and_then(|k| self.texture(k)).map_or(b.color, |t| t.mean(Tint::None));
+        let tint = if b.top.is_some() { b.top_tint } else { b.side_tint };
+        let kind = match tint {
+            Tint::None => None,
+            Tint::Fixed(c) => true_color::kind_of(id, true).filter(|k| matches!(k, true_color::Kind::Spruce | true_color::Kind::Birch)).or(Some(true_color::Kind::Fixed(c))),
+            _ => true_color::kind_of(id, true),
+        };
+        Some((mean, kind))
+    }
+
+    /// The colour a block's faces tinted `tint` take in a biome (plains
+    /// when `None`) at a height, as the game and the packs read colour
+    /// maps (see [`true_color`]): white for an untinted face.
+    pub fn tint_rgb(&self, id: &str, tint: Tint, biome: Option<&true_color::Climate>, y: i32) -> [u8; 3] {
+        let kind = match tint {
+            Tint::None => return [255; 3],
+            Tint::Fixed(c) => true_color::kind_of(id, true).filter(|k| matches!(k, true_color::Kind::Spruce | true_color::Kind::Birch)).unwrap_or(true_color::Kind::Fixed(c)),
+            Tint::Water => true_color::Kind::Water,
+            Tint::Foliage => true_color::Kind::Foliage,
+            Tint::Grass => true_color::kind_of(id, true).unwrap_or(true_color::Kind::Grass),
+        };
+        let plains = true_color::Climate::plains();
+        self.colors.tint(id, Some(kind), biome.unwrap_or(&plains), y).unwrap_or([255; 3])
+    }
+
     pub fn biome(&self, id: &str) -> Option<&BiomeInfo> {
         self.biomes.iter().find(|b| b.id == id)
     }
@@ -1479,15 +1535,20 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
 
     // The biomes, the game's first, then each mod's and data pack's, the
     // last file of an id winning.
-    let png = |name: &str| -> Option<image::RgbaImage> {
-        let bytes = archives[0].0.read(name)?.ok()?;
-        Some(image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).ok()?.to_rgba8())
-    };
-    let (grass_map, foliage_map) = (png("assets/minecraft/textures/colormap/grass.png"), png("assets/minecraft/textures/colormap/foliage.png"));
+    // The colour maps: the game's, then each resource pack's (or mod's) in
+    // order, the last word kept; packs left as folders too.
+    let mut rules = true_color::Rules::default();
+    for (k, (a, _)) in archives.iter().enumerate() {
+        let name = if k == 0 { String::new() } else { mod_infos.get(k - 1).map_or_else(String::new, |m| m.name.clone()) };
+        rules.read_archive(a, &name);
+    }
+    for m in mods.iter().filter(|m| m.is_dir() && m.join("assets").is_dir()) {
+        rules.read_files(&color_files(m), &m.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());
+    }
     let source_of = |k: usize| if k == 0 { MINECRAFT.to_owned() } else { mod_infos.get(k - 1).map_or_else(String::new, |m| m.name.clone()) };
     let mut biomes: Vec<(usize, BiomeInfo)> = Vec::new();
     let mut add_biome = |order: usize, id: String, source: String, v: Value| {
-        let info = biome_info(&id, &source, &v, biome_names.get(&id), [grass_map.as_ref(), foliage_map.as_ref()]);
+        let info = biome_info(&id, &source, &v, biome_names.get(&id), &rules);
         match biomes.iter().position(|(_, b)| b.id == id) {
             Some(i) => biomes[i] = (order, info),
             None => biomes.push((order, info)),
@@ -1523,6 +1584,7 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
         definitions,
         registered,
         biomes,
+        colors: Arc::new(rules),
     })
 }
 
@@ -2543,7 +2605,7 @@ mod tests {
         assert_eq!(rgb_of(Some(&serde_json::json!("6a7039"))), None, "the game writes its #");
         assert_eq!(rgb_of(Some(&serde_json::json!("#zz0000"))), None);
         let swamp = serde_json::json!({"temperature": 0.8, "downfall": 0.9, "effects": {"foliage_color": "#6a7039", "grass_color_modifier": "swamp", "water_color": "#617b64"}});
-        let b = biome_info("minecraft:swamp", MINECRAFT, &swamp, None, [None, None]);
+        let b = biome_info("minecraft:swamp", MINECRAFT, &swamp, None, &true_color::Rules::default());
         assert_eq!((b.grass, b.foliage, b.water), ([0x6a, 0x70, 0x39], [0x6a, 0x70, 0x39], [0x61, 0x7b, 0x64]));
     }
 

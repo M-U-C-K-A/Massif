@@ -316,7 +316,10 @@ impl Materials {
         let mut layer = |key: Option<&str>| key.map_or(0, |k| self.layer(inner, k));
         let (top, side, bottom) = (layer(top_key), layer(side_key), layer(bottom_key));
         // A face without its texture keeps the block's colour.
-        let tint = |l: u16, t: Tint, color: [u8; 3]| if l == 0 { color } else { t.color() };
+        // Tinted as the game and the resource packs colour it (in plains):
+        // the colour pipeline the True Colour views share.
+        let full = if name.contains(':') { name.to_owned() } else { format!("minecraft:{name}") };
+        let tint = |l: u16, t: Tint, color: [u8; 3]| if l == 0 { color } else { self.cat.as_ref().map_or(t.color(), |c| c.tint_rgb(&full, t, None, 64)) };
         let class = if short.contains("leaves") || (short.contains("glass") && !short.contains("pane")) || short == "spawner" { Class::Cutout } else { Class::Opaque };
         // A glowing block's light has the colour of its texture.
         let glow = if light == 0 {
@@ -389,7 +392,9 @@ impl Materials {
         let tint = if block.top_tint != Tint::None { block.top_tint } else if block.side_tint != Tint::None { block.side_tint } else { Tint::Grass };
         let short = name.rsplit(':').next().unwrap_or(name);
         let glow = if light == 0 { [0; 3] } else { glow_color(short) };
-        Some(Material { class: Class::Shaped, light, glow, top_tint: tint.color(), side_tint: tint.color(), first_quad: first, quads: count as u16, bounds, ..Material::AIR })
+        let full = if name.contains(':') { name.to_owned() } else { format!("minecraft:{name}") };
+        let tinted = self.cat.as_ref().map_or(tint.color(), |c| c.tint_rgb(&full, tint, None, 64));
+        Some(Material { class: Class::Shaped, light, glow, top_tint: tinted, side_tint: tinted, first_quad: first, quads: count as u16, bounds, ..Material::AIR })
     }
 
     fn fluid(&self, inner: &mut Inner, class: Class, key: &str, tint: [u8; 3]) -> Material {

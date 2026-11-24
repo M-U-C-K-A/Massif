@@ -318,6 +318,9 @@ pub enum MapMode {
     Slope,
     Biome,
     Relief,
+    /// The blocks in the colours the game will give them: their textures,
+    /// grass, leaves and water tinted by their biomes (see `true_color`).
+    TrueColour,
 }
 
 impl Default for MapStyle {
@@ -338,17 +341,19 @@ impl Default for MapStyle {
             sizes: false,
             pockets: false,
             slabs: false,
+            palette: 0,
         }
     }
 }
 
 impl MapMode {
-    pub const ALL: [MapMode; 5] = [
+    pub const ALL: [MapMode; 6] = [
         MapMode::Terrain,
         MapMode::Height,
         MapMode::Slope,
         MapMode::Biome,
         MapMode::Relief,
+        MapMode::TrueColour,
     ];
 
     pub fn label(self) -> &'static str {
@@ -358,6 +363,7 @@ impl MapMode {
             MapMode::Slope => tr!("Slope"),
             MapMode::Biome => tr!("Biome"),
             MapMode::Relief => tr!("Relief"),
+            MapMode::TrueColour => tr!("True Colour"),
         }
     }
 }
@@ -398,6 +404,10 @@ pub struct MapStyle {
     pub pockets: bool,
     /// Where the steps are smoothed with slabs is drawn over the map.
     pub slabs: bool,
+    /// In True Colour, the key of the colours' table (`true_color::key`):
+    /// the map is drawn again when the blocks read or the packs change.
+    /// 0 in the other modes.
+    pub palette: u32,
 }
 
 /// How the contour lines are drawn: as WorldPainter's, a dark line every
@@ -642,6 +652,10 @@ pub struct Colorizer<'a> {
     /// Each annotation's colour and how opaque it is drawn (0 to 1), by
     /// number; `None` for none.
     notes: Vec<Option<(Rgb, f32)>>,
+    /// The game's colours, in True Colour.
+    truth: Option<Arc<crate::true_color::TrueColors>>,
+    /// The blocks of the terrains, column by column, in True Colour.
+    mat: massif_core::compose::Materializer<'a>,
 }
 
 impl<'a> Colorizer<'a> {
@@ -667,6 +681,23 @@ impl<'a> Colorizer<'a> {
                     reg.annotations.color(n).filter(|_| alpha > 0.0).map(|c| (rgb(c), alpha))
                 })
                 .collect(),
+            truth: (style.mode == MapMode::TrueColour).then(|| crate::true_color::current(reg)),
+            mat: massif_core::compose::Materializer::new(reg, style.seed, -64),
+        }
+    }
+
+    /// The colour of the column of sample `c` in True Colour: at `at`, the
+    /// very block on its top; from afar, its terrain's surface blocks by
+    /// their weights.
+    fn true_ground(&self, t: &crate::true_color::TrueColors, c: &Sample, at: Option<(i32, i32)>, biome: u16) -> Rgb {
+        let y1 = block_top(c.height);
+        match at {
+            Some((x, z)) => {
+                let span = Span { y0: y1 - 8, y1, terrain: massif_core::registry::TerrainId(c.terrain), top: y1 as f32 };
+                let block = self.mat.block(&span, x, y1 - 1, z, c.water_depth() > 0.0);
+                t.block(block, biome, y1 - 1)
+            }
+            None => t.terrain(self.reg, c.terrain, biome, y1 - 1),
         }
     }
 
@@ -691,7 +722,26 @@ impl<'a> Colorizer<'a> {
             }
             None => BARE + (1.0 - BARE) * def.density.clamp(0.0, 1.0),
         };
-        mix(ground, rgb(def.color), def.opacity.clamp(0.0, 1.0) * share)
+        // In True Colour, the plants as the game colours them in the
+        // column's biome: the one growing there, or all of them by weight.
+        let color = match self.truth.as_ref() {
+            Some(t) if !def.plants.is_empty() => {
+                let (biome, y) = (self.auto.resolve(self.reg, c, self.sea), block_top(c.height));
+                let plant = |p: &str| t.state(p, biome, y).unwrap_or(rgb(def.color));
+                match at.and_then(|(x, z)| def.growth(x, z, self.style.seed as u64)).and_then(|g| def.plants.get(g.plant)) {
+                    Some(p) => plant(&p.0),
+                    None => {
+                        let total: f32 = def.plants.iter().map(|p| p.1 as f32).sum::<f32>().max(1.0);
+                        def.plants.iter().fold([0.0; 3], |acc, (p, w)| {
+                            let c = plant(p);
+                            std::array::from_fn(|k| acc[k] + c[k] * *w as f32 / total)
+                        })
+                    }
+                }
+            }
+            _ => rgb(def.color),
+        };
+        mix(ground, color, def.opacity.clamp(0.0, 1.0) * share)
     }
 
     fn terrain_rgb(&self, id: u16) -> Rgb {
@@ -770,6 +820,15 @@ impl<'a> Colorizer<'a> {
                 let g = 30.0 + 190.0 * ((shade - 0.3) / 1.02);
                 [g, g, g]
             }
+            MapMode::TrueColour => match &self.truth {
+                Some(t) => {
+                    let biome = self.auto.resolve(self.reg, c, self.sea);
+                    let ground = self.true_ground(t, c, at, biome);
+                    let ground = self.with_cover(ground, c, at);
+                    scale(ground, shade)
+                }
+                None => scale(self.terrain_rgb(c.terrain), shade),
+            },
         };
 
         let depth = c.water_depth();
@@ -777,7 +836,19 @@ impl<'a> Colorizer<'a> {
             let t = (depth / 18.0).min(1.0);
             let cover = c.cover.checked_sub(1).and_then(|k| self.covers.get(k as usize)).and_then(Option::as_ref);
             let (frozen, lava) = cover.map_or((false, false), |d| (d.frost && !self.style.lava, d.lava));
-            if frozen {
+            if let Some(tc) = &self.truth {
+                // The game's water, ice and lava: water seen through, more
+                // of its colour the deeper it is.
+                out = if frozen {
+                    scale(tc.ice(), 0.9 + 0.1 * shade)
+                } else if self.style.lava || lava {
+                    let crust = (1.0 - depth / 2.5).clamp(0.0, 1.0);
+                    scale(tc.lava(), 1.0 - 0.35 * crust)
+                } else {
+                    let biome = self.auto.resolve(self.reg, c, self.sea);
+                    mix(out, tc.water(biome, c.fluid as i32), 0.55 + 0.4 * t)
+                };
+            } else if frozen {
                 // Frost: the water is ice, white-blue, the relief under
                 // it lost.
                 out = scale([206.0, 224.0, 246.0], 0.9 + 0.1 * shade);
@@ -1252,10 +1323,17 @@ fn draw_objects(key: ChunkKey, sources: &Sources, colorizer: &Colorizer, pixels:
         } else {
             None
         };
+        // In True Colour, its blocks as the game colours them in the biome
+        // it stands in.
+        let truth = colorizer.truth.as_ref().map(|t| {
+            let at = sources.sample(0, p.x, p.z);
+            (t, colorizer.auto.resolve(reg, &at, colorizer.sea), if at.is_empty() { 64 } else { block_top(at.height) })
+        });
         for (t, k, y) in texels(p, &mut views, 0) {
             // Higher up, lighter: a crown shows its round.
             let shade = 0.72 + 0.4 * (y as f32 + 1.0) / h;
-            let color = scale(rgb(def.color(k)), shade);
+            let base = truth.and_then(|(tc, b, y0)| def.palette.get(k as usize).and_then(|s| tc.state(s, b, y0 + y as i32))).unwrap_or_else(|| rgb(def.color(k)));
+            let color = scale(base, shade);
             pixels[t] = to_color(match tint {
                 Some(tint) => mix(color, tint, 0.55),
                 None => color,

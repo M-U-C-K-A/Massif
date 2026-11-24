@@ -450,7 +450,7 @@ fn compose_area(dim: &Dimension, x0: i32, z0: i32, w: usize, d: usize, mode: Map
                             });
                         }
                     }
-                    if mode == MapMode::Biome {
+                    if matches!(mode, MapMode::Biome | MapMode::TrueColour) {
                         top = sampler.sample(stack, cell);
                     } else {
                         // The annotation, which tints the top in any mode.
@@ -558,6 +558,8 @@ struct Colors<'a> {
     lava: bool,
     /// The annotations' colours (see [`note_colors`]).
     notes: Vec<Option<([u8; 3], f32)>>,
+    /// The game's colours, in True Colour (see `true_color`).
+    truth: Option<std::sync::Arc<crate::true_color::TrueColors>>,
 }
 
 impl Colors<'_> {
@@ -607,7 +609,7 @@ impl Colors<'_> {
     fn bare_top(&self, terrain: u16, y0: i32, y1: i32, x: i32, z: i32, slope: f32, sample: &Sample, cover: u16, wet: bool) -> Skin {
         let flat = |c: [u8; 3]| Skin::flat(c, c);
         match self.mode {
-            MapMode::Terrain => {
+            MapMode::Terrain | MapMode::TrueColour => {
                 let span = Span {
                     y0,
                     y1,
@@ -618,8 +620,13 @@ impl Colors<'_> {
                 let bare = self.block(block);
                 let mut top = bare;
                 // Grass and leaves in the colours of the column's biome, as
-                // the game tints them (the blocks' colours are the plains').
-                if let Some(t) = self.biome_tint(block, sample) {
+                // the game tints them (the blocks' colours are the plains');
+                // in True Colour, every block as the game and the packs
+                // colour it.
+                let biome = self.truth.as_ref().map(|_| self.auto.resolve(self.reg, sample, self.sea));
+                if let (Some(t), Some(b)) = (&self.truth, biome) {
+                    top = t.block_u8(block, b, y1 - 1);
+                } else if let Some(t) = self.biome_tint(block, sample) {
                     top = std::array::from_fn(|c| (top[c] as f32 * t[c]).round().clamp(0.0, 255.0) as u8);
                 }
                 if let Some(def) = self.reg.cover(cover)
@@ -629,7 +636,8 @@ impl Colors<'_> {
                     && (!def.soil_only || massif_core::registry::is_soil(&self.reg.block(block).state))
                     && let Some(g) = def.growth(x, z, self.seed)
                 {
-                    let plant = def.plants.get(g.plant).and_then(|p| massif_core::registry::plant_color(&p.0)).unwrap_or(def.color);
+                    let truth = |p: &str| self.truth.as_ref().zip(biome).and_then(|(t, b)| t.state(p, b, y1)).map(|c| c.map(|v| v.round().clamp(0.0, 255.0) as u8));
+                    let plant = def.plants.get(g.plant).and_then(|p| truth(&p.0).or_else(|| massif_core::registry::plant_color(&p.0))).unwrap_or(def.color);
                     let k = 0.75;
                     top = std::array::from_fn(|c| (top[c] as f32 + (plant[c] as f32 - top[c] as f32) * k) as u8);
                 }
@@ -842,6 +850,7 @@ fn build_tile_part(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: T
         seed: seed as u64,
         lava: style.lava,
         notes: note_colors(reg, style.notes),
+        truth: (style.mode == MapMode::TrueColour).then(|| crate::true_color::current(reg)),
     };
     let (min_y, max_y) = (dim.min_y, dim.max_y);
     let clamp16 = |v: i32| v.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
@@ -4279,6 +4288,7 @@ fn build_glimpse(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, cell: Til
         seed: seed as u64,
         lava: style.lava,
         notes: note_colors(reg, style.notes),
+        truth: (style.mode == MapMode::TrueColour).then(|| crate::true_color::current(reg)),
     };
     let mut pair = |skin: Skin| *index.entry(skin).or_insert_with(|| {
         pairs.push(skin);
@@ -6487,7 +6497,7 @@ impl View3d {
         };
         // The player's view looks like the game: its blocks, light, sky and
         // clouds, the brush marking the blocks it takes as Axiom does.
-        let game = walking && self.mode == MapMode::Terrain;
+        let game = walking && matches!(self.mode, MapMode::Terrain | MapMode::TrueColour);
         let under_water = under && self.water;
         let sky = if under_water {
             Sky::under_water(if doc.world.meta.lava { [150, 52, 12] } else { [22, 64, 112] })
@@ -6508,7 +6518,7 @@ impl View3d {
         // in the views' own look of the map's blocks (Terrain).
         let (materials, fluids) = renderer.look_info();
         let textured = graphics.textures && self.catalogue.is_some() && materials > 0;
-        if textured && !game && self.mode == MapMode::Terrain {
+        if textured && !game && matches!(self.mode, MapMode::Terrain | MapMode::TrueColour) {
             let wk = doc.world.registry.well_known;
             globals.look = [1.0, 0.0, 0.0, materials as f32];
             globals.rock = [wk.stone.0 as f32, wk.deepslate.0 as f32, fluids[0] as f32, fluids[1] as f32];

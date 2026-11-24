@@ -151,7 +151,7 @@ brushes, terrain and biome palettes, levels or world info.
   it to reset it (back to how it was at first; a copy goes back to what it
   was copied from), duplicate it or delete it. The layout is remembered.
 - Each 3D View area is a view of its own: its mode (Terrain, Height,
-  Slope, Biome, Relief), its water and its camera. Split one to watch the
+  Slope, Biome, Relief, True Colour), its water and its camera. Split one to watch the
   map in Terrain and in Slope side by side; each area is remembered with
   the layout (a duplicated workspace keeps them), and a new one opens in
   Terrain, looking where the first 3D View looks. Two areas in one mode
@@ -169,8 +169,39 @@ What Massif did and what runs in the background (saving, exporting, the
 automatic tools over a whole map) shows at the bottom right of the window,
 over the areas, with a **Cancel** for long tasks.
 
+### True Colour
+
+**True Colour** shows the map as it will look in the game once exported,
+rather than in Massif's own colours: each block's top is the colour of its
+texture, and grass, leaves, vines and water take the tint the game gives
+them in the biome they stand in, painted or automatic, read from the game's
+colour maps by the biome's temperature and downfall (or the colours the
+biome names itself: badlands, swamps, warm oceans). A River biome painted
+blue in Biome mode has green grass here, as in the game. Plants of covers
+and the blocks of trees show in their own colours too, and so do mods'
+blocks, from their textures. The 3D views have the same mode: their
+textures tinted the same way.
+
+The colours come from the blocks read in the **Blocks** panel: the game's,
+then each mod and resource pack added there, in their order, the last one
+winning as a pack higher in the game's list does (right-click a pack's chip
+to read it earlier or later). A pack's `colormap/grass.png` and
+`foliage.png` replace the game's, and packs made for OptiFine (or MCPatcher)
+give blocks colour maps of their own: `optifine/colormap/*.properties` with
+their `blocks=`, read by temperature and downfall (`format=vanilla`), by
+biome and height (`format=grid`, a column a biome by OptiFine's numbers, a
+row a block of height from `yOffset`) or as one colour (`format=fixed`),
+and `water.png`, `pine.png`, `birch.png`, `swampgrass.png`,
+`swampfoliage.png`, and `palette.block.*` in `color.properties`. Packs left
+as folders in an instance's `resourcepacks` are read too. A note at the
+bottom left of the map names whose colours it shows. The Render side tints
+its blocks with the same maps.
+
+The view is drawn tile by tile in the background, as the other modes, and
+again where the map is edited, or when other blocks or packs are read.
+
 The 2D map's header picks what it shows (Terrain, Height, Slope, Biome,
-Relief) and what goes over it: contour lines, **Block steps** and the tile and
+Relief, True Colour) and what goes over it: contour lines, **Block steps** and the tile and
 chunk grid.
 
 The **contour lines** are drawn as WorldPainter's: a solid dark line every 10

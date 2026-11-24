@@ -1668,6 +1668,7 @@ impl MapView {
             sizes: tools.show_sizes || tools.tool == tools::Tool::TreeSize,
             pockets: tools.tool == tools::Tool::Pockets,
             slabs: tools.tool == tools::Tool::Slabs,
+            palette: if self.mode == MapMode::TrueColour { crate::true_color::key(&doc.world.registry) } else { 0 },
         };
         let ppp = ui.ctx().pixels_per_point();
         let blocks_per_px = 1.0 / (self.zoom * ppp);
@@ -2123,6 +2124,9 @@ impl MapView {
         }
 
         self.draw_scale(&painter, canvas, pal);
+        if self.mode == MapMode::TrueColour {
+            Self::true_colour_note(&painter, canvas, pal, doc);
+        }
         self.footer(ui, footer, doc, pal, *hover);
     }
 
@@ -2149,6 +2153,25 @@ impl MapView {
         let base = if pal.dark { Color32::WHITE } else { Color32::BLACK };
         lines(16.0, base.gamma_multiply(0.08));
         lines(TILE_SIZE as f64, base.gamma_multiply(0.22));
+    }
+
+    /// Over the scale, in True Colour: whose colours the map shows, the
+    /// game's or the resource packs' read with the blocks.
+    fn true_colour_note(painter: &egui::Painter, canvas: Rect, pal: Palette, doc: &Document) {
+        let table = crate::true_color::current(&doc.world.registry);
+        let text = if !crate::true_color::has_catalogue() {
+            tr!("The game's blocks are not read yet: colours are Massif's guesses").to_owned()
+        } else if table.packs.is_empty() {
+            tr!("The game's own colours").to_owned()
+        } else {
+            tr!("Colours of {packs}", packs = table.packs.join(", "))
+        };
+        let font = FontId::proportional(11.0);
+        let galley = painter.layout(text, font, pal.text, (canvas.width() - 24.0).max(60.0));
+        let at = pos2(canvas.left() + 8.0, canvas.bottom() - 46.0 - galley.size().y);
+        let bg = Rect::from_min_size(at, galley.size() + vec2(12.0, 6.0));
+        painter.rect_filled(bg, theme::TILE_RADIUS, pal.panel.gamma_multiply(0.86));
+        painter.galley(at + vec2(6.0, 3.0), galley, pal.text);
     }
 
     fn draw_scale(&self, painter: &egui::Painter, canvas: Rect, pal: Palette) {

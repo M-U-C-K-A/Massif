@@ -3962,10 +3962,28 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                 None => path.display().to_string(),
             };
             let chip = egui::Button::new(RichText::new(format!("{name}  {}", theme::glyph(Icon::X))).size(11.5)).corner_radius(theme::PILL);
-            if ui.add(chip).on_hover_text(tip).clicked() {
+            let response = ui.add(chip).on_hover_text(tip);
+            if response.clicked() {
                 mods.retain(|p| *p != path);
                 reload = true;
             }
+            // Their order is the game's: what is read later wins, as a
+            // resource pack higher in the game's list does.
+            let at = mods.iter().position(|p| *p == path);
+            response.context_menu(|ui| {
+                if let Some(i) = at {
+                    if ui.add_enabled(i > 0, egui::Button::new(tr!("Read earlier"))).clicked() {
+                        mods.swap(i, i - 1);
+                        reload = true;
+                        ui.close();
+                    }
+                    if ui.add_enabled(i + 1 < mods.len(), egui::Button::new(tr!("Read later (wins)"))).clicked() {
+                        mods.swap(i, i + 1);
+                        reload = true;
+                        ui.close();
+                    }
+                }
+            });
         }
         if ui
             .add(egui::Button::new(theme::with_icon(Icon::Plus, tr!("Add mods…"))).small().truncate())

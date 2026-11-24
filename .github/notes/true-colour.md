@@ -1,0 +1,3 @@
+**True Colour view**
+
+The 2D map and the 3D views have a new mode, True Colour, that shows the map as it will look in the game once exported rather than in Massif's editor colours: every block in its texture's colour, and grass, leaves, vines and water tinted by the biome they stand in, as the game does (a River biome no longer makes grass blue). Resource packs added in the Blocks panel change these colours in their order, the last one winning as in the game, including OptiFine's custom colour maps for grass, leaves and any block they name; mods' blocks show in their own textures' colours. The Render side tints its blocks with the same colour maps. Asked for by Jack (Fornad).
