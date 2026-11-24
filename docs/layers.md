@@ -142,7 +142,7 @@ what was not carried over.
 |---|---|
 | Plant layer | A ground cover of the same plants, in the same shares, on valid blocks only if it asked |
 | Custom object layer (Bo2, schematics, structures) | An object layer of its objects, read from the file, with their offset, frequency, random turn, density and grid; the trees of WorldPainter's tree pack, the pack's own |
-| Ground cover layer | Laid over the land: a ground cover of its blocks, as high as it is thick. Taking the place of the top of the land: a terrain of its blocks, that deep |
+| Ground cover layer | Laid over the land: a ground cover of its blocks, as high as it is thick. Taking the place of the top of the land: a terrain of its blocks, that deep (in a `.world`, a ground cover on the ground lowered as deep) |
 | Underground pockets layer | Underground pockets of the same blocks, as frequent and as large, between the same heights |
 | Combined layer | A combined layer: its terrain (a custom one from the material written with it), its biome, and the first layer of each slot it holds at its factor; the others it holds are layers of their own |
 | Tunnel and floating layers | Not carried over: Massif carves and raises land with Carve and Solid levels |

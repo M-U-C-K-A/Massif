@@ -400,7 +400,10 @@ impl TileHook<'_> {
                             let strength = if factor == 1.0 { strength.clone() } else { strength.iter().map(|&s| (s as f32 * factor).round().clamp(0.0, 255.0) as u8).collect() };
                             let priority = match conv {
                                 Conv::Cover(n) if self.mapper.registry.cover(n).is_some_and(|c| c.changes_water()) => 0,
-                                _ => 1,
+                                // Custom ground covers before plants: their
+                                // blocks are where plants would grow.
+                                Conv::Laid { .. } => 1,
+                                _ => 2,
                             };
                             painted.push(Painted { conv, strength, priority });
                         }
@@ -506,7 +509,7 @@ fn encode(raw: RawTile, beaches: &crate::terrains::Beaches) -> (Handle, TilePos,
     if !raw.painted.is_empty() {
         let (ox, oz) = raw.pos.origin();
         let (mut covers, mut objects, mut under) = (vec![0u16; TILE_AREA], vec![0u16; TILE_AREA], vec![0u16; TILE_AREA]);
-        let (mut best, mut best_under) = (vec![0u8; TILE_AREA], vec![0u8; TILE_AREA]);
+        let (mut best, mut best_under) = (vec![0u32; TILE_AREA], vec![0u32; TILE_AREA]);
         for p in &raw.painted {
             for (i, &strength) in p.strength.iter().enumerate() {
                 if strength == 0 {
@@ -515,15 +518,24 @@ fn encode(raw: RawTile, beaches: &crate::terrains::Beaches) -> (Handle, TilePos,
                 let (x, z) = (ox + (i & 127) as i32, oz + (i >> 7) as i32);
                 match p.conv {
                     Conv::Cover(n) if covers[i] == 0 && crate::layers::kept(strength, Curve::Linear, x, z, n as u64) => covers[i] = n,
-                    // The strongest base object layer of the column, and
-                    // the strongest sub-canopy one.
-                    Conv::Objects(n, curve, false) if strength > best[i] && crate::layers::kept(strength, curve, x, z, 0x10000 | n as u64) => {
-                        objects[i] = n;
-                        best[i] = strength;
+                    // A custom ground cover that takes the place of the top
+                    // of the land: the ground goes down under its blocks.
+                    Conv::Laid { cover, sink } if covers[i] == 0 => {
+                        covers[i] = cover;
+                        if sink > 0 {
+                            tile.top.set(i, tile.top.get(i) - sink as f32);
+                        }
                     }
-                    Conv::Objects(n, curve, true) if strength > best_under[i] && crate::layers::kept(strength, curve, x, z, 0x10000 | n as u64) => {
-                        under[i] = n;
-                        best_under[i] = strength;
+                    // One base object layer a column, and one sub-canopy
+                    // one: where several overlap, each of them in a share
+                    // of the columns as large as its strength, so that all
+                    // of them stand mixed (WorldPainter stands them all).
+                    Conv::Objects(n, curve, under_canopy) if crate::layers::kept(strength, curve, x, z, 0x10000 | n as u64) => {
+                        let (layer, total) = if under_canopy { (&mut under[i], &mut best_under[i]) } else { (&mut objects[i], &mut best[i]) };
+                        *total += strength as u32;
+                        if massif_core::compose::hash2(x, z, 0x6d69_7800 ^ n as u64) % *total < strength as u32 {
+                            *layer = n;
+                        }
                     }
                     _ => {}
                 }
@@ -663,6 +675,7 @@ pub fn import_stream<R: Read + Send>(reader: R, progress: &ImportProgress) -> Re
     let mut layers = BTreeMap::new();
     let mut converted_layers = BTreeMap::new();
     let mut converter = crate::layers::Converter::default();
+    converter.lay_covers = true;
     let converted: Mutex<HashMap<Handle, (TilePos, Blob, After)>> = Mutex::new(HashMap::new());
     let mut histogram = [0u64; 256];
     let mut damaged_tiles = 0;
@@ -843,6 +856,14 @@ pub fn import_stream<R: Read + Send>(reader: R, progress: &ImportProgress) -> Re
         if kind == DimensionKind::Overworld {
             overworld = Some(f.dimension);
         }
+        // Every tile stored as a file holds it, none decoded: the map as
+        // light and quick as when it is opened again (a map with layers
+        // applied after its tiles kept those tiles decoded, hundreds of
+        // kilobytes each, gigabytes on a large map).
+        for level in &mut dim.levels {
+            level.freeze();
+        }
+        dim.trim(0);
         dims.push(dim);
     }
     if dims.is_empty() {
@@ -1284,6 +1305,234 @@ mod tests {
         w.out
     }
 
+    /// A World2 stream of one tall tile at (0, 0), 70 high, its rows of
+    /// three terrains (grass, sand, stone, a third each), painted with
+    /// custom ground covers, each `(name, thickness, block, rows)` set on
+    /// the rows `rows` of the tile.
+    fn layered_world(covers: &[(&str, i32, &str, std::ops::Range<usize>)]) -> Vec<u8> {
+        let mut w = StreamWriter::new();
+        let null = |w: &mut StreamWriter| {
+            w.u8(TC_NULL);
+        };
+        w.u8(TC_OBJECT).class(
+            WORLD_CLASS,
+            SC_SERIALIZABLE,
+            &[(b'I', "maxheight", None), (b'I', "minHeight", None), (b'L', "dimensionsByAnchor", Some("Ljava/util/Map;")), (b'L', "name", Some("Ljava/lang/String;"))],
+            null,
+        );
+        w.handle();
+        w.i32(320).i32(-64);
+        let hashmap_desc = w.next;
+        w.u8(TC_OBJECT).class("java.util.HashMap", SC_SERIALIZABLE | SC_WRITE_METHOD, &[(b'F', "loadFactor", None), (b'I', "threshold", None)], null);
+        w.handle();
+        w.i32(0x3F40_0000).i32(12).u8(TC_BLOCKDATA).u8(8).i32(16).i32(1);
+        w.u8(TC_OBJECT).class(
+            "org.pepsoft.worldpainter.Dimension$Anchor",
+            SC_SERIALIZABLE,
+            &[(b'I', "dim", None), (b'I', "id", None), (b'Z', "invert", None), (b'L', "role", Some("Lorg/pepsoft/worldpainter/Dimension$Role;"))],
+            null,
+        );
+        w.handle();
+        w.i32(0).i32(0).u8(0);
+        w.u8(TC_ENUM).class("org.pepsoft.worldpainter.Dimension$Role", SC_SERIALIZABLE | 0x10, &[], |w| {
+            w.class("java.lang.Enum", SC_SERIALIZABLE | 0x10, &[], |w| {
+                w.u8(TC_NULL);
+            });
+        });
+        w.handle();
+        w.string("DETAIL");
+        w.u8(TC_OBJECT).class(
+            "org.pepsoft.worldpainter.Dimension",
+            SC_SERIALIZABLE,
+            &[(b'I', "borderLevel", None), (b'I', "maxHeight", None), (b'I', "minHeight", None), (b'L', "tiles", Some("Ljava/util/Map;"))],
+            null,
+        );
+        w.handle();
+        w.i32(62).i32(320).i32(-64);
+        w.u8(TC_OBJECT).reference(hashmap_desc);
+        w.handle();
+        w.i32(0x3F40_0000).i32(12).u8(TC_BLOCKDATA).u8(8).i32(16).i32(1);
+        w.u8(TC_OBJECT).class("java.awt.Point", SC_SERIALIZABLE, &[(b'I', "x", None), (b'I', "y", None)], null);
+        w.handle();
+        w.i32(0).i32(0);
+        let tile_fields: [(u8, &str, Option<&str>); 9] = [
+            (b'I', "maxHeight", None),
+            (b'I', "minHeight", None),
+            (b'Z', "tall", None),
+            (b'I', "x", None),
+            (b'I', "y", None),
+            (b'L', "bitLayerData", Some("Ljava/util/Map;")),
+            (b'[', "tallHeightMap", Some("[I")),
+            (b'[', "tallWaterLevel", Some("[S")),
+            (b'[', "terrain", Some("[B")),
+        ];
+        w.u8(TC_OBJECT).class(TILE_CLASS, SC_SERIALIZABLE, &tile_fields, null);
+        w.handle();
+        w.i32(320).i32(-64).u8(1).i32(0).i32(0);
+        w.u8(TC_OBJECT).reference(hashmap_desc);
+        w.handle();
+        w.i32(0x3F40_0000).i32(12).u8(TC_BLOCKDATA).u8(8).i32(16).i32(covers.len() as i32);
+        let (mut layer_desc, mut material_desc, mut identity_desc, mut set_desc) = (None, None, None, None);
+        for (name, thickness, block, rows) in covers {
+            match layer_desc {
+                None => {
+                    layer_desc = Some(w.next);
+                    w.u8(TC_OBJECT).class(
+                        "org.pepsoft.worldpainter.layers.groundcover.GroundCoverLayer",
+                        SC_SERIALIZABLE,
+                        &[(b'I', "thickness", None), (b'L', "material", Some("Lorg/pepsoft/minecraft/Material;")), (b'L', "name", Some("Ljava/lang/String;"))],
+                        null,
+                    );
+                }
+                Some(d) => {
+                    w.u8(TC_OBJECT).reference(d);
+                }
+            }
+            w.handle();
+            w.i32(*thickness);
+            match material_desc {
+                None => {
+                    material_desc = Some(w.next);
+                    w.u8(TC_OBJECT).class(
+                        "org.pepsoft.minecraft.Material",
+                        SC_SERIALIZABLE,
+                        &[(b'I', "blockType", None), (b'I', "data", None), (b'L', "identity", Some("Lorg/pepsoft/minecraft/Material$Identity;"))],
+                        null,
+                    );
+                }
+                Some(d) => {
+                    w.u8(TC_OBJECT).reference(d);
+                }
+            }
+            w.handle();
+            w.i32(-1).i32(-1);
+            match identity_desc {
+                None => {
+                    identity_desc = Some(w.next);
+                    w.u8(TC_OBJECT).class(
+                        "org.pepsoft.minecraft.Material$Identity",
+                        SC_SERIALIZABLE,
+                        &[(b'L', "name", Some("Ljava/lang/String;")), (b'L', "properties", Some("Ljava/util/Map;"))],
+                        null,
+                    );
+                }
+                Some(d) => {
+                    w.u8(TC_OBJECT).reference(d);
+                }
+            }
+            w.handle();
+            w.string(block);
+            w.u8(TC_NULL);
+            w.string(name);
+            match set_desc {
+                None => {
+                    let set = w.next;
+                    w.u8(TC_OBJECT).class("java.util.BitSet", SC_SERIALIZABLE | SC_WRITE_METHOD, &[(b'[', "bits", Some("[J"))], null);
+                    w.handle();
+                    let longs = w.next;
+                    w.u8(TC_ARRAY).class("[J", SC_SERIALIZABLE, &[], null);
+                    set_desc = Some((set, longs));
+                }
+                Some((set, longs)) => {
+                    w.u8(TC_OBJECT).reference(set);
+                    w.handle();
+                    w.u8(TC_ARRAY).reference(longs);
+                }
+            }
+            w.handle();
+            w.i32(256);
+            for k in 0..256 {
+                w.i64(if rows.contains(&(k / 2)) { -1 } else { 0 });
+            }
+            w.u8(TC_ENDBLOCKDATA);
+        }
+        w.u8(TC_ENDBLOCKDATA);
+        w.u8(TC_ARRAY).class("[I", SC_SERIALIZABLE, &[], null);
+        w.handle();
+        w.i32(TILE_AREA as i32);
+        for _ in 0..TILE_AREA {
+            w.i32(((70.0f32 + 64.0) * 256.0) as i32);
+        }
+        w.u8(TC_ARRAY).class("[S", SC_SERIALIZABLE, &[], null);
+        w.handle();
+        w.i32(TILE_AREA as i32);
+        for _ in 0..TILE_AREA {
+            w.u16(0);
+        }
+        w.u8(TC_ARRAY).class("[B", SC_SERIALIZABLE, &[], null);
+        w.handle();
+        w.i32(TILE_AREA as i32);
+        for i in 0..TILE_AREA {
+            w.u8([0, 2, 4][(i / 128) * 3 / 128]);
+        }
+        w.u8(TC_ENDBLOCKDATA);
+        w.u8(TC_ENDBLOCKDATA);
+        w.string("Layered");
+        w.out
+    }
+
+    /// WorldPainter's custom ground covers are ground covers of Massif,
+    /// painted where they were: three terrains under four covers that
+    /// overlap import as the three terrains and the four covers, with no
+    /// terrain made of a cover over another terrain. A cover that takes the
+    /// place of the top of the land lies on ground lowered under it.
+    #[test]
+    fn ground_covers_stay_layers_over_the_terrains() {
+        let covers = [
+            ("Water Block", -1, "minecraft:water", 0..40),
+            ("Small stones", 1, "minecraft:stone_button", 20..80),
+            ("Gravel", 2, "minecraft:gravel", 60..110),
+            ("Moss", 1, "minecraft:moss_carpet", 90..128),
+        ];
+        let bytes = layered_world(&covers);
+        let progress = ImportProgress::default();
+        let (world, report) = import_stream(&bytes[..], &progress).unwrap();
+        assert!(report.layers.is_empty(), "nothing left out: {:?}", report.layers);
+        let reg = &world.registry;
+        let vanilla = Registry::vanilla();
+        assert_eq!(reg.terrains.len(), vanilla.terrains.len(), "no terrain made: {:?}", reg.terrains.iter().skip(vanilla.terrains.len()).map(|t| &t.name).collect::<Vec<_>>());
+        assert!(reg.terrains.iter().all(|t| !t.name.contains(" on ")));
+        let tile = world.dims[0].ground().view(TilePos::new(0, 0)).unwrap();
+        let terrains: std::collections::BTreeSet<u16> = tile.terrain.dense().iter().copied().collect();
+        assert_eq!(terrains.len(), 3, "the three terrains, as painted");
+        for (name, thickness, block, rows) in &covers {
+            let n = reg.covers.iter().position(|c| c.name == *name).unwrap_or_else(|| panic!("{name} is a cover")) as u16 + 1;
+            let c = reg.cover(n).unwrap();
+            assert_eq!((c.plants[0].0.as_str(), c.height, c.density, c.soil_only), (*block, [thickness.unsigned_abs() as u8; 2], 1.0, false));
+            // Its own rows (past the cover painted before it) hold it.
+            let own = rows.start + 20.min(rows.len() - 1);
+            assert_eq!(tile.cover.get(own * 128 + 7), n, "{name} on row {own}");
+            assert!(tile.cover.dense().iter().filter(|&&v| v == n).count() >= 128, "{name}");
+        }
+        assert_eq!(tile.top.get(5 * 128), 70.0, "the ground goes down under water laid into it");
+        assert_eq!(tile.top.get(100 * 128), 71.0, "and stays under other covers");
+        assert_eq!(world.dims[0].ground().stats().hot_tiles, 0, "every tile stored, none decoded");
+    }
+
+    /// The memory a large imported map holds: as stored now, and with every
+    /// ground tile decoded as layers applied after the tiles used to leave
+    /// them. `MASSIF_IMPORT_MEMORY=<a .world> cargo test --release -p
+    /// massif-legacy import_memory -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn import_memory() {
+        let Some(path) = std::env::var_os("MASSIF_IMPORT_MEMORY") else { return };
+        let started = std::time::Instant::now();
+        let (mut world, _) = import_world(Path::new(&path), None).unwrap();
+        let took = started.elapsed();
+        let stats = |w: &World| w.dims[0].levels.iter().map(|l| l.stats()).fold((0, 0, 0), |(t, h, b), s| (t + s.tiles, h + s.hot_tiles, b + s.hot_bytes + s.cold_bytes));
+        let (tiles, hot, bytes) = stats(&world);
+        eprintln!("imported in {:.2} s: {tiles} tiles, {hot} decoded, {:.1} MB", took.as_secs_f32(), bytes as f64 / 1e6);
+        let positions: Vec<TilePos> = world.dims[0].ground().positions().collect();
+        for pos in positions {
+            world.dims[0].ground_mut().tile_mut(pos);
+        }
+        world.dims[0].ground_mut().take_dirty();
+        world.dims[0].ground_mut().freeze();
+        let (tiles, hot, bytes) = stats(&world);
+        eprintln!("every tile decoded, as before: {tiles} tiles, {hot} decoded, {:.1} MB", bytes as f64 / 1e6);
+    }
+
     #[test]
     fn a_synthetic_world_imports_faithfully() {
         let bytes = synthetic_world();
@@ -1347,7 +1596,9 @@ mod tests {
         assert_eq!(deciduous.name, "Deciduous");
         assert!(forest.iter().all(|&n| n == forest[0]));
         let share = forest.len() as f32 / (TILE_AREA - 384) as f32;
-        assert!((0.2..0.3).contains(&share), "{share}");
+        // Painted at about half strength: WorldPainter's forest is still
+        // half as dense as at full, its trees soon meeting.
+        assert!((0.4..0.65).contains(&share), "{share}");
         assert_eq!(deciduous.objects.iter().filter(|o| o.1 > 0).count(), 16, "big oaks and birches, eight of each");
         assert_eq!(deciduous.objects.len(), 32, "and their bushes and small ones, for Tree sizes");
         assert_eq!(short.cover.get(0), 0);

@@ -67,6 +67,29 @@ top left.
 
 On Windows and Linux, `⌘` is `Ctrl` and `⌥` is `Alt`.
 
+## What your layers become
+
+A `.world` keeps its terrains and its layers apart, as WorldPainter does.
+Your terrains, custom ones included, stay the map's terrains, and each layer
+becomes a layer of the Layers panel, painted where it was:
+
+- **Custom ground covers** (a block of water, snow layers, Conquest
+  Reforged's grass layers…) become ground covers of their blocks, as high as
+  they are thick. One that takes the place of the top of the land lies on
+  the ground lowered under it. Where several overlap, a block shows one of
+  them, as in WorldPainter's export.
+- **Forests, tree pack layers and custom object layers** become tree and
+  object layers with about as many trees as WorldPainter's export stands:
+  the import plays WorldPainter's placement with your objects' own shapes
+  and sets the spacing and density that match, at every strength you
+  painted. Overlapping tree layers each keep a share of the columns, all of
+  them standing mixed.
+- **Plant layers, Frost, Lava, Void, Annotations, pockets, combined
+  layers, caves, tunnels and River** come as described in
+  [Layers](layers.md).
+
+The import report lists any layer that was not carried over.
+
 ## What Massif adds
 
 - **A 3D view** of the world as it will stand in the game, redrawn as you

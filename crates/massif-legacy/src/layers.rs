@@ -32,6 +32,10 @@ pub enum Curve {
     Linear,
     /// The square of it, as WorldPainter's own forests plant their trees.
     Square,
+    /// The share of the columns kept (out of 255) at each strength painted
+    /// in WorldPainter (0 to 15): a custom object layer's, from how many
+    /// objects WorldPainter stands at each (see [`crate::placement`]).
+    Shares([u8; 16]),
 }
 
 /// What a WorldPainter layer becomes.
@@ -49,6 +53,11 @@ pub enum Conv {
     Caves(CaveKind),
     /// A custom ground cover: its index in [`Converter::ground_covers`].
     GroundCover(u16),
+    /// A custom ground cover laid as a ground cover of Massif (see
+    /// [`Converter::lay_covers`]): its number, and how many blocks the
+    /// ground goes down under it, for one that takes the place of the top
+    /// of the land rather than lying over it.
+    Laid { cover: u16, sink: u8 },
     /// A tunnel or floating layer: its index in [`Converter::tunnels`].
     Tunnel(u16),
     /// A terrain set where painted at half strength or more (a combined
@@ -174,6 +183,10 @@ pub struct Converter {
     known: HashMap<Handle, Vec<(Conv, f32)>>,
     pub ground_covers: Vec<GroundCover>,
     pub tunnels: Vec<Tunnel>,
+    /// Custom ground covers become ground covers of Massif, painted where
+    /// they were (a `.world`'s), rather than [`Conv::GroundCover`] (a
+    /// `.layer` file's, a script's).
+    pub lay_covers: bool,
 }
 
 impl Converter {
@@ -215,7 +228,17 @@ impl Converter {
                 if thickness == 0 {
                     return Vec::new();
                 }
-                self.ground_covers.push(GroundCover { name, blocks, thickness });
+                let cover = GroundCover { name, blocks, thickness };
+                if self.lay_covers {
+                    let mut def = cover_def(&cover);
+                    if let Some(c) = arena.field(key, "colour").and_then(|c| arena.int(c)).filter(|&c| c != 0) {
+                        def.color = [(c >> 16) as u8, (c >> 8) as u8, c as u8];
+                    }
+                    let sink = if thickness < 0 { def.height[0] } else { 0 };
+                    self.ground_covers.push(cover);
+                    return vec![(Conv::Laid { cover: mapper.registry.add_cover(def), sink }, 1.0)];
+                }
+                self.ground_covers.push(cover);
                 vec![(Conv::GroundCover(self.ground_covers.len() as u16 - 1), 1.0)]
             }
             "pockets.UndergroundPocketsLayer" => {
@@ -302,7 +325,7 @@ impl Converter {
                     let (part, layer) = match conv {
                         Conv::Terrain(t) => (Part::Terrain, *t),
                         Conv::Biome(b) => (Part::Biome, *b),
-                        Conv::Cover(n) => (Part::Cover, *n),
+                        Conv::Cover(n) | Conv::Laid { cover: n, .. } => (Part::Cover, *n),
                         Conv::Objects(n, _, under) => (if *under { Part::Under } else { Part::Trees }, *n),
                         Conv::Pockets(n) => (Part::Pockets, *n),
                         _ => continue,
@@ -338,7 +361,10 @@ pub fn convert(arena: &Arena, key: Value, class: &str, reg: &mut Registry) -> Op
     let string = |name: &str| arena.field(key, name).and_then(|v| arena.string(v)).map(str::to_owned);
     let objects = |n: u16, curve: Curve, reg: &Registry| Conv::Objects(n, curve, reg.object_layer(n).is_some_and(|l| l.understory));
     if let Some(conv) = standard(short, reg) {
-        return Some(conv);
+        return Some(match (conv, forest_chance(short)) {
+            (Conv::Objects(n, _, under), Some(chance)) => Conv::Objects(n, calibrate_layer(n, reg, crate::placement::Settings { density: chance / 64, grid: [1, 1], rotate: true }), under),
+            _ => conv,
+        });
     }
     match short {
         "Bo2Layer" => {
@@ -353,16 +379,43 @@ pub fn convert(arena: &Arena, key: Value, class: &str, reg: &mut Registry) -> Op
             };
             match TreeKind::ALL.into_iter().find(|k| (k.name() == name && made_by_worldpainter()) || string("description").is_some_and(|d| d.ends_with(TREE_PACK) && d.starts_with(k.name()))) {
                 Some(kind) => {
+                    // As many as WorldPainter stands with the layer's
+                    // density and grid.
                     let n = kind.install(reg);
-                    Some(objects(n, Curve::Linear, reg))
+                    let int = |f: &str, default: i64| arena.field(key, f).and_then(|v| arena.int(v)).unwrap_or(default).clamp(1, 1 << 20) as u32;
+                    let curve = calibrate_layer(n, reg, crate::placement::Settings { density: int("density", 20), grid: [int("gridX", 1), int("gridY", 1)], rotate: true });
+                    Some(objects(n, curve, reg))
                 }
                 // A layer of the user's own objects, which the world holds.
-                None => object_layer(arena, key, &name, reg).map(|n| objects(n, Curve::Square, reg)),
+                None => object_layer(arena, key, &name, reg).map(|(n, curve)| objects(n, curve, reg)),
             }
         }
         "plants.PlantLayer" => plant_cover(arena, key, reg).map(Conv::Cover),
         _ => None,
     }
+}
+
+/// The tree chance of one of WorldPainter's forests (its class, after
+/// `org.pepsoft.worldpainter.layers.`): a tree where a draw out of it falls
+/// under the square of the strength, a trunk never beside another, so that
+/// its forests close their canopy. A `.world`'s forests stand Massif's
+/// larger trees as WorldPainter would stand them, crowns touching (see
+/// [`calibrate`]); a script's paint as before.
+fn forest_chance(class: &str) -> Option<u32> {
+    match class {
+        "DeciduousForest" | "PineForest" => Some(1280),
+        "Jungle" => Some(640),
+        "SwampLand" => Some(7680),
+        _ => None,
+    }
+}
+
+/// [`calibrate`] object layer `n` of `reg`, returning its curve.
+fn calibrate_layer(n: u16, reg: &mut Registry, settings: crate::placement::Settings) -> Curve {
+    let Some(mut layer) = reg.object_layer(n).cloned() else { return Curve::Square };
+    let (_, curve) = calibrate(&mut layer, reg, settings);
+    reg.object_layers[n as usize - 1] = layer;
+    curve
 }
 
 /// What one of WorldPainter's own layers (its class, after
@@ -395,7 +448,7 @@ pub fn standard(class: &str, reg: &mut Registry) -> Option<Conv> {
 /// schematics, structures, Bo2 objects), placed as WorldPainter places
 /// them — about as many, standing on their offset, turned and mirrored if
 /// they were. `None` when none of its objects could be read.
-fn object_layer(arena: &Arena, key: Value, name: &str, reg: &mut Registry) -> Option<u16> {
+fn object_layer(arena: &Arena, key: Value, name: &str, reg: &mut Registry) -> Option<(u16, Curve)> {
     let provider = arena.field(key, "objectProvider")?;
     let items = arena.field(provider, "objects").and_then(|o| arena.list_items(o))?;
     let first = reg.objects.len() as u32;
@@ -443,14 +496,32 @@ fn object_layer(arena: &Arena, key: Value, name: &str, reg: &mut Registry) -> Op
     if let Some(c) = arena.field(key, "colour").and_then(|c| arena.int(c)).filter(|&c| c != 0) {
         layer.color = [(c >> 16) as u8, (c >> 8) as u8, c as u8];
     }
-    // WorldPainter tries every column of its grid, and places an object
-    // where a draw out of 64 × density falls under the square of the
-    // strength: at full strength, 226 in 64 × density. Massif places one in
-    // a share of the squares of its spacing, so as many stand.
-    let int = |n: &str, default: i64| arena.field(key, n).and_then(|v| arena.int(v)).unwrap_or(default).max(1) as f32;
-    let per_column = 226.0 / (64.0 * int("density", 20) * int("gridX", 1) * int("gridY", 1));
-    layer.density = (per_column * (layer.spacing as f32).powi(2)).clamp(0.02, 1.0);
-    Some(reg.add_object_layer(layer))
+    // As many as WorldPainter stands: played on flat land, the objects
+    // meeting as they do there; each object as often as it stood, and at
+    // each strength the share of columns that stands as many.
+    let int = |n: &str, default: i64| arena.field(key, n).and_then(|v| arena.int(v)).unwrap_or(default).clamp(1, 1 << 20) as u32;
+    let settings = crate::placement::Settings { density: int("density", 20), grid: [int("gridX", 1), int("gridY", 1)], rotate };
+    let (_, curve) = calibrate(&mut layer, reg, settings);
+    Some((reg.add_object_layer(layer), curve))
+}
+
+/// Give an object layer the spacing, density and objects' weights that
+/// stand as many objects as WorldPainter stands with `settings`, each as
+/// often (see [`crate::placement`]); with how many it stands a column at
+/// each strength, and the curve of the share of columns to keep at each.
+pub fn calibrate(layer: &mut massif_core::objects::ObjectLayerDef, reg: &Registry, settings: crate::placement::Settings) -> (crate::placement::Coverage, Curve) {
+    let defs: Vec<(&massif_core::objects::ObjectDef, u32)> = layer.objects.iter().map(|&(k, w)| (&reg.objects[k as usize], w as u32)).collect();
+    let coverage = crate::placement::coverage(&defs, settings);
+    let full = coverage.per_column[15];
+    (layer.spacing, layer.density) = crate::placement::spacing_for(full, layer.spacing);
+    if coverage.counts.iter().any(|&c| c > 0) {
+        // Those never picked (the smaller trees of Tree sizes) stay so.
+        for (o, &c) in layer.objects.iter_mut().zip(&coverage.counts).filter(|(o, _)| o.1 > 0) {
+            o.1 = c.clamp(1, u16::MAX as u32) as u16;
+        }
+    }
+    let shares = std::array::from_fn(|s| if full > 0.0 { (coverage.per_column[s] / full * 255.0).round().clamp(0.0, 255.0) as u8 } else { 0 });
+    (coverage, Curve::Shares(shares))
 }
 
 /// Where an object stands, in its box: the block WorldPainter puts on the
@@ -619,8 +690,10 @@ pub fn apply_after(dim: &mut Dimension, painted: &[(TilePos, After)], conv: &Con
         let level = dim.add_level(tunnel.name.clone(), kind);
         let (min, max) = (dim.min_y, dim.max_y);
         for (pos, strength) in tiles {
-            let Some(ground) = dim.ground_mut().tile_mut(pos) else { continue };
+            // Read, not edited: the ground stays as it was stored.
+            let Some(ground) = dim.ground().view(pos) else { continue };
             let (top, terrain) = (ground.top.dense().to_vec(), ground.terrain.dense().to_vec());
+            drop(ground);
             let (mut tops, mut bottoms, mut terrains, mut fluids) = (vec![0.0f32; AREA], vec![0.0f32; AREA], vec![0u16; AREA], vec![NO_FLUID; AREA]);
             for i in 0..AREA {
                 let (x, z) = column(pos, i);
@@ -869,6 +942,20 @@ pub fn dig_painted_rivers(dim: &mut Dimension, tiles: &[(TilePos, &Vec<u8>)], re
     }
 }
 
+/// A custom ground cover as a ground cover of Massif: its blocks, one
+/// picked for each column, as many high as the cover is thick, on every
+/// column it is painted on, whatever the ground; as solid on the map as
+/// the blocks are.
+pub fn cover_def(cover: &GroundCover) -> CoverDef {
+    let total: u64 = cover.blocks.iter().map(|b| b.1 as u64).sum::<u64>().max(1);
+    let weights: Vec<(&str, u16)> = cover.blocks.iter().map(|(s, n)| (s.as_str(), ((*n as u64 * 1000) / total).clamp(1, 1000) as u16)).collect();
+    let color = cover.blocks.first().map_or([128; 3], |b| crate::terrains::block_color(&b.0));
+    let depth = cover.thickness.unsigned_abs().clamp(1, 32) as u8;
+    let mut def = CoverDef::new(&cover.name, color, &weights, 1.0);
+    (def.height, def.soil_only, def.opacity) = ([depth, depth], false, 1.0);
+    def
+}
+
 /// The terrain of a custom ground cover over terrain `base`: the cover's
 /// blocks, as thick as it is, over the strata of `base`; made once.
 pub fn ground_terrain(reg: &mut Registry, cover: &GroundCover, base: u16) -> u16 {
@@ -924,6 +1011,7 @@ pub fn kept(strength: u8, curve: Curve, x: i32, z: i32, salt: u64) -> bool {
     let share = match curve {
         Curve::Linear => strength as u32,
         Curve::Square => (strength as u32 * strength as u32) / 255,
+        Curve::Shares(shares) => shares[(strength as usize * 15 + 127) / 255] as u32,
     };
     share >= 255 || (share > 0 && massif_core::compose::hash2(x, z, 0x7770_6c61_7965_7273 ^ salt) % 255 < share)
 }
@@ -1604,6 +1692,51 @@ mod tests {
         assert!(!dim.voxels.is_empty(), "caverns carved");
         assert!(dim.voxels.iter().all(|(p, _)| p.tile() == TilePos::new(-1, -1)));
         assert!(dim.selection.is_none());
+    }
+
+    /// A custom object layer stands as many trees as WorldPainter does:
+    /// on a flat 512 × 512 painted as the import paints it, at full
+    /// strength and at half, the trees Massif stands are WorldPainter's
+    /// count (its placement played with the trees' own shapes) within a
+    /// tenth.
+    #[test]
+    fn custom_object_layers_stand_as_many_trees_as_worldpainter() {
+        use massif_core::compose::{Materializer, TileStack};
+        use massif_core::objects::{ObjectLayerDef, tile_placements};
+        let mut reg = Registry::vanilla();
+        let first = reg.objects.len() as u32;
+        reg.objects.push(crate::placement::tree(3, 5));
+        reg.objects.push(crate::placement::tree(5, 8));
+        let mut layer = ObjectLayerDef::new("Oaks", &[first, first + 1], &reg);
+        layer.soil_only = false;
+        let before = (layer.spacing, layer.density);
+        let (coverage, curve) = calibrate(&mut layer, &reg, crate::placement::Settings { density: 10, grid: [1, 1], rotate: true });
+        let n = reg.add_object_layer(layer);
+        let grass = reg.terrain_by_name("Grass").unwrap().0;
+        for strength in [15u8, 8] {
+            let mut dim = Dimension::new(massif_core::world::DimensionKind::Overworld, -64, 320);
+            for tz in 0..4 {
+                for tx in 0..4 {
+                    let pos = TilePos::new(tx, tz);
+                    let mut tile = Tile::ground(71.0, grass, NO_FLUID);
+                    let (ox, oz) = pos.origin();
+                    let objects = (0..massif_core::TILE_AREA).map(|i| if kept(strength * 17, curve, ox + (i & 127) as i32, oz + (i >> 7) as i32, 0x10000 | n as u64) { n } else { 0 }).collect();
+                    tile.objects = massif_core::plane::Plane::from_vec(objects);
+                    dim.ground_mut().insert(pos, tile);
+                }
+            }
+            let mat = Materializer::new(&reg, 1, dim.min_y);
+            let mut stood = 0;
+            for tz in 0..4 {
+                for tx in 0..4 {
+                    let pos = TilePos::new(tx, tz);
+                    let stack = TileStack::new(&dim, pos, true).unwrap();
+                    stood += tile_placements(&reg, &mat, 1, false, &stack, pos).len();
+                }
+            }
+            let expected = coverage.per_column[strength as usize] * 512.0 * 512.0;
+            assert!((stood as f32 / expected - 1.0).abs() < 0.1, "strength {strength}: {stood} trees, WorldPainter {expected:.0} (spacing and density were {before:?}, now {:?})", (reg.object_layer(n).unwrap().spacing, reg.object_layer(n).unwrap().density));
+        }
     }
 
     #[test]

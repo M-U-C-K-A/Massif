@@ -8,7 +8,7 @@ use crate::javaser::{Item, Parser, Value};
 use crate::layers::{Conv, Converter};
 use crate::terrains::{CustomMaterial, Mapper};
 use crate::worldpainter::read_mixed;
-use massif_core::registry::{CoverDef, Registry, Stratum, TerrainDef};
+use massif_core::registry::{Registry, Stratum, TerrainDef};
 use std::io::Read;
 
 const LAYERS: &str = "org.pepsoft.worldpainter.layers.";
@@ -220,7 +220,7 @@ pub fn read_layer_file(bytes: &[u8], registry: &mut Registry) -> Result<LayerFil
     }
     for (part, _) in &parts {
         let made = match *part {
-            Conv::Cover(n) => Made::Cover(n),
+            Conv::Cover(n) | Conv::Laid { cover: n, .. } => Made::Cover(n),
             Conv::Objects(n, _, _) => Made::Objects(n, mapper.registry.object_layer(n).map_or(0, |l| l.objects.len())),
             Conv::Pockets(n) => Made::Pockets(n),
             Conv::GroundCover(k) => {
@@ -384,13 +384,10 @@ fn object_rules(arena: &crate::javaser::Arena, layer: Value) -> bool {
 /// deep.
 fn ground_cover(cover: &crate::layers::GroundCover, reg: &mut Registry) -> Made {
     let total: u64 = cover.blocks.iter().map(|b| b.1 as u64).sum::<u64>().max(1);
-    let weights: Vec<(&str, u16)> = cover.blocks.iter().map(|(s, n)| (s.as_str(), ((*n as u64 * 1000) / total).clamp(1, 1000) as u16)).collect();
     let color = cover.blocks.first().map_or([128; 3], |b| crate::terrains::block_color(&b.0));
     let depth = cover.thickness.unsigned_abs().clamp(1, 16) as u8;
     if cover.thickness > 0 {
-        let mut def = CoverDef::new(&cover.name, color, &weights, 1.0);
-        (def.height, def.soil_only) = ([depth, depth], false);
-        Made::Cover(reg.add_cover(def))
+        Made::Cover(reg.add_cover(crate::layers::cover_def(cover)))
     } else {
         let blocks = cover.blocks.iter().map(|(s, n)| (reg.intern_block(s, crate::terrains::block_color(s)), ((*n as u64 * 1000) / total).clamp(1, 1000) as u16)).collect();
         reg.terrains.push(TerrainDef {
