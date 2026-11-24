@@ -3077,5 +3077,14 @@
  "What each value paints": "O que cada valor pinta",
  "White point": "Ponto branco",
  "{name}, as dense as the grey is bright": "{name}, tão denso quanto o cinza é claro",
- "{name}: {w} × {h} pixels": "{name}: {w} × {h} pixels"
+ "{name}: {w} × {h} pixels": "{name}: {w} × {h} pixels",
+ "Remove the guide": "Remover a guia",
+ "Show the guide": "Mostrar a guia",
+ "Show the image on the map as a guide": "Mostrar a imagem no mapa como guia",
+ "The guide is only shown on the 2D map, to trace over: it is never saved in the map nor exported.": "A guia só é mostrada no mapa 2D, para decalcar: nunca é guardada no mapa nem exportada.",
+ "The imported image shown on the map to trace over: never exported": "A imagem importada mostrada no mapa para decalcar: nunca exportada",
+ "Edit placement": "Editar o posicionamento",
+ "Its handles on the map: drag it, a corner, the knob to turn it. Done or Esc ends it; the Pan tool shows them too": "Suas alças no mapa: arraste a imagem, um canto, o botão para girá-la. Pronto ou Esc termina; a ferramenta Mão também as mostra",
+ "Placing the image · Done": "Posicionando a imagem · Pronto",
+ "Done placing the image": "Concluir o posicionamento da imagem"
 }

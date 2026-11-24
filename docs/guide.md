@@ -877,9 +877,12 @@ The picture button in the map's header lists them, each with an eye to show
 or hide it and a lock to keep it in place; click one for its settings:
 **Over the map** or **Under it** (the shaded relief then fades over it, as
 much as the image is opaque), **Opacity**, its **Middle**, its **Scale** in
-blocks a pixel and its **Rotation**, typed in. With **Handles on the map**,
-drag the image to move it, a corner to scale it (the opposite corner stays),
-the knob above it to turn it (Shift: by 15°). There can be several. They are
+blocks a pixel and its **Rotation**, typed in. The images are passive:
+clicks and strokes go to the tool in hand, whatever is under them. With the
+**Pan** tool, or after **Edit placement** in its menu (until the **Done** pill
+at the top of the map, or `Esc`), drag an image to move it, a corner to scale
+it (the opposite corner stays), the knob above it to turn it (Shift: by 15°);
+with Pan, dragging the map off the images still moves the view. There can be several. They are
 saved with the map by the path of their files, found again beside the map
 when the map and its pictures move together. Each is read once and kept on
 the graphics card with mipmaps, scaled down past 8,192 pixels a side: a large

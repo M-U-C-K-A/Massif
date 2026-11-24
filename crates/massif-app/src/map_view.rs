@@ -1181,7 +1181,27 @@ impl MapView {
         // straight to where they go.
         let still = crate::theme::reduce_motion(ui.ctx());
         let panning = tools.tool == Tool::Pan || pan_key;
-        let pan_drag = response.dragged_by(PointerButton::Middle) || (panning && response.dragged_by(PointerButton::Primary) && self.stroke.is_none());
+        // The handles of the reference images: with the Pan tool, or while
+        // one is placed (Edit placement). They take the press before the
+        // tool, and before the Pan tool's drag.
+        references.pan = tools.tool == Tool::Pan;
+        let mut placed = false;
+        let on_reference = self.stroke.is_none()
+            && !self.view3d_grab
+            && references.interact(
+                ui,
+                &mut doc.world.meta.references,
+                pointer.filter(|_| response.hovered() || down[0]),
+                pressed[0] && response.is_pointer_button_down_on(),
+                down[0],
+                &|x, z| self.to_screen(canvas, x, z),
+                &|p| self.to_world(canvas, p),
+                &mut placed,
+            );
+        if placed {
+            doc.mark_changed();
+        }
+        let pan_drag = response.dragged_by(PointerButton::Middle) || (panning && !on_reference && response.dragged_by(PointerButton::Primary) && self.stroke.is_none());
         if pan_drag {
             let d = response.drag_delta();
             self.center[0] -= (d.x / self.zoom) as f64;
@@ -1302,25 +1322,6 @@ impl MapView {
         }
         if let Some((x, z)) = world_pointer.filter(|_| response.hovered()) {
             *hover = Some((x.floor() as i32, z.floor() as i32));
-        }
-        // The handles of the reference image being placed take the press
-        // before the tool.
-        let mut placed = false;
-        let on_reference = self.stroke.is_none()
-            && !self.view3d_grab
-            && !panning
-            && references.interact(
-                ui,
-                &mut doc.world.meta.references,
-                pointer.filter(|_| response.hovered() || down[0]),
-                pressed[0] && response.is_pointer_button_down_on(),
-                down[0],
-                &|x, z| self.to_screen(canvas, x, z),
-                &|p| self.to_world(canvas, p),
-                &mut placed,
-            );
-        if placed {
-            doc.mark_changed();
         }
         let button = if pressed[0] && !panning {
             Some(PointerButton::Primary)
@@ -1674,6 +1675,7 @@ impl MapView {
             // Over the relief.
             references.draw(&painter, refs, true, &|x, z| self.to_screen(canvas, x, z));
             references.draw_handles(ui, &painter, refs, &|x, z| self.to_screen(canvas, x, z));
+            references.done_pill(ui, canvas);
 
             if let Some((tex, r)) = &overlay {
                 let rect = Rect::from_min_max(self.to_screen(canvas, r[0] as f64, r[1] as f64), self.to_screen(canvas, r[2] as f64, r[3] as f64));

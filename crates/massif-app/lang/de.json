@@ -3080,5 +3080,14 @@
  "What each value paints": "Was jeder Wert malt",
  "White point": "Weißpunkt",
  "{name}, as dense as the grey is bright": "{name}, so dicht wie das Grau hell ist",
- "{name}: {w} × {h} pixels": "{name}: {w} × {h} Pixel"
+ "{name}: {w} × {h} pixels": "{name}: {w} × {h} Pixel",
+ "Remove the guide": "Vorlage entfernen",
+ "Show the guide": "Vorlage zeigen",
+ "Show the image on the map as a guide": "Das Bild als Vorlage auf der Karte zeigen",
+ "The guide is only shown on the 2D map, to trace over: it is never saved in the map nor exported.": "Die Vorlage wird nur auf der 2D-Karte gezeigt, zum Nachzeichnen: Sie wird nie in der Karte gespeichert oder exportiert.",
+ "The imported image shown on the map to trace over: never exported": "Das importierte Bild auf der Karte zum Nachzeichnen: nie exportiert",
+ "Edit placement": "Platzierung bearbeiten",
+ "Its handles on the map: drag it, a corner, the knob to turn it. Done or Esc ends it; the Pan tool shows them too": "Seine Griffe auf der Karte: das Bild ziehen, eine Ecke, den Knopf zum Drehen. Fertig oder Esc beendet es; das Hand-Werkzeug zeigt sie auch",
+ "Placing the image · Done": "Bild wird platziert · Fertig",
+ "Done placing the image": "Platzierung des Bildes beenden"
 }

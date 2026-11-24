@@ -8,7 +8,7 @@
 //! paths) and never exported.
 
 use crate::theme::{self, Icon, Palette, RichTextExt};
-use crate::widgets::{Field, button_group, row, switch, well};
+use crate::widgets::{Field, button_group, row, well};
 use egui::epaint::{Mesh, Vertex};
 use egui::{Color32, ColorImage, CursorIcon, Pos2, RichText, Shape, Stroke, TextureFilter, TextureHandle, TextureOptions, Ui, pos2, vec2};
 use massif_core::reference::ReferenceImage;
@@ -53,8 +53,13 @@ pub struct References {
     textures: HashMap<String, Slot>,
     /// The image whose settings show and whose handles are on the map.
     pub selected: Option<usize>,
-    /// Its handles are on the map.
+    /// Edit placement, picked in the header's menu: the handles of the
+    /// selected image are on the map until Done or Esc.
     pub placing: bool,
+    /// The Pan tool is in hand: the handles are on the map, and a press on
+    /// an image picks it. Set by the map each frame. Otherwise the images
+    /// are passive: presses and strokes go to the tool.
+    pub pan: bool,
     grab: Option<(Handle, ReferenceImage, (f64, f64))>,
     /// Images added that take a size and a place once read: fitted to the
     /// map when larger than it, else a block a pixel where they were put.
@@ -69,7 +74,12 @@ impl References {
         list.push(ReferenceImage { path: path.clone(), x, z, ..ReferenceImage::default() });
         self.pending.push(path);
         self.selected = Some(list.len() - 1);
-        self.placing = true;
+    }
+
+    /// Whether the handles are on the map: with the Pan tool, or while
+    /// placing.
+    pub fn handles_on(&self) -> bool {
+        self.placing || self.pan
     }
 
     /// Read what has to be, hand over what was read: textures for the
@@ -181,7 +191,7 @@ impl References {
     }
 
     fn placed<'a>(&self, list: &'a [ReferenceImage]) -> Option<&'a ReferenceImage> {
-        self.selected.filter(|_| self.placing).and_then(|k| list.get(k)).filter(|r| r.shown && r.size[0] > 0)
+        self.selected.filter(|_| self.handles_on()).and_then(|k| list.get(k)).filter(|r| r.shown && r.size[0] > 0)
     }
 
     /// The handle under the pointer at `p`, on the image being placed.
@@ -211,7 +221,22 @@ impl References {
             self.grab = None;
             return false;
         };
-        let over = self.handle_at(list, p, to_screen, to_world);
+        if !self.handles_on() {
+            self.grab = None;
+            return false;
+        }
+        let mut over = self.handle_at(list, p, to_screen, to_world);
+        // With the Pan tool, the image under the pointer (the topmost
+        // shown and unlocked), when not on the handles of the one selected.
+        if over.is_none() && self.pan && self.grab.is_none() {
+            let (x, z) = to_world(p);
+            if let Some(k) = list.iter().rposition(|r| r.shown && !r.locked && r.size[0] > 0 && r.contains(x, z)) {
+                over = Some(Handle::Move);
+                if pressed {
+                    self.selected = Some(k);
+                }
+            }
+        }
         if pressed && let (Some(h), Some(k)) = (over, self.selected) {
             self.grab = Some((h, list[k].clone(), to_world(p)));
         }
@@ -253,6 +278,34 @@ impl References {
             None => {}
         }
         held.is_some() || over.is_some()
+    }
+
+    /// While placing: a pill at the top of the map, Done, which ends it, as
+    /// Esc does.
+    pub fn done_pill(&mut self, ui: &mut Ui, canvas: egui::Rect) {
+        if !self.placing {
+            return;
+        }
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.placing = false;
+            return;
+        }
+        let pal = Palette::of(ui);
+        let text = tr!("Placing the image · Done");
+        let font = egui::FontId::proportional(12.5);
+        let galley = ui.painter().layout_no_wrap(text.to_owned(), font, pal.text);
+        let rect = egui::Rect::from_center_size(pos2(canvas.center().x, canvas.top() + 22.0), galley.size() + vec2(28.0, 12.0));
+        let r = ui.interact(rect, egui::Id::unique("reference placing done"), egui::Sense::click());
+        r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tr!("Done placing the image")));
+        let fill = if r.hovered() { theme::mix(pal.panel, pal.text, 0.08) } else { pal.panel };
+        ui.painter().rect(rect, rect.height() / 2.0, fill, Stroke::new(1.0, theme::accent()), egui::StrokeKind::Inside);
+        ui.painter().galley(rect.center() - galley.size() / 2.0, galley, pal.text);
+        if r.hovered() {
+            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+        }
+        if r.clicked() {
+            self.placing = false;
+        }
     }
 
     /// The button in the map's header: the images, each with an eye and a
@@ -336,10 +389,11 @@ impl References {
                         ui.add(Field::new(&mut r.rotation, 0.0..=360.0).max_decimals(1).suffix("°"));
                     });
                 });
-                row(ui, tr!("Handles on the map"), |ui| {
-                    switch(ui, &mut self.placing);
-                });
             });
+            if !r.locked && crate::widgets::button(ui, theme::with_icon(Icon::Move, tr!("Edit placement"))).on_hover_text(tr!("Its handles on the map: drag it, a corner, the knob to turn it. Done or Esc ends it; the Pan tool shows them too")).clicked() {
+                self.placing = true;
+                ui.close();
+            }
             if r.size[0] > 0 {
                 let (w, d) = (r.size[0] as f32 * r.scale, r.size[1] as f32 * r.scale);
                 ui.label(RichText::new(tr!("{px} × {py} pixels: {w:.0} × {d:.0} blocks on the map.", px = r.size[0], py = r.size[1], w, d)).size(11.0).color(pal.weak));

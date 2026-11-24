@@ -3140,5 +3140,14 @@
  "What each value paints": "Ce que peint chaque valeur",
  "White point": "Point blanc",
  "{name}, as dense as the grey is bright": "{name}, aussi dense que le gris est clair",
- "{name}: {w} × {h} pixels": "{name} : {w} × {h} pixels"
+ "{name}: {w} × {h} pixels": "{name} : {w} × {h} pixels",
+ "Remove the guide": "Retirer le guide",
+ "Show the guide": "Afficher le guide",
+ "Show the image on the map as a guide": "Afficher l'image sur la carte comme guide",
+ "The guide is only shown on the 2D map, to trace over: it is never saved in the map nor exported.": "Le guide est seulement affiché sur la carte 2D, pour décalquer : il n'est jamais enregistré dans la carte ni exporté.",
+ "The imported image shown on the map to trace over: never exported": "L'image importée affichée sur la carte pour décalquer : jamais exportée",
+ "Edit placement": "Modifier le placement",
+ "Its handles on the map: drag it, a corner, the knob to turn it. Done or Esc ends it; the Pan tool shows them too": "Ses poignées sur la carte : glissez l'image, un coin, la molette pour la tourner. Terminé ou Échap y met fin ; l'outil Main les affiche aussi",
+ "Placing the image · Done": "Placement de l'image · Terminé",
+ "Done placing the image": "Terminer le placement de l'image"
 }

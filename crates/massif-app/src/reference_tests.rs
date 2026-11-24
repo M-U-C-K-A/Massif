@@ -157,3 +157,75 @@ fn a_picture_dropped_on_the_map_becomes_a_reference_image() {
     assert_eq!(refs[0].size, [600, 400]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Reference images are passive: a stroke of Paint terrain over one
+/// paints the ground and leaves the image where it is; with the Pan tool,
+/// dragging it moves it (and does not pan the map); Edit placement shows
+/// the handles with any tool until Esc.
+#[test]
+fn reference_images_move_only_with_the_pan_tool_or_while_placed() {
+    let dir = std::env::temp_dir().join(format!("massif-references-passive-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let plan = dir.join("plan.png");
+    plan_picture(&plan);
+    let mut h = harness_with(ThemeChoice::Dark, ppp());
+    h.run_steps(5);
+    let id = map_id(&h);
+    {
+        let view = h.state_mut().maps.get_mut(&id).unwrap();
+        view.center = [0.0, 0.0];
+        view.zoom = 1.0;
+    }
+    h.run_steps(5);
+    h.state_mut().add_references(std::slice::from_ref(&plan), Some((0.0, 0.0)));
+    h.run_steps(5);
+    assert!(!h.state().references.placing, "passive once added");
+    // A stroke of Paint terrain over the image: the ground is painted, the
+    // image stays.
+    let deepslate = h.state().doc.world.registry.terrain_by_name("Deepslate").unwrap();
+    {
+        let app = h.state_mut();
+        app.tools.select(Tool::PaintTerrain);
+        app.tools.pattern.on = false;
+        app.tools.terrain = deepslate.0;
+        app.tools.brush = massif_core::Brush::symmetric(massif_core::BrushShape::Circle, massif_core::Profile::Constant, 12.0);
+    }
+    h.run_steps(3);
+    // Dry land under the image, 41 blocks along.
+    let dry = |x: i32, z: i32| crate::tools::probe(&h.state().doc, x, z).is_some_and(|p| p.fluid == massif_core::NO_FLUID || (p.fluid as f32) < p.height);
+    let (sx, sz) = (-280..240).step_by(8).flat_map(|z| (-280..200).step_by(8).map(move |x| (x, z))).find(|&(x, z)| (0..=40).all(|d| dry(x + d, z))).expect("dry land under the image");
+    let from = h.state().maps[&id].screen_of(sx as f64, sz as f64);
+    drag_on(&mut h, from, from + egui::vec2(40.0, 0.0));
+    let r = h.state().doc.world.meta.references[0].clone();
+    assert_eq!((r.x, r.z, r.scale), (0.0, 0.0, 1.0), "the image stayed where it was");
+    let painted = (0..=40).filter(|&d| crate::tools::probe(&h.state().doc, sx + d, sz).is_some_and(|p| p.terrain == deepslate.0)).count();
+    assert!(painted > 30, "the stroke painted the ground under the image: {painted} of 41 columns");
+    save(&mut h, "reference-passive-stroke");
+    // With the Pan tool, its handles show, and a drag on it moves it.
+    h.state_mut().tools.select(Tool::Pan);
+    h.run_steps(3);
+    let center = h.state().maps[&id].center;
+    let from = h.state().maps[&id].screen_of(-100.0, -50.0);
+    drag_on(&mut h, from, from + egui::vec2(60.0, 30.0));
+    let r = h.state().doc.world.meta.references[0].clone();
+    assert!((r.x - 60.0).abs() < 2.0 && (r.z - 30.0).abs() < 2.0, "moved by the Pan tool: {} {}", r.x, r.z);
+    assert_eq!(h.state().maps[&id].center, center, "the map did not pan under it");
+    save(&mut h, "reference-passive-pan");
+    // Dragging the map off the image still pans.
+    let off = h.state().maps[&id].screen_of(-370.0, 0.0);
+    drag_on(&mut h, off, off + egui::vec2(50.0, 0.0));
+    assert_ne!(h.state().maps[&id].center, center, "the Pan tool pans off the image");
+    // Edit placement: the handles with a brush in hand, until Esc.
+    h.state_mut().tools.select(Tool::PaintTerrain);
+    h.state_mut().references.placing = true;
+    h.run_steps(3);
+    save(&mut h, "reference-placing");
+    let x0 = h.state().doc.world.meta.references[0].x;
+    let p = h.state().maps[&id].screen_of(x0, 30.0);
+    drag_on(&mut h, p, p + egui::vec2(-30.0, 0.0));
+    assert!(h.state().doc.world.meta.references[0].x < x0 - 10.0, "moved while placed");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(3);
+    assert!(!h.state().references.placing, "Esc ends the placing");
+    let _ = std::fs::remove_dir_all(&dir);
+}
