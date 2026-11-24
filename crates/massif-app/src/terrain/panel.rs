@@ -497,10 +497,12 @@ impl TerrainPanel {
         self.graph.ui.get(id).is_some_and(|u| u.collapsed)
     }
 
-    /// Adds a node of type `kind` at `at`, selected; gives its name.
+    /// Adds a node of type `kind` at `at`, selected; gives its name. A
+    /// type named without its version gets its latest one.
     pub fn add_node(&mut self, kind: &str, at: [f32; 2]) -> String {
+        let kind = if kind.contains('@') { kind.to_owned() } else { registry::latest(kind).map_or_else(|| kind.to_owned(), |s| s.type_name()) };
         let g = self.edit();
-        let id = g.add(Node::new(kind));
+        let id = g.add(Node::new(&kind));
         g.ui.insert(id.clone(), NodeUi { pos: at, collapsed: false });
         self.selected = vec![id.clone()];
         id

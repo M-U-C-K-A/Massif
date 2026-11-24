@@ -39,7 +39,7 @@ pub fn output_group(name: &str) -> &'static str {
         "temperature" | "humidity" => "climate",
         "vegetation" => "life",
         "caves" => "underground",
-        n if n.starts_with("layer.") => "rock",
+        n if n.starts_with("level.") || n.starts_with("layer.") => "rock",
         n if n.starts_with("mask.") => "masks",
         _ => "other",
     }
@@ -1274,7 +1274,7 @@ pub fn find(query: &str, takes: Option<PortKind>) -> Vec<&'static NodeSpec> {
 /// Whether the library and the search offer a type of node: not the
 /// compiler's own, nor the nodes of 1.2 that only migrated graphs hold.
 pub fn offered(s: &NodeSpec) -> bool {
-    s.family != Family::Internal && !s.id.starts_with("legacy.")
+    s.family != Family::Internal && !s.id.starts_with("legacy.") && registry::latest(s.id).is_some_and(|l| l.version == s.version)
 }
 
 /// Whether the letters of `q` come in order in `s`.
