@@ -186,15 +186,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           version=${GITHUB_REF_NAME#v}
+          # GitHub takes at most 125,000 characters of notes: publish the top
+          # section, the one this version brings, and link the whole file.
+          awk '/^## New in /{n++} n==1' .github/RELEASE_NOTES.md > notes.md
+          echo >> notes.md
+          echo "Every earlier version's notes: [RELEASE_NOTES.md](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/.github/RELEASE_NOTES.md)" >> notes.md
           if [[ "$version" == *-* ]]; then
             # v1.0.0-beta.1: "Massif 1.0.0 beta 1", a pre-release.
             pre=${version#*-}
             gh release create "$GITHUB_REF_NAME" out/* \
               --title "Massif ${version%%-*} ${pre//./ }" \
-              --notes-file .github/RELEASE_NOTES.md \
+              --notes-file notes.md \
               --prerelease
           else
             gh release create "$GITHUB_REF_NAME" out/* \
               --title "Massif ${GITHUB_REF_NAME}" \
-              --notes-file .github/RELEASE_NOTES.md
+              --notes-file notes.md
           fi
