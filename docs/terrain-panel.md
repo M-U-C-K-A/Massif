@@ -16,6 +16,7 @@ Terrain section. The graph is saved with the world.
 - [The Map Output](#the-map-output)
 - [Settings](#settings)
 - [The viewer](#the-viewer)
+- [Apply](#apply)
 - [Keys](#keys)
 
 ## The graph
@@ -206,7 +207,32 @@ A picture comes coarse first, then sharp.
   one.
 - **Live** shows the graph's result on the World map as it is edited,
   without writing it; **Apply to map** writes it, in one step that can be
-  undone.
+  undone (see [Apply](#apply)).
+
+## Apply
+
+**Apply to map** writes everything the active Map Output carries into the
+map, as one step that ⌘Z takes back whole:
+
+- the ground (heights, water, terrains, colours as blocks, layers of rock,
+  biomes of the climate), made window after window of 1024 blocks, so that
+  a large map is written without ever holding all of it;
+- what goes underground: the cave layers of its Cave Layer nodes (marked as
+  the graph's, updated on the next Apply, never mixed with those painted by
+  hand), the cave biomes, and the volumes carved out of the ground or added
+  to it;
+- its villages: the Map Output's structures and roads, laid on the ground
+  as written. The villages an earlier Apply laid are replaced; structures
+  placed by hand stay.
+
+A dialog shows how far it is (the terrain window by window, then the
+caves, then the villages); **Cancel** stops it and leaves the map as it
+was. A map of 2048 blocks a side with a mountain and its erosion is
+written in about a second.
+
+Thumbnails and the viewer show every kind of output: points, lines,
+footprints and instances drawn over the relief they stand on, and a volume
+as its cut a little under the sea's level, laid over the relief.
 
 ## Keys
 

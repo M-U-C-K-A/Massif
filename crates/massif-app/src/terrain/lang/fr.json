@@ -476,5 +476,20 @@
   "{a} is {fa} and {b} is {fb}: nothing turns one into the other without a node saying how.": "{a} est {fa} et {b} est {fb} : rien ne change l'un en l'autre sans un node qui dise comment.",
   "{name} (copy)": "{name} (copie)",
   "{n} nodes": "{n} nodes",
-  "{n} nodes, {k} frames inside": "{n} nodes, {k} cadres dedans"
+  "{n} nodes, {k} frames inside": "{n} nodes, {k} cadres dedans",
+  ", a cave layer": ", une couche de grottes",
+  ", a village": ", un village",
+  ", {n} cave layers": ", {n} couches de grottes",
+  ", {n} sculpted chunks": ", {n} chunks sculptés",
+  ", {n} villages": ", {n} villages",
+  "Applied the terrain graph in {s} s": "Graphe de terrain appliqué en {s} s",
+  "Apply cancelled: the map is as it was": "Application annulée : la carte est telle qu'elle était",
+  "Apply stopped": "L'application s'est arrêtée",
+  "Apply the terrain graph": "Appliquer le graphe de terrain",
+  "Applying the terrain graph": "Application du graphe de terrain",
+  "Caves, cave biomes and volumes": "Grottes, biomes de grottes et volumes",
+  "The graph has no active Map Output to apply": "Le graphe n'a pas de sortie de carte active à appliquer",
+  "The terrain, window {k} of {n}": "Le terrain, fenêtre {k} sur {n}",
+  "Villages and roads": "Villages et routes",
+  "{s} s · one step you can undo": "{s} s · une étape que vous pouvez annuler"
 }

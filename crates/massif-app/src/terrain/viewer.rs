@@ -209,6 +209,7 @@ fn controls(p: &mut TerrainPanel, ui: &mut Ui) {
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         if ui.add(theme::primary_button(ui, t!("Apply to map"))).on_hover_text(t!("Write the graph's result into the map, in one step you can undo")).clicked() {
             p.events.push(Event::Apply);
+            p.apply_asked = true;
         }
         ui.add_space(6.0);
         let mut live = p.live_on;

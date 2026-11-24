@@ -174,6 +174,10 @@ pub struct TerrainPanel {
     pub exposing: Option<super::props::Exposing>,
     /// Something to tell, shown on the canvas for a moment.
     pub notice: Option<(String, f64)>,
+    /// Apply was asked for: the app starts it at its next frame.
+    pub apply_asked: bool,
+    /// Apply under way.
+    pub applying: Option<super::apply::Applying>,
 
     undo: Vec<Snap>,
     redo: Vec<Snap>,
@@ -249,6 +253,8 @@ impl TerrainPanel {
             renaming_mask: None,
             exposing: None,
             notice: None,
+            apply_asked: false,
+            applying: None,
             undo: Vec::new(),
             redo: Vec::new(),
             editing: false,

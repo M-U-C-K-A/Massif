@@ -3648,6 +3648,28 @@ impl MassifApp {
 
     // --------------------------------------------------------------- jobs --
 
+    /// The terrain graph's Apply, while it runs: its windows written as
+    /// they come, the views refreshed and what it did said once done.
+    fn poll_terrain_apply(&mut self, ctx: &egui::Context) {
+        let Some(p) = &mut self.terrain_panel else { return };
+        if !p.apply_asked && p.applying.is_none() {
+            return;
+        }
+        let lib = self.tools.structure.rt.library();
+        let Some(out) = p.tick_apply(ctx, &mut self.doc, &self.blocks, lib.as_deref()) else { return };
+        self.map_cache.invalidate_all();
+        self.view3d.invalidate_all();
+        self.sculpt3d.invalidate_all();
+        self.extra3d.iter_mut().for_each(View3d::invalidate_all);
+        match out {
+            Ok(done) => {
+                let text = done.summary();
+                self.say(ctx, &text, false, None);
+            }
+            Err(e) => self.say(ctx, &e, true, None),
+        }
+    }
+
     fn poll_jobs(&mut self, ctx: &egui::Context) {
         // A stroke under way: what the tasks bring waits until it ends, so
         // that their tiles, worked out before it, do not close its step
@@ -7182,6 +7204,7 @@ impl MassifApp {
         step("the work done in the background (opening, saving, exporting)");
         self.poll_autosave_opening();
         self.poll_jobs(&ctx);
+        self.poll_terrain_apply(&ctx);
         // A save point open read-only keeps as it is.
         if self.doc.take_back() {
             self.map_cache.invalidate_all();
@@ -13265,6 +13288,71 @@ mod tests {
     /// Caves made by a terrain graph (the Cave System, a tunnel and a hall
     /// carved along a line) are seen as painted ones are: in the 2D cut and
     /// through the ground in 3D.
+    /// The terrain graph's Apply from the panel: a Village Generator and a
+    /// Cave System written into the map in one step, the dialog showing how
+    /// far it is, the village on the map and the caves under it.
+    #[test]
+    fn terrain_graph_apply_writes_villages_and_caves() {
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let pack = crate::terrain::tests::test_pack("app");
+        let graph = massif_terrain::model::Graph::from_json(&format!(
+            r#"{{ "nodes": {{
+            "land": {{ "type": "noise.fbm", "params": {{ "scale": 600, "height": 10, "base": 70 }} }},
+            "village": {{ "type": "massif:village-generator", "inputs": {{ "height": "land" }}, "params": {{ "pack": {pack}, "houses": 24, "walls": true, "road": "stone" }} }},
+            "system": {{ "type": "massif:cave-system", "inputs": {{ "height": "village.height" }} }},
+            "out": {{ "type": "output.map", "inputs": {{ "height": "village.height", "structures": "village.structures", "roads": "village.roads", "caves": "system.caves", "cave_biomes": "system.biomes" }} }} }} }}"#,
+            pack = serde_json::to_string(&pack.to_string_lossy()).unwrap()
+        ))
+        .unwrap();
+        let steps = h.state().doc.history.undo_count();
+        {
+            let app = h.state_mut();
+            let mut p = crate::terrain::TerrainPanel::with_graph(std::sync::Arc::new(massif_terrain::engine::Engine::new(Default::default())), graph);
+            p.apply_asked = true;
+            app.terrain_panel = Some(p);
+        }
+        let ppp = std::env::var("MASSIF_SNAPSHOT_PPP").unwrap_or_else(|_| "1".into());
+        h.run_steps(4);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join(format!("editor-apply-dialog-{ppp}x.png"))).unwrap();
+        }
+        let mut frames = 0;
+        while h.state().terrain_panel.as_ref().is_some_and(|p| p.applying.is_some() || p.apply_asked) {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            frames += 1;
+            assert!(frames < 20000, "Apply never finished");
+        }
+        let app = h.state();
+        assert_eq!(app.doc.history.undo_count(), steps + 1, "one step");
+        let dim = app.doc.dimension();
+        assert!(dim.structures.iter().any(|s| !s.source.is_user()), "the graph's village on the map");
+        assert!(dim.caves.defs().iter().any(|c| c.graph.is_some()), "the graph's caves on the map");
+        let _ = std::fs::remove_dir_all(pack.parent().unwrap());
+        let Some(dir) = dir else { return };
+        let id = h.state().active_map.or_else(|| h.state().maps.keys().next().copied()).expect("a map view");
+        let village = h.state().doc.dimension().structures.iter().find(|s| !s.source.is_user()).map(|s| (s.min, s.max)).expect("a village");
+        let centre = [((village.0[0] + village.1[0]) / 2) as f64, ((village.0[2] + village.1[2]) / 2) as f64];
+        for (name, zoom, cut) in [("editor-applied-map", 0.9f32, None), ("editor-applied-village", 2.5, None), ("editor-applied-caves", 0.9, Some(30))] {
+            {
+                let view = h.state_mut().maps.get_mut(&id).unwrap();
+                view.cut = cut;
+                view.center = if zoom > 1.0 { centre } else { [0.0, 0.0] };
+                view.zoom = zoom;
+            }
+            let mut frames = 0;
+            while frames < 8 || h.state().map_cache.busy() {
+                h.step();
+                frames += 1;
+                assert!(frames < 3000, "the map never finished");
+            }
+            h.run_steps(4);
+            h.render().unwrap().save(dir.join(format!("{name}-{ppp}x.png"))).unwrap();
+        }
+    }
+
     #[test]
     fn graph_caves_seen_underground() {
         let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);

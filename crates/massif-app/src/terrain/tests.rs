@@ -575,6 +575,18 @@ fn the_editor_renders() {
         p.selected = vec!["shape".into()];
         p.exposing = Some(super::props::Exposing { target: "shape.roughness".into(), name: "rough".into(), label: "Roughness".into(), category: "Shape".into(), range: Some([0.0, 1.0]), ..Default::default() });
     });
+    // Geometry and volumes previewed: a village's roads in the viewer, its
+    // buildings and a hall cut under the sea on their nodes.
+    let pack = test_pack("render");
+    let mut g = village_and_caves(&pack);
+    g.terrain.size = Some(1024);
+    g.nodes.insert("hall".into(), massif_terrain::model::Node::new("volume.sphere").with("x", 0.5).with("z", 0.5).with("y", 40).with("radius", 120).with("squash", 0.5));
+    g.nodes.insert("pts".into(), massif_terrain::model::Node::new("points.scatter").input("height", "land"));
+    render_editor(&dir, "editor-geometry-dark", Dark, 1.0, engine.clone(), g, |p| {
+        p.viewed = Some((Vec::new(), super::eval::Shown { node: "village".into(), port: Some("roads".into()) }));
+        p.selected = vec!["hall".into()];
+    });
+    let _ = std::fs::remove_dir_all(pack.parent().unwrap());
     // A frame folded and selected; a refused link explained.
     render_editor_then(
         &dir,
@@ -626,4 +638,107 @@ fn a_composites_columns_wire_its_inside() {
     p.close();
     let (_, diags) = massif_terrain::lower::lower(&p.document());
     assert!(diags.iter().all(|d| d.severity != massif_terrain::compile::Severity::Error), "{diags:?}");
+}
+
+/// A graph making a village and caves on a map of `tiles` × `tiles` tiles.
+fn village_and_caves(pack: &std::path::Path) -> Graph {
+    let text = format!(
+        r#"{{ "nodes": {{
+        "land": {{ "type": "noise.fbm", "params": {{ "scale": 600, "height": 10, "base": 70 }} }},
+        "village": {{ "type": "massif:village-generator", "inputs": {{ "height": "land" }}, "params": {{ "pack": {pack}, "houses": 18, "walls": true }} }},
+        "system": {{ "type": "massif:cave-system", "inputs": {{ "height": "village.height" }} }},
+        "out": {{ "type": "output.map", "inputs": {{ "height": "village.height", "structures": "village.structures", "roads": "village.roads", "caves": "system.caves", "cave_biomes": "system.biomes" }} }}
+    }} }}"#,
+        pack = serde_json::to_string(&pack.to_string_lossy()).unwrap()
+    );
+    Graph::from_json(&text).unwrap()
+}
+
+pub(crate) fn test_pack(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("massif-app-apply-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    massif_structures::village::testpack::write_pack(&dir).unwrap()
+}
+
+/// Apply writes everything the Map Output carries in one step: the ground
+/// window by window, the caves and cave biomes, the village's structures;
+/// undo takes it all back, and Cancel leaves the map as it was.
+#[test]
+fn apply_writes_ground_caves_and_villages_in_one_step() {
+    let pack = test_pack("apply");
+    let world = massif_core::generate::generate(&massif_core::generate::GenParams { tiles_x: 4, tiles_z: 4, landform: massif_core::generate::Landform::Flat, ..Default::default() });
+    let mut doc = crate::doc::Document::new(world, None, 1);
+    let blocks = crate::blocks::BlockLibrary::default();
+    let engine = Arc::new(Engine::new(Default::default()));
+    let graph = village_and_caves(&pack);
+    let env: Arc<dyn massif_terrain::kernel::Env> = Arc::new(massif_terrain::world::MapEnv::new(&doc.world, 0, 1, "."));
+    let before_steps = doc.history.undo_count();
+    let height_before = massif_core::ops::height_at(doc.dimension(), 0, 100, 100, massif_core::ops::Surface::Top);
+    let mut a = super::apply::Applying::start(engine.clone(), &graph, &mut doc, env.clone(), 7).unwrap();
+    let t0 = std::time::Instant::now();
+    let done = loop {
+        if let Some(r) = a.step(&mut doc, &blocks, None) {
+            break r.unwrap();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        assert!(t0.elapsed().as_secs() < 120, "Apply never finished");
+    };
+    eprintln!("applied {} windows in {:.2} s: {:?}, {} villages, notes {:?}", done.windows, done.seconds, done.caves, done.villages, done.notes);
+    assert_eq!(doc.history.undo_count(), before_steps + 1, "one step");
+    assert!(done.caves.cave_layers >= 1 && done.caves.cave_columns > 0, "{:?}", done.caves);
+    assert_eq!(done.villages, 1);
+    let dim = doc.dimension();
+    assert!(dim.structures.iter().any(|s| !s.source.is_user()), "the graph's village is on the map");
+    assert_ne!(massif_core::ops::height_at(dim, 0, 100, 100, massif_core::ops::Surface::Top), height_before);
+    // Undo: as it was.
+    assert!(doc.undo().is_some());
+    assert!(doc.dimension().structures.iter().all(|s| s.source.is_user()));
+    assert_eq!(massif_core::ops::height_at(doc.dimension(), 0, 100, 100, massif_core::ops::Surface::Top), height_before);
+    // Cancelled half way: as it was, no step.
+    let steps = doc.history.undo_count();
+    let mut a = super::apply::Applying::start(engine, &graph, &mut doc, env, 8).unwrap();
+    let _ = a.step(&mut doc, &blocks, None);
+    a.cancel(&mut doc);
+    assert_eq!(doc.history.undo_count(), steps);
+    assert_eq!(massif_core::ops::height_at(doc.dimension(), 0, 100, 100, massif_core::ops::Surface::Top), height_before);
+    let _ = std::fs::remove_dir_all(pack.parent().unwrap());
+}
+
+/// On a map larger than a window, Apply writes it window by window with
+/// no seam where they meet, as one window would.
+#[test]
+fn apply_goes_window_by_window_without_seams() {
+    let world = massif_core::generate::generate(&massif_core::generate::GenParams { tiles_x: 16, tiles_z: 16, landform: massif_core::generate::Landform::Flat, ..Default::default() });
+    let mut doc = crate::doc::Document::new(world, None, 1);
+    let blocks = crate::blocks::BlockLibrary::default();
+    let engine = Arc::new(Engine::new(Default::default()));
+    let graph = Graph::from_json(r#"{ "nodes": {
+        "land": { "type": "noise.fbm", "params": { "scale": 500, "height": 60, "base": 70 } },
+        "worn": { "type": "erosion.thermal", "inputs": { "height": "land" } },
+        "out": { "type": "output.map", "inputs": { "height": "worn" } } } }"#).unwrap();
+    let env: Arc<dyn massif_terrain::kernel::Env> = Arc::new(massif_terrain::world::MapEnv::new(&doc.world, 0, 1, "."));
+    let mut a = super::apply::Applying::start(engine.clone(), &graph, &mut doc, env, 1).unwrap();
+    assert_eq!(a.windows, 4);
+    let done = loop {
+        if let Some(r) = a.step(&mut doc, &blocks, None) {
+            break r.unwrap();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    };
+    eprintln!("2048² in {} windows: {:.2} s", done.windows, done.seconds);
+    assert_eq!(done.windows, 4);
+    // What the graph makes over the whole terrain at once, against what
+    // the windows wrote, along the line where they meet.
+    let space = massif_terrain::world::space_of(&doc.world, 0, &graph);
+    let (c, _) = massif_terrain::compile::compile(&graph, space, space.size.min(4096));
+    let whole = engine.region(&c, c.output("height").unwrap(), 0, c.space.whole(0), &massif_terrain::engine::never).unwrap();
+    let mut worst = 0.0f32;
+    for z in (0..2048).step_by(37) {
+        for x in [1022, 1023, 1024, 1025] {
+            let (bx, bz) = (c.space.x0 + x, c.space.z0 + z);
+            let written = massif_core::ops::height_at(doc.dimension(), 0, bx, bz, massif_core::ops::Surface::Top).unwrap();
+            worst = worst.max((written - whole.at(x, z)).abs());
+        }
+    }
+    assert!(worst <= 1.0, "the windows meet {worst} blocks apart from the whole");
 }

@@ -8,6 +8,7 @@
 
 #[macro_use]
 pub mod text;
+pub mod apply;
 pub mod canvas;
 pub mod edit;
 pub mod eval;
@@ -22,4 +23,4 @@ pub mod viewer;
 pub use panel::TerrainPanel;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

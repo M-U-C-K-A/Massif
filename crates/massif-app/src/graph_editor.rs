@@ -3032,7 +3032,7 @@ impl GraphEditor {
 /// earlier conversions made, new ones for the others. Levels of layers the
 /// graph no longer has are removed — unless it starts from the map, which
 /// they are part of. Called at the start of the history step.
-fn layer_levels(doc: &mut Document, layers: &[LayerOut], reads_map: bool) -> Vec<usize> {
+pub(crate) fn layer_levels(doc: &mut Document, layers: &[LayerOut], reads_map: bool) -> Vec<usize> {
     let find = |doc: &Document, slot: u32| {
         doc.dimension()
             .levels
@@ -3062,7 +3062,7 @@ fn layer_levels(doc: &mut Document, layers: &[LayerOut], reads_map: bool) -> Vec
     layers.iter().map(|l| find(doc, l.slot).expect("the level was just made")).collect()
 }
 
-fn block_palette(doc: &mut Document, blocks: &BlockLibrary, set: BlockPalette, colors: &ColorField) -> Vec<(TerrainId, [u8; 3])> {
+pub(crate) fn block_palette(doc: &mut Document, blocks: &BlockLibrary, set: BlockPalette, colors: &ColorField) -> Vec<(TerrainId, [u8; 3])> {
     match &blocks.catalogue {
         Some(cat) => {
             let wanted = set.blocks();

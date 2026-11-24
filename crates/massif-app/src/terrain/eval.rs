@@ -373,8 +373,10 @@ fn picture(engine: &Engine, c: &Compiled, what: &Shown, samples: u32, look: Opti
         (lod, whole)
     };
     let eval = |s: (usize, u8)| engine.region(c, s, lod, rect, cancel).map_err(|e| e.to_string());
-    // Geometry and volumes get previews of their own with the editor of
-    // 1.2; meanwhile the relief they stand on.
+    // Geometry is drawn over the relief it stands on; a volume shows as its
+    // cut under the sea's level, laid on that relief.
+    let (geo, volume) = (kind.is_geometry().then_some(src), kind.is_volume().then_some(src));
+    let shown_kind = kind;
     let (src, kind) = match kind.is_raster() {
         true => (src, kind),
         false => match relief_of(c, src) {
@@ -384,6 +386,10 @@ fn picture(engine: &Engine, c: &Compiled, what: &Shown, samples: u32, look: Opti
     };
     let sea = c.space.sea_level;
     let main = eval(src)?;
+    let cut = match volume {
+        Some(v) => Some(volume_cut(engine, c, v, (sea as i32) - 16, lod, rect, cancel).map_err(|e| e.to_string())?),
+        None => None,
+    };
     let range = main.range();
     // Heights that are not a relief (a mask kept as heights, all under the
     // sea, all flat) are shown as a field: stretched over a relief, dry.
@@ -435,6 +441,13 @@ fn picture(engine: &Engine, c: &Compiled, what: &Shown, samples: u32, look: Opti
         (None, _) => thumb_surface,
     };
     let relief = Relief { heights: &heights, colors: colors.as_ref(), sea };
+    let overlay = match cut {
+        Some(m) => {
+            let tint = super::sockets::color(PortKind::Density).to_array();
+            Some((m, [tint[0], tint[1], tint[2]]))
+        }
+        None => overlay,
+    };
     let ov = overlay.as_ref().map(|(m, col)| Overlay { mask: m, color: *col, opacity: look.map_or(0.9, |l| l.overlay) });
     let (size, shade_look) = match look {
         None => ([samples as usize, samples as usize], Look { exaggeration: shade::auto_exaggeration(&heights, sea) * 1.6, camera: Camera::Top { view: view_of(&heights, rect, whole, [0.0, 0.0, 1.0, 1.0], c.space.samples(lod)) }, back: [0, 0, 0], water: !field, ..Look::default() }),
@@ -445,8 +458,121 @@ fn picture(engine: &Engine, c: &Compiled, what: &Shown, samples: u32, look: Opti
             (l.size, Look { sun: l.sun, exaggeration, camera, contours, back: l.back, water: !field, ..Look::default() })
         }
     };
-    let rgba = shade::shade(engine.gpu().map(|g| &**g), &relief, ov, surface, &shade_look, size);
+    let mut rgba = shade::shade(engine.gpu().map(|g| &**g), &relief, ov, surface, &shade_look, size);
+    // Geometry, drawn over the picture seen from above.
+    if let Some(g) = geo
+        && look.is_none_or(|l| !l.three_d)
+    {
+        let shown = engine.geometry(c, g, cancel).map_err(|e| e.to_string())?;
+        let win = look.map_or([0.0, 0.0, 1.0, 1.0], |l| l.window);
+        draw_geometry(&mut rgba, size, &shown, c, win, super::sockets::color(shown_kind).to_array());
+    }
+    let kind = if shown_kind.is_raster() { kind } else { shown_kind };
     Ok(Some((size, rgba, range, Some(kind))))
+}
+
+/// A volume cut at height `y`, one sample of it under each sample of
+/// `rect` at `lod` (1 inside, 0 outside): the bricks under them only, not
+/// every block, so that a thumbnail of a large terrain stays quick.
+fn volume_cut(engine: &Engine, c: &Compiled, src: (usize, u8), y: i32, lod: u8, rect: massif_terrain::space::Rect, cancel: &(dyn Fn() -> bool + Sync)) -> Result<Grid, massif_terrain::engine::EvalError> {
+    use massif_terrain::kernel::BRICK;
+    let step = massif_terrain::space::Space::spacing(lod);
+    let at = |i: u32, k: u32| -> [i32; 2] { [c.space.x0 + ((rect.x as f64 + i as f64 + 0.5) * step) as i32, c.space.z0 + ((rect.z as f64 + k as f64 + 0.5) * step) as i32] };
+    let by = y.div_euclid(BRICK) * BRICK;
+    let mut origins: Vec<[i32; 3]> = Vec::new();
+    let mut index: std::collections::HashMap<[i32; 3], usize> = std::collections::HashMap::new();
+    let mut which = Vec::with_capacity(rect.area());
+    for k in 0..rect.h {
+        for i in 0..rect.w {
+            let [x, z] = at(i, k);
+            let o = [x.div_euclid(BRICK) * BRICK, by, z.div_euclid(BRICK) * BRICK];
+            let n = *index.entry(o).or_insert_with(|| {
+                origins.push(o);
+                origins.len() - 1
+            });
+            which.push((n, x, z));
+        }
+    }
+    let bricks = engine.bricks(c, src, &origins, cancel)?;
+    let mut out = Grid::filled(0, rect, 0.0);
+    for (s, (n, x, z)) in which.into_iter().enumerate() {
+        out.data[s] = massif_terrain::underground::fill(bricks[n].at(x, y, z)) as f32 / 255.0;
+    }
+    Ok(out)
+}
+
+/// Points, lines, footprints or instances drawn over a picture of the
+/// terrain seen from above (`window`: the part of the terrain it shows, as
+/// fractions), in `color`.
+fn draw_geometry(rgba: &mut [u8], size: [usize; 2], geo: &massif_terrain::kernel::Geo, c: &Compiled, window: [f32; 4], color: [u8; 4]) {
+    use massif_terrain::kernel::Geo;
+    let (w, h) = (size[0] as f64, size[1] as f64);
+    let side = c.space.size as f64;
+    let (wx, wz) = ((window[2] - window[0]).max(1e-6) as f64, (window[3] - window[1]).max(1e-6) as f64);
+    // The picture keeps the terrain's square in its middle.
+    let fit = (w / wx).min(h / wz);
+    let (ox, oz) = ((w - wx * fit) / 2.0, (h - wz * fit) / 2.0);
+    let px = |x: f64, z: f64| -> (f64, f64) { (ox + ((x - c.space.x0 as f64) / side - window[0] as f64) * fit, oz + ((z - c.space.z0 as f64) / side - window[1] as f64) * fit) };
+    let mut plot = |x: f64, y: f64, a: f32| {
+        if x < 0.0 || y < 0.0 || x >= w || y >= h {
+            return;
+        }
+        let k = (y as usize * size[0] + x as usize) * 4;
+        for ch in 0..3 {
+            rgba[k + ch] = (rgba[k + ch] as f32 * (1.0 - a) + color[ch] as f32 * a) as u8;
+        }
+    };
+    let line = |a: (f64, f64), b: (f64, f64), plot: &mut dyn FnMut(f64, f64, f32)| {
+        let n = ((b.0 - a.0).abs().max((b.1 - a.1).abs()).ceil() as usize).max(1);
+        for k in 0..=n {
+            let t = k as f64 / n as f64;
+            plot(a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t, 1.0);
+        }
+    };
+    let rect = |a: (f64, f64), b: (f64, f64), plot: &mut dyn FnMut(f64, f64, f32)| {
+        line(a, (b.0, a.1), plot);
+        line((b.0, a.1), b, plot);
+        line(b, (a.0, b.1), plot);
+        line((a.0, b.1), a, plot);
+    };
+    match geo {
+        Geo::Points(p) => {
+            let r = (fit / side * 3.0).clamp(1.0, 3.0);
+            for q in &p.items {
+                let (x, y) = px(q.pos[0], q.pos[2]);
+                let ri = r.ceil() as i32;
+                for dz in -ri..=ri {
+                    for dx in -ri..=ri {
+                        let d = ((dx * dx + dz * dz) as f64).sqrt();
+                        if d <= r {
+                            plot(x + dx as f64, y + dz as f64, if d > r - 1.0 { 0.6 } else { 1.0 });
+                        }
+                    }
+                }
+            }
+        }
+        Geo::Splines(s) => {
+            for l in &s.lines {
+                let pts: Vec<(f64, f64)> = l.points.iter().map(|p| px(p[0], p[2])).collect();
+                for pair in pts.windows(2) {
+                    line(pair[0], pair[1], &mut plot);
+                }
+                if l.closed && pts.len() > 2 {
+                    line(pts[pts.len() - 1], pts[0], &mut plot);
+                }
+            }
+        }
+        Geo::Footprints(f) => {
+            for q in &f.items {
+                rect(px(q.min[0] as f64, q.min[1] as f64), px(q.max[0] as f64, q.max[1] as f64), &mut plot);
+            }
+        }
+        Geo::Instances(i) => {
+            for q in &i.items {
+                rect(px(q.bbox.0[0] as f64, q.bbox.0[2] as f64), px(q.bbox.1[0] as f64 + 1.0, q.bbox.1[2] as f64 + 1.0), &mut plot);
+            }
+        }
+    }
 }
 
 /// The window, in fractions of the terrain, as samples of `grid` (whose
