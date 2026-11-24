@@ -475,7 +475,18 @@ fn an_exported_conquest_world_is_the_games() {
 /// palettes: the files compared state for state, whatever order the blocks
 /// were registered in.
 fn region_bytes(dir: &Path) -> Vec<(String, Vec<u8>)> {
-    let mut out: Vec<(String, Vec<u8>)> = std::fs::read_dir(dir.join("region")).unwrap().flatten().filter(|e| e.path().extension().is_some_and(|x| x == "mca")).map(|e| (e.file_name().to_string_lossy().into_owned(), std::fs::read(e.path()).unwrap())).collect();
+    let mut out: Vec<(String, Vec<u8>)> = std::fs::read_dir(dir.join("region"))
+        .unwrap()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "mca"))
+        .map(|e| {
+            // The second sector holds when each chunk was saved: the time of
+            // the export, which two exports need not share.
+            let mut bytes = std::fs::read(e.path()).unwrap();
+            bytes[4096..8192].fill(0);
+            (e.file_name().to_string_lossy().into_owned(), bytes)
+        })
+        .collect();
     out.sort();
     out
 }
