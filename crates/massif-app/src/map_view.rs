@@ -1578,8 +1578,15 @@ impl MapView {
         if let Some(stroke) = &mut self.stroke {
             let held = if stroke.secondary() { down[1] } else { down[0] };
             if held {
+                let parts = passed.len().max(1) as f32;
+                for (x, z) in passed.iter().take(passed.len().saturating_sub(1)) {
+                    tools::continue_stroke(doc, tools, stroke, (*x as f32, *z as f32), dt / parts);
+                }
                 if let Some((x, z)) = world_pointer {
-                    tools::continue_stroke(doc, tools, stroke, (x as f32, z as f32), dt);
+                    tools::continue_stroke(doc, tools, stroke, (x as f32, z as f32), dt / parts);
+                    if let Some(note) = stroke.take_note() {
+                        *feedback = Some(note);
+                    }
                 }
                 ui.ctx().request_repaint();
             } else if let Some(mut stroke) = self.stroke.take() {
@@ -1925,7 +1932,8 @@ impl MapView {
             if panning {
                 ui.ctx().set_cursor_icon(if down[0] { CursorIcon::Grabbing } else { CursorIcon::Grab });
             } else if tools.tool.uses_brush() && !(tools.tool == Tool::Annotate && tools.annotation_curve) {
-                let brush = &tools.brush;
+                let shown = tools.shown_brush().into_owned();
+                let brush = &shown;
                 let shadow = Line::new(3.0, Color32::from_black_alpha(90));
                 let line = Line::new(1.4, Color32::WHITE);
                 // Its fill, hatching and noise over the land only: over the

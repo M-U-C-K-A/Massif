@@ -124,7 +124,8 @@ What Massif did, and what it does in the background (saving, exporting, automati
 A brush has a shape, a size, an intensity and a rotation. The shapes are the built-in brushes, terrain stamps (whole mountains, dunes, craters) and your own images.
 - Scroll: size (`Shift`: one block at a time). `−` and `+` too.
 - `1` … `9`, `0`: intensity 10 % … 100 %.
-- `[` `]` or `⌘` + scroll: turn the brush.
+- `[` `]` or `Alt` + scroll: turn the brush, as in WorldPainter (`⌘` + scroll too).
+- **Pencil** (Brush Settings): a hard line at full strength that follows the mouse block after block, without a gap however fast it moves, with any tool (terrain, layers, biomes, height). One block wide, its blocks join by their sides, never only by a corner; **Width** makes it wider.
 
 **Your brushes** are sorted into groups, Massif's brush palettes: each group is a folder of Massif's brushes folder, saved there. A click on a group's title folds or opens it; right-click a group made in Massif to **Rename** or **Delete** it (its brushes move to Custom Brushes, none is deleted). Drag a brush onto another group, or right-click it ▸ **Move to group**, to move it there. WorldPainter's brushes folders are listed too, to paint with, but stay as they are.
 

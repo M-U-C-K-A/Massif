@@ -1216,10 +1216,24 @@ impl ToolState {
 
     /// The brush strokes use: the brush with the filter, if one is on.
     pub fn stroke_brush(&self) -> Brush {
-        Brush {
-            filter: self.filter.is_active().then(|| std::sync::Arc::new(self.filter.clone())),
-            ..self.brush.clone()
+        let filter = self.filter.is_active().then(|| std::sync::Arc::new(self.filter.clone()));
+        if self.pencil {
+            return Brush { filter, ..self.pencil_brush() };
         }
+        Brush { filter, ..self.brush.clone() }
+    }
+
+    /// The Pencil's brush: a square of [`ToolState::pencil_width`] blocks,
+    /// hard and at full strength.
+    pub fn pencil_brush(&self) -> Brush {
+        let width = (self.pencil_width.max(1) | 1) as f32;
+        Brush { shape: massif_core::brush::BrushShape::Square, profile: massif_core::brush::Profile::Constant, radius: width / 2.0, strength: 1.0, rotation: 0.0, mask: None, filter: None }
+    }
+
+    /// The brush the map shows and the strokes paint with: the Pencil's
+    /// when it is on.
+    pub fn shown_brush(&self) -> std::borrow::Cow<'_, Brush> {
+        if self.pencil { std::borrow::Cow::Owned(self.pencil_brush()) } else { std::borrow::Cow::Borrowed(&self.brush) }
     }
 
     pub fn surface(&self) -> Surface {
@@ -1483,7 +1497,27 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
     let (dx, dz) = (to.0 - stroke.last.0, to.1 - stroke.last.1);
     let len = (dx * dx + dz * dz).sqrt();
     let spacing = (brush.radius * 0.25).max(1.0);
-    let n = ((len / spacing).ceil() as usize).clamp(1, 512);
+    // The Pencil goes block by block, each the next one along a side of
+    // the last (never across a corner), at their centres: a line without
+    // a gap.
+    let path = tools.pencil.then(|| {
+        let cell = |p: (f32, f32)| (p.0.floor() as i32, p.1.floor() as i32);
+        let (from, to) = (cell(stroke.last), cell(to));
+        let mut path = pencil_path(from, to);
+        if stroke.drawn {
+            path.remove(0);
+        }
+        path.into_iter().map(|(x, z)| (x as f32 + 0.5, z as f32 + 0.5)).collect::<Vec<_>>()
+    });
+    stroke.drawn = true;
+    let n = match &path {
+        Some(p) if p.is_empty() => {
+            stroke.last = to;
+            return;
+        }
+        Some(p) => p.len(),
+        None => ((len / spacing).ceil() as usize).clamp(1, 512),
+    };
     let dt = dt.clamp(0.0, 0.1);
     // Annotations are marks on the map, whatever the level: on the ground's.
     // Pockets are in the rock of the ground: on its level too.
@@ -1519,7 +1553,10 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
     let mut edit = doc.history.edit(&mut doc.world, level);
     for k in 1..=n {
         let t = k as f32 / n as f32;
-        let (x, z) = (stroke.last.0 + dx * t, stroke.last.1 + dz * t);
+        let (x, z) = match &path {
+            Some(p) => p[k - 1],
+            None => (stroke.last.0 + dx * t, stroke.last.1 + dz * t),
+        };
         stroke.salt = stroke.salt.wrapping_add(0x632b_e59b);
         let share = 1.0 / n as f32;
         match stroke.tool {

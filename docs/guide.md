@@ -728,6 +728,19 @@ ring of columns around it its tests need, so that a brush of any size takes
 little memory; slopes are fitted from sums along the rows, then down the
 columns, a few additions a column rather than the 81 of the square.
 
+### Pencil
+
+**Pencil** (Brush Settings) draws as WorldPainter's Pencil: a hard line, at
+full strength, that follows the mouse block after block, without a gap
+however fast it moves, with whatever tool is in hand — terrain, a layer, a
+biome, the height. One block wide, its blocks join by their sides, never
+only by a corner (a "joined up" line, as roads and walls want it);
+**Width** makes it 3, 5 or more blocks wide.
+
+The wheel sizes the brush; **Alt** and the wheel turn it, as in
+WorldPainter (⌘ and the wheel too on a Mac, Ctrl + Shift elsewhere), 5° a
+notch, 1° with Shift; Ctrl and the wheel zoom the map.
+
 ## Selections
 
 As in WorldPainter and image editors, a selection marks the part of the map

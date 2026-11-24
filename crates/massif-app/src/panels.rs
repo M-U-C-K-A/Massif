@@ -1141,14 +1141,20 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
         b.rotation = degrees.rem_euclid(360.0);
     }
     ui.add_space(2.0);
-    hint(
-        ui,
-        if cfg!(target_os = "macos") {
-            tr!("Scroll: size · 1…0: intensity · ⌘+scroll: turn")
-        } else {
-            tr!("Scroll: size · 1…0: intensity · Ctrl+Shift+scroll: turn")
-        },
-    );
+    hint(ui, tr!("Scroll: size · 1…0: intensity · Alt+scroll: turn"));
+    // The Pencil, as WorldPainter's: a hard line, block after block.
+    ui.add_space(4.0);
+    crate::widgets::checkbox(ui, &mut tools.pencil, tr!("Pencil"))
+        .on_hover_text(tr!("Draw a hard line at full strength that follows the mouse block after block, without a gap however fast it moves. One block wide, its blocks join by their sides, never only by a corner."));
+    if tools.pencil {
+        let mut width = tools.pencil_width.max(1) as f32;
+        let changed = slider_row(ui, tr!("Width"), |ui| ui.add(crate::widgets::Field::new(&mut width, 1.0..=31.0).suffix(tr!(" blocks")).max_decimals(0)));
+        if changed {
+            // Odd widths: the line is centred on its blocks.
+            let (w, old) = ((width.round() as u16).max(1), tools.pencil_width);
+            tools.pencil_width = (if w < old { w.saturating_sub(1).max(1) | 1 } else { w | 1 }).min(31);
+        }
+    }
     crate::widgets::checkbox(ui, &mut tools.show_strength, tr!("Strength on the map"))
         .on_hover_text(tr!("Under the pointer, lighter where the brush presses harder. Its lines at a quarter, a half and three quarters of its strength show either way."));
 
