@@ -31,6 +31,9 @@ crc32fast = "1.5"
 eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "persistence", "clipboard", "links", "x11", "wayland"] }
 egui = "0.37"
 egui-wgpu = "0.37"
+# The scopes of egui, eframe, wgpu and Massif, for the performance
+# recorder (`perf`): they reach its `tracing` subscriber.
+profiling = { version = "1.0.18", default-features = false, features = ["profile-with-tracing"] }
 wgpu = { version = "30", default-features = false, features = ["wgsl", "std", "metal", "dx12", "vulkan", "gles"] }
 lucide-icons = "1.71"
 bytemuck = { version = "1.25", features = ["derive"] }

@@ -70,6 +70,41 @@ Two environment variables enable the heavier tests:
   a map of as many blocks; `MASSIF_GRAPH_TEMPLATE=<word>` times a template
   instead (`floating`, `karst`…).
 
+## Performance
+
+The performance recorder (`crates/massif-app/src/perf.rs`) takes the scopes
+of the `profiling` crate: egui's, eframe's and wgpu's own, and Massif's
+(`profiling::scope!("map view")`; `massif-core` has some too). Massif turns
+on its `profile-with-tracing` backend and installs a small `tracing`
+subscriber at start that answers "not now" to every scope until a recording
+is on (an atomic load a scope; `scopes_cost_nothing_while_off` checks it
+stays under 200 ns). A new scope of Massif's shows in recordings by itself;
+give it a short name, and one of `Recording::COLUMNS` if it should have a
+column of `frames.csv`.
+
+Two tests drive the whole app offscreen with the recorder on (run them with
+`--release -- --nocapture`):
+
+- `MASSIF_PROFILE=1 cargo test --release -p massif-app profile_a_session`: a
+  map (`MASSIF_MOVE_WORLD=<.massif>`, else one of `MASSIF_PROFILE_TILES`²
+  tiles, 32 by default: 4,096 blocks a side) in the Layout workspace with a
+  Diorama and a floating 3D View; then still, panned, zoomed, a big brush
+  (`MASSIF_PROFILE_RADIUS`, 100 blocks) raising and then painting, a
+  4,096 × 3,072 reference image added and dragged. Each stage prints its
+  frames, its processor time and where the interface's time went;
+  `MASSIF_PROFILE_STAGES=raise,paint` records only those,
+  `MASSIF_PROFILE_PLAIN=1` keeps the workspace as it is, and
+  `MASSIF_PROFILE_OUT=<folder>` keeps each stage's recording as a zip.
+- `MASSIF_REPLAY=<recording .zip or folder> MASSIF_REPLAY_MAP=<.massif>
+  cargo test --release -p massif-app replay_a_recording`: a user's
+  recording played back on a map, in its workspaces, window size and pixels
+  a point, frame by frame, with its input and tool in hand; the frames are
+  timed as the recorder times them. Floating panels' own windows are drawn
+  inside the window there, and only the main window's input is replayed.
+
+The machine is shared: compare processor time, best of several runs, and
+run the binaries before and after a change one after the other.
+
 ## In the game itself
 
 `tools/minecraft_check.py` checks an export in Minecraft: it exports a

@@ -4,7 +4,8 @@
 //! will be written, before the zip is saved. And the pill that says a
 //! recording is on, with its Stop.
 
-use crate::report::{self, Part, Recording};
+use crate::perf::Recording;
+use crate::report::{self, Part};
 use crate::theme::{self, Icon, Palette, RichTextExt};
 use crate::i18n::tr;
 use egui::{Align, RichText, Stroke, Ui};

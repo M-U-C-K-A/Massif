@@ -7,6 +7,8 @@ license.workspace = true
 description = "World model of Massif: multi-level surfaces, RLE planes, brushes, generation"
 
 [dependencies]
+# Scopes the app's performance recorder times (nothing without it).
+profiling = { version = "1.0.18", default-features = false }
 rayon.workspace = true
 zstd.workspace = true
 serde.workspace = true

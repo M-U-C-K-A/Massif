@@ -3562,5 +3562,21 @@
  "the game's rules": "as regras do jogo",
  "tick speed {speed}": "velocidade dos ticks {speed}",
  "time stopped": "tempo parado",
- "weather fixed": "clima fixo"
+ "weather fixed": "clima fixo",
+ "Saved the performance recording “{name}”: send it to us on Discord": "Gravação de desempenho “{name}” salva: envie-a para nós no Discord",
+ "Could not save the performance recording: {e}": "Não foi possível salvar a gravação de desempenho: {e}",
+ "Record Performance": "Gravar o desempenho",
+ "Start, then use Massif as when it slows down: move the map, sculpt, open the views that stutter. Stop with the red dot at the top right, or in the Help menu. The recording is saved on your desktop as a .zip to send us on Discord.": "Comece e use o Massif como quando ele fica lento: mova o mapa, esculpa, abra as vistas que travam. Pare com o ponto vermelho no canto superior direito ou no menu Ajuda. A gravação é salva na sua área de trabalho como um .zip para nos enviar no Discord.",
+ "It keeps the time of each frame and of each of its parts, the memory, the processor, your computer and graphics card, the settings that change how Massif draws, the map's size and the workspaces, and the pointer and the keys as you used them. Never the map itself, nor what you type, nor where your files are.": "Ela guarda o tempo de cada quadro e de cada uma das suas partes, a memória, o processador, seu computador e sua placa de vídeo, as configurações que mudam como o Massif desenha, o tamanho do mapa e os espaços de trabalho, e o ponteiro e as teclas como você os usou. Nunca o próprio mapa, nem o que você digita, nem onde estão seus arquivos.",
+ "Recording performance: click to stop and save it on your desktop": "Gravando o desempenho: clique para parar e salvar na sua área de trabalho",
+ "Stop Recording Performance": "Parar a gravação de desempenho",
+ "Performance": "Desempenho",
+ "Stop and Save": "Parar e salvar",
+ "Record…": "Gravar…",
+ "Every frame and where its time went, saved on your desktop to send us (Help ▸ Record Performance…)": "Cada quadro e onde seu tempo foi gasto, salvo na sua área de trabalho para nos enviar (Ajuda ▸ Gravar o desempenho…)",
+ "Record Performance…": "Gravar o desempenho…",
+ "Every frame and where its time went, while you use Massif: a file to send us when it slows down": "Cada quadro e onde seu tempo foi gasto enquanto você usa o Massif: um arquivo para nos enviar quando ele fica lento",
+ "The pointer, the keys and the tool in hand, frame by frame": "O ponteiro, as teclas e a ferramenta em mãos, quadro a quadro",
+ "Massif, the computer, the settings, the map's size, the workspaces": "Massif, o computador, as configurações, o tamanho do mapa, os espaços de trabalho",
+ "The workspaces, for the replay": "Os espaços de trabalho, para a reprodução"
 }

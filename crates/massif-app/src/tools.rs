@@ -1549,6 +1549,7 @@ fn end_step(doc: &mut Document, step: u64) {
 
 /// Continue a stroke to `to`. `dt` is the time since the previous call.
 pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Stroke, to: (f32, f32), dt: f32) {
+    profiling::scope!("brush stroke");
     keep_step(doc, &mut stroke.step, &stroke.label);
     let invert = stroke.inverse;
     // The automatic tools read the land with the rules of the settings.

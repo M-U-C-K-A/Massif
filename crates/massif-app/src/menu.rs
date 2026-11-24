@@ -82,6 +82,8 @@ pub enum Command {
     ShowAnnotations,
     /// A report of a problem to save and send (see `report`).
     ReportProblem,
+    /// Start a performance recording, or stop and save it (see `perf`).
+    RecordPerformance,
     /// Massif's Discord server, in the browser.
     JoinDiscord,
 }
@@ -172,6 +174,8 @@ pub struct State<'a> {
     pub selected: bool,
     /// The annotations are shown.
     pub annotations: bool,
+    /// A performance recording is on: the Help menu stops it.
+    pub recording: bool,
 }
 
 /// An item: a command under a name.
@@ -337,6 +341,11 @@ pub fn menus(state: &State) -> Vec<Menu> {
         item(Command::Tour, Icon::Compass, tr!("Take the tour"), free),
         tipped(Command::WorldPainterTour, Icon::Map, tr!("Where are my WorldPainter tools?"), free, tr!("A short tour for those who come from WorldPainter: where each of its tools is in Massif")),
         item(Command::ReportProblem, Icon::Bug, tr!("Report a Problem…"), free),
+        if state.recording {
+            item(Command::RecordPerformance, Icon::Square, tr!("Stop Recording Performance"), true)
+        } else {
+            tipped(Command::RecordPerformance, Icon::Activity, tr!("Record Performance…"), free, tr!("Every frame and where its time went, while you use Massif: a file to send us when it slows down"))
+        },
         tipped(Command::JoinDiscord, Icon::MessagesSquare, tr!("Join the Discord…"), free, tr!("Massif's community server, in your browser: questions, maps, #bug-reports")),
         Entry::Separator,
         item(Command::HomeScreen, Icon::House, tr!("Home screen"), map),
@@ -510,6 +519,7 @@ mod tests {
             theme: ThemeChoice::Dark,
             selected: true,
             annotations: true,
+            recording: false,
         }
     }
 

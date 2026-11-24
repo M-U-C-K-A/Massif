@@ -86,6 +86,7 @@ impl References {
     /// pictures of `list` (their files found beside the map, `map_dir`,
     /// when moved with it). True when an image just added took its place.
     pub fn update(&mut self, ctx: &egui::Context, list: &mut [ReferenceImage], map_dir: Option<&Path>, map: Option<[f64; 4]>) -> bool {
+        profiling::scope!("reference images");
         let mut changed = false;
         for r in list.iter_mut() {
             let slot = self.textures.entry(r.path.clone()).or_insert_with(|| {

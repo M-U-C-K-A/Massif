@@ -449,6 +449,8 @@ enum Dialog {
     Recover,
     /// A newer version is out: its notes, and its page to open.
     Update,
+    /// Help ▸ Record Performance…: what a recording keeps, and Start.
+    RecordPerformance,
     /// Caves to carve: their settings.
     Caves(Box<crate::caves::CaveForm>),
     /// An image to paint onto the map: what, where, how.
@@ -606,7 +608,9 @@ pub struct MassifApp {
     /// What the Developer panel shows, measured frame after frame.
     dev: crate::devtools::DevStats,
     /// A performance recording, on or done, for the problem report.
-    recording: Option<crate::report::Recording>,
+    recording: Option<crate::perf::Recording>,
+    /// A performance recording being written: its file, or why not.
+    perf_saving: Option<std::sync::mpsc::Receiver<Result<PathBuf, String>>>,
     /// The problem report's dialog while a recording is on, to open again
     /// as it was once it stops.
     report_aside: Option<Box<crate::report_view::ReportForm>>,
@@ -1214,6 +1218,7 @@ impl MassifApp {
             report_aside: None,
             report_return: None,
             report_saving: None,
+            perf_saving: None,
             gpu: None,
             after_save: None,
             status: None,
@@ -2258,6 +2263,18 @@ impl MassifApp {
                         self.settings.frame_limit = FrameLimit::ALL[i];
                     }
                 });
+                crate::widgets::row(ui, tr!("Performance"), |ui| {
+                    let on = self.recording.as_ref().is_some_and(|r| r.is_on());
+                    let label = if on { theme::with_icon(Icon::Square, tr!("Stop and Save")) } else { theme::with_icon(Icon::Circle, tr!("Record…")) };
+                    if ui.button(label).on_hover_text(tr!("Every frame and where its time went, saved on your desktop to send us (Help ▸ Record Performance…)")).clicked() {
+                        if on {
+                            let ctx = ui.ctx().clone();
+                            self.stop_recording(&ctx);
+                        } else {
+                            self.dialog = Some(Dialog::RecordPerformance);
+                        }
+                    }
+                });
                 crate::widgets::row(ui, tr!("Draw every frame"), |ui| {
                     crate::widgets::switch(ui, &mut self.settings.draw_always).on_hover_text(tr!("Even when nothing changes: the charts of the Developer panel then show how many frames the computer makes"));
                 });
@@ -2378,26 +2395,34 @@ impl MassifApp {
     fn report_frame(&mut self, ctx: &egui::Context) {
         let mut stopped = false;
         if self.recording.as_ref().is_some_and(|r| r.is_on()) {
-            let jobs = self.job_lines();
-            let last = self.dev.last_frame();
-            let (memory, cpu) = self.dev.latest();
+            let info = self.perf_frame(ctx);
+            let for_report = self.recording.as_ref().is_some_and(|r| r.for_report);
             if let Some(r) = &mut self.recording {
-                if let Some((begun, gap, work)) = last {
-                    r.frame(begun, gap, work, memory, cpu, jobs);
-                }
-                if crate::report_view::recording_pill(ctx, r) || !r.is_on() {
+                r.frame(info);
+                let stop = if for_report { crate::report_view::recording_pill(ctx, r) } else { false };
+                if stop || !r.is_on() {
                     r.stop();
                     stopped = true;
                 }
             }
         }
         if stopped {
-            if let Some(form) = self.report_aside.take() {
-                if self.dialog.is_none() {
-                    self.dialog = Some(Dialog::Report(form));
+            self.recording_stopped(ctx);
+        }
+        if let Some(rx) = &self.perf_saving {
+            match rx.try_recv() {
+                Ok(Ok(path)) => {
+                    self.perf_saving = None;
+                    let name = jobs::display_name(&path);
+                    self.say(ctx, tr!("Saved the performance recording “{name}”: send it to us on Discord", name), false, Some(path.clone()));
+                    jobs::reveal(&path);
                 }
-            } else if self.dialog.is_none() {
-                self.open_report(ctx, false);
+                Ok(Err(e)) => {
+                    self.perf_saving = None;
+                    self.say(ctx, tr!("Could not save the performance recording: {e}", e), true, None);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.perf_saving = None,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
         }
         if let Some(rx) = &self.report_saving {
@@ -2438,6 +2463,135 @@ impl MassifApp {
             let _ = tx.send(result);
             ctx.request_repaint();
         });
+    }
+
+    /// What a performance recording keeps of this frame.
+    fn perf_frame(&self, ctx: &egui::Context) -> crate::perf::FrameInfo {
+        let last = self.dev.last_frame();
+        let (memory, cpu) = self.dev.latest();
+        let (events, window, ppp) = ctx.input(|i| (crate::perf::input_json(&i.raw.events), i.content_rect().size(), i.pixels_per_point));
+        let areas: Vec<(AreaId, Rect)> = ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap_or_default();
+        let ws = self.layout.current();
+        let mut shown: Vec<String> = areas.iter().filter_map(|(id, r)| ws.root.editor_of(*id).map(|e| format!("{e:?} {:.0}×{:.0}", r.width(), r.height()))).collect();
+        shown.extend(ws.floating.iter().map(|f| format!("{:?} {:.0}×{:.0} floating{}", f.editor, f.size[0], f.size[1], if f.screen { " (window)" } else { "" })));
+        let all3d = || [&self.view3d, &self.sculpt3d].into_iter().chain(&self.extra3d);
+        crate::perf::FrameInfo {
+            begun: last.map(|l| l.0),
+            ended: last.map(|l| l.0 + std::time::Duration::from_secs_f32(l.2 / 1000.0)),
+            memory,
+            cpu,
+            jobs: self.job_lines(),
+            causes: { let mut c: Vec<String> = ctx.repaint_causes().iter().map(|c| c.to_string()).collect(); c.sort(); c.dedup(); c },
+            again: ctx.requested_repaint_last_pass(),
+            events,
+            tool: if self.home.is_some() { "home screen".to_owned() } else { format!("{:?}", self.tools.tool) },
+            areas: format!("{}: {}", ws.name, shown.join(", ")),
+            window: [window.x, window.y],
+            ppp,
+            tiles: self.doc.dimension().levels.iter().map(|l| l.stats().hot_tiles).sum(),
+            gpu_mb: (all3d().map(View3d::gpu_bytes).sum::<u64>() + self.map_cache.bytes().1 as u64) as f32 / (1u64 << 20) as f32,
+            windows: ws.floating.iter().filter(|f| f.screen).count(),
+        }
+    }
+
+    /// Start a performance recording: what does not change frame by frame
+    /// read now. `for_report`: from the problem report, Stop goes back to it.
+    fn start_recording(&mut self, ctx: &egui::Context, for_report: bool) {
+        let mut r = crate::perf::Recording::start();
+        r.for_report = for_report;
+        let window = ctx.input(|i| i.viewport().inner_rect.map(|rect| ([rect.width(), rect.height()], i.pixels_per_point)));
+        let info = self.dev_info();
+        let mut workspaces: Vec<(String, String)> = Vec::new();
+        for (k, ws) in self.layout.workspaces.iter().enumerate() {
+            let mut areas = Vec::new();
+            ws.root.areas(&mut areas);
+            let editors: Vec<String> = areas.iter().map(|a| format!("{:?}", a.1)).chain(ws.floating.iter().map(|f| format!("{:?} floating{}", f.editor, if f.screen { " in a window" } else { "" }))).collect();
+            let side = if ws.render { "Render" } else if ws.terrain { "Terrain" } else { "World" };
+            workspaces.push((format!("{}{} ({side})", if k == self.layout.active { "▸ " } else { "" }, ws.name), editors.join(", ")));
+        }
+        let home = std::env::home_dir();
+        let scrub = |v: Vec<(String, String)>| v.into_iter().map(|(a, b)| (a, crate::report::scrub(&b, home.as_deref()))).collect::<Vec<_>>();
+        r.context = vec![
+            ("Computer".to_owned(), crate::report::System::read(self.gpu.clone(), window).lines()),
+            ("Settings".to_owned(), scrub(self.report_settings())),
+            ("Map".to_owned(), if self.has_map { info.map.iter().map(|(a, b)| ((*a).to_owned(), b.clone())).collect() } else { vec![("Map".to_owned(), "none open".to_owned())] }),
+            ("What Massif keeps".to_owned(), info.keeps.iter().map(|(a, b, c)| ((*a).to_owned(), format!("{b} ({c})"))).collect()),
+            ("Workspaces".to_owned(), workspaces),
+        ];
+        r.layout = serde_json::to_string(&self.layout).ok();
+        self.recording = Some(r);
+        ctx.request_repaint();
+    }
+
+    /// Stop the performance recording (the red dot, the menu, Settings).
+    fn stop_recording(&mut self, ctx: &egui::Context) {
+        if let Some(r) = &mut self.recording
+            && r.is_on()
+        {
+            r.stop();
+            self.recording_stopped(ctx);
+        }
+    }
+
+    /// A recording stopped: from the report, back to it; else written to
+    /// the desktop in the background, and shown in the Finder.
+    fn recording_stopped(&mut self, ctx: &egui::Context) {
+        if self.recording.as_ref().is_some_and(|r| !r.for_report) {
+            let Some(r) = self.recording.take() else { return };
+            let path = crate::perf::file_path();
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.perf_saving = Some(rx);
+            let ctx = ctx.clone();
+            let _ = std::thread::Builder::new().name("massif performance recording".into()).spawn(move || {
+                let parts = r.parts("");
+                let result = crate::report::save(&path, &parts).map(|()| path).map_err(|e| e.to_string());
+                let _ = tx.send(result);
+                ctx.request_repaint();
+            });
+            return;
+        }
+        if let Some(form) = self.report_aside.take() {
+            if self.dialog.is_none() {
+                self.dialog = Some(Dialog::Report(form));
+            }
+        } else if self.dialog.is_none() {
+            self.open_report(ctx, false);
+        }
+    }
+
+    /// The problem report is done with its recording (not with one of
+    /// Help ▸ Record Performance…, which goes on).
+    fn drop_report_recording(&mut self) {
+        if self.recording.as_ref().is_some_and(|r| r.for_report || !r.is_on()) {
+            self.recording = None;
+        }
+    }
+
+    /// Help ▸ Record Performance…: what a recording keeps, and Start.
+    fn record_performance_dialog(ctx: &egui::Context) -> (bool, bool) {
+        let (mut start, mut close) = (false, false);
+        let response = modal(ctx, "record performance").show(ctx, |ui| {
+            ui.set_width(480.0);
+            let pal = Palette::of(ui);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(theme::glyph(Icon::Activity).to_string()).size(17.0).color(pal.accent));
+                ui.label(RichText::new(tr!("Record Performance")).bold().size(15.0));
+            });
+            ui.add_space(4.0);
+            ui.add(egui::Label::new(RichText::new(tr!("Start, then use Massif as when it slows down: move the map, sculpt, open the views that stutter. Stop with the red dot at the top right, or in the Help menu. The recording is saved on your desktop as a .zip to send us on Discord.")).color(pal.weak)).wrap());
+            ui.add_space(8.0);
+            ui.add(egui::Label::new(RichText::new(tr!("It keeps the time of each frame and of each of its parts, the memory, the processor, your computer and graphics card, the settings that change how Massif draws, the map's size and the workspaces, and the pointer and the keys as you used them. Never the map itself, nor what you type, nor where your files are.")).size(12.0).color(pal.weak)).wrap());
+            ui.add_space(14.0);
+            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                if ui.add(theme::primary_button(ui, theme::with_icon(Icon::Circle, tr!("Start Recording")))).clicked() {
+                    start = true;
+                }
+                if crate::widgets::button(ui, tr!("Cancel")).clicked() {
+                    close = true;
+                }
+            });
+        });
+        (start, close || response.should_close())
     }
 
     /// The dialog of a filter over the whole map, with a cold copy of the
@@ -3975,6 +4129,11 @@ impl MassifApp {
             // the left one.
             self.sync_depot();
             let right = ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                if let Some(r) = self.recording.as_ref().filter(|r| r.is_on() && !r.for_report)
+                    && recording_dot(ui, r.seconds()).clicked()
+                {
+                    self.stop_recording(&ctx);
+                }
                 // The map's versions: the one it stands on, its branch, and a
                 // dot when a contribution waits or is under review.
                 if self.has_map {
@@ -4039,6 +4198,7 @@ impl MassifApp {
             theme: self.settings.theme,
             selected: self.doc.selection().is_some(),
             annotations: self.tools.show_annotations,
+            recording: self.recording.as_ref().is_some_and(|r| r.is_on()),
         }
     }
 
@@ -4144,6 +4304,8 @@ impl MassifApp {
             Command::FitMap => self.fit_map(),
             Command::ShowAnnotations => self.tools.show_annotations = !self.tools.show_annotations,
             Command::ReportProblem => self.open_report(ctx, false),
+            Command::RecordPerformance if self.recording.as_ref().is_some_and(|r| r.is_on()) => self.stop_recording(ctx),
+            Command::RecordPerformance => self.dialog = Some(Dialog::RecordPerformance),
             Command::JoinDiscord => ctx.open_url(egui::OpenUrl::new_tab(crate::menu::DISCORD)),
         }
     }
@@ -4600,6 +4762,7 @@ impl MassifApp {
     /// largest of the `docked` areas).
     #[allow(clippy::too_many_arguments)]
     fn float_window(&mut self, ctx: &egui::Context, frame: &eframe::Frame, id: AreaId, editor: EditorKind, rect: Rect, shown: &HashSet<EditorKind>, docked: &[(AreaId, [f32; 4])]) {
+        profiling::scope!("floating window");
         // Where it opens, on a screen there is, then kept while it is open:
         // egui moves a window whose position asked changes, and this one
         // stays where the user puts it.
@@ -4913,6 +5076,7 @@ impl MassifApp {
                     });
                 });
         };
+        let _scope = editor_scope(editor);
         match editor {
             EditorKind::Map => {
                 let pan_key = !cui.ctx().egui_wants_keyboard_input() && cui.input(|i| crate::keymap::held(i, crate::keymap::Action::Pan));
@@ -4953,6 +5117,7 @@ impl MassifApp {
                     k => &mut self.extra3d[k - 1],
                 };
                 if view.wants_glimpse(&self.doc) {
+                    profiling::scope!("3D view: glimpse");
                     view.give_glimpse(&self.doc, self.map_cache.summaries_of(self.doc.generation));
                 }
                 view.annotations = self.tools.show_annotations;
@@ -6247,14 +6412,14 @@ impl MassifApp {
                     Choice::Stay => {}
                     Choice::Close => {
                         keep = false;
-                        self.recording = None;
+                        self.drop_report_recording();
                     }
                     Choice::Record => {
-                        self.recording = Some(crate::report::Recording::start());
+                        self.start_recording(ctx, true);
                         self.report_aside = Some(form.clone());
                         keep = false;
                     }
-                    Choice::DropRecording => self.recording = None,
+                    Choice::DropRecording => self.drop_report_recording(),
                     Choice::Copy => {
                         ctx.copy_text(crate::report::short_summary(&form.inputs, self.recording.as_ref()));
                         self.say(ctx, tr!("Copied a summary of the problem: paste it in your message"), false, None);
@@ -6266,7 +6431,7 @@ impl MassifApp {
                                 path.set_extension("zip");
                             }
                             self.save_report(ctx, &form, path);
-                            self.recording = None;
+                            self.drop_report_recording();
                             keep = false;
                         }
                     }
@@ -6635,6 +6800,15 @@ impl MassifApp {
                 match choice {
                     Some(from_wp) => self.answer_origin(from_wp),
                     None => self.dialog = Some(Dialog::Origin),
+                }
+            }
+            Dialog::RecordPerformance => {
+                let (start, close) = Self::record_performance_dialog(ctx);
+                if start {
+                    self.start_recording(ctx, false);
+                }
+                if !(start || close) {
+                    self.dialog = Some(Dialog::RecordPerformance);
                 }
             }
             Dialog::Update => {
@@ -7111,6 +7285,21 @@ impl eframe::App for MassifApp {
     }
 }
 
+/// The scope of a performance recording an editor's frame goes in.
+fn editor_scope(editor: EditorKind) -> profiling::tracing::span::EnteredSpan {
+    use profiling::tracing::{Level, span};
+    match editor {
+        EditorKind::Map => span!(Level::INFO, "map view"),
+        EditorKind::View3d => span!(Level::INFO, "3D view"),
+        EditorKind::Sculpt3d => span!(Level::INFO, "3D Sculpt"),
+        EditorKind::Diorama => span!(Level::INFO, "Diorama"),
+        EditorKind::RenderView => span!(Level::INFO, "Render"),
+        EditorKind::GraphView => span!(Level::INFO, "node graph"),
+        _ => span!(Level::INFO, "panels"),
+    }
+    .entered()
+}
+
 /// The window of floating panel `id`.
 fn float_viewport(id: AreaId) -> egui::ViewportId {
     egui::ViewportId::from_hash_of(("massif floating", id))
@@ -7160,6 +7349,23 @@ fn versions_pill(ui: &mut Ui, label: &str, branch: bool, dot: Option<Color32>) -
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
+    response
+}
+
+/// The top bar's red dot while a performance recording is on: how long,
+/// and a click stops it.
+fn recording_dot(ui: &mut Ui, seconds: f64) -> egui::Response {
+    let pal = Palette::of(ui);
+    let secs = seconds as u64;
+    let (rect, response) = ui.allocate_exact_size(vec2(58.0, 22.0), Sense::click());
+    let fill = if response.hovered() { theme::mix(pal.app_bg, pal.text, 0.08) } else { Color32::TRANSPARENT };
+    ui.painter().rect_filled(rect, theme::PILL, fill);
+    ui.painter().circle_filled(pos2(rect.left() + 11.0, rect.center().y), 4.5, pal.danger);
+    ui.painter().text(pos2(rect.left() + 21.0, rect.center().y), egui::Align2::LEFT_CENTER, format!("{}:{:02}", secs / 60, secs % 60), FontId::monospace(11.5), pal.text);
+    // The time goes on: drawn again each second.
+    ui.ctx().request_repaint_after(std::time::Duration::from_millis(1000 - (seconds.fract() * 1000.0) as u64));
+    let response = response.on_hover_text(tr!("Recording performance: click to stop and save it on your desktop"));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tr!("Stop Recording Performance")));
     response
 }
 
@@ -8035,6 +8241,9 @@ mod jack_tools_tests;
 #[cfg(test)]
 #[path = "ideas_tests.rs"]
 mod ideas_tests;
+#[cfg(test)]
+#[path = "perf_tests.rs"]
+mod perf_tests;
 
 #[cfg(test)]
 mod tests {
@@ -8459,7 +8668,7 @@ mod tests {
     /// a start after a crash and back to it.
     #[test]
     fn a_problem_report() {
-        use crate::report::{Recording, unzip};
+        use crate::report::unzip;
         use egui_kittest::kittest::Queryable;
         let dir = std::env::temp_dir().join(format!("massif-report-app-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -8518,20 +8727,21 @@ mod tests {
         assert_eq!(massif_format::read(bytes).unwrap().meta.name, h.state().doc.world.meta.name);
 
         // A recording: each frame and its parts.
-        h.state_mut().recording = Some(Recording::start());
+        h.state_mut().start_recording(&ctx, true);
         h.run_steps(12);
         let r = h.state_mut().recording.as_mut().unwrap();
         r.stop();
         assert!(r.frames() >= 10, "{} frames", r.frames());
         let summary = r.summary();
-        assert!(summary.contains("the theme and the accessibility settings"), "{summary}");
+        assert!(summary.contains("Where the interface thread's time went") && summary.contains("Slowest frames"), "{summary}");
+        assert!(r.trace_json().contains("the theme and the accessibility settings"), "the parts of the frame");
         let Some(Dialog::Report(form)) = &h.state().dialog else { panic!() };
         let form = form.clone();
         let parts = crate::report::parts(&form.inputs, h.state().recording.as_ref(), None);
         assert!(parts.iter().any(|p| p.name == "recording/trace.json"));
         h.state_mut().dialog = None;
         // Its pill, over the map.
-        h.state_mut().recording = Some(Recording::start());
+        h.state_mut().start_recording(&ctx, true);
         h.run_steps(5);
         h.get_by_label_contains("Recording 0:");
         if let Some(out) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {

@@ -3626,5 +3626,21 @@
  "the game's rules": "les règles du jeu",
  "tick speed {speed}": "vitesse des ticks {speed}",
  "time stopped": "temps arrêté",
- "weather fixed": "météo fixe"
+ "weather fixed": "météo fixe",
+ "Saved the performance recording “{name}”: send it to us on Discord": "Enregistrement des performances « {name} » sauvegardé : envoyez-le-nous sur Discord",
+ "Could not save the performance recording: {e}": "Impossible de sauvegarder l'enregistrement des performances : {e}",
+ "Record Performance": "Enregistrer les performances",
+ "Start, then use Massif as when it slows down: move the map, sculpt, open the views that stutter. Stop with the red dot at the top right, or in the Help menu. The recording is saved on your desktop as a .zip to send us on Discord.": "Démarrez, puis utilisez Massif comme quand il ralentit : déplacez la carte, sculptez, ouvrez les vues qui saccadent. Arrêtez avec le point rouge en haut à droite, ou dans le menu Aide. L'enregistrement est sauvegardé sur votre bureau en .zip, à nous envoyer sur Discord.",
+ "It keeps the time of each frame and of each of its parts, the memory, the processor, your computer and graphics card, the settings that change how Massif draws, the map's size and the workspaces, and the pointer and the keys as you used them. Never the map itself, nor what you type, nor where your files are.": "Il garde le temps de chaque image et de chacune de ses parties, la mémoire, le processeur, votre ordinateur et votre carte graphique, les réglages qui changent l'affichage de Massif, la taille de la carte et les espaces de travail, et le pointeur et les touches tels que vous les avez utilisés. Jamais la carte elle-même, ni ce que vous tapez, ni l'emplacement de vos fichiers.",
+ "Recording performance: click to stop and save it on your desktop": "Enregistrement des performances : cliquez pour l'arrêter et le sauvegarder sur votre bureau",
+ "Stop Recording Performance": "Arrêter l'enregistrement des performances",
+ "Performance": "Performances",
+ "Stop and Save": "Arrêter et sauvegarder",
+ "Record…": "Enregistrer…",
+ "Every frame and where its time went, saved on your desktop to send us (Help ▸ Record Performance…)": "Chaque image et où son temps est passé, sauvegardé sur votre bureau pour nous l'envoyer (Aide ▸ Enregistrer les performances…)",
+ "Record Performance…": "Enregistrer les performances…",
+ "Every frame and where its time went, while you use Massif: a file to send us when it slows down": "Chaque image et où son temps est passé pendant que vous utilisez Massif : un fichier à nous envoyer quand il ralentit",
+ "The pointer, the keys and the tool in hand, frame by frame": "Le pointeur, les touches et l'outil en main, image par image",
+ "Massif, the computer, the settings, the map's size, the workspaces": "Massif, l'ordinateur, les réglages, la taille de la carte, les espaces de travail",
+ "The workspaces, for the replay": "Les espaces de travail, pour la relecture"
 }

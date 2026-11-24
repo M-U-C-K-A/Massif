@@ -16,8 +16,6 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::cell::{Cell, RefCell};
-use std::time::Instant;
 
 // ---------------------------------------------------------------------------
 // Private paths
@@ -343,234 +341,6 @@ fn percentile(v: &[f32], q: f32) -> f32 {
 }
 
 // ---------------------------------------------------------------------------
-// The performance recording
-
-thread_local! {
-    /// A recording is on: the parts of each frame are noted. Of the thread
-    /// that draws the interface, where the frames are laid out and the
-    /// recording kept (and in the tests, of each test's own).
-    static RECORDING: Cell<bool> = const { Cell::new(false) };
-    /// The parts of the frame under way, as `mark` notes them.
-    static MARKS: RefCell<Vec<(Instant, String)>> = const { RefCell::new(Vec::new()) };
-}
-
-/// The longest a recording goes on: then it stops by itself.
-pub const MAX_SECONDS: f64 = 600.0;
-
-/// A part of the frame begins (from `startup::frame_step`): noted while a
-/// recording is on, and nothing else costs but one load.
-pub fn mark(what: &str) {
-    if RECORDING.get() {
-        MARKS.with_borrow_mut(|m| m.push((Instant::now(), what.to_owned())));
-    }
-}
-
-/// A frame of a recording.
-#[derive(Debug, Clone)]
-struct Frame {
-    /// Milliseconds since the recording started, when the frame's work began.
-    at: f64,
-    gap: f32,
-    work: f32,
-    memory: Option<f32>,
-    cpu: Option<f32>,
-    /// The parts of the work: name, milliseconds from the frame's start,
-    /// milliseconds long.
-    parts: Vec<(String, f32, f32)>,
-    jobs: Vec<String>,
-}
-
-/// A performance recording: Start, the slow thing, Stop.
-#[derive(Debug, Clone)]
-pub struct Recording {
-    started: Instant,
-    frames: Vec<Frame>,
-    pub stopped: Option<f64>,
-}
-
-impl Recording {
-    pub fn start() -> Recording {
-        MARKS.with_borrow_mut(Vec::clear);
-        RECORDING.set(true);
-        Recording { started: Instant::now(), frames: Vec::new(), stopped: None }
-    }
-
-    pub fn is_on(&self) -> bool {
-        self.stopped.is_none()
-    }
-
-    /// Seconds recorded.
-    pub fn seconds(&self) -> f64 {
-        self.stopped.unwrap_or_else(|| self.started.elapsed().as_secs_f64())
-    }
-
-    pub fn frames(&self) -> usize {
-        self.frames.len()
-    }
-
-    pub fn stop(&mut self) {
-        if self.stopped.is_none() {
-            self.stopped = Some(self.started.elapsed().as_secs_f64());
-            RECORDING.set(false);
-            MARKS.with_borrow_mut(Vec::clear);
-        }
-    }
-
-    /// A frame ended: it began at `begun`, `gap` ms after the one before,
-    /// and its work took `work` ms. Stops by itself after [`MAX_SECONDS`].
-    pub fn frame(&mut self, begun: Instant, gap: f32, work: f32, memory: Option<f32>, cpu: Option<f32>, jobs: Vec<String>) {
-        if !self.is_on() {
-            return;
-        }
-        let marks = MARKS.take();
-        let end = begun + std::time::Duration::from_secs_f32(work / 1000.0);
-        let mut parts = Vec::with_capacity(marks.len());
-        for (k, (at, name)) in marks.iter().enumerate() {
-            if *at < begun {
-                continue;
-            }
-            let until = marks.get(k + 1).map_or(end, |m| m.0).max(*at);
-            parts.push((name.clone(), at.duration_since(begun).as_secs_f32() * 1000.0, until.duration_since(*at).as_secs_f32() * 1000.0));
-        }
-        let at = begun.saturating_duration_since(self.started).as_secs_f64() * 1000.0;
-        self.frames.push(Frame { at, gap, work, memory, cpu, parts, jobs });
-        if self.started.elapsed().as_secs_f64() >= MAX_SECONDS {
-            self.stop();
-        }
-    }
-
-    /// A line a frame.
-    pub fn frames_csv(&self) -> String {
-        let mut out = String::from("frame,start_ms,frame_ms,work_ms,memory_mb,cpu_percent,slowest_part,slowest_part_ms,tasks\n");
-        for (n, f) in self.frames.iter().enumerate() {
-            let slow = f.parts.iter().max_by(|a, b| a.2.total_cmp(&b.2));
-            out.push_str(&format!(
-                "{n},{:.2},{:.2},{:.2},{},{},{},{},{}\n",
-                f.at,
-                f.gap,
-                f.work,
-                f.memory.map_or(String::new(), |m| format!("{m:.0}")),
-                f.cpu.map_or(String::new(), |c| format!("{c:.0}")),
-                csv_field(slow.map_or("", |s| s.0.as_str())),
-                slow.map_or(String::new(), |s| format!("{:.2}", s.2)),
-                csv_field(&f.jobs.join("; ")),
-            ));
-        }
-        out
-    }
-
-    /// A trace in the Trace Event format (chrome://tracing, Perfetto): the
-    /// frames and their parts on one track, the tasks on another, the
-    /// memory and the processor as counters.
-    pub fn trace_json(&self) -> String {
-        let mut ev: Vec<serde_json::Value> = vec![
-            serde_json::json!({"name": "thread_name", "ph": "M", "pid": 1, "tid": 1, "args": {"name": "Frames"}}),
-            serde_json::json!({"name": "thread_name", "ph": "M", "pid": 1, "tid": 2, "args": {"name": "Tasks"}}),
-        ];
-        let us = |ms: f64| (ms * 1000.0).round();
-        // A task: from the first frame it is seen in to the last.
-        let mut open: Vec<(String, f64)> = Vec::new();
-        for (n, f) in self.frames.iter().enumerate() {
-            ev.push(serde_json::json!({"name": format!("frame {n}"), "ph": "X", "pid": 1, "tid": 1, "ts": us(f.at), "dur": us(f.work as f64).max(1.0), "args": {"frame_ms": f.gap}}));
-            for (name, start, dur) in &f.parts {
-                ev.push(serde_json::json!({"name": name, "ph": "X", "pid": 1, "tid": 1, "ts": us(f.at + *start as f64), "dur": us(*dur as f64).max(1.0)}));
-            }
-            if let Some(m) = f.memory {
-                ev.push(serde_json::json!({"name": "memory (MB)", "ph": "C", "pid": 1, "ts": us(f.at), "args": {"MB": m}}));
-            }
-            if let Some(c) = f.cpu {
-                ev.push(serde_json::json!({"name": "processor (% of a core)", "ph": "C", "pid": 1, "ts": us(f.at), "args": {"percent": c}}));
-            }
-            open.retain(|(name, since)| {
-                let still = f.jobs.iter().any(|j| task_name(j) == name);
-                if !still {
-                    ev.push(serde_json::json!({"name": name, "ph": "X", "pid": 1, "tid": 2, "ts": us(*since), "dur": us(f.at - since).max(1.0)}));
-                }
-                still
-            });
-            for j in &f.jobs {
-                let name = task_name(j);
-                if !open.iter().any(|(o, _)| o == name) {
-                    open.push((name.to_owned(), f.at));
-                }
-            }
-        }
-        let end = self.frames.last().map_or(0.0, |f| f.at + f.work as f64);
-        for (name, since) in open {
-            ev.push(serde_json::json!({"name": name, "ph": "X", "pid": 1, "tid": 2, "ts": us(since), "dur": us(end - since).max(1.0)}));
-        }
-        serde_json::to_string(&serde_json::json!({"traceEvents": ev, "displayTimeUnit": "ms"})).unwrap_or_default()
-    }
-
-    /// What the recording found, in words: its frames, the slowest of them,
-    /// and the parts that took the most time.
-    pub fn summary(&self) -> String {
-        let mut s = format!("Performance recording: {:.1} s, {} frames\n", self.seconds(), self.frames.len());
-        if self.frames.is_empty() {
-            return s;
-        }
-        let gaps: Vec<f32> = self.frames.iter().map(|f| f.gap).collect();
-        let work: Vec<f32> = self.frames.iter().map(|f| f.work).collect();
-        s.push_str(&format!(
-            "Frame time: median {:.1} ms, 99th percentile {:.1} ms, worst {:.1} ms\nWork a frame: median {:.1} ms, worst {:.1} ms\nFrames over 50 ms: {}\n",
-            percentile(&gaps, 0.5),
-            percentile(&gaps, 0.99),
-            percentile(&gaps, 1.0),
-            percentile(&work, 0.5),
-            percentile(&work, 1.0),
-            gaps.iter().filter(|g| **g > 50.0).count()
-        ));
-        // The parts, by the time spent in them all together.
-        let mut parts: Vec<(String, f64, f32, usize)> = Vec::new();
-        for f in &self.frames {
-            for (name, _, dur) in &f.parts {
-                match parts.iter_mut().find(|p| &p.0 == name) {
-                    Some(p) => {
-                        p.1 += *dur as f64;
-                        p.2 = p.2.max(*dur);
-                        p.3 += 1;
-                    }
-                    None => parts.push((name.clone(), *dur as f64, *dur, 1)),
-                }
-            }
-        }
-        parts.sort_by(|a, b| b.1.total_cmp(&a.1));
-        if !parts.is_empty() {
-            s.push_str("\nWhere the work went (all frames, worst frame):\n");
-            for (name, total, worst, n) in parts.iter().take(12) {
-                s.push_str(&format!("  {total:>9.1} ms  {worst:>7.1} ms  {name} ({n} frames)\n"));
-            }
-        }
-        let mut slow: Vec<(usize, &Frame)> = self.frames.iter().enumerate().collect();
-        slow.sort_by(|a, b| b.1.gap.total_cmp(&a.1.gap));
-        s.push_str("\nSlowest frames:\n");
-        for (n, f) in slow.iter().take(10) {
-            let part = f.parts.iter().max_by(|a, b| a.2.total_cmp(&b.2)).map_or(String::new(), |p| format!(", most in {} ({:.1} ms)", p.0, p.2));
-            let jobs = if f.jobs.is_empty() { String::new() } else { format!(", tasks: {}", f.jobs.join("; ")) };
-            s.push_str(&format!("  frame {n} at {:.2} s: {:.1} ms, work {:.1} ms{part}{jobs}\n", f.at / 1000.0, f.gap, f.work));
-        }
-        s
-    }
-}
-
-impl Drop for Recording {
-    fn drop(&mut self) {
-        if self.stopped.is_none() {
-            RECORDING.set(false);
-        }
-    }
-}
-
-/// A task's name without its progress (`Exporting · 40 %`).
-fn task_name(job: &str) -> &str {
-    job.split(" · ").next().unwrap_or(job)
-}
-
-fn csv_field(s: &str) -> String {
-    if s.contains([',', '"', '\n']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s.to_owned() }
-}
-
-// ---------------------------------------------------------------------------
 // The report
 
 /// What a report is made of, gathered by the app when the dialog opens.
@@ -612,7 +382,7 @@ pub const MAP_NAME: &str = "map.massif";
 
 /// The files of a report, every text scrubbed. The map goes in only when
 /// given (ticked in the dialog).
-pub fn parts(inputs: &Inputs, recording: Option<&Recording>, map: Option<MapFile>) -> Vec<Part> {
+pub fn parts(inputs: &Inputs, recording: Option<&crate::perf::Recording>, map: Option<MapFile>) -> Vec<Part> {
     let home = inputs.home.as_deref();
     let text = |name: &str, about: &'static str, s: &str| Part { name: name.to_owned(), about, bytes: scrub(s, home).into_bytes(), text: true };
     let mut out = vec![text("report.txt", tn!("Massif, the computer, the settings, the map, the last minute"), &report_text(inputs, recording))];
@@ -631,9 +401,10 @@ pub fn parts(inputs: &Inputs, recording: Option<&Recording>, map: Option<MapFile
         out.push(text("last-minute.csv", tn!("Each frame of the last minute: its time, the memory, the processor"), &inputs.last_minute.csv()));
     }
     if let Some(r) = recording.filter(|r| r.frames() > 0) {
-        out.push(text("recording/summary.txt", tn!("The recording: its slowest frames, where the work went"), &r.summary()));
-        out.push(text("recording/frames.csv", tn!("Each frame recorded"), &r.frames_csv()));
-        out.push(text("recording/trace.json", tn!("A timeline for chrome://tracing or ui.perfetto.dev"), &r.trace_json()));
+        out.extend(r.parts("recording/").into_iter().filter(|p| p.name != "recording/system.txt").map(|mut p| {
+            p.bytes = scrub(&String::from_utf8_lossy(&p.bytes), home).into_bytes();
+            p
+        }));
     }
     out.extend(map.map(map_part));
     out
@@ -645,7 +416,7 @@ pub fn map_part(map: MapFile) -> Part {
 }
 
 /// `report.txt`: everything but the files, in words.
-pub fn report_text(inputs: &Inputs, recording: Option<&Recording>) -> String {
+pub fn report_text(inputs: &Inputs, recording: Option<&crate::perf::Recording>) -> String {
     let mut s = String::from("Massif problem report\n");
     let section = |s: &mut String, title: &str, lines: &[(String, String)]| {
         s.push_str(&format!("\n## {title}\n"));
@@ -679,7 +450,7 @@ pub fn report_text(inputs: &Inputs, recording: Option<&Recording>) -> String {
 
 /// A few lines for Discord: the version, the computer, how it ran, the
 /// last error the log has.
-pub fn short_summary(inputs: &Inputs, recording: Option<&Recording>) -> String {
+pub fn short_summary(inputs: &Inputs, recording: Option<&crate::perf::Recording>) -> String {
     let sys = &inputs.system;
     let mut s = format!("**Massif {}** · {}\n", version(), sys.os);
     s.push_str(&format!("{} ({} threads) · {} RAM\n", sys.cpu, sys.threads, sys.ram.map_or_else(|| "?".to_owned(), gb)));
@@ -700,8 +471,8 @@ pub fn short_summary(inputs: &Inputs, recording: Option<&Recording>) -> String {
         ));
     }
     if let Some(r) = recording.filter(|r| r.frames() > 0) {
-        let gaps: Vec<f32> = r.frames.iter().map(|f| f.gap).collect();
-        s.push_str(&format!("Recording: {:.0} s, {} frames, median {:.0} ms, worst {:.0} ms\n", r.seconds(), r.frames(), percentile(&gaps, 0.5), percentile(&gaps, 1.0)));
+        let (median, worst) = r.busy_median_worst();
+        s.push_str(&format!("Recording: {:.0} s, {} frames, median {median:.0} ms, worst {worst:.0} ms\n", r.seconds(), r.frames()));
     }
     if let Some((_, size)) = inputs.map.iter().find(|(k, _)| k == "Size") {
         let levels = inputs.map.iter().find(|(k, _)| k == "Levels").map_or(String::new(), |(_, v)| format!(", {v} levels"));
@@ -983,31 +754,6 @@ mod tests {
         let short = short_summary(&inputs, None);
         assert!(short.contains("Last error: panic in thread main: boom") && short.contains("Apple M2 (8 threads)"), "{short}");
         let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn a_recording_has_its_frames_and_parts() {
-        let mut r = Recording::start();
-        for n in 0..3 {
-            let begun = Instant::now();
-            mark("the map");
-            std::thread::sleep(std::time::Duration::from_millis(2));
-            mark("the panels");
-            let work = begun.elapsed().as_secs_f32() * 1000.0;
-            r.frame(begun, 16.0 + n as f32, work, Some(500.0), Some(30.0), if n == 1 { vec!["Exporting · 40 %".into()] } else { vec![] });
-        }
-        r.stop();
-        mark("after the stop");
-        assert_eq!(r.frames(), 3);
-        assert!(MARKS.with_borrow(Vec::is_empty), "nothing is noted once stopped");
-        let csv = r.frames_csv();
-        assert_eq!(csv.lines().count(), 4);
-        assert!(csv.lines().nth(1).unwrap().contains(",the map,"), "{csv}");
-        let trace: serde_json::Value = serde_json::from_str(&r.trace_json()).unwrap();
-        let names: Vec<&str> = trace["traceEvents"].as_array().unwrap().iter().filter_map(|e| e["name"].as_str()).collect();
-        assert!(names.contains(&"the panels") && names.contains(&"Exporting") && names.contains(&"frame 2"), "{names:?}");
-        let summary = r.summary();
-        assert!(summary.contains("3 frames") && summary.contains("the map"), "{summary}");
     }
 
     #[test]

@@ -3724,5 +3724,21 @@
  "the game's rules": "правила игры",
  "tick speed {speed}": "скорость тактов {speed}",
  "time stopped": "время остановлено",
- "weather fixed": "погода не меняется"
+ "weather fixed": "погода не меняется",
+ "Saved the performance recording “{name}”: send it to us on Discord": "Запись производительности «{name}» сохранена: отправьте её нам в Discord",
+ "Could not save the performance recording: {e}": "Не удалось сохранить запись производительности: {e}",
+ "Record Performance": "Запись производительности",
+ "Start, then use Massif as when it slows down: move the map, sculpt, open the views that stutter. Stop with the red dot at the top right, or in the Help menu. The recording is saved on your desktop as a .zip to send us on Discord.": "Начните запись и работайте в Massif так же, как когда он тормозит: двигайте карту, лепите, открывайте подтормаживающие виды. Остановите красной точкой справа вверху или в меню «Справка». Запись сохраняется на рабочий стол в .zip, чтобы отправить нам в Discord.",
+ "It keeps the time of each frame and of each of its parts, the memory, the processor, your computer and graphics card, the settings that change how Massif draws, the map's size and the workspaces, and the pointer and the keys as you used them. Never the map itself, nor what you type, nor where your files are.": "Она хранит время каждого кадра и каждой его части, память, процессор, ваш компьютер и видеокарту, настройки, влияющие на отрисовку Massif, размер карты и рабочие области, а также указатель и клавиши так, как вы их использовали. Никогда — саму карту, то, что вы печатаете, и расположение ваших файлов.",
+ "Recording performance: click to stop and save it on your desktop": "Идёт запись производительности: нажмите, чтобы остановить и сохранить на рабочий стол",
+ "Stop Recording Performance": "Остановить запись производительности",
+ "Performance": "Производительность",
+ "Stop and Save": "Остановить и сохранить",
+ "Record…": "Записать…",
+ "Every frame and where its time went, saved on your desktop to send us (Help ▸ Record Performance…)": "Каждый кадр и на что ушло его время, сохраняется на рабочий стол, чтобы отправить нам (Справка ▸ Запись производительности…)",
+ "Record Performance…": "Запись производительности…",
+ "Every frame and where its time went, while you use Massif: a file to send us when it slows down": "Каждый кадр и на что ушло его время, пока вы работаете в Massif: файл, который можно отправить нам, когда он тормозит",
+ "The pointer, the keys and the tool in hand, frame by frame": "Указатель, клавиши и инструмент в руке, кадр за кадром",
+ "Massif, the computer, the settings, the map's size, the workspaces": "Massif, компьютер, настройки, размер карты, рабочие области",
+ "The workspaces, for the replay": "Рабочие области, для воспроизведения"
 }

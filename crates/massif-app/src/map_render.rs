@@ -1542,6 +1542,7 @@ impl MapCache {
         wanted: &[ChunkKey],
         budget: Duration,
     ) -> bool {
+        profiling::scope!("map tiles");
         // What was used before this update may shrink.
         let first = self.clock + 1;
         self.busy = self.build(ctx, dim, reg, sea, style, wanted, budget);

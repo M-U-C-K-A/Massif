@@ -2845,12 +2845,48 @@ graphics card, how the last minute ran and the last error of the log.
 
 **Performance recording** is for what is slow: **Start Recording**, do the
 slow thing, then **Stop** in the pill at the top of the window (it stops by
-itself after ten minutes). The report then also holds `recording/`: a
-summary of the slowest frames and of where the work went, every frame in
-`frames.csv` (its time, its work, the memory, the processor, its slowest
-part, the tasks running), and `trace.json`, a timeline of the frames, their
-parts and the tasks to open in `chrome://tracing` or
-[ui.perfetto.dev](https://ui.perfetto.dev).
+itself after ten minutes). The report then also holds `recording/`, the
+files of a performance recording (see below).
+
+## Recording performance
+
+When Massif stutters, **Help ▸ Record Performance…** (also **Record…** in
+**Settings ▸ Developer**) records it for us. **Start Recording**, then use
+Massif as when it slows down: move the map, sculpt, paint, open the views
+that stutter. A red dot and the time recorded show at the right of the top
+bar; click it, or **Help ▸ Stop Recording Performance**, to stop. The
+recording is saved on your desktop as `Massif performance <date>.zip`, shown
+in the Finder (the Explorer on Windows), to send in `#bug-reports`. It stops
+by itself after ten minutes, and costs too little to be felt while it runs.
+
+It holds:
+
+- `summary.txt`: the frames, the slowest of them and what took their time,
+  where the interface's time went over the whole recording, the other
+  threads' work, and why frames were drawn when nothing happened;
+- `frames.csv`: every frame, its time, how long it kept the interface busy
+  and the app's own work in it, the time of its main parts (the 2D map and
+  its tiles, the 3D views, the Diorama, the Render side, the panels,
+  laying out, tessellating, drawing, waiting for the screen), the memory,
+  the processor, the tiles decoded, the graphics card's memory, the tool in
+  hand, the input, why it was drawn and the tasks running;
+- `trace.json`: a timeline of every part of every frame on every thread,
+  Massif's and its libraries' (egui, wgpu), with the input, the memory and
+  the processor, to open in `chrome://tracing` or
+  [ui.perfetto.dev](https://ui.perfetto.dev);
+- `inputs.jsonl`: the pointer, the keys and the tool in hand, frame by
+  frame: what you did, to play it back on the same map;
+- `system.txt`: Massif's version, the computer, its graphics card and
+  driver, the settings that change how Massif draws (graphics preset,
+  frames a second), the map's size and levels, what Massif keeps, the
+  workspaces and their areas, floating panels included;
+- `layout.json`: the workspaces, for the replay.
+
+Never the map itself, nor what you type (only how many characters), nor
+where your files are: the home folder is written `~`.
+
+The replay plays a recording back on a map, offscreen, and times its frames
+as the recorder does (see [development](development.md#performance)).
 
 After Massif closed without saving, the dialog that offers to restore your
 map has **Report the Problem…** too.

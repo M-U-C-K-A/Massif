@@ -42,6 +42,7 @@ mod pack_share;
 mod packs;
 mod palettes;
 mod panels;
+mod perf;
 mod picker;
 mod player;
 mod quit;
@@ -99,6 +100,8 @@ fn main() -> eframe::Result {
     // Every step of the start written down, panics too (see `startup`).
     startup::begin();
     startup::log_warnings();
+    // The scopes reach the performance recorder (idle until it records).
+    perf::install();
     let open = std::env::args_os().nth(1).map(PathBuf::from);
     // Files the Finder asks to open, and the system's Quit (the Dock's, a
     // logout's), asked first when the map has changes; on Windows, `.massif`

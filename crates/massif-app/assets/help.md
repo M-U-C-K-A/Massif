@@ -378,6 +378,12 @@ Its layers come too. Forests (Deciduous, Pine, Jungle, Swamp) and the trees of W
 - For slowness, **Start Recording**, do the slow thing, then **Stop** at the top of the window: each frame and what took its time go in the report.
 - After Massif closed without saving, the dialog that offers your map back has **Report the Problem…** too.
 
+## Recording performance
+When Massif stutters, **Help ▸ Record Performance…** (or **Record…** in **Settings ▸ Developer**) records it for us. **Start Recording**, use Massif as when it slows down, then click the red dot at the right of the top bar (or **Help ▸ Stop Recording Performance**).
+- The recording is saved on your desktop as `Massif performance <date>.zip` and shown in the Finder: send it in **#bug-reports**. It stops by itself after ten minutes.
+- It holds every frame and where its time went (the map, the 3D views, the Diorama, the Render side, drawing, waiting for the screen), the memory, the processor, your computer and graphics card, the settings that change how Massif draws, the map's size, the workspaces, and the pointer, the keys and the tool in hand as you used them.
+- Never the map itself, nor what you type, nor where your files are.
+
 ## If Massif does not start
 Massif writes every step of its start in `startup.log` (on Windows in `%LOCALAPPDATA%\Massif`, on macOS in `~/Library/Logs/Massif`, on Linux in `~/.local/state/massif`), the start before in `startup.previous.log`. Once Massif starts again, **Help ▸ Report a Problem…** puts them in the report; if it never starts, send those two files. A graphics API whose driver got stuck is set aside in `graphics.txt` beside them: delete it to try them all again.
 
