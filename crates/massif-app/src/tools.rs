@@ -2211,6 +2211,39 @@ pub fn click(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, inverse:
         Tool::Eyedropper => {
             let p = probe(doc, x, z)?;
             let reg = &doc.world.registry;
+/// Alt + click, as WorldPainter's eyedropper: what is under the cursor, for
+/// the tool in hand: the biome for Paint biome, the ground cover, the
+/// object layer for theirs, the terrain for the others (Paint terrain
+/// leaving its noise for that terrain). What was picked, or why nothing.
+pub fn pick(doc: &Document, tools: &mut ToolState, x: i32, z: i32) -> Feedback {
+    let Some(p) = probe(doc, x, z) else {
+        return Some(tr!("Nothing here to pick").to_owned());
+    };
+    let reg = &doc.world.registry;
+    Some(match tools.tool {
+        Tool::PaintBiome if p.biome != 0 => {
+            tools.biome = p.biome;
+            tr!("Picked the biome {name}", name = reg.biome(massif_core::registry::BiomeId(p.biome)).name)
+        }
+        Tool::PaintBiome => tr!("No biome painted here").to_owned(),
+        Tool::Cover if p.cover != 0 => {
+            tools.cover = p.cover;
+            tr!("Picked the ground cover {name}", name = reg.covers.get(p.cover as usize - 1).map_or("", |c| c.name.as_str()))
+        }
+        Tool::Cover => tr!("No ground cover here").to_owned(),
+        Tool::Objects if p.objects != 0 => {
+            tools.object_layer = p.objects;
+            tr!("Picked the layer {name}", name = reg.object_layers.get(p.objects as usize - 1).map_or("", |l| l.name.as_str()))
+        }
+        Tool::Objects => tr!("No trees nor objects here").to_owned(),
+        _ => {
+            tools.terrain = p.terrain;
+            tools.pattern.on = false;
+            tr!("Picked {terrain_name}", terrain_name = reg.terrain(TerrainId(p.terrain)).name)
+        }
+    })
+}
+
             let terrain_name = reg.terrain(TerrainId(p.terrain)).name.clone();
             tools.terrain = p.terrain;
             tools.target_height = p.height.round();

@@ -6243,6 +6243,14 @@ impl View3d {
             }
             None => (sculpting && response.hovered() && !alt && !shift && (primary || secondary), secondary),
         };
+        // Alt + click (a drag turns the view): what is under the cursor, as
+        // WorldPainter's eyedropper.
+        if sculpting && alt && self.walk.is_none() && (response.clicked() || response.secondary_clicked())
+            && let Some(frame) = self.frame
+        {
+            let (x, z) = (frame.center[0].floor() as i32, frame.center[2].floor() as i32);
+            self.feedback = crate::tools::pick(doc, tools, x, z).or(self.feedback.take());
+        }
         match (&mut self.sculpt, pressed, self.frame) {
             // Once over the land: a stroke of the map's brushes begins where
             // it is.

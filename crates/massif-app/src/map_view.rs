@@ -1237,9 +1237,9 @@ impl MapView {
         }
 
         // ---- editing -------------------------------------------------------
-        // The left button applies the tool, the right button (or Alt with the
-        // left one) its inverse: lower instead of raise, erase instead of
-        // paint, drain instead of flood.
+        // The left button applies the tool, the right button its inverse:
+        // lower instead of raise, erase instead of paint, drain instead of
+        // flood. Alt + click picks what is under the cursor.
         let world_pointer = pointer.map(|p| self.to_world(canvas, p));
         // The mark of the 3D view, taken with the primary button: the 3D
         // view follows it rather than the tool acting.
@@ -1299,9 +1299,13 @@ impl MapView {
             && let Some((x, z)) = world_pointer
         {
             let secondary = button == PointerButton::Secondary;
-            let inverse = secondary || modifiers.alt;
+            let inverse = secondary;
             let (bx, bz) = (x.floor() as i32, z.floor() as i32);
-            if tools.tool == Tool::Road {
+            if modifiers.alt {
+                // Alt + click, either button: what is under the cursor, as
+                // WorldPainter's eyedropper.
+                *feedback = tools::pick(doc, tools, bx, bz).or(feedback.take());
+            } else if tools.tool == Tool::Road {
                 if let Some(p) = pointer {
                     let screen = |q: (f32, f32)| self.to_screen(canvas, q.0 as f64, q.1 as f64);
                     *feedback = crate::road_draft::press(doc, tools, (x as f32, z as f32), p, secondary, &screen, self.zoom).or(feedback.take());

@@ -352,7 +352,8 @@ Massif's own keys, as they are out of the box. **Settings ▸ Keyboard** changes
 
 | `⌘N` `⌘O` `⌘S` `⌘E` | New, open, save, export |
 | `⌘Z` / `⇧⌘Z` | Undo / redo |
-| Left / right button | The tool / its inverse (also `Alt` + left) |
+| Left / right button | The tool / its inverse (a layer's right button rubs out that layer alone) |
+| `Alt` + click | Pick what is under the cursor: the terrain, or the biome, ground cover or object layer of the tool in hand (in 3D too, without dragging) |
 | Scroll | Brush size (`Shift`: one block at a time) |
 | `⌘` + scroll | Turn the brush |
 | `Ctrl` or `Alt` + scroll, pinch | Zoom the map |

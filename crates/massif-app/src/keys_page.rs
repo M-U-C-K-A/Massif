@@ -149,7 +149,7 @@ pub fn page(ui: &mut Ui, saved: &mut Saved) {
     let mouse = if keymap::MAC {
         tr!("The mouse keeps its own: the wheel sizes the brush (Shift: a block at a time), ⌘ and the wheel turn it, ⌥ or ⌃ and the wheel zoom, ⌥ with the left button does the tool's inverse.")
     } else {
-        tr!("The mouse keeps its own: the wheel sizes the brush (Shift: a block at a time), Ctrl + Shift and the wheel turn it, Alt or Ctrl and the wheel zoom, Alt with the left button does the tool's inverse.")
+        tr!("The mouse keeps its own: the wheel sizes the brush (Shift: a block at a time), Ctrl + Shift and the wheel turn it, Alt or Ctrl and the wheel zoom, Alt + click picks the terrain, biome or layer under the cursor.")
     };
     ui.add(egui::Label::new(RichText::new(mouse).size(11.5).color(pal.weak)).wrap());
     ui.add_space(4.0);
