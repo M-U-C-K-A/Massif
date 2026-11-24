@@ -3109,5 +3109,20 @@
  },
  "Keep the image as a reference image": "Garder l'image comme image de référence",
  "The image shown stays on the 2D map where it lands, to see under what it painted: kept with the map, never exported. The map's Reference images button shows, moves or removes it.": "L'image affichée reste sur la carte 2D là où elle se pose, pour voir dessous ce qu'elle a peint : gardée avec la carte, jamais exportée. Le bouton Images de référence de la carte l'affiche, la déplace ou la retire.",
- "The image stays on the 2D map where it lands, to see under what it painted: kept with the map, never exported. The map's Reference images button shows, moves or removes it.": "L'image reste sur la carte 2D là où elle se pose, pour voir dessous ce qu'elle a peint : gardée avec la carte, jamais exportée. Le bouton Images de référence de la carte l'affiche, la déplace ou la retire."
+ "The image stays on the 2D map where it lands, to see under what it painted: kept with the map, never exported. The map's Reference images button shows, moves or removes it.": "L'image reste sur la carte 2D là où elle se pose, pour voir dessous ce qu'elle a peint : gardée avec la carte, jamais exportée. Le bouton Images de référence de la carte l'affiche, la déplace ou la retire.",
+ "Remove the guide": "Retirer le guide",
+ "Show the guide": "Afficher le guide",
+ "Show the image on the map as a guide": "Afficher l'image sur la carte comme guide",
+ "The guide is only shown on the 2D map, to trace over: it is never saved in the map nor exported.": "Le guide est seulement affiché sur la carte 2D, pour décalquer : il n'est jamais enregistré dans la carte ni exporté.",
+ "The imported image shown on the map to trace over: never exported": "L'image importée affichée sur la carte pour décalquer : jamais exportée",
+ "Export 384 × 384 blocks around the view, to test it": "Exporter 384 × 384 blocs autour de la vue, pour tester",
+ "The mouse keeps its own: the wheel sizes the brush (Shift: a block at a time), Ctrl + Shift and the wheel turn it, Alt or Ctrl and the wheel zoom, Alt with the left button does the tool's inverse.": "La souris garde les siens : la molette règle la taille du pinceau (Maj : un bloc à la fois), Ctrl + Maj et la molette le tournent, Alt ou Ctrl et la molette zooment, Alt avec le bouton gauche fait l'inverse de l'outil.",
+ "Too much water for one flood: it would cover more than {columns} columns. Nothing was flooded.": "Trop d'eau pour une seule inondation : elle couvrirait plus de {columns} colonnes. Rien n'a été inondé.",
+ "Too much water to drain at once: it covers more than {columns} columns. Nothing was drained.": "Trop d'eau à assécher d'un coup : elle couvre plus de {columns} colonnes. Rien n'a été asséché.",
+ "Too much water to lower at once: it covers more than {columns} columns.": "Trop d'eau à baisser d'un coup : elle couvre plus de {columns} colonnes.",
+ "The water stays at {level}: a block higher, it would spread over more than {columns} columns, too much for one flood.": "L'eau reste à {level} : un bloc plus haut, elle s'étendrait sur plus de {columns} colonnes, trop pour une seule inondation.",
+ "Water raised by {n} blocks, to {level}: a block higher, it would spread over more than {columns} columns, too much for one flood.": {
+  "one": "Eau montée de {n} bloc, à {level} : un bloc plus haut, elle s'étendrait sur plus de {columns} colonnes, trop pour une seule inondation.",
+  "other": "Eau montée de {n} blocs, à {level} : un bloc plus haut, elle s'étendrait sur plus de {columns} colonnes, trop pour une seule inondation."
+ }
 }

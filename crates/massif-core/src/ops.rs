@@ -1230,17 +1230,23 @@ fn spill(dim: &Dimension, x: i32, z: i32, cap: usize) -> Option<(Option<i16>, bo
     Some(((level > start).then(|| level.clamp(i16::MIN as i32, i16::MAX as i32) as i16), capped))
 }
 
+/// A flood that would change more than its limit of columns: it changes
+/// none. Stopped halfway, the water it laid would stand cut off where it
+/// stopped, a wall of water over the land and the water beyond.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TooMany;
+
 /// Flood-fill fluid on the ground level starting from column `(x, z)`.
 ///
 /// Returns the number of columns changed. The fill stops at the edge of the
-/// map and after `max_cells` columns.
-pub fn flood_fill(edit: &mut Edit, x: i32, z: i32, mode: Flood, max_cells: usize) -> usize {
+/// map; one that would change more than `max_cells` columns changes none.
+pub fn flood_fill(edit: &mut Edit, x: i32, z: i32, mode: Flood, max_cells: usize) -> Result<usize, TooMany> {
     if edit.level_index() != 0 {
-        return 0;
+        return Ok(0);
     }
-    let (filled, changed, _) = flood_plan(edit.dim(), x, z, mode, max_cells);
+    let (filled, changed, _) = flood_plan(edit.dim(), x, z, mode, max_cells)?;
     write_plan(edit, changed);
-    filled
+    Ok(filled)
 }
 
 fn write_plan(edit: &mut Edit, changed: Vec<(TilePos, Vec<i16>)>) {
@@ -1265,29 +1271,35 @@ pub fn water_at(dim: &Dimension, x: i32, z: i32) -> Option<i16> {
 /// to a block higher as far as it reaches, over the shore a block above
 /// it and wherever the land lies lower from there. The columns changed,
 /// and the level it stands at; `None` with no water on the column.
-pub fn raise_water(edit: &mut Edit, x: i32, z: i32, max_cells: usize) -> Option<(usize, i16)> {
+pub fn raise_water(edit: &mut Edit, x: i32, z: i32, max_cells: usize) -> Option<(Result<usize, TooMany>, i16)> {
     let level = water_at(edit.dim(), x, z)?.checked_add(1)?;
     Some((flood_fill(edit, x, z, Flood::Fill(level), max_cells), level))
 }
 
+/// What [`lower_water`] did: the columns it changed, and a column the water
+/// still covers (`None`: the water is gone).
+pub type Lowered = (usize, Option<(i32, i32)>);
+
 /// Lower the body of water on column `(x, z)` by one block: its top layer
 /// taken off, the shore it uncovers left as the ground was. The columns
 /// changed and a column it still covers (`None`: the water is gone); `None`
-/// with no water on the column.
-pub fn lower_water(edit: &mut Edit, x: i32, z: i32, max_cells: usize) -> Option<(usize, Option<(i32, i32)>)> {
+/// with no water on the column. A body of more than `max_cells` columns
+/// is left as it is.
+pub fn lower_water(edit: &mut Edit, x: i32, z: i32, max_cells: usize) -> Option<Result<Lowered, TooMany>> {
     if edit.level_index() != 0 {
         return None;
     }
     let level = water_at(edit.dim(), x, z)?;
-    let (n, changed, kept) = flood_plan(edit.dim(), x, z, Flood::Lower(level), max_cells);
-    write_plan(edit, changed);
-    Some((n, kept))
+    Some(flood_plan(edit.dim(), x, z, Flood::Lower(level), max_cells).map(|(n, changed, kept)| {
+        write_plan(edit, changed);
+        (n, kept)
+    }))
 }
 
-/// How many columns [`flood_fill`] would change from column `(x, z)`, at
-/// most `max_cells`, changing nothing.
-pub fn flood_count(dim: &Dimension, x: i32, z: i32, mode: Flood, max_cells: usize) -> usize {
-    flood_plan(dim, x, z, mode, max_cells).0
+/// How many columns [`flood_fill`] would change from column `(x, z)`, or
+/// that it would change more than `max_cells`; changing nothing.
+pub fn flood_count(dim: &Dimension, x: i32, z: i32, mode: Flood, max_cells: usize) -> Result<usize, TooMany> {
+    flood_plan(dim, x, z, mode, max_cells).map(|p| p.0)
 }
 
 /// The level water poured at column `(x, z)` stands at if it is made to
@@ -1555,10 +1567,14 @@ fn near_hollow(surface: &mut impl FnMut(i32, i32) -> Option<(i32, bool)>, x: i32
     None
 }
 
-/// The columns a flood from `(x, z)` changes and the water of the tiles it
-/// changes, as [`flood_fill`] would write them.
-#[allow(clippy::type_complexity)]
-fn flood_plan(dim: &Dimension, x: i32, z: i32, mode: Flood, max_cells: usize) -> (usize, Vec<(TilePos, Vec<i16>)>, Option<(i32, i32)>) {
+/// What a flood plans: the columns it changes, the water of the tiles it
+/// changes, as [`flood_fill`] would write them, and a column the water
+/// still covers ([`Flood::Lower`]).
+type Plan = (usize, Vec<(TilePos, Vec<i16>)>, Option<(i32, i32)>);
+
+/// The plan of a flood from `(x, z)`; [`TooMany`] past `max_cells`
+/// columns.
+fn flood_plan(dim: &Dimension, x: i32, z: i32, mode: Flood, max_cells: usize) -> Result<Plan, TooMany> {
     let mut filled = 0usize;
     let kept;
     let changed: Vec<(TilePos, Vec<i16>)> = {
@@ -1591,8 +1607,8 @@ fn flood_plan(dim: &Dimension, x: i32, z: i32, mode: Flood, max_cells: usize) ->
         let mut stack = Vec::new();
         stack.extend(run(&mut grid, x, z, &mut filled));
         while let Some((x0, x1, sz)) = stack.pop() {
-            if filled >= max_cells {
-                break;
+            if filled > max_cells {
+                return Err(TooMany);
             }
             for nz in [sz - 1, sz + 1] {
                 let mut nx = x0;
@@ -1607,6 +1623,9 @@ fn flood_plan(dim: &Dimension, x: i32, z: i32, mode: Flood, max_cells: usize) ->
                 }
             }
         }
+        if filled > max_cells {
+            return Err(TooMany);
+        }
         kept = grid.kept;
         grid.tiles
             .into_iter()
@@ -1614,7 +1633,7 @@ fn flood_plan(dim: &Dimension, x: i32, z: i32, mode: Flood, max_cells: usize) ->
             .map(|t| (t.pos, t.fluid))
             .collect()
     };
-    (filled, changed, kept)
+    Ok((filled, changed, kept))
 }
 
 // --------------------------------------------------------- whole-map ops --
@@ -1731,7 +1750,7 @@ mod tests {
         assert_eq!(spill_level(&w.dims[0], 60, 60, 1 << 20), None);
         let mut hist = History::default();
         hist.begin("flood", 0);
-        let n = flood_fill(&mut hist.edit(&mut w, 0), 0, 0, Flood::Fill(75), usize::MAX);
+        let n = flood_fill(&mut hist.edit(&mut w, 0), 0, 0, Flood::Fill(75), usize::MAX).unwrap();
         hist.commit();
         // The pit fills; the plateau and the notch stay dry.
         assert!(n > 1000 && n < 1400, "{n}");
@@ -1755,7 +1774,7 @@ mod tests {
             }
             let mut hist = History::default();
             hist.begin("flood", 0);
-            flood_fill(&mut hist.edit(&mut w, 0), 0, 0, Flood::Fill(75), usize::MAX);
+            flood_fill(&mut hist.edit(&mut w, 0), 0, 0, Flood::Fill(75), usize::MAX).unwrap();
             hist.commit();
             let before = crate::water::check(&w.dims[0]);
             assert_eq!(before.spills, 0);
@@ -1857,7 +1876,7 @@ mod tests {
         let Some(Pour::Hollow { x: -10, z: 0, level: 80, columns, capped: false, near: false }) = pour_target(dim, -10, 0, 12, 256, 1 << 20) else { panic!("{:?}", pour_target(dim, -10, 0, 12, 256, 1 << 20)) };
         let mut hist = History::default();
         hist.begin("flood", 0);
-        let n = flood_fill(&mut hist.edit(&mut w, 0), -10, 0, Flood::Fill(80), usize::MAX);
+        let n = flood_fill(&mut hist.edit(&mut w, 0), -10, 0, Flood::Fill(80), usize::MAX).unwrap();
         hist.commit();
         assert!(n == columns && n > 1200, "the pit, its dent with it: {n} {columns}");
     }
@@ -2112,7 +2131,7 @@ mod tests {
         let mut hist = History::default();
         select(&mut w, &mut hist, Selection::shape(&Shape::Ellipse(BlockRect::new(-20, -20, 20, 20))));
         hist.begin("fill", 0);
-        let n = flood_fill(&mut hist.edit(&mut w, 0), 0, 0, Flood::Fill(70), 1_000_000);
+        let n = flood_fill(&mut hist.edit(&mut w, 0), 0, 0, Flood::Fill(70), 1_000_000).unwrap();
         hist.commit();
         let area = w.dims[0].selection.as_ref().unwrap().area() as usize;
         assert_eq!(n, area);
@@ -2395,7 +2414,7 @@ mod tests {
         hist.commit();
 
         hist.begin("Flood", 0);
-        let n = flood_fill(&mut hist.edit(&mut w, 0), 0, 0, Flood::Fill(60), usize::MAX);
+        let n = flood_fill(&mut hist.edit(&mut w, 0), 0, 0, Flood::Fill(60), usize::MAX).unwrap();
         hist.commit();
         let fluid = |w: &World, x: i32, z: i32| {
             let t = w.dims[0].ground().view(TilePos::containing(x, z)).unwrap();
@@ -2407,8 +2426,8 @@ mod tests {
         assert_eq!(fluid(&w, 12, 0), NO_FLUID);
         // Filling again changes nothing; draining removes the whole lake.
         hist.begin("Flood", 0);
-        assert_eq!(flood_fill(&mut hist.edit(&mut w, 0), 0, 0, Flood::Fill(60), usize::MAX), 0);
-        assert_eq!(flood_fill(&mut hist.edit(&mut w, 0), 3, 3, Flood::Drain, usize::MAX), n);
+        assert_eq!(flood_fill(&mut hist.edit(&mut w, 0), 0, 0, Flood::Fill(60), usize::MAX), Ok(0));
+        assert_eq!(flood_fill(&mut hist.edit(&mut w, 0), 3, 3, Flood::Drain, usize::MAX), Ok(n));
         hist.commit();
         assert_eq!(fluid(&w, 0, 0), NO_FLUID);
     }
@@ -2425,7 +2444,7 @@ mod tests {
             hist.edit(&mut w, 0).tile_mut(pos).unwrap().fluid.fill(NO_FLUID);
         }
         raise(&mut hist.edit(&mut w, 0), &hard_brush(10.0), 0.0, 0.0, -14.0, Surface::Top);
-        flood_fill(&mut hist.edit(&mut w, 0), 0, 0, Flood::Fill(55), usize::MAX);
+        flood_fill(&mut hist.edit(&mut w, 0), 0, 0, Flood::Fill(55), usize::MAX).unwrap();
         hist.commit();
         let wet = |w: &World| {
             let dim = &w.dims[0];
@@ -2440,9 +2459,9 @@ mod tests {
         assert_eq!(water_at(&w.dims[0], 0, 0), Some(56));
         assert!(wet(&w) >= lake, "{} < {lake}", wet(&w));
         hist.begin("Lower", 0);
-        let (_, kept) = lower_water(&mut hist.edit(&mut w, 0), 0, 0, usize::MAX).unwrap();
+        let (_, kept) = lower_water(&mut hist.edit(&mut w, 0), 0, 0, usize::MAX).unwrap().unwrap();
         assert!(kept.is_some());
-        let (_, kept) = lower_water(&mut hist.edit(&mut w, 0), 0, 0, usize::MAX).unwrap();
+        let (_, kept) = lower_water(&mut hist.edit(&mut w, 0), 0, 0, usize::MAX).unwrap().unwrap();
         hist.commit();
         assert!(kept.is_some());
         assert_eq!(water_at(&w.dims[0], 0, 0), Some(54));
@@ -2451,7 +2470,7 @@ mod tests {
         assert_eq!(w.dims[0].ground().view(TilePos::containing(0, 0)).unwrap().top.dense().into_owned(), ground);
         hist.begin("Lower", 0);
         let mut layers = 0;
-        while let Some((_, kept)) = lower_water(&mut hist.edit(&mut w, 0), 0, 0, usize::MAX) {
+        while let Some(Ok((_, kept))) = lower_water(&mut hist.edit(&mut w, 0), 0, 0, usize::MAX) {
             layers += 1;
             if kept.is_none() {
                 break;
@@ -2466,15 +2485,41 @@ mod tests {
     }
 
     #[test]
-    fn flood_fill_honours_the_cell_budget() {
+    fn a_flood_past_its_limit_changes_nothing() {
         let mut w = world(1);
+        let fluid = |w: &World| {
+            let mut tiles: Vec<((i32, i32), Vec<i16>)> = w.dims[0].ground().positions().map(|p| ((p.x, p.z), w.dims[0].ground().view(p).unwrap().fluid.dense().into_owned())).collect();
+            tiles.sort_by_key(|t| t.0);
+            tiles
+        };
+        let before = fluid(&w);
         let mut hist = History::default();
-        hist.begin("Flood", 0);
         // Flat land at 64 with the default sea at 63: flooding to 80 would
-        // cover the whole map.
-        let n = flood_fill(&mut hist.edit(&mut w, 0), 0, 0, Flood::Fill(80), 1000);
+        // cover the whole map, 65,536 columns. Stopped after 1,000, it would
+        // leave a wall of water where it stopped: it floods none.
+        hist.begin("Flood", 0);
+        assert_eq!(flood_count(&w.dims[0], 0, 0, Flood::Fill(80), 65_535), Err(TooMany));
+        assert_eq!(flood_fill(&mut hist.edit(&mut w, 0), 0, 0, Flood::Fill(80), 1000), Err(TooMany));
         hist.commit();
-        assert!((1000..3000).contains(&n), "{n}");
+        assert!(fluid(&w) == before, "nothing flooded");
+        // Within it, all of it.
+        hist.begin("Flood", 0);
+        assert_eq!(flood_count(&w.dims[0], 0, 0, Flood::Fill(80), 65_536), Ok(65_536));
+        assert_eq!(flood_fill(&mut hist.edit(&mut w, 0), 0, 0, Flood::Fill(80), 65_536), Ok(65_536));
+        hist.commit();
+        // Raised, lowered or drained past it: left as it was.
+        let flooded = fluid(&w);
+        assert_ne!(flooded, before);
+        hist.begin("Water", 0);
+        assert_eq!(raise_water(&mut hist.edit(&mut w, 0), 5, 5, 1000), Some((Err(TooMany), 81)));
+        assert_eq!(lower_water(&mut hist.edit(&mut w, 0), 5, 5, 1000), Some(Err(TooMany)));
+        assert_eq!(flood_fill(&mut hist.edit(&mut w, 0), 5, 5, Flood::Drain, 1000), Err(TooMany));
+        hist.commit();
+        assert!(fluid(&w) == flooded, "the water as it was");
+        hist.begin("Drain", 0);
+        assert_eq!(flood_fill(&mut hist.edit(&mut w, 0), 5, 5, Flood::Drain, 65_536), Ok(65_536));
+        hist.commit();
+        assert!(w.dims[0].ground().positions().all(|p| w.dims[0].ground().view(p).unwrap().fluid.dense().iter().all(|&f| f == NO_FLUID)), "drained whole");
     }
 
     #[test]

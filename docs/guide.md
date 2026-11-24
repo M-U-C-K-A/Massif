@@ -1577,6 +1577,14 @@ height comes back to Where I click until you pick one.
   beyond a hollow off), never over the height limit or the top of the
   world, down to the bottom. The 2D map and the 3D views
   follow it as it goes, and the whole press is one step to undo.
+- A flood changes **67,108,864 columns at most** (a square of some 8,000
+  blocks a side), all of them or none: one that would cover more, a body
+  of water that large lowered or drained, or water raised a block past
+  where it would spread that far, is left as it was, and the message says
+  why (**Too much water for one flood: it would cover more than
+  67,108,864 columns. Nothing was flooded.**). Stopped halfway, the water
+  would stand cut off where it stopped, a wall of water over the land and
+  the sea beyond it.
 
 **Water brush.** It lays water under the brush at the water height chosen;
 the right button takes water off.

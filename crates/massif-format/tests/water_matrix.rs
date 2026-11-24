@@ -585,7 +585,7 @@ fn water_holds_on_every_map() {
             let Some(l) = ops::spill_level(&lake.dims[0], x, z, 16 << 20) else { continue };
             let mut h0 = History::new(1);
             h0.begin("Flood", 0);
-            ops::flood_fill(&mut h0.edit(&mut lake, 0), x, z, Flood::Fill(l), 64 << 20);
+            ops::flood_fill(&mut h0.edit(&mut lake, 0), x, z, Flood::Fill(l), 64 << 20).unwrap();
             h0.commit();
             // The shore east of the hollow.
             let Some(sx) = (x..x + 200).find(|&sx| column(&lake, sx, z).is_some_and(|c| c.1.is_none())) else { continue };
@@ -658,7 +658,7 @@ fn water_holds_on_every_map() {
                         let level = ops::spill_level(&w.dims[0], x, z, 16 << 20);
                         h.begin("Flood", 0);
                         match level {
-                            Some(l) => format!("{} columns to {l}", ops::flood_fill(&mut h.edit(w, 0), x, z, Flood::Fill(l), 64 << 20)),
+                            Some(l) => format!("{} columns to {l}", ops::flood_fill(&mut h.edit(w, 0), x, z, Flood::Fill(l), 64 << 20).unwrap()),
                             None => "not a hollow".into(),
                         }
                     }),
@@ -671,14 +671,14 @@ fn water_holds_on_every_map() {
                         let rim = ops::spill_level(&w.dims[0], x, z, 16 << 20);
                         h.begin("Flood", 0);
                         let Some(l) = rim else { return "not a hollow".into() };
-                        ops::flood_fill(&mut h.edit(w, 0), x, z, Flood::Fill(l - 3), 64 << 20);
+                        ops::flood_fill(&mut h.edit(w, 0), x, z, Flood::Fill(l - 3), 64 << 20).unwrap();
                         let mut n = 0;
                         for _ in 0..5 {
                             let Some(now) = ops::water_at(&w.dims[0], x, z) else { break };
                             if now + 1 > l {
                                 break;
                             }
-                            ops::raise_water(&mut h.edit(w, 0), x, z, 64 << 20);
+                            ops::raise_water(&mut h.edit(w, 0), x, z, 64 << 20).unwrap().0.unwrap();
                             n += 1;
                         }
                         format!("raised {n} to {:?} (rim {l})", ops::water_at(&w.dims[0], x, z))
@@ -691,7 +691,7 @@ fn water_holds_on_every_map() {
                         let rim = ops::spill_level(&w.dims[0], x, z, 16 << 20);
                         h.begin("Flood", 0);
                         let Some(l) = rim else { return "not a hollow".into() };
-                        let n = ops::flood_fill(&mut h.edit(w, 0), x, z, Flood::Fill(l + 2), 64 << 20);
+                        let n = ops::flood_fill(&mut h.edit(w, 0), x, z, Flood::Fill(l + 2), 64 << 20).unwrap();
                         format!("{n} columns to {}", l + 2)
                     }),
                 ),
@@ -705,7 +705,7 @@ fn water_holds_on_every_map() {
                         let mut n = 0;
                         for _ in 0..2 {
                             match ops::lower_water(&mut h.edit(w, 0), at.0, at.1, 64 << 20) {
-                                Some((_, Some(k))) => {
+                                Some(Ok((_, Some(k)))) => {
                                     at = k;
                                     n += 1;
                                 }
@@ -722,7 +722,7 @@ fn water_holds_on_every_map() {
                             return "not a hollow".into();
                         }
                         h.begin("Drain", 0);
-                        format!("drained {}", ops::flood_fill(&mut h.edit(w, 0), x, z, Flood::Drain, 64 << 20))
+                        format!("drained {}", ops::flood_fill(&mut h.edit(w, 0), x, z, Flood::Drain, 64 << 20).unwrap())
                     }),
                 ),
             ];
@@ -737,7 +737,7 @@ fn water_holds_on_every_map() {
                     if let Some(l) = ops::spill_level(&w.dims[0], x, z, 16 << 20) {
                         let mut h0 = History::new(1);
                         h0.begin("Flood", 0);
-                        ops::flood_fill(&mut h0.edit(&mut w, 0), x, z, Flood::Fill(l), 64 << 20);
+                        ops::flood_fill(&mut h0.edit(&mut w, 0), x, z, Flood::Fill(l), 64 << 20).unwrap();
                         h0.commit();
                     }
                 }
@@ -770,7 +770,7 @@ fn water_holds_on_every_map() {
                     &mut w,
                     &mut |h, w| {
                         h.begin("Flood", 0);
-                        format!("{} columns to {level}", ops::flood_fill(&mut h.edit(w, 0), x, z, Flood::Fill(level), 64 << 20))
+                        format!("{} columns to {level}", ops::flood_fill(&mut h.edit(w, 0), x, z, Flood::Fill(level), 64 << 20).unwrap())
                     },
                     None,
                 );
@@ -827,7 +827,7 @@ fn water_holds_on_every_map() {
                     }
                     for (k, &(x, z)) in hollows(w, 3).iter().enumerate() {
                         if let Some(l) = ops::spill_level(&w.dims[0], x, z, 16 << 20) {
-                            ops::flood_fill(&mut h.edit(w, 0), x, z, Flood::Fill(if k == 0 { l + 2 } else { l }), 64 << 20);
+                            ops::flood_fill(&mut h.edit(w, 0), x, z, Flood::Fill(if k == 0 { l + 2 } else { l }), 64 << 20).unwrap();
                         }
                     }
                     let lakes = Reshape::Filter(NodeKind::Lakes { amount: 0.0, sea: sea as f32 });

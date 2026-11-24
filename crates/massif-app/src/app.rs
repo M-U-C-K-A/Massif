@@ -4939,12 +4939,8 @@ impl MassifApp {
                     ui.set_width(400.0);
                     ui.label(RichText::new(tr!("Flood beyond the hollow?")).bold().size(15.0));
                     let (columns, level) = (crate::select::thousands(ask.columns as u64), ask.level);
-                    let what = if ask.at_rim && ask.more {
-                        tr!("The water is at the rim of its hollow: a block higher, it would spill and spread wherever the land lies lower, over more than {columns} columns, up to {level}.", columns, level)
-                    } else if ask.at_rim {
+                    let what = if ask.at_rim {
                         tr!("The water is at the rim of its hollow: a block higher, it would spill and spread wherever the land lies lower, over {columns} columns, up to {level}.", columns, level)
-                    } else if ask.more {
-                        tr!("This spot is not in a hollow: the water would run away. Made to stay a block over it, it would spread wherever the land lies lower, over more than {columns} columns, up to {level}.", columns, level)
                     } else {
                         tr!("This spot is not in a hollow: the water would run away. Made to stay a block over it, it would spread wherever the land lies lower, over {columns} columns, up to {level}.", columns, level)
                     };
@@ -7804,8 +7800,8 @@ mod tests {
             ((lo.x + hi.x + 1) * t / 2, (lo.z + hi.z + 1) * t / 2)
         };
         let level = massif_core::ops::pour_level(h.state().doc.dimension(), x, z).unwrap();
-        let columns = massif_core::ops::flood_count(h.state().doc.dimension(), x, z, massif_core::ops::Flood::Fill(level), 64 << 20);
-        let ask = crate::tools::FloodAsk { x, z, level, columns, more: false, at_rim: false };
+        let columns = massif_core::ops::flood_count(h.state().doc.dimension(), x, z, massif_core::ops::Flood::Fill(level), 64 << 20).unwrap();
+        let ask = crate::tools::FloodAsk { x, z, level, columns, at_rim: false };
         h.state_mut().tools.flood_ask = Some(ask.clone());
         h.run_steps(3);
         assert!(matches!(h.state().dialog, Some(Dialog::FloodAsk(_))));
@@ -19070,7 +19066,7 @@ mod tests {
         openers.push(("Crashed".into(), Box::new(|app: &mut MassifApp, _: &egui::Context| app.dialog = Some(Dialog::Crashed("index out of bounds: the len is 3 but the index is 7".into(), None)))));
         openers.push(("PointName".into(), Box::new(|app: &mut MassifApp, _: &egui::Context| app.dialog = Some(Dialog::PointName(None, "Before the rivers".into())))));
         openers.push(("SmoothTerrain".into(), Box::new(|app: &mut MassifApp, ctx: &egui::Context| app.command(ctx, Command::SmoothTerrain))));
-        openers.push(("FloodAsk".into(), Box::new(|app: &mut MassifApp, _: &egui::Context| app.dialog = Some(Dialog::FloodAsk(crate::tools::FloodAsk { x: 0, z: 0, level: 70, columns: 65536, more: true, at_rim: false })))));
+        openers.push(("FloodAsk".into(), Box::new(|app: &mut MassifApp, _: &egui::Context| app.dialog = Some(Dialog::FloodAsk(crate::tools::FloodAsk { x: 0, z: 0, level: 70, columns: 65536, at_rim: false })))));
         // What is past the window with no dialog (the 3D View's header, cut
         // by its area) is not the dialogs'.
         let past = |h: &egui_kittest::Harness<'_, MassifApp>| -> Vec<String> {

@@ -5,7 +5,7 @@ use crate::doc::Document;
 use crate::theme::Icon;
 use massif_core::compose::block_top;
 use massif_core::level::LevelKind;
-use massif_core::ops::{self, Anchor, Flood, Surface};
+use massif_core::ops::{self, Anchor, Flood, Surface, TooMany};
 use massif_core::registry::{BiomeId, TerrainId};
 use massif_core::tile::NO_FLUID;
 use massif_core::{Brush, TilePos};
@@ -1758,19 +1758,32 @@ pub fn probe(doc: &Document, x: i32, z: i32) -> Option<Probe> {
     })
 }
 
-/// The columns a flood fills at most.
+/// The columns a flood changes at most: past them, it changes none.
 const FLOOD_MAX: usize = 64 << 20;
+
+/// [`FLOOD_MAX`], or the limit a test sets on its thread.
+fn flood_max() -> usize {
+    #[cfg(test)]
+    if let Some(n) = FLOOD_LIMIT.with(|l| l.get()) {
+        return n;
+    }
+    FLOOD_MAX
+}
+
+#[cfg(test)]
+thread_local! {
+    static FLOOD_LIMIT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
 
 /// A flood from the click on a spot not in a hollow, to ask about: where,
 /// the level the water would stand at (a block over the spot), and how
-/// many columns it would cover (`more`: that many at least).
+/// many columns it would cover.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FloodAsk {
     pub x: i32,
     pub z: i32,
     pub level: i16,
     pub columns: usize,
-    pub more: bool,
     /// Raising water at the rim of its hollow, rather than on dry land.
     pub at_rim: bool,
 }
@@ -1779,9 +1792,30 @@ pub struct FloodAsk {
 /// one step to undo. What it did.
 pub fn flood_anyway(doc: &mut Document, ask: &FloodAsk) -> String {
     doc.history.begin(tr!("Flood"), doc.dim);
-    let n = ops::flood_fill(&mut doc.history.edit(&mut doc.world, 0), ask.x, ask.z, Flood::Fill(ask.level), FLOOD_MAX);
+    let n = ops::flood_fill(&mut doc.history.edit(&mut doc.world, 0), ask.x, ask.z, Flood::Fill(ask.level), flood_max());
     doc.commit();
-    tr!("Flooded {n} columns up to {water_level}", water_level = ask.level, n)
+    match n {
+        Ok(n) => tr!("Flooded {n} columns up to {water_level}", water_level = ask.level, n),
+        Err(TooMany) => too_many_to_flood(),
+    }
+}
+
+/// What raising water at `level` (raised `blocks` so far) says when a block
+/// more would spread it over more than [`FLOOD_MAX`] columns.
+fn too_many_to_raise(level: i16, blocks: u32) -> String {
+    let columns = crate::select::thousands(flood_max() as u64);
+    if blocks == 0 {
+        tr!("The water stays at {level}: a block higher, it would spread over more than {columns} columns, too much for one flood.", level, columns)
+    } else {
+        trn!("Water raised by {n} block, to {level}: a block higher, it would spread over more than {columns} columns, too much for one flood.", "Water raised by {n} blocks, to {level}: a block higher, it would spread over more than {columns} columns, too much for one flood.", n = blocks, level, columns)
+    }
+}
+
+/// What a flood past [`FLOOD_MAX`] columns says: it floods none, since
+/// stopped halfway, it would leave the water it laid standing as a wall
+/// where it stopped.
+fn too_many_to_flood() -> String {
+    tr!("Too much water for one flood: it would cover more than {columns} columns. Nothing was flooded.", columns = crate::select::thousands(flood_max() as u64))
 }
 
 /// The level a Water brush stroke starting on column `(x, z)` lays its
@@ -1861,8 +1895,10 @@ fn pour_mode(doc: &Document, tools: &mut ToolState, x: i32, z: i32) -> Result<Fi
                 return Err(Some(under_the_limit(tools)));
             }
             if tools.flood_warn {
-                let columns = ops::flood_count(doc.dimension(), x, z, Flood::Fill(level), FLOOD_MAX);
-                tools.flood_ask = Some(FloodAsk { x, z, level, columns, more: columns >= FLOOD_MAX, at_rim: false });
+                let Ok(columns) = ops::flood_count(doc.dimension(), x, z, Flood::Fill(level), flood_max()) else {
+                    return Err(Some(too_many_to_flood()));
+                };
+                tools.flood_ask = Some(FloodAsk { x, z, level, columns, at_rim: false });
                 return Err(None);
             }
             Ok(Fill { x, z, level, set: false, above, near: false })
@@ -2027,6 +2063,8 @@ enum HoldEnd {
     Gone,
     /// Nothing more to change.
     Still,
+    /// A block more (or less) would change more than [`FLOOD_MAX`] columns.
+    TooMany,
 }
 
 impl WaterHold {
@@ -2055,9 +2093,12 @@ fn hold_period(tools: &ToolState) -> f32 {
 pub fn press_water(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, lower: bool, drain_all: bool) -> (Option<WaterHold>, Feedback) {
     if drain_all {
         doc.history.begin(tr!("Drain"), doc.dim);
-        let n = ops::flood_fill(&mut doc.history.edit(&mut doc.world, 0), x, z, Flood::Drain, FLOOD_MAX);
+        let n = ops::flood_fill(&mut doc.history.edit(&mut doc.world, 0), x, z, Flood::Drain, flood_max());
         doc.commit();
-        return (None, Some(poured(doc, tools, x, z, false, 0, n)));
+        return (None, Some(match n {
+            Ok(n) => poured(doc, tools, x, z, false, 0, n),
+            Err(TooMany) => tr!("Too much water to drain at once: it covers more than {columns} columns. Nothing was drained.", columns = crate::select::thousands(flood_max() as u64)),
+        }));
     }
     let water = ops::water_at(doc.dimension(), x, z);
     let mut hold = WaterHold { x, z, lower, step: 0, label: String::new(), rim: None, wait: 0.0, blocks: 0, level: water, flooded: None, ran: false, above: None, near: false, end: None };
@@ -2077,8 +2118,10 @@ pub fn press_water(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, lo
             // At the rim already: a block more, and it spills. Asked first.
             let rim = ops::spill_level(doc.dimension(), x, z, 16 << 20);
             if tools.flood_warn && rim.is_none_or(|rim| higher > rim) {
-                let columns = ops::flood_count(doc.dimension(), x, z, Flood::Fill(higher), FLOOD_MAX);
-                tools.flood_ask = Some(FloodAsk { x, z, level: higher, columns, more: columns >= FLOOD_MAX, at_rim: true });
+                let Ok(columns) = ops::flood_count(doc.dimension(), x, z, Flood::Fill(higher), flood_max()) else {
+                    return (None, Some(too_many_to_raise(level, 0)));
+                };
+                tools.flood_ask = Some(FloodAsk { x, z, level: higher, columns, at_rim: true });
                 return (None, None);
             }
             hold.rim = Some(rim.filter(|_| tools.flood_warn));
@@ -2093,7 +2136,13 @@ pub fn press_water(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, lo
             };
             hold.label = tr!("Flood").to_owned();
             hold.step = doc.history.begin(hold.label.clone(), doc.dim);
-            let n = ops::flood_fill(&mut doc.history.edit(&mut doc.world, 0), fill.x, fill.z, Flood::Fill(fill.level), FLOOD_MAX);
+            let n = match ops::flood_fill(&mut doc.history.edit(&mut doc.world, 0), fill.x, fill.z, Flood::Fill(fill.level), flood_max()) {
+                Ok(n) => n,
+                Err(TooMany) => {
+                    doc.commit();
+                    return (None, Some(too_many_to_flood()));
+                }
+            };
             if n == 0 {
                 doc.commit();
                 return (None, Some(poured(doc, tools, fill.x, fill.z, true, fill.level, n)));
@@ -2125,8 +2174,9 @@ fn water_step(doc: &mut Document, tools: &ToolState, hold: &mut WaterHold) {
     };
     if hold.lower {
         let mut edit = doc.history.edit(&mut doc.world, 0);
-        match ops::lower_water(&mut edit, hold.x, hold.z, FLOOD_MAX) {
-            Some((n, kept)) if n > 0 => {
+        match ops::lower_water(&mut edit, hold.x, hold.z, flood_max()) {
+            Some(Err(TooMany)) => hold.end = Some(HoldEnd::TooMany),
+            Some(Ok((n, kept))) if n > 0 => {
                 hold.blocks += 1;
                 match kept {
                     Some((x, z)) => {
@@ -2159,11 +2209,12 @@ fn water_step(doc: &mut Document, tools: &ToolState, hold: &mut WaterHold) {
         hold.end = Some(HoldEnd::Rim);
         return;
     }
-    match ops::raise_water(&mut doc.history.edit(&mut doc.world, 0), hold.x, hold.z, FLOOD_MAX) {
-        Some((n, level)) if n > 0 => {
+    match ops::raise_water(&mut doc.history.edit(&mut doc.world, 0), hold.x, hold.z, flood_max()) {
+        Some((Ok(n), level)) if n > 0 => {
             hold.blocks += 1;
             hold.level = Some(level);
         }
+        Some((Err(TooMany), _)) => hold.end = Some(HoldEnd::TooMany),
         _ => hold.end = Some(HoldEnd::Still),
     }
 }
@@ -2202,6 +2253,8 @@ pub fn release_water(doc: &mut Document, hold: WaterHold) -> Feedback {
             (Some(above), true, false) => tr!("The land is above y {above}: the water ran down into a hollow, {n} columns up to {water_level}", above, water_level = level, n),
             (Some(above), true, true) => tr!("The land is above y {above}: filled the nearest hollow, {n} columns up to {water_level}", above, water_level = level, n),
         },
+        (_, true, Some(HoldEnd::TooMany), _) => tr!("Too much water to lower at once: it covers more than {columns} columns.", columns = crate::select::thousands(flood_max() as u64)),
+        (_, false, Some(HoldEnd::TooMany), Some(level)) => too_many_to_raise(level, hold.blocks),
         (_, true, _, None) => tr!("The water is gone").to_owned(),
         (_, true, _, Some(level)) => trn!("Water lowered by {n} block, to {level}", "Water lowered by {n} blocks, to {level}", n = hold.blocks, level),
         (_, false, Some(HoldEnd::Rim), Some(level)) => trn!("Water raised by {n} block, to {level}: it is at the rim of its hollow, a block more and it spills.", "Water raised by {n} blocks, to {level}: it is at the rim of its hollow, a block more and it spills.", n = hold.blocks, level),
@@ -2748,7 +2801,7 @@ mod tests {
         assert_eq!(click(&mut d, &mut tools, 50, 50, false), None);
         let ask = tools.flood_ask.take().expect("a question");
         assert_eq!((ask.x, ask.z), (50, 50));
-        assert!(ask.columns > 1000 && !ask.more, "{ask:?}");
+        assert!(ask.columns > 1000, "{ask:?}");
         assert_eq!(d.history.undo_count(), steps);
         assert_eq!(probe(&d, 50, 50).unwrap().fluid, NO_FLUID);
         // A level of its own under the ground, and no hollow the water
@@ -3127,6 +3180,66 @@ mod tests {
         assert_eq!(water(&d, 60, 60), Some(rim + 5));
     }
 
+    /// A flood that would change more columns than the tools' limit changes
+    /// none: stopped halfway, the water it laid would stand as a wall where
+    /// it stopped. Flooded, raised, lowered or drained past the limit, the
+    /// water stays as it was, no step is added, and the tool says why.
+    #[test]
+    fn a_flood_past_the_limit_changes_nothing_and_says_why() {
+        let mut d = doc();
+        let mut tools = ToolState::default();
+        tools.select(Tool::Flood);
+        // The flat map is 65,536 columns.
+        FLOOD_LIMIT.with(|l| l.set(Some(5000)));
+        let unchanged = |d: &Document, before: &[i16], steps: usize, what: &str| {
+            assert!(fluids(d) == before, "{what}: the water as it was");
+            assert_eq!(d.history.undo_count(), steps, "{what}: no step");
+        };
+        let (before, steps) = (fluids(&d), d.history.undo_count());
+        // On flat land, water made to stay would cover the whole map: said
+        // instead of asked, and said when not asked.
+        let msg = click(&mut d, &mut tools, 50, 50, false).unwrap();
+        assert_eq!(msg, "Too much water for one flood: it would cover more than 5,000 columns. Nothing was flooded.");
+        assert!(tools.flood_ask.is_none());
+        unchanged(&d, &before, steps, "asked");
+        tools.flood_warn = false;
+        assert_eq!(click(&mut d, &mut tools, 50, 50, false).unwrap(), msg);
+        unchanged(&d, &before, steps, "not asked");
+        // A pit of some 700 columns, within the limit, fills to its rim.
+        let (_, rim) = pit(&mut d);
+        assert!(click(&mut d, &mut tools, 60, 60, false).unwrap().starts_with("Flooded "));
+        assert_eq!(water(&d, 60, 60), Some(rim));
+        let (before, steps) = (fluids(&d), d.history.undo_count());
+        // A block higher, it would spread over the whole map.
+        let msg = click(&mut d, &mut tools, 60, 60, false).unwrap();
+        assert_eq!(msg, format!("The water stays at {rim}: a block higher, it would spread over more than 5,000 columns, too much for one flood."));
+        unchanged(&d, &before, steps, "raised");
+        tools.flood_warn = true;
+        assert_eq!(click(&mut d, &mut tools, 60, 60, false).unwrap(), msg);
+        assert!(tools.flood_ask.is_none());
+        unchanged(&d, &before, steps, "raised, asked");
+        // Held, the same.
+        tools.flood_warn = false;
+        let (hold, _) = press_water(&mut d, &mut tools, 60, 60, false, false);
+        let mut hold = hold.unwrap();
+        for _ in 0..10 {
+            hold_water(&mut d, &tools, &mut hold, hold_period(&tools));
+        }
+        assert!(hold.ended());
+        assert_eq!(release_water(&mut d, hold).unwrap(), msg);
+        unchanged(&d, &before, steps, "held");
+        // Under a limit smaller than the pit's water: neither lowered nor
+        // drained.
+        FLOOD_LIMIT.with(|l| l.set(Some(100)));
+        assert_eq!(click(&mut d, &mut tools, 60, 60, true).unwrap(), "Too much water to lower at once: it covers more than 100 columns.");
+        unchanged(&d, &before, steps, "lowered");
+        let (hold, msg) = press_water(&mut d, &mut tools, 60, 60, true, true);
+        assert!(hold.is_none());
+        assert_eq!(msg.unwrap(), "Too much water to drain at once: it covers more than 100 columns. Nothing was drained.");
+        unchanged(&d, &before, steps, "drained");
+        FLOOD_LIMIT.with(|l| l.set(None));
+    }
+
     /// By the cursor, the water tools say the level they fill to, or why
     /// the ground stays dry: a level under it, or the height limit.
     #[test]
@@ -3174,7 +3287,7 @@ mod tests {
         click(&mut d, &mut tools, 70, 60, true).unwrap();
         assert_eq!(hint(&d, &tools, 60, 60), format!("Raise this water to y {}", bottom + 2));
         d.history.begin("fill", d.dim);
-        ops::flood_fill(&mut d.history.edit(&mut d.world, 0), 60, 60, Flood::Fill(rim), FLOOD_MAX);
+        ops::flood_fill(&mut d.history.edit(&mut d.world, 0), 60, 60, Flood::Fill(rim), FLOOD_MAX).unwrap();
         d.commit();
         assert_eq!(hint(&d, &tools, 60, 60), format!("At the rim, y {rim}: a block more spills"));
     }
