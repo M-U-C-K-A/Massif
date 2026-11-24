@@ -3592,5 +3592,11 @@
  "Covers of layers made the ground's own: {columns} columns raised and smoothed in {secs:.1} s": "Покровы из слоёв стали землёй: {columns} столбцов поднято и сглажено за {secs:.1} с",
  "Covers of layers": "Покровы из слоёв",
  "These ground covers are layers of a block laid over the land. Ticked, they become the ground's own: the land raised by their layers, its top that block, smoothed with layers on export, as they look now.": "Эти покровы — слои блока, положенные на землю. Отмеченные, они станут самой землёй: земля поднимется на их слои, сверху будет этот блок, сглаженный слоями при экспорте, как сейчас.",
- "Make them the ground's own": "Сделать землёй"
+ "Make them the ground's own": "Сделать землёй",
+ "Contour lines: interval, strength, colour": "Горизонтали: шаг, яркость, цвет",
+ "Crisp": "Чёткие",
+ "Edges": "Края",
+ "Fine lines between": "Тонкие линии между",
+ "Interval": "Шаг",
+ "Lines": "Линии"
 }

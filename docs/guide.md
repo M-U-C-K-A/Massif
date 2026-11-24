@@ -171,8 +171,22 @@ over the areas, with a **Cancel** for long tasks.
 
 The 2D map's header picks what it shows (Terrain, Height, Slope, Biome,
 Relief) and what goes over it: contour lines, **Block steps** and the tile and
-chunk grid. With **Block steps** on, the default, the map close up (a pixel
-or more for each block) is shaded from the height of each column's top block,
+chunk grid.
+
+The **contour lines** are drawn as WorldPainter's: a solid dark line every 10
+blocks, and a finer, fainter one halfway between. The arrow beside their
+button (or a right-click on it) sets them: the **Interval** (5, 10, 20, 50, or
+any number of blocks), their **Strength**, **Black** or **White** lines (white
+reads better on dark ground, the Relief mode's shadows), **Crisp** edges (a
+line on the blocks where the height crosses a level) or **Smooth** ones (soft,
+along the shape of the ground), and the **Fine lines between**. Zoomed out,
+the interval grows to a round multiple of the one set (20, 50, 100…), so that
+the lines never run together, and the fine lines show only where there is
+room for them. In high contrast the lines are drawn at full strength. The
+settings are kept for every map.
+
+With **Block steps** on, the default, the map close up (a pixel or
+more for each block) is shaded from the height of each column's top block,
 as the game's own maps are: each block is compared with its neighbour on the
 side the light comes from, so a step of one block is a sharp line one block
 wide, lit where it faces the light and in shadow at its foot, and the contour

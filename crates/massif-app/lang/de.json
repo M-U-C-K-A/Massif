@@ -3437,5 +3437,11 @@
  "Covers of layers made the ground's own: {columns} columns raised and smoothed in {secs:.1} s": "Schichtdecken zum Boden gemacht: {columns} Säulen in {secs:.1} s angehoben und geglättet",
  "Covers of layers": "Schichtdecken",
  "These ground covers are layers of a block laid over the land. Ticked, they become the ground's own: the land raised by their layers, its top that block, smoothed with layers on export, as they look now.": "Diese Bodendecken sind Schichten eines Blocks über dem Land. Angehakt werden sie zum Boden selbst: das Land um ihre Schichten angehoben, oben dieser Block, beim Export mit Schichten geglättet, so wie sie jetzt aussehen.",
- "Make them the ground's own": "Zum Boden machen"
+ "Make them the ground's own": "Zum Boden machen",
+ "Contour lines: interval, strength, colour": "Höhenlinien: Abstand, Stärke, Farbe",
+ "Crisp": "Scharf",
+ "Edges": "Kanten",
+ "Fine lines between": "Feine Linien dazwischen",
+ "Interval": "Abstand",
+ "Lines": "Linien"
 }

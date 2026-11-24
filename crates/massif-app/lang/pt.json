@@ -3434,5 +3434,11 @@
  "Covers of layers made the ground's own: {columns} columns raised and smoothed in {secs:.1} s": "Coberturas de camadas tornadas solo: {columns} colunas elevadas e suavizadas em {secs:.1} s",
  "Covers of layers": "Coberturas de camadas",
  "These ground covers are layers of a block laid over the land. Ticked, they become the ground's own: the land raised by their layers, its top that block, smoothed with layers on export, as they look now.": "Estas coberturas são camadas de um bloco postas sobre o terreno. Marcadas, tornam-se o próprio solo: o terreno sobe com as camadas, o topo passa a ser esse bloco, suavizado com camadas na exportação, como aparecem agora.",
- "Make them the ground's own": "Torná-las o solo"
+ "Make them the ground's own": "Torná-las o solo",
+ "Contour lines: interval, strength, colour": "Curvas de nível: intervalo, intensidade, cor",
+ "Crisp": "Nítidas",
+ "Edges": "Bordas",
+ "Fine lines between": "Linhas finas entre elas",
+ "Interval": "Intervalo",
+ "Lines": "Linhas"
 }

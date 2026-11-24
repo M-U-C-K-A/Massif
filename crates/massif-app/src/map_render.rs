@@ -333,6 +333,7 @@ impl Default for MapStyle {
             top: 320,
             seed: 0,
             annotations: true,
+            contour: ContourStyle::default(),
             sizes: false,
             pockets: false,
             slabs: false,
@@ -384,12 +385,69 @@ pub struct MapStyle {
     pub seed: i64,
     /// Annotations are drawn over the map.
     pub annotations: bool,
+    /// How the contour lines are drawn.
+    pub contour: ContourStyle,
     /// The tree sizes are drawn over the map.
     pub sizes: bool,
     /// The underground pockets are drawn over the map.
     pub pockets: bool,
     /// Where the steps are smoothed with slabs is drawn over the map.
     pub slabs: bool,
+}
+
+/// How the contour lines are drawn: as WorldPainter's, a dark line every
+/// `interval` blocks, and finer ones between.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ContourStyle {
+    /// Blocks between two lines.
+    pub interval: u16,
+    /// How strong the lines are, in percent.
+    pub opacity: u8,
+    /// White lines rather than black ones.
+    pub white: bool,
+    /// Smooth lines (soft at their edges, along the shape of the ground)
+    /// rather than crisp ones, a texel wide on the blocks.
+    pub smooth: bool,
+    /// Finer, fainter lines halfway between the main ones, where there is
+    /// room for them.
+    pub fine: bool,
+}
+
+impl Default for ContourStyle {
+    fn default() -> Self {
+        Self { interval: 10, opacity: 85, white: false, smooth: false, fine: true }
+    }
+}
+
+/// The intervals offered for the contour lines, in blocks.
+pub const CONTOUR_INTERVALS: [u16; 4] = [5, 10, 20, 50];
+
+/// The contour lines of one level of detail: the main lines' interval and
+/// the fine ones', in blocks.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Contours {
+    pub major: f32,
+    pub minor: Option<f32>,
+}
+
+impl ContourStyle {
+    /// The lines drawn where a texel is `texel` blocks wide: the main
+    /// interval, or a round multiple of it far enough apart for the lines
+    /// not to run together (four texels at least); the fine lines halfway,
+    /// where they are two texels apart at least.
+    pub fn at(&self, texel: f32) -> Contours {
+        let base = self.interval.max(1) as f32;
+        let mut major = base;
+        for k in [1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0] {
+            major = base * k;
+            if major >= texel * 4.0 {
+                break;
+            }
+        }
+        let minor = (self.fine && major / 2.0 >= texel * 2.0).then_some(major / 2.0);
+        Contours { major, minor }
+    }
 }
 
 /// Default light direction: from the north-west, like WorldPainter.
@@ -645,7 +703,7 @@ impl<'a> Colorizer<'a> {
         d: &Sample,
         spacing: f32,
         exaggeration: f32,
-        contour: Option<f32>,
+        contour: Option<Contours>,
         trend: Option<f32>,
         steps: Option<f32>,
     ) -> Color32 {
@@ -746,11 +804,14 @@ impl<'a> Colorizer<'a> {
             out = mix(out, color.map(|v| v as f32), 0.75);
         }
 
-        if let Some(interval) = contour {
-            let band = |v: f32| (level(v) / interval).floor();
-            let b = band(c.height);
-            if (!r.is_empty() && band(r.height) != b) || (!d.is_empty() && band(d.height) != b) {
-                out = scale(out, 0.74);
+        if let Some(lines) = contour {
+            let strength = self.contour_strength(c, l, r, u, d, lines, &level);
+            if strength > 0.0 {
+                let style = self.style.contour;
+                // Black lines a very dark grey: as strong a line, never the
+                // black of a part of the map not drawn.
+                let ink = if style.white { [250.0, 250.0, 248.0] } else { [30.0, 30.0, 34.0] };
+                out = mix(out, ink, strength * style.opacity.min(100) as f32 / 100.0);
             }
         }
 
@@ -772,6 +833,48 @@ impl<'a> Colorizer<'a> {
             out = mix(out, HIGHLIGHT, 0.42);
         }
         to_color(out)
+    }
+}
+
+impl Colorizer<'_> {
+    /// How much of a contour line covers sample `c` (0 to 1): a main line
+    /// whole, a fine one less. Crisp, the texels where the band of heights
+    /// changes to the next texel east or south, at the heights of the
+    /// blocks; smooth, the texels near where the ground's shape crosses a
+    /// level, softening over a texel.
+    #[allow(clippy::too_many_arguments)]
+    fn contour_strength(&self, c: &Sample, l: &Sample, r: &Sample, u: &Sample, d: &Sample, lines: Contours, level: &dyn Fn(f32) -> f32) -> f32 {
+        const FINE: f32 = 0.5;
+        if self.style.contour.smooth {
+            let h = |s: &Sample| if s.is_empty() { c.height } else { s.height };
+            // The step of height across a texel, and how far the sample is
+            // from the nearest level, in texels.
+            let (gx, gz) = ((h(r) - h(l)) / 2.0, (h(d) - h(u)) / 2.0);
+            let grad = (gx * gx + gz * gz).sqrt();
+            if grad < 1e-3 {
+                return 0.0;
+            }
+            let cover = |interval: f32| {
+                let f = c.height / interval;
+                let off = (f - f.round()).abs() * interval / grad;
+                (1.1 - off).clamp(0.0, 1.0)
+            };
+            let major = cover(lines.major);
+            let minor = lines.minor.map_or(0.0, |m| cover(m) * FINE);
+            return major.max(minor);
+        }
+        let crosses = |interval: f32| {
+            let band = |v: f32| (level(v) / interval).floor();
+            let b = band(c.height);
+            (!r.is_empty() && band(r.height) != b) || (!d.is_empty() && band(d.height) != b)
+        };
+        if crosses(lines.major) {
+            1.0
+        } else if lines.minor.is_some_and(crosses) {
+            FINE
+        } else {
+            0.0
+        }
     }
 }
 
@@ -898,16 +1001,6 @@ impl Sources<'_> {
     }
 }
 
-/// Contour interval at a level of detail.
-fn contour_interval(lod: u8) -> f32 {
-    match lod {
-        0 | 1 => 8.0,
-        2 => 16.0,
-        3 => 32.0,
-        _ => 64.0,
-    }
-}
-
 /// Samples around a pixel the slope is measured over, each way, at a level
 /// of detail: the same reach in blocks (`SLOPE_REACH`) whatever the zoom.
 fn slope_ring(lod: u8) -> usize {
@@ -1019,7 +1112,7 @@ fn build_chunk(key: ChunkKey, sources: &Sources, colorizer: &Colorizer) -> Color
     }
     let spacing = (1u32 << key.lod) as f32;
     let exaggeration = 1.0 + 0.3 * key.lod as f32;
-    let contour = colorizer.style.contours.then(|| contour_interval(key.lod));
+    let contour = colorizer.style.contours.then(|| colorizer.style.contour.at(spacing));
     // A texel of 2 × 2 or 4 × 4 blocks: the lines of its blocks' steps over
     // the light of the hillside (see `block_step_shades`).
     let steps = (!colorizer.style.smooth && !slope && (1..=STEP_LODS).contains(&key.lod)).then(|| block_step_shades(key, sources, colorizer.light));
@@ -2081,6 +2174,73 @@ mod tests {
         }
         let (none, _) = cover_bands(&[(1.0, Some(0.0)), (0.5, Some(0.0)), (0.0, Some(0.0))]);
         assert!(none.1.iter().all(|&d| d < 0.5), "none of it: {:?}", none.1);
+    }
+
+    /// The contour lines' intervals follow the zoom: the one chosen close
+    /// up, a round multiple of it further out, the fine lines halfway
+    /// where there is room.
+    #[test]
+    fn contour_intervals_follow_the_zoom() {
+        let c = ContourStyle::default();
+        assert_eq!(c.at(1.0), Contours { major: 10.0, minor: Some(5.0) });
+        assert_eq!(c.at(2.0), Contours { major: 10.0, minor: Some(5.0) });
+        assert_eq!(c.at(4.0), Contours { major: 20.0, minor: Some(10.0) });
+        assert_eq!(c.at(8.0), Contours { major: 50.0, minor: Some(25.0) });
+        assert_eq!(c.at(16.0), Contours { major: 100.0, minor: Some(50.0) });
+        assert_eq!(ContourStyle { fine: false, ..c }.at(1.0).minor, None);
+        assert_eq!(ContourStyle { interval: 5, ..c }.at(1.0), Contours { major: 5.0, minor: Some(2.5) });
+    }
+
+    /// The contour lines stand out as WorldPainter's, close up and zoomed
+    /// out, on light ground and dark: solid lines several times stronger
+    /// than the faint shade they were, black or white, crisp or smooth.
+    /// Saved side by side (before, black, white, smooth) with
+    /// MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn contour_lines_stand_out() {
+        let w = generate(&GenParams { tiles_x: 8, tiles_z: 8, landform: Landform::Mountains, seed: 11, ..GenParams::default() });
+        let dim = &w.dims[0];
+        // The lines as they were: the texel darkened to 74 %, every 8
+        // blocks close up.
+        let before = ContourStyle { interval: 8, opacity: 26, white: false, smooth: false, fine: false };
+        let after = ContourStyle::default();
+        let luma = |c: Color32| 0.3 * c.r() as f32 + 0.59 * c.g() as f32 + 0.11 * c.b() as f32;
+        for (lod, x0, chunks) in [(0u8, -256, 4), (2u8, -512, 2)] {
+            let render = |contours: bool, contour: ContourStyle| render_region(dim, &w.registry, 63.0, MapStyle { contours, contour, ..MapStyle::default() }, lod, x0, x0, chunks, chunks);
+            let plain = render(false, after);
+            // How much the lines change the pixels they cross, on average,
+            // and how many there are.
+            let change = |img: &ColorImage| {
+                let d: Vec<f32> = img.pixels.iter().zip(&plain.pixels).map(|(a, b)| (luma(*a) - luma(*b)).abs()).filter(|&d| d > 0.5).collect();
+                (d.iter().sum::<f32>() / d.len().max(1) as f32, d.len())
+            };
+            let shots = [render(true, before), render(true, after), render(true, ContourStyle { white: true, ..after }), render(true, ContourStyle { smooth: true, ..after })];
+            let (old, _) = change(&shots[0]);
+            let (_, lines) = change(&shots[1]);
+            // The main lines alone, the fine ones being fainter on purpose.
+            let main = |c: ContourStyle| change(&render(true, ContourStyle { fine: false, ..c })).0;
+            let (new, white, smooth) = (main(after), main(ContourStyle { white: true, ..after }), main(ContourStyle { smooth: true, ..after }));
+            assert!(new > 2.5 * old, "lod {lod}: the lines change their pixels by {new:.1} against {old:.1} before");
+            assert!(white > 2.0 * old && smooth > 1.5 * old, "lod {lod}: white {white:.1}, smooth {smooth:.1} against {old:.1}");
+            let share = lines as f32 / plain.pixels.len() as f32;
+            assert!((0.04..0.6).contains(&share), "lod {lod}: lines over {:.0} % of the map", share * 100.0);
+            // Side by side, with a gap.
+            let (wd, ht) = (plain.width(), plain.height());
+            let sw = wd * 4 + 24;
+            let mut strip = ColorImage::new([sw, ht], vec![Color32::from_gray(40); sw * ht]);
+            for (k, img) in shots.iter().enumerate() {
+                for y in 0..ht {
+                    for x in 0..wd {
+                        strip.pixels[y * sw + k * (wd + 8) + x] = img.pixels[y * wd + x];
+                    }
+                }
+            }
+            save(&format!("map-contours-lod{lod}-before-black-white-smooth.png"), &strip);
+        }
+        // On dark ground (the Relief mode's shadows, deep water), black
+        // lines still show at full strength, white ones at least as well.
+        let dark = |contour: ContourStyle| render_region(dim, &w.registry, 63.0, MapStyle { mode: MapMode::Relief, contours: true, contour, light: 6, ..MapStyle::default() }, 0, -256, -256, 4, 4);
+        save("map-contours-relief-white.png", &dark(ContourStyle { white: true, ..after }));
     }
 
     #[test]

@@ -381,6 +381,66 @@ pub struct MapInput<'a> {
     /// The reference images' textures and handles (the images are the
     /// map's).
     pub references: &'a mut crate::references::References,
+    /// How the contour lines show.
+    pub overlays: Overlays,
+}
+
+/// How the map views draw the contour lines: one choice for all of them,
+/// kept in the settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Overlays {
+    pub contour: crate::map_render::ContourStyle,
+}
+
+impl Overlays {
+    /// The contour lines as drawn: in high contrast, strong whatever the
+    /// setting.
+    pub fn contour(&self, high_contrast: bool) -> crate::map_render::ContourStyle {
+        let mut c = self.contour;
+        if high_contrast {
+            c.opacity = c.opacity.max(100);
+        }
+        c
+    }
+
+    /// The settings of the contour lines, in a menu.
+    pub fn contour_settings(&mut self, ui: &mut Ui) {
+        let c = &mut self.contour;
+        ui.set_min_width(250.0);
+        crate::widgets::well(ui, |ui| {
+            crate::widgets::row(ui, tr!("Interval"), |ui| {
+                ui.add(crate::widgets::Field::new(&mut c.interval, 1..=500).suffix(tr!(" blocks")).width(96.0));
+            });
+            crate::widgets::row(ui, "", |ui| {
+                let labels: Vec<String> = crate::map_render::CONTOUR_INTERVALS.iter().map(|n| n.to_string()).collect();
+                let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+                let on: Vec<bool> = crate::map_render::CONTOUR_INTERVALS.iter().map(|&n| n == c.interval).collect();
+                if let Some(k) = crate::widgets::button_group(ui, "contour interval", &labels, &on) {
+                    c.interval = crate::map_render::CONTOUR_INTERVALS[k];
+                }
+            });
+            crate::widgets::row(ui, tr!("Strength"), |ui| {
+                ui.add(crate::widgets::Field::new(&mut c.opacity, 10..=100).suffix("%").width(96.0));
+            });
+            crate::widgets::row(ui, tr!("Lines"), |ui| {
+                if let Some(k) = crate::widgets::button_group(ui, "contour ink", &[tr!("Black"), tr!("White")], &[!c.white, c.white]) {
+                    c.white = k == 1;
+                }
+            });
+            crate::widgets::row(ui, tr!("Edges"), |ui| {
+                if let Some(k) = crate::widgets::button_group(ui, "contour edges", &[tr!("Crisp"), tr!("Smooth")], &[!c.smooth, c.smooth]) {
+                    c.smooth = k == 1;
+                }
+            });
+            crate::widgets::row(ui, tr!("Fine lines between"), |ui| {
+                crate::widgets::switch(ui, &mut c.fine);
+            });
+        });
+        if ui.button(tr!("Reset")).clicked() {
+            *c = Default::default();
+        }
+    }
 }
 
 impl MapView {
@@ -422,12 +482,15 @@ impl MapView {
     }
 
     /// Display-mode tabs and toggles, shown in the area header.
-    pub fn header(&mut self, ui: &mut Ui) {
+    pub fn header(&mut self, ui: &mut Ui, overlays: &mut Overlays) {
         let narrow = ui.available_width() < 420.0;
         mode_selector(ui, &mut self.mode, narrow, "map mode");
         ui.separator();
         ui.toggle_value(&mut self.contours, theme::glyph(Icon::Spline).to_string())
-            .on_hover_text(tr!("Contour lines"));
+            .on_hover_text(tr!("Contour lines"))
+            .context_menu(|ui| overlays.contour_settings(ui));
+        crate::widgets::menu_button(ui, theme::glyph(Icon::ChevronDown).to_string(), |ui| overlays.contour_settings(ui))
+            .on_hover_text(tr!("Contour lines: interval, strength, colour"));
         let mut steps = !self.smooth;
         if ui
             .toggle_value(&mut steps, theme::glyph(Icon::Blocks).to_string())
@@ -1154,6 +1217,7 @@ impl MapView {
             overlay,
             mut view3d,
             references,
+            overlays,
         } = input;
         // The reference images read, those just added placed.
         {
@@ -1590,6 +1654,7 @@ impl MapView {
             top: doc.dimension().max_y,
             seed: doc.world.meta.seed,
             annotations: self.annotations,
+            contour: overlays.contour(theme::high_contrast(ui.ctx())),
             sizes: tools.show_sizes || tools.tool == tools::Tool::TreeSize,
             pockets: tools.tool == tools::Tool::Pockets,
             slabs: tools.tool == tools::Tool::Slabs,

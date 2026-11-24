@@ -3500,5 +3500,11 @@
  "Covers of layers made the ground's own: {columns} columns raised and smoothed in {secs:.1} s": "Couvertures de couches devenues le sol : {columns} colonnes surélevées et lissées en {secs:.1} s",
  "Covers of layers": "Couvertures de couches",
  "These ground covers are layers of a block laid over the land. Ticked, they become the ground's own: the land raised by their layers, its top that block, smoothed with layers on export, as they look now.": "Ces couvertures sont les couches d'un bloc posées sur le terrain. Cochées, elles deviennent le sol lui-même : le terrain monte de leurs couches, son dessus devient ce bloc, lissé en couches à l'export, comme elles apparaissent maintenant.",
- "Make them the ground's own": "En faire le sol"
+ "Make them the ground's own": "En faire le sol",
+ "Contour lines: interval, strength, colour": "Courbes de niveau : intervalle, force, couleur",
+ "Crisp": "Nettes",
+ "Edges": "Bords",
+ "Fine lines between": "Lignes fines entre",
+ "Interval": "Intervalle",
+ "Lines": "Lignes"
 }

@@ -147,6 +147,8 @@ struct Settings {
     /// The card the first start picked the preset for, and how long its
     /// trial frame took: what Settings ▸ Graphics says of the choice.
     graphics_chosen_for: Option<(String, f32)>,
+    /// How the map views draw the contour lines.
+    overlays: crate::map_view::Overlays,
 }
 
 fn yes() -> bool {
@@ -216,6 +218,7 @@ impl Default for Settings {
             graphics: None,
             graphics_chosen_for: None,
             keys: crate::keymap::Saved::default(),
+            overlays: Default::default(),
         }
     }
 }
@@ -4578,7 +4581,7 @@ impl MassifApp {
         match editor {
             EditorKind::Map => {
                 hui.add_space(8.0);
-                self.maps.entry(id).or_default().header(&mut hui);
+                self.maps.entry(id).or_default().header(&mut hui, &mut self.settings.overlays);
                 let mut add = false;
                 if self.references.header(&mut hui, &mut self.doc.world.meta.references, &mut add) {
                     self.doc.mark_changed();
@@ -4682,6 +4685,7 @@ impl MassifApp {
                         overlay,
                         view3d: shows_3d.then_some(&mut self.view3d),
                         references: &mut self.references,
+                        overlays: self.settings.overlays,
                     },
                 );
                 if self.map_center.is_none() {
