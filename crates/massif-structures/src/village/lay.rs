@@ -212,7 +212,7 @@ fn crop(name: &str, age: u32) -> String {
 
 /// The walls along their line, on the land: crenellated, towers at the
 /// corners and every few blocks, a gate where a road crosses.
-fn lay_walls(b: &mut Builder, ground: &dyn Ground, theme: &Theme, walls: &Walls, road: &HashMap<(i32, i32), RoadKind>, plans: &mut Plans, unknown: &mut Vec<String>) {
+fn lay_walls(b: &mut Builder, ground: &dyn Ground, theme: &Theme, walls: &Walls, plans: &mut Plans, unknown: &mut Vec<String>) {
     let style = &theme.walls;
     let h = style.height;
     let block = style.block.as_str();
@@ -220,8 +220,7 @@ fn lay_walls(b: &mut Builder, ground: &dyn Ground, theme: &Theme, walls: &Walls,
     let near_tower = |x: i32, z: i32| towers.iter().any(|t| (t[0] - x).abs() <= 2 && (t[1] - z).abs() <= 2);
     for (k, &[x, z]) in walls.line.iter().enumerate() {
         let base = ground.floor(x, z);
-        let on_road = (-1..=1).any(|d| road.contains_key(&(x + d, z)) || road.contains_key(&(x, z + d)));
-        if on_road {
+        if walls.in_gate(x, z) {
             // A gate: the road passes under an arch.
             for y in base + 4..base + h + 1 {
                 b.set([x, y, z], block, None);
@@ -364,7 +363,7 @@ pub fn lay(lib: Option<&Library>, plans: &dyn PlanSource, ground: &dyn Ground, t
     if let Some(w) = &stages.walls
         && !w.line.is_empty()
     {
-        lay_walls(&mut b, &adapted, theme, w, &road, &mut plans, &mut unknown);
+        lay_walls(&mut b, &adapted, theme, w, &mut plans, &mut unknown);
     }
     let name = if theme.pack.is_empty() { format!("{} village", theme.name) } else { theme.name.clone() };
     let mut s = b.finish(id, &name, "", true, lib.map_or(0, |l| l.data_version()));

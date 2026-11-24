@@ -81,8 +81,21 @@ pub fn hull(points: &[[i32; 2]]) -> Vec<[i32; 2]> {
     lower
 }
 
+/// The roads cut where the walls are: side roads stop short of them,
+/// main roads pass through their gates.
+pub fn trim(roads: &mut Roads, walls: &Walls) {
+    let reserved = walls.reserved();
+    for r in roads.lines.iter_mut().filter(|r| r.kind == RoadKind::Side) {
+        let reach = r.width / 2 + 1;
+        if let Some(k) = r.points.iter().position(|p| (-reach..=reach).any(|d| reserved.contains(&(p[0] + d, p[1])) || reserved.contains(&(p[0], p[1] + d)))) {
+            r.points.truncate(k);
+        }
+    }
+    roads.lines.retain(|r| r.kind != RoadKind::Side || r.points.len() >= 6);
+}
+
 /// Stage 3: the walls' line round the area (its hull three blocks in),
-/// and a gate wherever a road crosses it.
+/// and a gate wherever a main road crosses it.
 pub fn walls(area: &Area, roads: &Roads) -> Walls {
     let samples = area.samples(8);
     let mean = samples.iter().fold((0i64, 0i64), |a, p| (a.0 + p[0] as i64, a.1 + p[1] as i64));
@@ -108,11 +121,28 @@ pub fn walls(area: &Area, roads: &Roads) -> Walls {
             }
         }
     }
+    // A gate where a main road crosses: on the line, and on both sides of
+    // it (a road beside the wall is no way through).
     let cells = roads.cells(area);
+    let main = |x: i32, z: i32| (-1..=1).any(|d| cells.get(&(x + d, z)) == Some(&RoadKind::Main) || cells.get(&(x, z + d)) == Some(&RoadKind::Main));
     let mut gates: Vec<[i32; 2]> = Vec::new();
     for &[x, z] in &line {
-        let on_road = (-1..=1).any(|d| cells.get(&(x + d, z)).is_some_and(|k| *k != RoadKind::Square) || cells.get(&(x, z + d)).is_some_and(|k| *k != RoadKind::Square));
-        if on_road && gates.iter().all(|g| (g[0] - x).abs() + (g[1] - z).abs() > 6) {
+        if !main(x, z) {
+            continue;
+        }
+        let (dx, dz) = ((c[0] - x) as f32, (c[1] - z) as f32);
+        let d = (dx * dx + dz * dz).sqrt().max(1.0);
+        let (ux, uz) = (dx / d, dz / d);
+        let at = |k: f32| ((x as f32 + ux * k).round() as i32, (z as f32 + uz * k).round() as i32);
+        let inward = (2..=4).any(|k| {
+            let (px, pz) = at(k as f32);
+            main(px, pz)
+        });
+        let outward = (2..=4).any(|k| {
+            let (px, pz) = at(-(k as f32));
+            main(px, pz) || !area.contains(px, pz)
+        });
+        if inward && outward && gates.iter().all(|g| (g[0] - x).abs() + (g[1] - z).abs() > 6) {
             gates.push([x, z]);
         }
     }

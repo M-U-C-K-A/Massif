@@ -278,33 +278,35 @@ pub fn buildings(ground: &dyn Ground, area: &Area, site: &Site, roads: &Roads, r
             .map(|v| (v, v.weight * class_weight(v.class, bias) * if v.class == plot.size { 3.0 } else { 1.0 }))
             .collect();
         let Some(k) = draw(&mut rng, &variants) else { continue };
-        let v = variants[k].0;
+        // The variant drawn, else the type's smaller ones in turn: a plot
+        // too tight for one may hold another.
+        let mut tries: Vec<&Variant> = vec![variants[k].0];
+        let mut smaller: Vec<&Variant> = variants.iter().map(|w| w.0).filter(|w| !std::ptr::eq(*w, variants[k].0)).collect();
+        smaller.sort_by_key(|w| w.size[0] * w.size[2]);
+        tries.extend(smaller.into_iter().take(3));
         let facing = plot.side.opposite();
-        let (origin, turn, b) = fit(v, plot.door, floor, facing);
-        // On free land of the area, apart from the others.
         let margin = params.margin.clamp(0, 8) + rng.between(0, 2);
-        let mut ok = true;
-        let (mut lo, mut hi) = (i32::MAX, i32::MIN);
-        'cells: for z in b.min[2] - margin..=b.max[2] + margin {
-            for x in b.min[0] - margin..=b.max[0] + margin {
-                let inner = x >= b.min[0] && x <= b.max[0] && z >= b.min[2] && z <= b.max[2];
-                if taken.contains(&(x, z)) || (inner && (!area.contains(x, z) || road_cells.contains_key(&(x, z)))) {
-                    ok = false;
-                    break 'cells;
-                }
-                if inner {
-                    let (h, wet) = height(ground, x, z);
-                    if wet {
-                        ok = false;
-                        break 'cells;
+        // On free land of the area, apart from the others, not too steep.
+        let free = |b: &BBox| -> bool {
+            let (mut lo, mut hi) = (i32::MAX, i32::MIN);
+            for z in b.min[2] - margin..=b.max[2] + margin {
+                for x in b.min[0] - margin..=b.max[0] + margin {
+                    let inner = x >= b.min[0] && x <= b.max[0] && z >= b.min[2] && z <= b.max[2];
+                    if taken.contains(&(x, z)) || (inner && (!area.contains(x, z) || road_cells.contains_key(&(x, z)))) {
+                        return false;
                     }
-                    (lo, hi) = (lo.min(h), hi.max(h));
+                    if inner {
+                        let (h, wet) = height(ground, x, z);
+                        if wet {
+                            return false;
+                        }
+                        (lo, hi) = (lo.min(h), hi.max(h));
+                    }
                 }
             }
-        }
-        if !ok || hi - lo > params.max_slope.max(1) {
-            continue;
-        }
+            hi - lo <= params.max_slope.max(1)
+        };
+        let Some((v, (origin, turn, b))) = tries.into_iter().map(|v| (v, fit(v, plot.door, floor, facing))).find(|(_, f)| free(&f.2)) else { continue };
         for z in b.min[2] - margin..=b.max[2] + margin {
             for x in b.min[0] - margin..=b.max[0] + margin {
                 taken.insert((x, z));
@@ -321,11 +323,13 @@ pub fn buildings(ground: &dyn Ground, area: &Area, site: &Site, roads: &Roads, r
             let back = plot.side;
             let sides = [back, if matches!(back, Side::North | Side::South) { Side::East } else { Side::North }, if matches!(back, Side::North | Side::South) { Side::West } else { Side::South }];
             let rect_on = |side: Side, fw: i32, fd: i32| -> [i32; 4] {
+                // Past the farm's margin, a path's width between.
+                let g = margin + 2;
                 match side {
-                    Side::North => [b.min[0], b.min[2] - 2 - fd, b.min[0] + fw - 1, b.min[2] - 3],
-                    Side::South => [b.min[0], b.max[2] + 3, b.min[0] + fw - 1, b.max[2] + 2 + fd],
-                    Side::East => [b.max[0] + 3, b.min[2], b.max[0] + 2 + fd, b.min[2] + fw - 1],
-                    Side::West => [b.min[0] - 2 - fd, b.min[2], b.min[0] - 3, b.min[2] + fw - 1],
+                    Side::North => [b.min[0], b.min[2] - g - fd, b.min[0] + fw - 1, b.min[2] - g - 1],
+                    Side::South => [b.min[0], b.max[2] + g + 1, b.min[0] + fw - 1, b.max[2] + g + fd],
+                    Side::East => [b.max[0] + g + 1, b.min[2], b.max[0] + g + fd, b.min[2] + fw - 1],
+                    Side::West => [b.min[0] - g - fd, b.min[2], b.min[0] - g - 1, b.min[2] + fw - 1],
                 }
             };
             let fits = |rect: [i32; 4]| -> Option<i32> {
@@ -340,7 +344,7 @@ pub fn buildings(ground: &dyn Ground, area: &Area, site: &Site, roads: &Roads, r
                     }
                 }
                 hs.sort();
-                (hs[hs.len() - 1] - hs[0] <= 4).then(|| hs[hs.len() / 2])
+                (hs[hs.len() - 1] - hs[0] <= params.max_slope.clamp(1, 10) * 3 / 4).then(|| hs[hs.len() / 2])
             };
             let found = sides.iter().flat_map(|&side| [(fw, fd), ((fw + lo_s) / 2, (fd + lo_s) / 2), (lo_s, lo_s)].map(move |(w, d)| (side, w, d))).find_map(|(side, w, d)| {
                 let r = rect_on(side, w, d);

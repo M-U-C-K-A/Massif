@@ -64,6 +64,21 @@ selection), or a builder's pack, added with **Add a pack…**: a folder of
 schematics by theme and type with a small manifest, described in
 [Village packs](village-packs.md).
 
+A pack's village has more: farms with a field of crops behind them, a
+market of stalls round the square, a mill by the water or toward the edge,
+manors on high ground, and props — lampposts and benches along the roads,
+hay and carts by the farms, fences round the fields. **Houses** leans the
+village toward small or large buildings, **Props** sets how many props,
+and **Roads** lays the roads in the theme's blocks, dirt, gravel, stone (with
+slabs where they climb a block) or planks.
+
+The village is built in six stages — the site (its squares on flat dry
+land), the roads, the walls, the plots along the roads, the buildings, the
+props — each its own step, which the terrain graph's Village Generator will
+show as nodes. From the command line, `massif-cli village` takes the same
+settings and more (`--houses`, `--size-bias`, `--road`, `--density`,
+`--spread`, `--props`, `--fields`, `--mill`).
+
 ## Underground
 
 An Ancient City, Trial Chambers or a stronghold carve their own halls: the

@@ -301,6 +301,9 @@ pub fn stages(lib: Option<&Library>, ground: &dyn Ground, req: &Request) -> Resu
             roads.extra.extend(j.streets.iter().copied());
         }
         let walls = p.walls.then(|| walls::walls(&area, &roads));
+        if let Some(w) = &walls {
+            walls::trim(&mut roads, w);
+        }
         let plots = if theme.vanilla.is_some() { Vec::new() } else { plots::plots(&roads, &site, p, req.seed) };
         let reserved = walls.as_ref().map(|w| w.reserved()).unwrap_or_default();
         let buildings = buildings::buildings(ground, &area, &site, &roads, &reserved, &blocked, &plots, theme, p, req.seed);
