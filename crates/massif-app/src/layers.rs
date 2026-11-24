@@ -489,7 +489,7 @@ fn header(ui: &mut Ui, icon: Icon, title: &str, add: &str, tip: &str) -> bool {
             // Too long for the panel beside a bit of the title (a narrow
             // panel, a long language): the + alone, its name on hover.
             let text = theme::with_icon(Icon::Plus, add);
-            let wide = ui.fonts(|f| f.layout_no_wrap(text.clone(), egui::FontId::proportional(11.5), pal.text).size().x) + 2.0 * ui.spacing().button_padding.x;
+            let wide = ui.painter().layout_no_wrap(text.clone(), egui::FontId::proportional(11.5), pal.text).size().x + 2.0 * ui.spacing().button_padding.x;
             let button = if wide + 60.0 <= ui.available_width() {
                 ui.add(egui::Button::new(RichText::new(text).size(11.5)).frame(false)).on_hover_text(tip)
             } else {

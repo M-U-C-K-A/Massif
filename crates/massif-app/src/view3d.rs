@@ -6739,8 +6739,9 @@ mod tests {
             }
         }
         eprintln!("{} columns of water standing over a neighbour", found.len());
-        // In clusters of 256 × 256.
-        let mut groups: std::collections::BTreeMap<(i32, i32), (usize, i16, i16, i32, i32)> = std::collections::BTreeMap::new();
+        // In clusters of 256 × 256: how many columns, and their extremes.
+        type Cluster = (usize, i16, i16, i32, i32);
+        let mut groups: std::collections::BTreeMap<(i32, i32), Cluster> = std::collections::BTreeMap::new();
         for &(x, z, f, l) in &found {
             let e = groups.entry((x.div_euclid(256), z.div_euclid(256))).or_insert((0, i16::MAX, i16::MIN, i32::MAX, i32::MIN));
             e.0 += 1;

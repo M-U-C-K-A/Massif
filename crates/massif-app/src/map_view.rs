@@ -868,7 +868,7 @@ impl MapView {
     fn land_rects(&self, canvas: Rect, doc: &Document, area: Rect) -> Vec<Rect> {
         let area = area.intersect(canvas);
         let level = doc.dimension().ground();
-        if !area.is_positive() || level.len() == 0 {
+        if !area.is_positive() || level.is_empty() {
             return Vec::new();
         }
         let t = TILE_SIZE as f64;
