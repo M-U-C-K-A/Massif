@@ -693,19 +693,29 @@ impl MaskForm {
             self.set_origin(origins[i].0);
         }
         ui.add_space(6.0);
+        let r = self.placement().rect(self.info.header.width, self.info.header.height);
+        let [x0, z0, x1, z1] = self.bounds;
         well(ui, |ui| {
             row(ui, tr!("Scale"), |ui| {
+                // Around the scale that fits the map and a block a pixel,
+                // spread in ratios; any scale typed in.
+                let (lo, hi) = scale_range(self.fit_scale(), self.scale);
                 let mut percent = self.scale * 100.0;
-                if ui.add(Field::new(&mut percent, 1.0..=10_000.0).max_decimals(1).suffix(" %").logarithmic(true)).changed() {
-                    self.scale = (percent / 100.0).max(0.01);
-                    self.origin = None;
+                if ui.add(Field::new(&mut percent, lo * 100.0..=hi * 100.0).max_decimals(1).suffix(" %").logarithmic(true).clamping(egui::SliderClamping::Never)).changed() {
+                    self.set_scale(percent / 100.0);
                 }
             });
             row(ui, tr!("Offset"), |ui| {
-                if ui.add(Field::new(&mut self.z, -30_000_000..=30_000_000).text("z ")).changed() {
+                // From where the image just touches the map's west (north)
+                // edge to where it touches its east (south) one: a block a
+                // step, any offset typed in.
+                let width = ((ui.available_width() - 64.0) / 2.0 - ui.spacing().item_spacing.x).max(90.0);
+                let (lo, hi) = offset_range(z0, z1, r.depth(), self.z);
+                if ui.add(Field::new(&mut self.z, lo..=hi).text("z ").width(width).clamping(egui::SliderClamping::Never)).changed() {
                     self.origin = None;
                 }
-                if ui.add(Field::new(&mut self.x, -30_000_000..=30_000_000).text("x ")).changed() {
+                let (lo, hi) = offset_range(x0, x1, r.width(), self.x);
+                if ui.add(Field::new(&mut self.x, lo..=hi).text("x ").width(width).clamping(egui::SliderClamping::Never)).changed() {
                     self.origin = None;
                 }
             });
@@ -716,33 +726,100 @@ impl MaskForm {
             }
         });
         let r = self.placement().rect(self.info.header.width, self.info.header.height);
-        let [x0, z0, x1, z1] = self.bounds;
         let size = tr!("It covers {w} × {d} blocks, from x {x}, z {z}; the map is {mw} × {md}.", w = r.width(), d = r.depth(), x = r.x0, z = r.z0, mw = x1 - x0, md = z1 - z0);
         ui.add(egui::Label::new(RichText::new(size).size(11.5).color(pal.weak)).wrap());
         ui.add_space(6.0);
         self.picture(ui, r);
+        ui.add(egui::Label::new(RichText::new(tr!("Drag the image on the map to move it; the arrow keys move it a block, with Shift 16.")).size(11.5).color(pal.weak)).wrap());
     }
 
-    /// The map, and the image where it lands.
+    /// The scale at which the image fits the map.
+    fn fit_scale(&self) -> f32 {
+        let [x0, z0, x1, z1] = self.bounds;
+        let (w, h) = (self.info.header.width.max(1) as f64, self.info.header.height.max(1) as f64);
+        (((x1 - x0) as f64 / w).min((z1 - z0) as f64 / h)) as f32
+    }
+
+    /// Scale the image about its middle, which stays where it is.
+    pub(crate) fn set_scale(&mut self, scale: f32) {
+        let scale = scale.clamp(0.01, 1000.0);
+        let (w, h) = (self.info.header.width as f64, self.info.header.height as f64);
+        let (cx, cz) = (self.x as f64 + w * self.scale as f64 / 2.0, self.z as f64 + h * self.scale as f64 / 2.0);
+        self.scale = scale;
+        self.x = (cx - w * scale as f64 / 2.0).round() as i32;
+        self.z = (cz - h * scale as f64 / 2.0).round() as i32;
+        self.origin = None;
+    }
+
+    /// Move the image by whole blocks.
+    pub(crate) fn nudge(&mut self, dx: i32, dz: i32) {
+        if (dx, dz) != (0, 0) {
+            self.x = self.x.saturating_add(dx);
+            self.z = self.z.saturating_add(dz);
+            self.origin = None;
+        }
+    }
+
+    /// The map, and the image where it lands: dragged, it moves; the arrow
+    /// keys move it a block (Shift: 16) while the picture has the focus or
+    /// the pointer.
     fn picture(&mut self, ui: &mut Ui, r: massif_core::BlockRect) {
         let pal = Palette::of(ui);
-        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 220.0), Sense::hover());
+        let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 220.0), Sense::click_and_drag());
+        let id = response.id;
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, theme::GROUP_RADIUS, pal.well());
-        painter.rect_stroke(rect, theme::GROUP_RADIUS, Stroke::new(1.0, pal.border), StrokeKind::Inside);
+        let focused = response.has_focus();
+        painter.rect_stroke(rect, theme::GROUP_RADIUS, Stroke::new(1.0, if focused { pal.accent } else { pal.border }), StrokeKind::Inside);
         let [x0, z0, x1, z1] = self.bounds;
-        // What is seen: the map and the image, with a margin.
-        let (wx0, wz0) = (x0.min(r.x0) as f32, z0.min(r.z0) as f32);
-        let (wx1, wz1) = (x1.max(r.x1) as f32, z1.max(r.z1) as f32);
+        // What is seen: the map and the image, with a margin; held still
+        // while the image is dragged, so that it follows the pointer.
+        let fresh = [x0.min(r.x0) as f32, z0.min(r.z0) as f32, x1.max(r.x1) as f32, z1.max(r.z1) as f32];
+        let held: Option<[f32; 4]> = ui.data(|d| d.get_temp(id.with("view")));
+        let [wx0, wz0, wx1, wz1] = if response.dragged() { held.unwrap_or(fresh) } else { fresh };
         let inner = rect.shrink(12.0);
         let s = (inner.width() / (wx1 - wx0).max(1.0)).min(inner.height() / (wz1 - wz0).max(1.0));
         let origin = inner.center() - vec2((wx1 - wx0) * s, (wz1 - wz0) * s) / 2.0;
         let at = |x: f32, z: f32| pos2(origin.x + (x - wx0) * s, origin.y + (z - wz0) * s);
+        if response.drag_started() {
+            ui.data_mut(|d| {
+                d.insert_temp(id.with("view"), [wx0, wz0, wx1, wz1]);
+                d.insert_temp(id.with("start"), (self.x, self.z, egui::Vec2::ZERO));
+            });
+            response.request_focus();
+        }
+        if response.clicked() {
+            response.request_focus();
+        }
+        if response.dragged()
+            && let Some((sx, sz, moved)) = ui.data(|d| d.get_temp::<(i32, i32, egui::Vec2)>(id.with("start")))
+        {
+            let moved = moved + response.drag_delta();
+            ui.data_mut(|d| d.insert_temp(id.with("start"), (sx, sz, moved)));
+            let (dx, dz) = drag_blocks(moved, s);
+            self.nudge(sx + dx - self.x, sz + dz - self.z);
+        }
+        if response.drag_stopped() {
+            ui.data_mut(|d| {
+                d.remove::<[f32; 4]>(id.with("view"));
+                d.remove::<(i32, i32, egui::Vec2)>(id.with("start"));
+            });
+        }
+        if focused || response.hovered() {
+            let (dx, dz) = ui.input(|i| {
+                let step = if i.modifiers.shift { 16 } else { 1 };
+                let k = |key| i.key_pressed(key) as i32 * step;
+                (k(egui::Key::ArrowRight) - k(egui::Key::ArrowLeft), k(egui::Key::ArrowDown) - k(egui::Key::ArrowUp))
+            });
+            self.nudge(dx, dz);
+        }
+        if response.hovered() || response.dragged() {
+            ui.ctx().set_cursor_icon(if response.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
+        }
+        let r = self.placement().rect(self.info.header.width, self.info.header.height);
         let map = Rect::from_min_max(at(x0 as f32, z0 as f32), at(x1 as f32, z1 as f32));
-        if let Some((image, blocks)) = self.map_picture.take() {
+        if let Some((image, _)) = self.map_picture.take() {
             self.map_texture = Some(ui.ctx().load_texture("import mask map", image, egui::TextureOptions::LINEAR));
-            self.map_picture = None;
-            let _ = blocks;
         }
         match &self.map_texture {
             Some(tex) => {
@@ -876,5 +953,91 @@ impl Guide {
         .response
         .on_hover_text(tr!("The imported image shown on the map to trace over: never exported"));
         keep
+    }
+}
+
+/// The offsets along one axis at which an image `size` blocks across still
+/// meets a map from `lo` to `hi`: from where its far edge touches the map's
+/// near edge to where its near edge touches the far one, with a margin of
+/// a twentieth of the map (16 blocks at least); widened to `at`, the offset
+/// it has, wherever that is.
+pub(crate) fn offset_range(lo: i32, hi: i32, size: i32, at: i32) -> (i32, i32) {
+    let margin = ((hi - lo) / 20).max(16);
+    ((lo - size - margin).min(at), (hi + margin).max(at))
+}
+
+/// The scales the slider spans: from an eighth of the scale that fits the
+/// map, or a block a pixel if smaller, to four times it, or 100 % if
+/// larger; widened to `at`, the scale it has.
+pub(crate) fn scale_range(fit: f32, at: f32) -> (f32, f32) {
+    let lo = (fit / 8.0).clamp(0.01, 1.0);
+    let hi = (fit * 4.0).clamp(1.0, 100.0);
+    (lo.min(at), hi.max(at))
+}
+
+/// The whole blocks a drag of `moved` points makes on a picture of `s`
+/// points a block.
+pub(crate) fn drag_blocks(moved: egui::Vec2, s: f32) -> (i32, i32) {
+    let s = s.max(1e-6);
+    ((moved.x / s).round() as i32, (moved.y / s).round() as i32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_offsets_span_the_map() {
+        // A map of 1,024 blocks from -512, an image of 820 across.
+        let (lo, hi) = offset_range(-512, 512, 820, 0);
+        assert_eq!(lo, -512 - 820 - 51, "its east edge just past the map's west one");
+        assert_eq!(hi, 512 + 51, "its west edge just past the map's east one");
+        // An image placed far away keeps its offset in the range.
+        assert_eq!(offset_range(-512, 512, 820, 40_000), (lo, 40_000));
+        assert_eq!(offset_range(-512, 512, 820, -40_000), (-40_000, hi));
+        // A small map keeps a margin of 16 blocks.
+        assert_eq!(offset_range(0, 64, 10, 0), (-26, 80));
+    }
+
+    #[test]
+    fn the_scales_span_fit_and_a_block_a_pixel() {
+        let (lo, hi) = scale_range(0.25, 0.41);
+        assert!(lo <= 0.25 / 8.0 + 1e-6 && hi >= 1.0, "{lo} {hi}");
+        let (lo, hi) = scale_range(16.0, 16.0);
+        assert!(lo <= 1.0 && (hi - 64.0).abs() < 1e-4, "{lo} {hi}");
+        assert_eq!(scale_range(1.0, 300.0).1, 300.0, "a scale typed in stays in the range");
+    }
+
+    #[test]
+    fn a_drag_moves_by_whole_blocks() {
+        // 0.2 points a block: 10 points are 50 blocks.
+        assert_eq!(drag_blocks(vec2(10.0, -3.0), 0.2), (50, -15));
+        // 4 points a block: 1 point is nothing yet, 3 are a block.
+        assert_eq!(drag_blocks(vec2(1.0, 3.0), 4.0), (0, 1));
+    }
+
+    /// A form for an image of `w` × `h` pixels onto a map of 1,024 blocks
+    /// from -512.
+    pub(crate) fn form(w: usize, h: usize) -> MaskForm {
+        use massif_core::mask::{Header, Preview};
+        let header = Header { width: w, height: h, bits: 8, colour: false, alpha: false, float: false, format: "PNG", lossy: false };
+        let preview = Preview { width: 1, height: 1, grey: vec![255.0], rgb: vec![[255; 3]] };
+        let info = ImageInfo { header, colour: false, transparent: false, low: 0.0, high: 255.0, white: 255.0, preview: preview.clone(), guide: preview };
+        MaskForm::new(vec![(PathBuf::from("mask.png"), Arc::new(info))], &Registry::vanilla(), [-512, -512, 512, 512], (-64, 320), 62, None)
+    }
+
+    #[test]
+    fn scaling_keeps_the_middle_and_nudging_moves_by_blocks() {
+        let mut f = form(1000, 800);
+        assert_eq!((f.x, f.z, f.scale), (0, 0, 1.0), "an image of another size lands at the origin");
+        f.set_scale(0.5);
+        let r = f.placement().rect(1000, 800);
+        assert_eq!((r.x0, r.z0, r.width(), r.depth()), (250, 200, 500, 400), "about its middle");
+        f.nudge(1, -16);
+        assert_eq!((f.x, f.z), (251, 184));
+        assert!(f.origin.is_none());
+        f.set_origin(Origin::Fit);
+        let r = f.placement().rect(1000, 800);
+        assert_eq!((r.x0, r.width()), (-512, 1024), "fit to the map");
     }
 }

@@ -3149,5 +3149,6 @@
   "few": "{n} чанка",
   "many": "{n} чанков",
   "other": "{n} чанка"
- }
+ },
+ "Drag the image on the map to move it; the arrow keys move it a block, with Shift 16.": "Перетащите изображение по карте, чтобы сдвинуть его; стрелки сдвигают его на блок, с Shift — на 16."
 }

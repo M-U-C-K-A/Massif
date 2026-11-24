@@ -938,8 +938,14 @@ its values and a picture of it, then the dialog opens.
 **Where it lands**: **At the world's origin** puts its top left corner on
 x 0, z 0, a block a pixel; **Fit to the map** makes it as large as the map
 lets it, in its middle (an image of the map's size lands on it, block for
-block). **Scale** and **Offset** move it from there; under them, the map
-small, the image over it where it lands, coloured as it will paint.
+block). **Scale** and **Offset** move it from there: the scale about the
+image's middle, from an eighth of the scale that fits the map to four times
+it (100 % is a block a pixel), the offsets a block a step from where the
+image just touches the map's west or north edge to where it touches its
+east or south one; any value typed in is kept exactly. Under them, the map
+small, the image over it where it lands, coloured as it will paint: drag
+the image there to move it, or use the arrow keys, a block a press (with
+Shift, 16).
 Larger than a block a pixel, the greys between pixels are blended; smaller,
 each block takes the average of its pixels (colours: the middle one).
 

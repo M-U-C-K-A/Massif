@@ -3090,5 +3090,6 @@
  "{n} chunks": {
   "one": "{n} chunk",
   "other": "{n} chunks"
- }
+ },
+ "Drag the image on the map to move it; the arrow keys move it a block, with Shift 16.": "Faites glisser l'image sur la carte pour la déplacer ; les flèches la déplacent d'un bloc, de 16 avec Maj."
 }

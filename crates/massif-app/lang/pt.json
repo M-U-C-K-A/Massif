@@ -3027,5 +3027,6 @@
  "{n} chunks": {
   "one": "{n} chunk",
   "other": "{n} chunks"
- }
+ },
+ "Drag the image on the map to move it; the arrow keys move it a block, with Shift 16.": "Arraste a imagem no mapa para movê-la; as setas a movem um bloco, 16 com Shift."
 }
