@@ -3352,6 +3352,80 @@ mod tests {
         assert!(high.is_empty(), "{} columns above the height set, as {:?}", high.len(), &high[..high.len().min(8)]);
     }
 
+    /// A user's overhang, built in 3D Sculpt, went whole at one light click
+    /// of Raise beside it on the map: it stays, as Raise and Lower click
+    /// lightly beside it, and as Smooth goes over it on the map and in 3D
+    /// Sculpt, the land moving under it.
+    #[test]
+    fn an_overhang_stays_under_the_tools_of_the_map() {
+        let mut d = doc();
+        // A hill, and a ledge over its side: 3 blocks of sculpted matter
+        // 6 over the highest ground under it.
+        let hill = ToolState { tool: Tool::Raise, brush: Brush { radius: 24.0, strength: 1.0, ..Brush::default() }, ..ToolState::default() };
+        let (s, _) = begin_stroke(&mut d, &hill, (40.5, 40.5), false, false);
+        let mut s = s.unwrap();
+        for _ in 0..6 {
+            continue_stroke(&mut d, &hill, &mut s, (40.5, 40.5), 0.1);
+        }
+        end_stroke(&mut d, s);
+        let ledge: Vec<(i32, i32)> = (48..56).flat_map(|x| (36..44).map(move |z| (x, z))).collect();
+        let bottom = ledge.iter().map(|&(x, z)| block_top(height(&d, x, z))).max().unwrap() + 6;
+        assert!(bottom > 72, "a hill: {bottom}");
+        d.history.begin("Build", d.dim);
+        {
+            let mut e = d.history.edit(&mut d.world, 0);
+            for &(x, z) in &ledge {
+                for y in bottom..bottom + 3 {
+                    let pos = massif_core::voxel::ChunkPos::containing(x, y, z);
+                    let (x0, y0, z0) = pos.origin();
+                    e.voxel_chunk_mut(pos).set(x - x0, y - y0, z - z0, 255);
+                }
+            }
+        }
+        d.commit();
+        // The columns of the ledge with it whole: 3 blocks over air.
+        let whole = |d: &Document| {
+            ledge
+                .iter()
+                .filter(|&&(x, z)| {
+                    let stack = massif_core::TileStack::new(d.dimension(), TilePos::containing(x, z), false).unwrap();
+                    let mut spans = Vec::new();
+                    stack.spans(massif_core::coords::local_index(x, z), &mut spans);
+                    spans.len() == 2 && spans[1].y1 - spans[1].y0 == 3
+                })
+                .count()
+        };
+        assert_eq!(whole(&d), ledge.len());
+        // The map's own ground (what the brushes move), under the ledge.
+        let ground = |d: &Document| ledge.iter().map(|&(x, z)| ops::height_at(d.dimension(), 0, x, z, Surface::Top).unwrap()).collect::<Vec<f32>>();
+        // A light click of Raise beside it, then of Lower (Raise's other
+        // button), then Smooth over it.
+        for (tool, inverse, strength, at) in [(Tool::Raise, false, 0.1, (50.5, 47.5)), (Tool::Raise, true, 0.1, (50.5, 47.5)), (Tool::Smooth, false, 1.0, (52.5, 40.5))] {
+            let tools = ToolState { tool, brush: Brush { radius: 12.0, strength, ..Brush::default() }, ..ToolState::default() };
+            let was = ground(&d);
+            let (s, _) = begin_stroke(&mut d, &tools, at, inverse, false);
+            let mut s = s.unwrap();
+            for _ in 0..4 {
+                continue_stroke(&mut d, &tools, &mut s, at, 1.0 / 60.0);
+            }
+            end_stroke(&mut d, s);
+            assert_ne!(ground(&d), was, "{tool:?} moved the land under the ledge");
+            assert_eq!(whole(&d), ledge.len(), "{tool:?} {inverse}: the ledge stays whole");
+        }
+        // Smooth in 3D Sculpt is the map's: the same.
+        let mut tools = ToolState { tool: Tool::Smooth, brush: Brush { radius: 12.0, strength: 1.0, ..Brush::default() }, ..ToolState::default() };
+        let frame = massif_core::voxel::Frame { center: [52.5, height(&d, 52, 40), 40.5], normal: [0.0, 1.0, 0.0] };
+        let was = ground(&d);
+        let (s, _) = begin_sculpt(&mut d, &mut tools, false, &frame);
+        let mut s = s.unwrap();
+        for _ in 0..6 {
+            sculpt_dab(&mut d, &tools, &mut s, &frame, 0.05);
+        }
+        end_sculpt(&mut d, s);
+        assert_ne!(ground(&d), was, "smoothed in 3D");
+        assert_eq!(whole(&d), ledge.len(), "Smooth in 3D: the ledge stays whole");
+    }
+
     #[test]
     fn sculpting_from_the_map_digs_and_undoes() {
         let mut d = doc();

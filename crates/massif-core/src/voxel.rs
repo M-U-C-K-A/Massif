@@ -101,7 +101,7 @@ pub struct VoxelChunk {
 }
 
 /// A voxel whose terrain is the column's (see [`VoxelChunk`]).
-const FOLLOW: u16 = u16::MAX;
+pub(crate) const FOLLOW: u16 = u16::MAX;
 /// Air voxels holding water or lava keep it in the plane of terrains (which
 /// solid voxels alone read): an underground lake. Older versions read them
 /// as air.
@@ -219,13 +219,18 @@ impl VoxelChunk {
         self.density == bare.density && self.terrain.as_ref().is_none_or(|plane| plane.iter().all(|&t| t == FOLLOW))
     }
 
-    /// Column `(lx, lz)` as `bare` has it: what was sculpted there gives
-    /// way to what the levels compose.
-    pub fn follow_column(&mut self, lx: i32, lz: i32, bare: &VoxelChunk) {
-        for ly in 0..SIZE {
-            self.set(lx, ly, lz, bare.get(lx, ly, lz));
-            self.set_terrain(lx, ly, lz, None);
+    /// What a voxel's matter is marked with: the terrain it brought, the
+    /// fluid it holds, or [`FOLLOW`] (as its column composes it).
+    pub(crate) fn mark(&self, lx: i32, ly: i32, lz: i32) -> u16 {
+        self.terrain.as_ref().map_or(FOLLOW, |plane| plane[voxel_index(lx, ly, lz)])
+    }
+
+    /// Mark a voxel's matter as [`VoxelChunk::mark`] reads it.
+    pub(crate) fn set_mark(&mut self, lx: i32, ly: i32, lz: i32, mark: u16) {
+        if mark == FOLLOW && self.terrain.is_none() {
+            return;
         }
+        self.terrain.get_or_insert_with(|| Box::new([FOLLOW; VOLUME]))[voxel_index(lx, ly, lz)] = mark;
     }
 }
 
@@ -1500,10 +1505,11 @@ mod tests {
         assert!(idle.contains(&at) && idle.contains(&off));
     }
 
-    /// A brush on the map changes the ground under sculpted chunks too: in
-    /// the columns it moves, what was sculpted gives way to the new ground
-    /// (one step to undo), where the chunks used to keep the old one, a
-    /// wall at their edge.
+    /// A brush on the map changes the ground under sculpted chunks too, and
+    /// what was sculpted there rides on it: raised by 20, every column of
+    /// the bump and around it stands 20 higher (one step to undo), where the
+    /// chunks used to keep the old ground, a wall at their edge, and then
+    /// gave way to the new one, the bump lost.
     #[test]
     fn the_ground_moved_under_sculpted_chunks_shows() {
         let mut w = world();
@@ -1513,20 +1519,107 @@ mod tests {
         sculpt(&mut h.edit(&mut w, 0), &brush(3.0), [10.5, 64.5, 10.5], 1.0, SculptMode::Add);
         h.commit();
         assert!(top_at(&w, 10, 10) > 64);
-        let before = w.dims[0].voxels.len();
+        let around: Vec<(i32, i32)> = (0..32).flat_map(|z| (0..32).map(move |x| (x, z))).collect();
+        let was: Vec<Vec<Span>> = around.iter().map(|&(x, z)| spans_at(&w, x, z)).collect();
         // The ground raised by 20 over a wide area: everywhere, the bump's
         // columns too.
         h.begin("Raise", 0);
         crate::ops::raise(&mut h.edit(&mut w, 0), &Brush { radius: 40.0, ..brush(40.0) }, 10.5, 10.5, 20.0, crate::ops::Surface::Top);
         h.commit();
-        for (x, z) in [(10, 10), (12, 10), (4, 4), (25, 10), (10, 30)] {
-            assert_eq!(top_at(&w, x, z), 84, "the raised ground shows at ({x}, {z})");
+        for (&(x, z), was) in around.iter().zip(&was) {
+            let is = spans_at(&w, x, z);
+            assert_eq!(is.len(), was.len(), "({x}, {z})");
+            assert_eq!(is.last().unwrap().y1, was.last().unwrap().y1 + 20, "the bump and the ground around it 20 higher at ({x}, {z})");
         }
-        assert!(w.dims[0].voxels.len() < before, "chunks left with nothing of their own go");
         // One step: undone, the bump is back on the old ground.
         h.undo(&mut w);
-        assert!(top_at(&w, 10, 10) > 64 && top_at(&w, 25, 10) == 64);
-        assert_eq!(w.dims[0].voxels.len(), before);
+        for (&(x, z), was) in around.iter().zip(&was) {
+            assert_eq!(spans_at(&w, x, z).last().unwrap().y1, was.last().unwrap().y1, "({x}, {z})");
+        }
+    }
+
+    /// An overhang sculpted in 3D keeps its shape when the brushes of the
+    /// map move the land around and under it, lightly or a lot (a user's
+    /// overhang went whole at one light click of Raise beside it): Raise
+    /// and Lower, Smooth, and Set height wide over it, each one step to
+    /// undo.
+    #[test]
+    fn an_overhang_keeps_its_shape_under_the_brushes_of_the_map() {
+        let mut w = world();
+        let mut h = History::default();
+        // A hill on the map, and a ledge sculpted over its side: 3 blocks
+        // thick, 6 over the ground below it.
+        h.begin("Hill", 0);
+        crate::ops::raise(&mut h.edit(&mut w, 0), &Brush { profile: Profile::Sine, ..brush(24.0) }, 40.5, 40.5, 16.0, crate::ops::Surface::Top);
+        h.commit();
+        let ledge: Vec<(i32, i32)> = (48..56).flat_map(|x| (36..44).map(move |z| (x, z))).collect();
+        h.begin("Build", 0);
+        {
+            let mut e = h.edit(&mut w, 0);
+            let tops: Vec<i32> = ledge.iter().map(|&(x, z)| crate::compose::block_top(crate::ops::height_at(e.dim(), 0, x, z, crate::ops::Surface::Top).unwrap())).collect();
+            let bottom = tops.iter().max().unwrap() + 6;
+            for &(x, z) in &ledge {
+                for y in bottom..bottom + 3 {
+                    let pos = ChunkPos::containing(x, y, z);
+                    let (x0, y0, z0) = pos.origin();
+                    e.voxel_chunk_mut(pos).set(x - x0, y - y0, z - z0, 255);
+                }
+            }
+        }
+        h.commit();
+        // The ledge: a run of 3 blocks over air in each of its columns.
+        let shape = |w: &World| -> Vec<Option<(i32, i32)>> {
+            ledge
+                .iter()
+                .map(|&(x, z)| {
+                    let spans = spans_at(w, x, z);
+                    (spans.len() == 2).then(|| (spans[1].y0, spans[1].y1 - spans[1].y0))
+                })
+                .collect()
+        };
+        let built = shape(&w);
+        assert!(built.iter().all(|s| s.is_some_and(|(_, thick)| thick == 3)), "{built:?}");
+        let start: Vec<Vec<Span>> = ledge.iter().map(|&(x, z)| spans_at(&w, x, z)).collect();
+        type Stroke = Box<dyn Fn(&mut Edit<'_>)>;
+        let light = || Brush { strength: 0.2, profile: Profile::Sine, ..brush(10.0) };
+        let strokes: Vec<(&str, Stroke)> = vec![
+            ("Raise", Box::new(move |e: &mut Edit<'_>| crate::ops::raise(e, &light(), 50.5, 46.5, 0.4, crate::ops::Surface::Top))),
+            ("Lower", Box::new(move |e: &mut Edit<'_>| crate::ops::raise(e, &light(), 50.5, 46.5, -0.4, crate::ops::Surface::Top))),
+            (
+                "Smooth",
+                Box::new(|e: &mut Edit<'_>| {
+                    for _ in 0..8 {
+                        crate::ops::smooth(e, &Brush { profile: Profile::Sine, ..brush(12.0) }, 52.5, 40.5, crate::ops::Surface::Top);
+                    }
+                }),
+            ),
+            ("Raise a lot", Box::new(|e: &mut Edit<'_>| crate::ops::raise(e, &brush(30.0), 52.5, 40.5, 5.0, crate::ops::Surface::Top))),
+            ("Set height", Box::new(|e: &mut Edit<'_>| crate::ops::set_height(e, &brush(30.0), 52.5, 40.5, 70.0, crate::ops::Surface::Top))),
+        ];
+        for (name, stroke) in &strokes {
+            let before = shape(&w);
+            let ground: Vec<f32> = ledge.iter().map(|&(x, z)| crate::ops::height_at(&w.dims[0], 0, x, z, crate::ops::Surface::Top).unwrap()).collect();
+            h.begin(*name, 0);
+            stroke(&mut h.edit(&mut w, 0));
+            h.commit();
+            let after = shape(&w);
+            let moved = ledge.iter().zip(&ground).filter(|&(&(x, z), g)| crate::ops::height_at(&w.dims[0], 0, x, z, crate::ops::Surface::Top).unwrap() != *g).count();
+            assert!(moved > 0, "{name} moved the ground under the ledge");
+            for (k, (&(x, z), is)) in ledge.iter().zip(&after).enumerate() {
+                let (y, thick) = is.unwrap_or_else(|| panic!("{name}: the ledge kept at ({x}, {z}): {:?}", spans_at(&w, x, z)));
+                assert_eq!(thick, 3, "{name} at ({x}, {z})");
+                // It goes up or down with the ground under it, by whole
+                // blocks: not at all for a light stroke.
+                let shifted = crate::compose::block_top(crate::ops::height_at(&w.dims[0], 0, x, z, crate::ops::Surface::Top).unwrap()) - crate::compose::block_top(ground[k]);
+                assert_eq!(y, before[k].unwrap().0 + shifted, "{name} at ({x}, {z})");
+            }
+        }
+        // Each stroke one step: undone, the ledge and the hill as built.
+        for _ in &strokes {
+            h.undo(&mut w);
+        }
+        let back: Vec<Vec<Span>> = ledge.iter().map(|&(x, z)| spans_at(&w, x, z)).collect();
+        assert_eq!(format!("{back:?}"), format!("{start:?}"));
     }
 
     #[test]

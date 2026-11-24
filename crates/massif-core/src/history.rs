@@ -12,8 +12,13 @@ use crate::selection::Selection;
 use crate::tile::Tile;
 use crate::voxel::{ChunkPos, VoxelChunk};
 use crate::world::{Dimension, World};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+
+/// By how many blocks the surface of each column of a tile went up or down
+/// in an edit, by local index; `None` where it stayed (see
+/// [`Edit::follow_ground`]).
+type Moved = Vec<Option<i32>>;
 
 #[derive(Debug)]
 struct Step {
@@ -612,9 +617,27 @@ impl Edit<'_> {
         }
         self.touch_all(&positions);
         // Tiles with sculpted chunks over them: where their columns move,
-        // the chunks follow (see `follow_ground`).
+        // the chunks follow (see `follow_ground`), from what the levels
+        // composed under those the edit reaches before it.
         let sculpted: HashSet<TilePos> = positions.iter().copied().filter(|p| self.dim.voxels.has_tile(*p)).collect();
-        let moved: Vec<(TilePos, Vec<bool>)> = {
+        let under: HashMap<ChunkPos, VoxelChunk> = if sculpted.is_empty() {
+            HashMap::new()
+        } else {
+            let size = crate::voxel::SIZE;
+            let reached: Vec<ChunkPos> = sculpted
+                .iter()
+                .flat_map(|t| self.dim.voxels.in_tile(*t).map(|(p, _)| p).collect::<Vec<_>>())
+                .filter(|p| {
+                    let (x0, _, z0) = p.origin();
+                    x0 < rect.x1 && x0 + size > rect.x0 && z0 < rect.z1 && z0 + size > rect.z0
+                })
+                .collect();
+            crate::voxel::bare_densities(self.dim, &reached).into_iter().collect()
+        };
+        // Only the ground's surface carries what was sculpted over it up or
+        // down; a level's own surfaces leave it where it is.
+        let ground = self.level == 0;
+        let moved: Vec<(TilePos, Moved)> = {
             let (min_y, max_y) = (self.dim.min_y, self.dim.max_y);
             let voxels = &self.dim.voxels;
             let (before, rest) = self.dim.levels.split_at_mut(self.level);
@@ -630,16 +653,22 @@ impl Edit<'_> {
                 .into_iter()
                 .filter_map(|pos| level.check_out(pos, create).map(|t| (pos, t)))
                 .collect();
-            let edited: Vec<(TilePos, Box<Tile>, Option<Vec<bool>>)> = taken
+            let edited: Vec<(TilePos, Box<Tile>, Option<Moved>)> = taken
                 .into_par_iter()
                 .map(|(pos, taken)| {
                     let mut tile = taken.into_tile();
                     let old = sculpted.contains(&pos).then(|| (tile.top.clone(), tile.bottom.clone()));
                     f(pos, rect.intersect(&pos.rect()), &mut tile, &others);
+                    // Each column that moved, and by how many blocks its
+                    // surface went up or down.
                     let moved = old.map(|(top, bottom)| {
                         (0..crate::coords::TILE_AREA)
-                            .map(|k| top.get(k) != tile.top.get(k) || bottom.as_ref().map(|b| b.get(k)) != tile.bottom.as_ref().map(|b| b.get(k)))
-                            .collect::<Vec<bool>>()
+                            .map(|k| {
+                                let (was, is) = (top.get(k), tile.top.get(k));
+                                let changed = was != is || bottom.as_ref().map(|b| b.get(k)) != tile.bottom.as_ref().map(|b| b.get(k));
+                                changed.then(|| if ground { crate::compose::block_top(is) - crate::compose::block_top(was) } else { 0 })
+                            })
+                            .collect::<Moved>()
                     });
                     (pos, tile, moved)
                 })
@@ -647,46 +676,121 @@ impl Edit<'_> {
             let mut moved = Vec::new();
             for (pos, tile, m) in edited {
                 level.check_in(pos, tile);
-                if let Some(m) = m.filter(|m| m.iter().any(|&b| b)) {
+                if let Some(m) = m.filter(|m| m.iter().any(Option::is_some)) {
                     moved.push((pos, m));
                 }
             }
             moved
         };
         for (pos, m) in moved {
-            self.follow_ground(pos, &m);
+            self.follow_ground(pos, &m, &under);
         }
     }
 
-    /// The sculpted chunks over `tile` follow its ground where it moved: in
-    /// the columns `moved` (by local index), what was sculpted over the old
-    /// ground gives way to what the levels compose now, recorded for undo,
-    /// and a chunk left holding nothing of its own goes. A chunk stands for
-    /// its whole 16³ cube: without this, the ground changed under it by a
-    /// brush on the map did not show there, and the brush seemed to do
-    /// nothing.
-    fn follow_ground(&mut self, tile: TilePos, moved: &[bool]) {
-        let over = |p: &ChunkPos| {
+    /// The sculpted chunks over `tile` follow its ground where it moved
+    /// (`moved`, by local index: by how many blocks each column's surface
+    /// went up or down, `None` where it stayed). What was sculpted in such a
+    /// column, what a chunk holds beyond what the levels composed there
+    /// before (`under`), goes up or down with the surface, onto what they
+    /// compose now: an overhang, a cave or a smoothed slope keeps its shape
+    /// as the brushes of the map move the land under it, and the land they
+    /// moved shows around it (a chunk stands for its whole 16³ cube: the
+    /// ground changed under it did not show there, and the brush seemed to
+    /// do nothing). Recorded for undo; a chunk left holding nothing of its
+    /// own goes.
+    fn follow_ground(&mut self, tile: TilePos, moved: &[Option<i32>], under: &HashMap<ChunkPos, VoxelChunk>) {
+        use crate::voxel::SIZE;
+        let shift = |x: i32, z: i32| moved[crate::coords::local_index(x, z)];
+        // The stacks of chunks over moved columns: the heights of their
+        // chunks, and the most their columns moved.
+        let mut stacks: std::collections::BTreeMap<(i32, i32), (Vec<i32>, i32)> = std::collections::BTreeMap::new();
+        for (p, _) in self.dim.voxels.in_tile(tile) {
             let (x0, _, z0) = p.origin();
-            (0..crate::voxel::SIZE).any(|lz| (0..crate::voxel::SIZE).any(|lx| moved[crate::coords::local_index(x0 + lx, z0 + lz)]))
-        };
-        let chunks: Vec<ChunkPos> = self.dim.voxels.in_tile(tile).map(|(p, _)| p).filter(over).collect();
-        if chunks.is_empty() {
+            let reach = (0..SIZE * SIZE).filter_map(|k| shift(x0 + k % SIZE, z0 + k / SIZE)).map(i32::abs).max();
+            if let Some(reach) = reach {
+                let stack = stacks.entry((p.x, p.z)).or_default();
+                stack.0.push(p.y);
+                stack.1 = stack.1.max(reach);
+            }
+        }
+        if stacks.is_empty() {
             return;
         }
-        for (pos, bare) in crate::voxel::bare_densities(self.dim, &chunks) {
-            self.touch_voxel(pos);
-            let (x0, _, z0) = pos.origin();
-            let Some(chunk) = self.dim.voxels.get_mut(pos) else { continue };
-            for lz in 0..crate::voxel::SIZE {
-                for lx in 0..crate::voxel::SIZE {
-                    if moved[crate::coords::local_index(x0 + lx, z0 + lz)] {
-                        chunk.follow_column(lx, lz, &bare);
+        // The chunks the sculpture lands in: its own, and those its column's
+        // surface takes it into, within the height of the world.
+        let (bottom, top) = (self.dim.min_y.div_euclid(SIZE), (self.dim.max_y - 1).div_euclid(SIZE));
+        let span = |(ys, reach): &(Vec<i32>, i32)| {
+            let k = (reach + SIZE - 1) / SIZE;
+            let (a, b) = (ys.iter().min().copied().unwrap_or(0), ys.iter().max().copied().unwrap_or(0));
+            ((a - k).max(bottom), (b + k).min(top))
+        };
+        let reached: Vec<ChunkPos> = stacks.iter().flat_map(|(&(cx, cz), s)| {
+            let (a, b) = span(s);
+            (a..=b).map(move |cy| ChunkPos::new(cx, cy, cz))
+        }).collect();
+        let now: HashMap<ChunkPos, VoxelChunk> = crate::voxel::bare_densities(self.dim, &reached).into_iter().collect();
+        for (&(cx, cz), stack) in &stacks {
+            let (a, b) = span(stack);
+            let base = a * SIZE;
+            let mut chunks: Vec<(ChunkPos, Option<VoxelChunk>)> = (a..=b).map(|cy| {
+                let pos = ChunkPos::new(cx, cy, cz);
+                (pos, self.dim.voxels.get(pos).cloned())
+            }).collect();
+            let mut changed = vec![false; chunks.len()];
+            let (x0, z0) = (cx * SIZE, cz * SIZE);
+            // A column's sculpture, bottom up: its density over what the
+            // levels composed, and the mark of its matter (see
+            // `VoxelChunk::mark`).
+            let mut was: Vec<(i16, u16)> = Vec::new();
+            for lz in 0..SIZE {
+                for lx in 0..SIZE {
+                    let Some(s) = shift(x0 + lx, z0 + lz) else { continue };
+                    was.clear();
+                    for (pos, chunk) in &chunks {
+                        for ly in 0..SIZE {
+                            was.push(match chunk {
+                                Some(c) => {
+                                    // Under a chunk the edit did not reach,
+                                    // what is composed now.
+                                    let bare = under.get(pos).or_else(|| now.get(pos)).map_or(0, |u| u.get(lx, ly, lz));
+                                    (c.get(lx, ly, lz) as i16 - bare as i16, c.mark(lx, ly, lz))
+                                }
+                                None => (0, crate::voxel::FOLLOW),
+                            });
+                        }
+                    }
+                    for (k, (pos, chunk)) in chunks.iter_mut().enumerate() {
+                        let Some(bare) = now.get(pos) else { continue };
+                        for ly in 0..SIZE {
+                            let y = pos.y * SIZE + ly;
+                            let (d, mark) = usize::try_from(y - s - base).ok().and_then(|i| was.get(i).copied()).unwrap_or((0, crate::voxel::FOLLOW));
+                            let density = (bare.get(lx, ly, lz) as i16 + d).clamp(0, 255) as u8;
+                            let c = match chunk {
+                                Some(c) => c,
+                                None if d == 0 && mark == crate::voxel::FOLLOW => continue,
+                                None => chunk.insert(bare.clone()),
+                            };
+                            if c.get(lx, ly, lz) != density || c.mark(lx, ly, lz) != mark {
+                                c.set(lx, ly, lz, density);
+                                c.set_mark(lx, ly, lz, mark);
+                                changed[k] = true;
+                            }
+                        }
                     }
                 }
             }
-            if chunk.is_bare(&bare) {
-                self.dim.voxels.remove(pos);
+            for ((pos, chunk), changed) in chunks.into_iter().zip(changed) {
+                if !changed {
+                    continue;
+                }
+                self.touch_voxel(pos);
+                match chunk {
+                    Some(c) if now.get(&pos).is_some_and(|bare| c.is_bare(bare)) => {
+                        self.dim.voxels.remove(pos);
+                    }
+                    Some(c) => self.dim.voxels.insert(pos, Arc::new(c)),
+                    None => {}
+                }
             }
         }
     }

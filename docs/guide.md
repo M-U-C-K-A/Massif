@@ -2266,8 +2266,11 @@ to the shared one.)
 
 Sculpted matter is kept by cubes of 16 blocks, each standing for its whole
 cube. A brush on the map that moves the ground under it takes it along: in
-the columns the brush moves, what was sculpted gives way to the new ground
-(one step to undo with the brush's). Strokes in 3D keep only the cubes they
+the columns the brush moves, what was sculpted keeps its shape and rides on
+the ground, up or down by the whole blocks the ground moved there, and the
+ground the brush moved shows around it (one step to undo with the brush's).
+An overhang stays an overhang under a light Raise, Lower or Smooth beside
+it, on the map or in 3D Sculpt. Strokes in 3D keep only the cubes they
 change, and a map opened lets go of cubes that hold nothing of their own —
 versions before made them over the whole reach of the brush, and the ground
 changed under them later did not show there —, saying how many.
