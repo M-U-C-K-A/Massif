@@ -192,6 +192,10 @@ pub struct Component {
     /// One sentence on what it makes.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub summary: String,
+    /// Kept out of the library (a shipped composite another supersedes):
+    /// graphs using it still load and work.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<PortDecl>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -210,7 +214,7 @@ pub struct Component {
 
 impl Default for Component {
     fn default() -> Self {
-        Self { version: 1, label: String::new(), category: String::new(), summary: String::new(), inputs: Vec::new(), outputs: Vec::new(), exposed: Vec::new(), nodes: BTreeMap::new(), ui: BTreeMap::new(), frames: BTreeMap::new() }
+        Self { version: 1, label: String::new(), category: String::new(), summary: String::new(), hidden: false, inputs: Vec::new(), outputs: Vec::new(), exposed: Vec::new(), nodes: BTreeMap::new(), ui: BTreeMap::new(), frames: BTreeMap::new() }
     }
 }
 

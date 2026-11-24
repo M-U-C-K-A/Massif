@@ -473,10 +473,13 @@ fn settings_exposed_reach_inside() {
 #[test]
 fn the_search_offers_composites() {
     let g = mountain_graph();
-    let hits = super::canvas::find_in(&g, "mount", None);
-    assert!(hits.iter().any(|e| e.id == "massif:mountain" && e.is_composite()));
-    let masks = super::canvas::find_in(&g, "", Some(massif_terrain::registry::PortKind::Mask));
-    assert!(masks.iter().any(|e| e.id == "massif:mountain"), "it takes an area mask");
+    let hits = super::canvas::find_in(&g, "range", None);
+    assert!(hits.iter().any(|e| e.id == "massif:alpine-range" && e.is_composite()));
+    // Mountain is superseded by Alpine Range: kept for the graphs using it,
+    // not offered.
+    assert!(super::canvas::find_in(&g, "mount", None).iter().all(|e| e.id != "massif:mountain"));
+    let heights = super::canvas::find_in(&g, "", Some(massif_terrain::registry::PortKind::Height));
+    assert!(heights.iter().any(|e| e.id == "massif:cave-system"), "it takes a relief");
 }
 
 /// A graph showing what the editor does: one of Massif's composites, a

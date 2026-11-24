@@ -32,6 +32,21 @@ pub fn builtin(kind: &str, version: u16) -> Option<Component> {
     all().iter().find(|(k, v, _)| *k == kind && *v == version).map(|(_, _, c)| c.clone())
 }
 
+/// The composites the library offers: the latest version of each shipped
+/// one not hidden, by type.
+pub fn offered() -> Vec<(&'static str, u16, &'static Component)> {
+    let mut out: Vec<(&'static str, u16, &'static Component)> = Vec::new();
+    for (kind, version, c) in all() {
+        if let Some((latest, _)) = latest(kind)
+            && latest == *version
+            && !c.hidden
+        {
+            out.push((kind, *version, c));
+        }
+    }
+    out
+}
+
 /// The latest version of the composite shipped as `kind`.
 pub fn latest(kind: &str) -> Option<(u16, &'static Component)> {
     all().iter().filter(|(k, _, _)| *k == kind).max_by_key(|(_, v, _)| *v).map(|(_, v, c)| (*v, c))
@@ -45,6 +60,13 @@ mod tests {
 
     /// Every composite shipped compiles with its defaults, its exposed
     /// settings each standing for settings that exist.
+    #[test]
+    fn the_library_offers_what_is_not_hidden() {
+        let kinds: Vec<&str> = super::offered().iter().map(|(k, _, _)| *k).collect();
+        assert!(kinds.contains(&"massif:alpine-range") && !kinds.contains(&"massif:mountain"), "{kinds:?}");
+        assert!(super::builtin("massif:mountain", 1).is_some(), "hidden, still there for the graphs using it");
+    }
+
     #[test]
     fn shipped_composites_hold_together() {
         for (kind, version, c) in super::all() {

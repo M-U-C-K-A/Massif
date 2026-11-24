@@ -1805,7 +1805,7 @@ impl Entry {
 /// then the composites Massif ships and those of the document.
 pub fn entries(doc: &massif_terrain::model::Graph) -> Vec<Entry> {
     let mut out: Vec<Entry> = registry::all().iter().copied().filter(|s| offered(s)).map(Entry::native).collect();
-    let mut kinds: Vec<String> = massif_terrain::components::all().iter().map(|(k, _, _)| (*k).to_owned()).collect();
+    let mut kinds: Vec<String> = massif_terrain::components::offered().iter().map(|(k, _, _)| (*k).to_owned()).collect();
     kinds.sort();
     kinds.dedup();
     kinds.extend(doc.components.keys().cloned());

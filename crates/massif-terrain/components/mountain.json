@@ -1,6 +1,7 @@
 {
   "label": "Mountain",
   "category": "Shapes",
+  "hidden": true,
   "summary": "Alpine mountains grown by their rivers: sharp crests, valleys branching up every slope, scree under the cliffs and snow above a line.",
   "inputs": [
     { "name": "area", "label": "Area", "type": "mask", "optional": true, "help": "Where the mountains stand; everywhere when left empty." }
