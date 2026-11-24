@@ -201,6 +201,22 @@ impl Cache {
             self.order.remove(&last);
         }
         self.order.insert(self.tick, key);
+        if self.bytes <= self.budget {
+            return;
+        }
+        // Tiles go first, oldest first: a simulation's whole result or a
+        // node's geometry costs far more to make again than a tile, and a
+        // map written window by window needs them for every window.
+        let tiles: Vec<(u64, Key)> = self.order.iter().filter(|(_, k)| matches!(k, Key::Tile { .. } | Key::Brick { .. })).map(|(t, k)| (*t, *k)).collect();
+        for (tick, oldest) in tiles {
+            if self.bytes <= self.budget {
+                return;
+            }
+            self.order.remove(&tick);
+            if let Some((e, _)) = self.map.remove(&oldest) {
+                self.bytes -= e.bytes();
+            }
+        }
         while self.bytes > self.budget {
             let Some((_, oldest)) = self.order.pop_first() else { break };
             if let Some((e, _)) = self.map.remove(&oldest) {
@@ -318,26 +334,53 @@ impl Engine {
 
     /// Plans and makes tiles `keys` of `out` at `lod`, wherever they are made.
     fn evaluate(&self, c: &Compiled, out: (usize, u8), lod: u8, keys: &[(i32, i32)], cancel: Cancel) -> Result<Vec<Arc<TileData>>, EvalError> {
-        let (root, port) = out;
-        let node = &c.nodes[root];
-        if node.spec.is_output() {
-            let Some(src) = node.inputs.first().copied().flatten() else {
-                return Err(EvalError::Broken { node: node.id.clone(), why: node.broken.clone().unwrap_or_else(|| "nothing feeds it".to_owned()) });
-            };
-            return self.evaluate(c, src, lod, keys, cancel);
-        }
+        Ok(self.evaluate_many(c, &[out], lod, keys, cancel)?.pop().expect("one output asked"))
+    }
 
-        let kind = c.kind(out);
-        if !kind.is_raster() {
-            let why = if kind.is_geometry() { "its geometry is made whole (Engine::geometry), not by tiles" } else { "its volume is made by bricks (Engine::bricks), not by tiles" };
-            return Err(EvalError::Broken { node: node.id.clone(), why: why.to_owned() });
+    /// Tiles `keys` at `lod` of several outputs, planned together: what
+    /// they share upstream is made once, whatever the cache keeps.
+    pub fn regions(&self, c: &Compiled, outs: &[(usize, u8)], lod: u8, rect: Rect, cancel: Cancel) -> Result<Vec<Grid>, EvalError> {
+        let keys = rect.tiles();
+        let all = self.evaluate_many(c, outs, lod, &keys, cancel)?;
+        let mut grids = Vec::with_capacity(outs.len());
+        for (&out, tiles) in outs.iter().zip(all) {
+            self.to_cpu(&tiles.iter().map(|t| &**t).collect::<Vec<_>>());
+            let mut grid = Grid::new(lod, rect, vec![0.0; rect.area() * c.kind(resolve(c, out)).planes()]);
+            for ((tx, tz), t) in keys.iter().zip(&tiles) {
+                copy_into(&mut grid, Rect::tile(*tx, *tz), t.values().expect("tiles given back are on the CPU"));
+            }
+            grids.push(grid);
         }
+        Ok(grids)
+    }
+
+    /// Plans and makes tiles `keys` at `lod` of each of `outs`, wherever
+    /// they are made.
+    fn evaluate_many(&self, c: &Compiled, outs: &[(usize, u8)], lod: u8, keys: &[(i32, i32)], cancel: Cancel) -> Result<Vec<Vec<Arc<TileData>>>, EvalError> {
+        // What each output really is: an output node gives what feeds it.
+        let mut roots = Vec::with_capacity(outs.len());
+        for &out in outs {
+            let node = &c.nodes[out.0];
+            if node.spec.is_output() && node.inputs.first().copied().flatten().is_none() {
+                return Err(EvalError::Broken { node: node.id.clone(), why: node.broken.clone().unwrap_or_else(|| "nothing feeds it".to_owned()) });
+            }
+            let out = resolve(c, out);
+            let kind = c.kind(out);
+            if !kind.is_raster() {
+                let why = if kind.is_geometry() { "its geometry is made whole (Engine::geometry), not by tiles" } else { "its volume is made by bricks (Engine::bricks), not by tiles" };
+                return Err(EvalError::Broken { node: c.nodes[out.0].id.clone(), why: why.to_owned() });
+            }
+            roots.push(out);
+        }
+        let Some(root) = roots.iter().map(|r| r.0).max() else { return Ok(Vec::new()) };
 
         // Plan: what each node must make, walking back from the root.
         let mut need: Vec<BTreeSet<(u8, i32, i32)>> = vec![BTreeSet::new(); root + 1];
         let mut todo: Vec<Vec<(u8, i32, i32)>> = vec![Vec::new(); root + 1];
         let mut have: HashMap<At, Arc<TileData>> = HashMap::new();
-        need[root].extend(keys.iter().map(|&(x, z)| (lod, x, z)));
+        for &(r, _) in &roots {
+            need[r].extend(keys.iter().map(|&(x, z)| (lod, x, z)));
+        }
         for n in (0..=root).rev() {
             if need[n].is_empty() {
                 continue;
@@ -383,7 +426,7 @@ impl Engine {
                 }
             }
         }
-        Ok(keys.iter().map(|&(x, z)| have[&(root, port, lod, x, z)].clone()).collect())
+        Ok(roots.iter().map(|&(r, port)| keys.iter().map(|&(x, z)| have[&(r, port, lod, x, z)].clone()).collect()).collect())
     }
 
     /// All of a node's outputs at a tile, when the cache has them.

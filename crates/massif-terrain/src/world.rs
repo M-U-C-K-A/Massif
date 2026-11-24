@@ -178,7 +178,17 @@ pub fn outputs_in(engine: &Engine, c: &Compiled, lod: u8, window: Rect, cancel: 
     let step = Space::spacing(lod);
     // 1.2's samples lie at the middle of their cells; these at the corner.
     let extent = Extent { x0: c.space.x0 as f64 + whole.x as f64 * step - step / 2.0, z0: c.space.z0 as f64 + whole.z as f64 * step - step / 2.0, size: step * n as f64, n };
-    let grid = |name: &str| -> Result<Option<Grid>, EvalError> { c.output(name).map(|src| engine.region(c, src, lod, whole, cancel)).transpose() };
+    // Every output the Map Output has, planned together: what they share
+    // upstream is made once.
+    let names: Vec<String> = ["height", "water", "terrain", "albedo", "temperature", "humidity"]
+        .into_iter()
+        .map(str::to_owned)
+        .chain((1..=4).flat_map(|k| [format!("level.{k}.top"), format!("level.{k}.bottom"), format!("level.{k}.color")]))
+        .filter(|n| c.output(n).is_some())
+        .collect();
+    let srcs: Vec<(usize, u8)> = names.iter().filter_map(|n| c.output(n)).collect();
+    let made: std::collections::HashMap<&str, Grid> = names.iter().map(String::as_str).zip(engine.regions(c, &srcs, lod, whole, cancel)?).collect();
+    let grid = |name: &str| -> Result<Option<Grid>, EvalError> { Ok(made.get(name).cloned()) };
     let mut out = Outputs::default();
     let heights = grid("height")?;
     if let Some(water) = grid("water")? {
