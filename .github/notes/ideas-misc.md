@@ -1,3 +1,0 @@
-**Linked map sizes, snowfall, noise gradients**
-
-The width and depth of a new map, of a new world from a real place and of a map resized are linked by a chain: typing one sets the other, until you click the chain to set them apart. Edit ▸ Whole map ▸ Snowfall… lays snow as the wind and the slopes leave it — drifts in the lee of ridges and in hollows, bare windward slopes, none on steep cliffs or over water —, in snow layers then snow blocks, within a band of heights, with a preview first and one step to undo. Noise painting has a Blend that turns its list into an ordered gradient (dirt, then coarse dirt, then grass, dithered between neighbours), and the same mix is the terrain graph's new Noise paint node, which shares its presets with the brush.
