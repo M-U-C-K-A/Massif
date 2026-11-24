@@ -907,7 +907,10 @@ pub fn button_group_named(ui: &mut Ui, id: &str, labels: &[&str], names: &[&str]
             Rect::from_min_size(pos2(x, rect.min.y + INSET), vec2(*w, seg_h))
         };
         let pressed = on.get(k).copied().unwrap_or(false);
-        let mut r = ui.interact(seg, egui::Id::unique((id, k)), Sense::click());
+        // Its own in the Ui it is in: the same settings shown twice (Tool
+        // Settings and a layer's dialog) are two controls, each answering
+        // its clicks.
+        let mut r = ui.interact(seg, ui.make_persistent_id((id, k)), Sense::click());
         let name = names.get(k).copied().unwrap_or(labels[k]);
         r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, pressed, name));
         if name != labels[k] {
