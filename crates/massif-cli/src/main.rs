@@ -14,7 +14,8 @@ USAGE
   massif-cli new <out.massif> [--size WxD] [--landform NAME] [--seed N] [--name TEXT] [--limits MIN..MAX] [--relief BLOCKS]
   massif-cli info <world.massif>
   massif-cli verify <world.massif>
-  massif-cli export <world.massif> <folder> [--version V] [--void] [--survival] [--no-ores] [--overwrite]
+  massif-cli export <world.massif> <folder> [--version V] [--void] [--survival] [--no-ores] [--overwrite] [--rules frozen|survival-safe|vanilla|map]
+  massif-cli rules <frozen|survival-safe|vanilla> [--version V]
   massif-cli import <old.world> <out.massif>
   massif-cli probe <world.massif> [<x> <z>…] [--random N]
   massif-cli analyse <world.massif>
@@ -219,7 +220,10 @@ fn cmd_export(mut args: Args) -> Res<()> {
         })?,
         None => massif_anvil::Target::default(),
     };
-    let options = ExportOptions {
+    // The world rules: a preset, or the map's own (as last exported from
+    // the app).
+    let rules = args.option("--rules")?;
+    let mut options = ExportOptions {
         target,
         surroundings: if args.flag("--void") {
             Surroundings::Void
@@ -238,6 +242,15 @@ fn cmd_export(mut args: Args) -> Res<()> {
     let [path, dir] = args.positional(["<world.massif>", "<folder>"])?;
     let t = Instant::now();
     let mut world = massif_format::load(&path).map_err(|e| e.to_string())?;
+    use massif_core::rules::Preset;
+    match rules.as_deref() {
+        None => {}
+        Some("frozen") => options.rules = Preset::Frozen.rules(),
+        Some("survival-safe") => options.rules = Preset::SurvivalSafe.rules(),
+        Some("vanilla") => options.rules = Preset::Vanilla.rules(),
+        Some("map") => options.rules = world.meta.export_rules.map(|r| r.rules).unwrap_or_default(),
+        Some(other) => return Err(format!("unknown rules {other}: frozen, survival-safe, vanilla or map")),
+    }
     if no_ores {
         world.meta.ores.on = false;
     }
@@ -290,6 +303,36 @@ fn cmd_import(args: Args) -> Res<()> {
         human(stats.file_len),
         t.elapsed() - imported
     );
+    Ok(())
+}
+
+/// The game rules a preset writes for a version, one JSON object a line:
+/// the name `/gamerule` takes in that version, and the value it should
+/// say (tools/minecraft_check.py asks the game).
+fn cmd_rules(mut args: Args) -> Res<()> {
+    use massif_anvil::level_dat::{RULE_REGISTRY, RuleValue, game_rules};
+    use massif_core::rules::Preset;
+    let target = match args.option("--version")? {
+        Some(name) => massif_anvil::Target::release(&name).ok_or_else(|| format!("unknown Minecraft version {name}"))?,
+        None => massif_anvil::Target::default(),
+    };
+    let [preset] = args.positional(["<preset>"])?;
+    let preset = match preset.to_string_lossy().as_ref() {
+        "frozen" => Preset::Frozen,
+        "survival-safe" => Preset::SurvivalSafe,
+        "vanilla" => Preset::Vanilla,
+        other => return Err(format!("unknown preset {other}: frozen, survival-safe or vanilla")),
+    };
+    let rules = preset.rules();
+    for rule in game_rules(&rules, &target) {
+        let name = if target.data_version >= RULE_REGISTRY { rule.id } else { rule.name };
+        let value = match rule.value {
+            RuleValue::Bool(on) => on.to_string(),
+            RuleValue::Int(n) => n.to_string(),
+        };
+        println!("{{\"rule\": \"{name}\", \"value\": \"{value}\"}}");
+    }
+    println!("{{\"time\": {}}}", rules.time);
     Ok(())
 }
 
@@ -800,6 +843,7 @@ fn main() -> ExitCode {
         "export" => cmd_export(args),
         "import" => cmd_import(args),
         "probe" => cmd_probe(args),
+        "rules" => cmd_rules(args),
         "water" => cmd_water(args),
         "rivers" => cmd_rivers(args),
         "lakes" => cmd_lakes(args),

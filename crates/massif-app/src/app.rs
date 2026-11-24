@@ -128,6 +128,9 @@ struct Settings {
     map_follows_tool: bool,
     /// The shared folders of the maps (see `collab::DepotState`), by map.
     depots: Vec<DepotLink>,
+    /// The world rules saved under a name of one's own, offered in the
+    /// export dialog beside the ready ones (Settings ▸ Export).
+    rule_presets: Vec<massif_core::rules::NamedRules>,
     /// The language of the interface: the system's, or one chosen.
     language: crate::i18n::Language,
     /// The keyboard shortcuts: a preset and what was changed in it.
@@ -174,6 +177,7 @@ enum PrefsSection {
     Keyboard,
     Updates,
     Graphics,
+    Export,
     Developer,
 }
 
@@ -212,6 +216,7 @@ impl Default for Settings {
             pack_author: String::new(),
             map_follows_tool: true,
             depots: Vec::new(),
+            rule_presets: Vec::new(),
             language: crate::i18n::Language::System,
             tour_done: false,
             origin_asked: false,
@@ -272,6 +277,7 @@ enum TestArea {
 enum ExportTab {
     General,
     World,
+    Rules,
 }
 
 struct ExportForm {
@@ -323,6 +329,12 @@ struct ExportForm {
     /// The mods whose blocks the map uses, to warn of a version or a mod
     /// that does not match.
     mods: Vec<ModUse>,
+    /// The game rules, the weather and the time of day.
+    rules: massif_core::rules::GameRules,
+    /// The presets of one's own (from the settings, written back when
+    /// changed here), and the name a new one is being given.
+    presets: Vec<massif_core::rules::NamedRules>,
+    preset_name: Option<String>,
 }
 
 /// The blocks of a mod a map uses.
@@ -1888,6 +1900,38 @@ impl MassifApp {
         }
     }
 
+    /// The world rules saved under a name: renamed or removed here, chosen
+    /// and saved in the export dialog's Rules.
+    fn prefs_export(&mut self, ui: &mut Ui) {
+        let pal = Palette::of(ui);
+        Self::prefs_header(
+            ui,
+            tr!("Export"),
+            tr!("The world rules you saved under a name in the export dialog (Rules ▸ Save as preset), offered there beside Creative / Frozen, Survival safe and Vanilla."),
+        );
+        if self.settings.rule_presets.is_empty() {
+            ui.label(RichText::new(tr!("No presets of your own yet.")).size(12.0).color(pal.weak));
+            return;
+        }
+        let mut remove = None;
+        crate::widgets::well(ui, |ui| {
+            // What each changes on the left (cut, whole on hover), its name
+            // to change and its removal on the right.
+            for (k, preset) in self.settings.rule_presets.iter_mut().enumerate() {
+                let summary = rules_summary(&preset.rules);
+                crate::widgets::row(ui, &summary, |ui| {
+                    if ui.add(egui::Button::new(RichText::new(theme::glyph(Icon::Trash2).to_string()).color(pal.weak)).frame(false)).on_hover_text(tr!("Remove this preset")).clicked() {
+                        remove = Some(k);
+                    }
+                    ui.add_sized(vec2(170.0, ui.spacing().interact_size.y), egui::TextEdit::singleline(&mut preset.name));
+                });
+            }
+        });
+        if let Some(k) = remove {
+            self.settings.rule_presets.remove(k);
+        }
+    }
+
     fn prefs_updates(&mut self, ui: &mut Ui) {
         let pal = Palette::of(ui);
         Self::prefs_header(
@@ -3271,6 +3315,8 @@ impl MassifApp {
             .unwrap_or(parent);
         let unique = massif_anvil::unique_dir(&parent, &self.doc.world.meta.name);
         let name = unique.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| self.doc.world.meta.name.clone());
+        // The rules this map was last exported with.
+        let remembered = self.doc.world.meta.export_rules;
         self.dialog = Some(Dialog::Export(ExportForm {
             target,
             versions,
@@ -3279,8 +3325,11 @@ impl MassifApp {
             tab: ExportTab::General,
             parent,
             name,
-            game_mode: GameMode::Creative,
-            difficulty: massif_anvil::Difficulty::Normal,
+            game_mode: remembered.map_or(GameMode::Creative, |r| game_mode_of(r.game_mode)),
+            difficulty: remembered.map_or(massif_anvil::Difficulty::Normal, |r| difficulty_of(r.difficulty)),
+            rules: remembered.map_or_else(Default::default, |r| r.rules),
+            presets: self.settings.rule_presets.clone(),
+            preset_name: None,
             hardcore: false,
             allow_cheats: true,
             surroundings: Surroundings::Vanilla,
@@ -5390,6 +5439,7 @@ impl MassifApp {
                                 (PrefsSection::Keyboard, Icon::Keyboard, tr!("Keyboard")),
                                 (PrefsSection::Updates, Icon::CircleArrowUp, tr!("Updates")),
                                 (PrefsSection::Graphics, Icon::Gauge, tr!("Graphics")),
+                                (PrefsSection::Export, Icon::Package, tr!("Export")),
                                 (PrefsSection::Developer, Icon::Activity, tr!("Developer")),
                             ] {
                                 let on = section == s;
@@ -5428,6 +5478,7 @@ impl MassifApp {
                                     PrefsSection::Keyboard => self.prefs_keyboard(ui),
                                     PrefsSection::Updates => self.prefs_updates(ui),
                                     PrefsSection::Graphics => self.prefs_graphics(ui),
+                                    PrefsSection::Export => self.prefs_export(ui),
                                     PrefsSection::Developer => self.prefs_developer(ui),
                                 }
                             });
@@ -6276,6 +6327,7 @@ impl MassifApp {
             }
             Dialog::Export(mut form) => {
                 let mut start = None;
+                let presets = self.settings.rule_presets.clone();
                 let response = modal(ctx, "export").show(ctx, |ui| {
                     ui.set_width(840.0);
                     let pal = Palette::of(ui);
@@ -6298,6 +6350,7 @@ impl MassifApp {
                                         match form.tab {
                                             ExportTab::General => export_general(ui, &mut form),
                                             ExportTab::World => export_world(ui, &mut form),
+                                            ExportTab::Rules => export_rules(ui, &mut form),
                                         }
                                     });
                             })
@@ -6311,7 +6364,7 @@ impl MassifApp {
                         ui.vertical(|ui| {
                             ui.set_min_width(110.0);
                             for (tab, label) in
-                                [(ExportTab::General, tr!("General")), (ExportTab::World, tr!("World"))]
+                                [(ExportTab::General, tr!("General")), (ExportTab::World, tr!("World")), (ExportTab::Rules, tr!("Rules"))]
                             {
                                 if ui
                                     .add_sized(
@@ -6364,6 +6417,9 @@ impl MassifApp {
                 if response.should_close() {
                     keep = false;
                 }
+                if form.presets != presets {
+                    self.settings.rule_presets = form.presets.clone();
+                }
                 if form.pick_regions {
                     // The map takes the clicks until the regions are picked.
                     form.pick_regions = false;
@@ -6384,6 +6440,7 @@ impl MassifApp {
                         hardcore: form.hardcore,
                         border: form.border,
                         datapacks: form.datapacks.clone(),
+                        rules: form.rules,
                         spawn: Some(form.spawn),
                         target: form.target.clone(),
                         selection_only: form.has_selection && form.selection_only,
@@ -6430,6 +6487,12 @@ impl MassifApp {
                     }
                     if form.ores != self.doc.world.meta.ores.on {
                         self.doc.world.meta.ores.on = form.ores;
+                        self.doc.mark_changed();
+                    }
+                    // Kept with the map, offered again at its next export.
+                    let rules = massif_core::world::ExportRules { rules: form.rules, game_mode: form.game_mode as u8, difficulty: form.difficulty as u8 };
+                    if self.doc.world.meta.export_rules != Some(rules) {
+                        self.doc.world.meta.export_rules = Some(rules);
                         self.doc.mark_changed();
                     }
                     let snapshot = self.doc.world.snapshot();
@@ -7322,43 +7385,9 @@ fn export_general(ui: &mut Ui, form: &mut ExportForm) {
     }
     ui.columns(2, |cols| {
         let (left, right) = cols.split_at_mut(1);
-        card(&mut left[0], tr!("Game"), tr!("The rules of the world when it is first played."), |ui| {
-            row(ui, tr!("Game mode"), |ui| {
-                let mode = |m: GameMode| match m {
-                    GameMode::Survival => tr!("Survival"),
-                    GameMode::Creative => tr!("Creative"),
-                    GameMode::Adventure => tr!("Adventure"),
-                    GameMode::Spectator => tr!("Spectator"),
-                };
-                crate::widgets::combo("game mode")
-                    .selected_text(mode(form.game_mode))
-                    .show_ui(ui, |ui| {
-                        for m in [GameMode::Survival, GameMode::Creative, GameMode::Adventure, GameMode::Spectator] {
-                            ui.selectable_value(&mut form.game_mode, m, mode(m));
-                        }
-                    });
-            });
-            row(ui, tr!("Difficulty"), |ui| {
-                use massif_anvil::Difficulty;
-                let name = |d: Difficulty| match d {
-                    Difficulty::Peaceful => tr!("Peaceful"),
-                    Difficulty::Easy => tr!("Easy"),
-                    Difficulty::Normal => tr!("Normal"),
-                    Difficulty::Hard => tr!("Hard"),
-                };
-                crate::widgets::combo("difficulty")
-                    .selected_text(name(form.difficulty))
-                    .show_ui(ui, |ui| {
-                        for d in [Difficulty::Peaceful, Difficulty::Easy, Difficulty::Normal, Difficulty::Hard] {
-                            ui.selectable_value(&mut form.difficulty, d, name(d));
-                        }
-                    });
-            });
+        card(&mut left[0], tr!("Game"), tr!("What the world allows. Its game mode, difficulty and rules are in Rules."), |ui| {
             row(ui, "", |ui| {
                 crate::widgets::checkbox(ui, &mut form.allow_cheats, tr!("Allow cheats"));
-            });
-            row(ui, "", |ui| {
-                crate::widgets::checkbox(ui, &mut form.hardcore, tr!("Hardcore"));
             });
             row(ui, "", |ui| {
                 crate::widgets::checkbox(ui, &mut form.structures, tr!("Structures beyond the map")).on_hover_text(tr!("Minecraft generates villages, strongholds and the like in the land it makes around the map"));
@@ -7568,6 +7597,194 @@ fn export_test_area(ui: &mut Ui, form: &mut ExportForm) -> bool {
         });
     });
     go
+}
+
+/// The game mode the game numbers `n`.
+fn game_mode_of(n: u8) -> GameMode {
+    match n {
+        0 => GameMode::Survival,
+        2 => GameMode::Adventure,
+        3 => GameMode::Spectator,
+        _ => GameMode::Creative,
+    }
+}
+
+fn difficulty_of(n: u8) -> massif_anvil::Difficulty {
+    use massif_anvil::Difficulty;
+    match n {
+        0 => Difficulty::Peaceful,
+        1 => Difficulty::Easy,
+        3 => Difficulty::Hard,
+        _ => Difficulty::Normal,
+    }
+}
+
+/// A few words on what a set of rules changes from the game's.
+fn rules_summary(rules: &massif_core::rules::GameRules) -> String {
+    let game = massif_core::rules::GameRules::vanilla();
+    let mut said: Vec<String> = Vec::new();
+    if !rules.spawn_mobs {
+        said.push(tr!("no mobs").to_owned());
+    }
+    if rules.random_tick_speed != game.random_tick_speed {
+        said.push(tr!("tick speed {speed}", speed = rules.random_tick_speed));
+    }
+    if !rules.advance_time {
+        said.push(tr!("time stopped").to_owned());
+    }
+    if !rules.advance_weather {
+        said.push(tr!("weather fixed").to_owned());
+    }
+    if !rules.fire_spreads {
+        said.push(tr!("no fire spread").to_owned());
+    }
+    if !rules.mob_griefing {
+        said.push(tr!("no griefing").to_owned());
+    }
+    if rules.keep_inventory {
+        said.push(tr!("keep inventory").to_owned());
+    }
+    if said.is_empty() { tr!("the game's rules").to_owned() } else { said.join(" · ") }
+}
+
+/// The Rules tab: the game mode and difficulty, a preset (the ready ones
+/// and one's own), and every rule, the weather and the time of day; the
+/// rules the version chosen does not have are greyed, and said.
+fn export_rules(ui: &mut Ui, form: &mut ExportForm) {
+    use massif_core::rules::{GameRules, MIDNIGHT, MORNING, NOON, NamedRules, Preset, SUNSET, Weather};
+    let pal = Palette::of(ui);
+    card(ui, tr!("Game"), tr!("How the world is played when it is first opened."), |ui| {
+        row(ui, tr!("Game mode"), |ui| {
+            let modes = [GameMode::Survival, GameMode::Creative, GameMode::Adventure, GameMode::Spectator];
+            let labels = [tr!("Survival"), tr!("Creative"), tr!("Adventure"), tr!("Spectator")];
+            if let Some(k) = crate::widgets::button_group(ui, "game mode", &labels, &modes.map(|m| m == form.game_mode)) {
+                form.game_mode = modes[k];
+            }
+        });
+        row(ui, tr!("Difficulty"), |ui| {
+            use massif_anvil::Difficulty;
+            let levels = [Difficulty::Peaceful, Difficulty::Easy, Difficulty::Normal, Difficulty::Hard];
+            let labels = [tr!("Peaceful"), tr!("Easy"), tr!("Normal"), tr!("Hard")];
+            if let Some(k) = crate::widgets::button_group(ui, "difficulty", &labels, &levels.map(|d| d == form.difficulty)) {
+                form.difficulty = levels[k];
+            }
+        });
+        row(ui, "", |ui| {
+            crate::widgets::checkbox(ui, &mut form.hardcore, tr!("Hardcore"));
+        });
+    });
+    // The presets: the ready ones, then one's own.
+    card(ui, tr!("World rules"), tr!("What goes on by itself in the world: written into it, so that it opens as set, with no /gamerule to type."), |ui| {
+        let ready = Preset::ALL.map(|p| crate::i18n::tr_name(p.label()));
+        let chosen = Preset::of(&form.rules);
+        row(ui, tr!("Preset"), |ui| {
+            if let Some(k) = crate::widgets::button_group(ui, "rules preset", &ready, &Preset::ALL.map(|p| Some(p) == chosen)) {
+                form.rules = Preset::ALL[k].rules();
+            }
+        });
+        if !form.presets.is_empty() {
+            row(ui, tr!("Yours"), |ui| {
+                let mine = form.presets.iter().find(|p| p.rules == form.rules).map(|p| p.name.clone());
+                crate::widgets::combo("my rules")
+                    .selected_text(mine.unwrap_or_else(|| tr!("Choose…").to_owned()))
+                    .width(200.0)
+                    .show_ui(ui, |ui| {
+                        for p in &form.presets {
+                            if ui.selectable_label(p.rules == form.rules, &p.name).clicked() {
+                                form.rules = p.rules;
+                            }
+                        }
+                    });
+            });
+        }
+        // Saving these rules under a name, when they are no preset yet.
+        let known = chosen.is_some() || form.presets.iter().any(|p| p.rules == form.rules);
+        if !known {
+            row(ui, "", |ui| match &mut form.preset_name {
+                None => {
+                    if ui.button(tr!("Save as preset…")).clicked() {
+                        form.preset_name = Some(String::new());
+                    }
+                }
+                Some(name) => {
+                    let ok = !name.trim().is_empty();
+                    let mut save = false;
+                    if ui.add_enabled(ok, egui::Button::new(tr!("Save"))).clicked() {
+                        save = true;
+                    }
+                    let edit = ui.add_sized(vec2(180.0, ui.spacing().interact_size.y), egui::TextEdit::singleline(name).hint_text(tr!("Name")));
+                    if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && ok {
+                        save = true;
+                    }
+                    if save {
+                        form.presets.push(NamedRules { name: name.trim().to_owned(), rules: form.rules });
+                        form.preset_name = None;
+                    }
+                }
+            });
+        }
+    });
+    let dv = form.target.data_version;
+    let has = |since: i32| dv >= since || (dv == 0 && since == 0);
+    let missing = std::cell::Cell::new(false);
+    let rules = &mut form.rules;
+    let switch_row = |ui: &mut Ui, label: &str, on: &mut bool, since: i32| {
+        let there = has(since);
+        missing.set(missing.get() || !there);
+        crate::widgets::row(ui, label, |ui| {
+            ui.add_enabled_ui(there, |ui| {
+                crate::widgets::switch(ui, on);
+            });
+        });
+    };
+    ui.columns(2, |cols| {
+        let (left, right) = cols.split_at_mut(1);
+        let ui = &mut left[0];
+        ui.label(RichText::new(tr!("Mobs")).medium());
+        crate::widgets::well(ui, |ui| {
+            switch_row(ui, tr!("Mobs spawn"), &mut rules.spawn_mobs, 0);
+            switch_row(ui, tr!("Pillager patrols"), &mut rules.spawn_patrols, 2230);
+            switch_row(ui, tr!("Wandering trader"), &mut rules.spawn_traders, 2230);
+            switch_row(ui, tr!("Phantoms"), &mut rules.spawn_phantoms, 2225);
+            switch_row(ui, tr!("Mobs change blocks"), &mut rules.mob_griefing, 0);
+        });
+        ui.add_space(8.0);
+        ui.label(RichText::new(tr!("Blocks and players")).medium());
+        crate::widgets::well(ui, |ui| {
+            switch_row(ui, tr!("Fire spreads"), &mut rules.fire_spreads, 0);
+            crate::widgets::row(ui, tr!("Random ticks"), |ui| {
+                ui.add_enabled_ui(form.target.name != "1.7.10", |ui| {
+                    ui.add(crate::widgets::Field::new(&mut rules.random_tick_speed, 0..=GameRules::MAX_TICK_SPEED).width(90.0));
+                });
+            });
+            switch_row(ui, tr!("Keep inventory"), &mut rules.keep_inventory, 0);
+        });
+        let ui = &mut right[0];
+        ui.label(RichText::new(tr!("Time and weather")).medium());
+        crate::widgets::well(ui, |ui| {
+            switch_row(ui, tr!("Day and night go by"), &mut rules.advance_time, 0);
+            crate::widgets::row(ui, if rules.advance_time { tr!("Starts at") } else { tr!("Time") }, |ui| {
+                let times = [MORNING, NOON, SUNSET, MIDNIGHT];
+                let labels = [tr!("Morning"), tr!("Noon"), tr!("Sunset"), tr!("Night")];
+                if let Some(k) = crate::widgets::button_group(ui, "time of day", &labels, &times.map(|t| t == rules.time)) {
+                    rules.time = times[k];
+                }
+            });
+            switch_row(ui, tr!("Weather changes"), &mut rules.advance_weather, 819);
+            crate::widgets::row(ui, if rules.advance_weather { tr!("Starts with") } else { tr!("Weather") }, |ui| {
+                let labels = Weather::ALL.map(|w| crate::i18n::tr_name(w.label()));
+                if let Some(k) = crate::widgets::button_group(ui, "weather", &labels, &Weather::ALL.map(|w| w == rules.weather)) {
+                    rules.weather = Weather::ALL[k];
+                }
+            });
+        });
+        ui.add_space(6.0);
+        ui.add(egui::Label::new(RichText::new(tr!("Random ticks: blocks ticked at random in each chunk section every game tick, 3 in the game. They make crops and grass grow, leaves decay, ice melt and fire burn out; 0 stops all of it.")).size(11.5).color(pal.weak)).wrap());
+    });
+    if missing.get() {
+        ui.add_space(6.0);
+        ui.add(egui::Label::new(RichText::new(tr!("Java {name} does not have the greyed rules: they are left out of its world.", name = form.target.name)).size(11.5).color(pal.weak)).wrap());
+    }
 }
 
 fn export_world(ui: &mut Ui, form: &mut ExportForm) {
@@ -18924,6 +19141,111 @@ mod tests {
         }
         h.run_steps(5);
         h.render().unwrap().save(dir.join("dialog-export-world.png")).unwrap();
+    }
+
+    /// The export dialog's Rules: a preset chosen sets every rule; a rule
+    /// changed makes them one's own, saved under a name into the settings
+    /// (Settings ▸ Export lists them); the rules a version lacks are greyed
+    /// and said; the world exported holds them, and the map keeps them for
+    /// its next export. With MASSIF_SNAPSHOT_DIR, the tab and the settings'
+    /// page rendered in light and dark (MASSIF_SNAPSHOT_PPP for 2×).
+    #[test]
+    fn the_export_dialog_sets_the_world_rules() {
+        use egui_kittest::kittest::Queryable;
+        use massif_core::rules::{GameRules, Preset};
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let out = std::env::temp_dir().join(format!("massif-rules-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        std::fs::create_dir_all(&out).unwrap();
+        for theme in [ThemeChoice::Light, ThemeChoice::Dark] {
+            let name = if theme == ThemeChoice::Light { "light" } else { "dark" };
+            let mut h = harness(theme);
+            h.run_steps(3);
+            h.state_mut().open_export_dialog();
+            fn form<'a>(h: &'a mut egui_kittest::Harness<'static, MassifApp>) -> &'a mut ExportForm {
+                match &mut h.state_mut().dialog {
+                    Some(Dialog::Export(form)) => form,
+                    _ => panic!("the export dialog"),
+                }
+            }
+            form(&mut h).tab = ExportTab::Rules;
+            form(&mut h).target = massif_anvil::Target::release("1.21.11").unwrap();
+            form(&mut h).parent = out.clone();
+            form(&mut h).name = format!("rules {name}");
+            h.run_steps(4);
+            // The game's rules at first; a preset sets them all.
+            assert_eq!(form(&mut h).rules, GameRules::vanilla());
+            if let Some(dir) = &dir {
+                let ppp = h.ctx.pixels_per_point();
+                h.render().unwrap().save(dir.join(format!("export-rules-vanilla-{name}-{ppp}x.png"))).unwrap();
+            }
+            h.get_by_label("Creative / Frozen").scroll_to_me();
+            h.run_steps(3);
+            // The pointer comes into the window first: a click before it
+            // has moved there is lost, as it never is in the app.
+            h.get_by_label("Creative / Frozen").hover();
+            h.run_steps(2);
+            h.get_by_label("Creative / Frozen").click();
+            h.run_steps(3);
+            assert_eq!(form(&mut h).rules, Preset::Frozen.rules());
+            assert!(h.query_by_label("Save as preset…").is_none(), "a preset is not saved again");
+            // A rule changed: one's own, saved under a name.
+            form(&mut h).rules.keep_inventory = true;
+            h.run_steps(3);
+            h.get_by_label("Save as preset…").click();
+            h.run_steps(3);
+            if let Some(name) = &mut form(&mut h).preset_name {
+                *name = "Jack's frozen".into();
+            }
+            h.run_steps(2);
+            h.get_by_label("Save").click();
+            h.run_steps(3);
+            assert_eq!(h.state().settings.rule_presets.len(), 1);
+            assert_eq!(h.state().settings.rule_presets[0].name, "Jack's frozen");
+            if let Some(dir) = &dir {
+                let ppp = h.ctx.pixels_per_point();
+                h.render().unwrap().save(dir.join(format!("export-rules-{name}-{ppp}x.png"))).unwrap();
+            }
+            // Its name in the menu of one's own.
+            let shown = h.query_all_by_label_contains("Jack's frozen").next().is_some() || h.query_all_by_value("Jack's frozen").next().is_some();
+            assert!(shown, "offered among one's own");
+            // An older version: its missing rules greyed and said.
+            form(&mut h).target = massif_anvil::Target::release("1.14.4").unwrap();
+            h.run_steps(3);
+            assert!(h.query_by_label_contains("does not have the greyed rules").is_some());
+            if let Some(dir) = &dir {
+                let ppp = h.ctx.pixels_per_point();
+                h.render().unwrap().save(dir.join(format!("export-rules-1.14-{name}-{ppp}x.png"))).unwrap();
+            }
+            form(&mut h).target = massif_anvil::Target::release("1.21.11").unwrap();
+            h.run_steps(2);
+            // Exported: the world holds them, the map keeps them.
+            h.get_by_label("Export").click();
+            h.run_steps(2);
+            while !h.state().jobs.is_empty() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                h.run_steps(1);
+            }
+            let kept = h.state().doc.world.meta.export_rules.expect("kept with the map");
+            assert_eq!(kept.rules, GameRules { keep_inventory: true, ..Preset::Frozen.rules() });
+            let level = std::fs::read(out.join(format!("rules {name}")).join("level.dat")).unwrap();
+            let mut raw = Vec::new();
+            std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(&level[..]), &mut raw).unwrap();
+            let text = String::from_utf8_lossy(&raw);
+            assert!(text.contains("game_rules") && text.contains("minecraft:spawn_mobs") && text.contains("minecraft:keep_inventory"), "the rules in level.dat");
+            // The next export offers them again.
+            h.state_mut().open_export_dialog();
+            h.run_steps(2);
+            assert_eq!(form(&mut h).rules, kept.rules);
+            h.state_mut().dialog = Some(Dialog::Preferences(PrefsSection::Export));
+            h.run_steps(4);
+            assert!(h.query_by_label_contains("no mobs").is_some(), "the preset said in Settings ▸ Export");
+            if let Some(dir) = &dir {
+                let ppp = h.ctx.pixels_per_point();
+                h.render().unwrap().save(dir.join(format!("settings-export-{name}-{ppp}x.png"))).unwrap();
+            }
+        }
+        let _ = std::fs::remove_dir_all(&out);
     }
 
     /// Save points through the app: made from File ▸ Save Point…, listed

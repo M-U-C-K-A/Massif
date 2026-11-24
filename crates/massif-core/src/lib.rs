@@ -61,6 +61,7 @@ pub mod pockets;
 pub mod registry;
 pub mod river;
 pub mod road;
+pub mod rules;
 pub mod selection;
 pub mod shapes;
 pub mod surface_layers;

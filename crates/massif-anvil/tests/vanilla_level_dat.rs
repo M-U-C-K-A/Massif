@@ -96,6 +96,7 @@ fn level_dat_has_what_the_game_writes() {
         hardcore: false,
         border: WorldBorder { center: [0.0, 0.0], size: 60_000_000.0 },
         datapacks: Vec::new(),
+        rules: Default::default(),
     };
     let mut checked: HashMap<String, PathBuf> = HashMap::new();
     for path in worlds(&named) {

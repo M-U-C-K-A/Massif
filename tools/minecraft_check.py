@@ -14,6 +14,10 @@ unless --accept-eula is given.
 
   tools/minecraft_check.py --world my.massif --version 1.21.11 \\
       --minecraft "/Volumes/T7 Shield/minecraft/Install" --accept-eula
+
+With --rules frozen (or survival-safe, vanilla), the world is exported with
+those game rules, and the game is asked each of them (/gamerule) and the
+time of day: they must read back as set.
 """
 
 import argparse
@@ -93,6 +97,7 @@ def main() -> int:
     ap.add_argument("--probes", type=int, default=40, help="random columns to check")
     ap.add_argument("--at", nargs="*", default=[], help="more columns to check, as x,z")
     ap.add_argument("--accept-eula", action="store_true", help="you accept Mojang's EULA for this local server")
+    ap.add_argument("--rules", choices=["frozen", "survival-safe", "vanilla"], help="export with these game rules, and check the game reads them")
     args = ap.parse_args()
 
     cli = ROOT / "target/release/massif-cli"
@@ -101,7 +106,18 @@ def main() -> int:
     work = Path(tempfile.mkdtemp(prefix="massif-mc-check-"))
     world_dir = work / "massif-check"
     print(f"exporting {args.world} for {args.version} into {world_dir}")
-    subprocess.run([str(cli), "export", str(args.world), str(world_dir), "--version", args.version, "--void", "--overwrite"], check=True)
+    rules_args = ["--rules", args.rules] if args.rules else []
+    subprocess.run([str(cli), "export", str(args.world), str(world_dir), "--version", args.version, "--void", "--overwrite", *rules_args], check=True)
+    expected_rules, expected_time = [], None
+    if args.rules:
+        out = subprocess.run([str(cli), "rules", args.rules, "--version", args.version], check=True, capture_output=True, text=True).stdout
+        for line in out.splitlines():
+            entry = json.loads(line)
+            if "rule" in entry:
+                expected_rules.append((entry["rule"], entry["value"]))
+            else:
+                expected_time = entry["time"]
+        print(f"{len(expected_rules)} game rules to check, time {expected_time}")
 
     coords = []
     for xz in args.at:
@@ -175,6 +191,33 @@ def main() -> int:
         if p.get("biome"):
             send(f"execute if biome {x} {y} {z} {p['biome']} run say MASSIF {k} biome ok")
             send(f"execute unless biome {x} {y} {z} {p['biome']} run say MASSIF {k} biome BAD")
+    # The game rules, asked one by one: the answer ends with the value.
+    rule_answers = []
+    for name, value in expected_rules:
+        while not lines.empty():
+            lines.get_nowait()
+        send(f"gamerule {name}")
+        line = wait_for(name.split(":")[-1], 20)
+        # "Gamerule doMobSpawning is currently set to: false" up to 1.21.10,
+        # "Game rule spawn_mobs is currently set to false" in 26.x: the
+        # value is the last word.
+        said = line.split()[-1].strip() if line else None
+        rule_answers.append((name, value, said))
+    time_said = None
+    if expected_time is not None:
+        while not lines.empty():
+            lines.get_nowait()
+        # Up to 1.21.11 "The time is N"; 26.x has timelines: "Timeline
+        # minecraft:day is at N tick(s)".
+        send("time query daytime")
+        line = wait_for("The time is", 8)
+        if line:
+            time_said = int(line.rsplit(" ", 1)[-1])
+        else:
+            send("time query day")
+            line = wait_for("is at", 20)
+            if line:
+                time_said = int(line.split("is at", 1)[1].split()[0])
     send("say MASSIF end")
     wait_for("MASSIF end", 120)
     send("stop")
@@ -186,6 +229,15 @@ def main() -> int:
     bad = [r for r in results if r.endswith("BAD")]
     problems = [l for l in log if any(w in l for w in ("ERROR", "Exception", "Couldn't load", "Failed to load", "Failed to read", "Recreating"))]
     print(f"\n{len(results) - len(bad)} checks passed, {len(bad)} failed, over {len(probes)} columns")
+    rules_bad = [(n, v, s) for n, v, s in rule_answers if s != v]
+    if expected_rules:
+        print(f"{len(rule_answers) - len(rules_bad)} game rules read back as set, {len(rules_bad)} not")
+        for n, v, s in rule_answers:
+            print(f"  {'ok ' if s == v else 'BAD'} {n} = {s} (set {v})")
+    # With the day going by, a few seconds pass while the server starts.
+    time_ok = expected_time is None or (time_said is not None and 0 <= time_said - expected_time < 2000)
+    if expected_time is not None:
+        print(f"  {'ok ' if time_ok else 'BAD'} time of day {time_said} (set {expected_time})")
     for r in bad:
         k = int(r.split()[0])
         print("  failed:", r, json.dumps(probes[k]))
@@ -194,7 +246,7 @@ def main() -> int:
         for l in problems[:30]:
             print("  ", l)
     shutil.rmtree(work, ignore_errors=True)
-    return 0 if not bad and not problems else 1
+    return 0 if not bad and not problems and not rules_bad and time_ok else 1
 
 
 if __name__ == "__main__":
