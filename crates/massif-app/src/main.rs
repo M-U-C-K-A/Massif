@@ -69,13 +69,14 @@ mod tour;
 mod update;
 mod versions;
 mod view3d;
+mod screens;
 mod view_image;
 mod widgets;
 
 use std::path::PathBuf;
 
 /// The window icon: Massif's logo.
-fn icon() -> egui::IconData {
+pub(crate) fn icon() -> egui::IconData {
     let image = image::load_from_memory(include_bytes!("../assets/icon.png"))
         .expect("the icon is a PNG")
         .into_rgba8();

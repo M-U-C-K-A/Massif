@@ -492,8 +492,16 @@ pub struct Workspace {
 pub struct Floating {
     pub id: AreaId,
     pub editor: EditorKind,
+    /// Its window's top left corner: on the screen (its frame included)
+    /// when `screen`, else in Massif's window.
     pub pos: [f32; 2],
+    /// Its size: the inside of its window when `screen`.
     pub size: [f32; 2],
+    /// In a window of the system's own, anywhere on the screens, rather
+    /// than over the layout in Massif's window (where the system has no
+    /// windows of an app's own to give).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub screen: bool,
 }
 
 impl Workspace {
@@ -941,14 +949,15 @@ impl Layout {
     }
 
     /// Take area `id` of the current workspace out of its layout, into a
-    /// window floating at `rect` (`[x, y, w, h]`). Not the last area.
-    pub fn detach(&mut self, id: AreaId, rect: [f32; 4]) -> bool {
+    /// window floating at `rect` (`[x, y, w, h]`, on the screen when
+    /// `screen`, else in Massif's window). Not the last area.
+    pub fn detach(&mut self, id: AreaId, rect: [f32; 4], screen: bool) -> bool {
         let ws = self.current_mut();
         let Some(Node::Area { editor, .. }) = ws.root.remove(id) else { return false };
         if ws.maximized == Some(id) {
             ws.maximized = None;
         }
-        ws.floating.push(Floating { id, editor, pos: [rect[0], rect[1]], size: [rect[2], rect[3]] });
+        ws.floating.push(Floating { id, editor, pos: [rect[0], rect[1]], size: [rect[2], rect[3]], screen });
         true
     }
 
@@ -1401,7 +1410,7 @@ mod tests {
         let mut areas = Vec::new();
         layout.current().root.areas(&mut areas);
         let (info, _) = *areas.iter().find(|a| a.1 == EditorKind::Info).unwrap();
-        assert!(layout.detach(info, [300.0, 200.0, 320.0, 240.0]));
+        assert!(layout.detach(info, [300.0, 200.0, 320.0, 240.0], false));
         assert_eq!(layout.current().root.count(), before - 1);
         assert_eq!(layout.current().editor_of(info), Some(EditorKind::Info));
         assert!(layout.current().shows(EditorKind::Info) && !layout.current().root.shows(EditorKind::Info));
@@ -1422,7 +1431,7 @@ mod tests {
         assert_eq!(layout.current().root.count(), before);
         assert_eq!(layout.current().root.sibling(info).map(|s| (s.0, s.2, s.3)), Some((map, Dir::Row, false)));
         // Onto an area: in its place, that one floating.
-        layout.detach(info, [10.0, 10.0, 200.0, 200.0]);
+        layout.detach(info, [10.0, 10.0, 200.0, 200.0], false);
         assert!(layout.dock_back(info, Some((map, Zone::Center)), &[]));
         assert_eq!(layout.current().root.editor_of(info), Some(EditorKind::Versions));
         assert_eq!(layout.current().floating.iter().map(|f| (f.id, f.editor)).collect::<Vec<_>>(), [(map, EditorKind::Map)]);
@@ -1432,8 +1441,8 @@ mod tests {
         let mut minimal = Layout { active: 6, ..Layout::default() };
         let first = minimal.current().root.first_area();
         let second = first + 1;
-        assert!(minimal.detach(first, [0.0; 4]));
-        assert!(!minimal.detach(second, [0.0; 4]), "the last area stays");
+        assert!(minimal.detach(first, [0.0; 4], false));
+        assert!(!minimal.detach(second, [0.0; 4], false), "the last area stays");
         // Reset: the panels back as they were.
         minimal.reset_workspace(6);
         assert!(minimal.current().floating.is_empty());

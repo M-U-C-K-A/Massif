@@ -125,12 +125,18 @@ brushes, terrain and biome palettes, levels or world info.
 - The ⋮ menu of an area splits it, joins it with its neighbour, maximises it
   (Ctrl+Space) or closes it. Hold Shift for a one-click close button.
 - **Float** in that menu takes the area out of the layout into a window of
-  its own over it: drag its title to move it, its bottom right corner to
-  size it. **Dock back** in its own ⋮ menu puts it back beside the largest
-  area; or drag its title with **Shift** held onto an area, to dock it on
-  that side of it (onto the centre: in its place, that one floating
-  instead). Any editor floats, on any side; floating panels are saved with
-  their workspace and come back where they were.
+  its own, a real window of your system: move it anywhere, onto another
+  screen, size it by its edges, as any window (its title in the panel moves
+  it too). **Dock back** in its own ⋮ menu puts it back beside the largest
+  area, and so does closing its window. Any editor floats, on any side, the
+  map, the 3D View and the Render Viewport included, with the same map and
+  view as in the layout; floating panels are saved with their workspace and
+  come back where they were (on a screen there is, if theirs was unplugged).
+  Where the system gives no windows of their own (some Linux desktops), a
+  floating panel stands over the layout in Massif's window instead: drag
+  its title to move it, its bottom right corner to size it, or drag its
+  title with **Shift** held onto an area to dock it on that side of it
+  (onto the centre: in its place, that one floating instead).
 - Drag any corner of an area into it to split it where you let go: the new area opens on that corner's side (across: left or right; up or down: above or below).
 - Drag an area by its title onto another to move it, or onto its centre to
   swap the two. Drag the gaps between areas to resize them.

@@ -200,15 +200,30 @@ converted and freed as it is read.
 
 A workspace (`layout::Workspace`) is a tree of areas plus `floating`, the
 panels taken out of it: each keeps its area id (so a map view or a 3D view
-keeps its state), its editor, and its place and size in points. They are
-drawn after the tree, each in an `egui::Area` of the middle order over the
-central panel, through the same `area()` as a docked area (its header, its
-menu, its editor), with a corner to size it. `Layout::detach` and
-`Layout::dock_back` move an area between the two; floating panels are
-serialised with the workspace, renumbered when it is duplicated and cleared
-when it is reset. They live in the main window rather than in OS windows
-(egui viewports): one wgpu renderer and one set of native textures (the 3D
-views, the path tracer) serve them, and the kittest harness drives them.
+keeps its state), its editor, and its place and size in points. Where egui
+can open native windows (`!ctx.embed_viewports()`: eframe on macOS,
+Windows, X11 and Wayland), each is an immediate viewport
+(`MassifApp::float_window`, `ctx.show_viewport_immediate`), drawn in the
+same pass as the main window through the same `area()` as a docked area,
+with the app's whole state: eframe's one wgpu device and renderer serve
+every viewport's surface, so the paint callbacks of the map, the 3D views
+and the path tracer work there as in the main window. `Floating::screen`
+then says its `pos` is the window's outer corner on the screen and its
+`size` the inside, read back every pass from `ViewportInfo`; the builder's
+position stays the one it opened at (`float_opened`), since egui moves a
+window whose builder position changes. A window opens where it was saved
+when its top is on a screen there is (`screens::place`, the screens' work
+areas from AppKit or `EnumDisplayMonitors`; none known on Linux, where the
+window manager places it), else whole on the main window's screen. Closing
+the window docks the panel back. Keys pressed in it go through
+`shortcuts`, as in the main window. Where egui embeds viewports (the kittest
+harness, unless a test installs a stand-in renderer), a floating panel is
+an `egui::Area` of the middle order over the central panel with a corner to
+size it, its position in the main window; `dock()` turns positions from
+one to the other by the main window's inner corner. `Layout::detach` and
+`Layout::dock_back` move an area between the tree and `floating`; floating
+panels are serialised with the workspace, renumbered when it is duplicated
+and cleared when it is reset.
 
 Each workspace belongs to a side (`Workspace::side`: `render`, else
 `terrain`, else the World side). The Render side's editors are

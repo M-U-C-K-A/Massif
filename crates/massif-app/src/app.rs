@@ -549,6 +549,9 @@ pub struct MassifApp {
     dragging_area: Option<AreaId>,
     /// A floating panel moved by its title (with Shift, to dock it).
     dragging_float: Option<AreaId>,
+    /// Where each floating panel's window of the system's own opened,
+    /// kept while it is open (see `float_window`).
+    float_opened: HashMap<AreaId, Rect>,
     rename: Option<(usize, String)>,
     /// The Layers panel's layer being renamed.
     layers_ui: crate::layers::LayersUi,
@@ -1138,6 +1141,7 @@ impl MassifApp {
             feedback: None,
             dragging_area: None,
             dragging_float: None,
+            float_opened: HashMap::new(),
             rename: None,
             layers_ui: Default::default(),
             pack_dialog: None,
@@ -3683,20 +3687,40 @@ impl MassifApp {
             Some((id, editor)) => areas.push((id, editor, rect)),
             None => compute(&ws.root, rect, &mut Vec::new(), &mut areas, &mut seps),
         }
-        // Floating panels, kept where some of them shows in the window.
+        // Floating panels: each in a window of the system's own where egui
+        // can open more windows, else over the layout, kept where some of it
+        // shows. Their positions follow from one to the other.
+        let os = !ui.ctx().embed_viewports();
+        let window = ui.ctx().input(|i| i.viewport().inner_rect);
+        if ws.floating.iter().any(|f| f.screen != os) {
+            for f in &mut self.layout.current_mut().floating {
+                if f.screen != os {
+                    if let Some(w) = window {
+                        let d = if os { w.min.to_vec2() } else { -w.min.to_vec2() };
+                        f.pos = [f.pos[0] + d.x, f.pos[1] + d.y];
+                    }
+                    f.screen = os;
+                }
+            }
+        }
+        let ws = self.layout.current();
         let bounds = ui.ctx().content_rect();
         let floats: Vec<(AreaId, EditorKind, Rect)> = ws
             .floating
             .iter()
             .map(|f| {
+                if os {
+                    return (f.id, f.editor, Rect::from_min_size(pos2(f.pos[0], f.pos[1]), vec2(f.size[0], f.size[1])));
+                }
                 let size = vec2(f.size[0].clamp(FLOAT_MIN.x, bounds.width().max(FLOAT_MIN.x)), f.size[1].clamp(FLOAT_MIN.y, bounds.height().max(FLOAT_MIN.y)));
                 let x = f.pos[0].clamp(bounds.left() - size.x + 80.0, bounds.right() - 80.0);
                 let y = f.pos[1].clamp(bounds.top(), (bounds.bottom() - HEADER).max(bounds.top()));
                 (f.id, f.editor, Rect::from_min_size(pos2(x, y), size))
             })
             .collect();
-        // The floating ones first: they are over the others.
-        let area_rects: Vec<(AreaId, Rect)> = floats.iter().rev().map(|(id, _, r)| (*id, *r)).chain(areas.iter().map(|(id, _, r)| (*id, *r))).collect();
+        // The floating ones first: they are over the others (in Massif's
+        // window).
+        let area_rects: Vec<(AreaId, Rect)> = floats.iter().rev().filter(|_| !os).map(|(id, _, r)| (*id, *r)).chain(areas.iter().map(|(id, _, r)| (*id, *r))).collect();
         ui.ctx().data_mut(|d| d.insert_temp(Id::unique("massif areas"), area_rects));
 
         // Splitters.
@@ -3732,9 +3756,18 @@ impl MassifApp {
         for (id, editor, rect) in &areas {
             self.area(ui, frame, *id, *editor, *rect, &shown, false);
         }
+        let docked: Vec<(AreaId, [f32; 4])> = areas.iter().map(|(a, _, r)| (*a, [r.left(), r.top(), r.width(), r.height()])).collect();
         for &(id, editor, rect) in &floats {
-            self.floating(ui, frame, id, editor, rect, &shown);
+            if os {
+                let ctx = ui.ctx().clone();
+                self.float_window(&ctx, frame, id, editor, rect, &shown, &docked);
+            } else {
+                self.floating(ui, frame, id, editor, rect, &shown);
+            }
         }
+        // A window closed, or its panel docked: opened anew where it is
+        // kept when it floats again.
+        self.float_opened.retain(|id, _| floats.iter().any(|f| f.0 == *id));
         self.maps.retain(|id, _| areas.iter().any(|a| a.0 == *id) || floats.iter().any(|f| f.0 == *id));
 
         // A floating panel dragged by its title with Shift: docked where it
@@ -3834,6 +3867,61 @@ impl MassifApp {
         }
     }
 
+    /// A floating panel in a window of the system's own: moved, sized and
+    /// put on another screen as any window, its editor drawn in it with
+    /// the same state as in the layout. Closed, it docks back (beside the
+    /// largest of the `docked` areas).
+    #[allow(clippy::too_many_arguments)]
+    fn float_window(&mut self, ctx: &egui::Context, frame: &eframe::Frame, id: AreaId, editor: EditorKind, rect: Rect, shown: &HashSet<EditorKind>, docked: &[(AreaId, [f32; 4])]) {
+        // Where it opens, on a screen there is, then kept while it is open:
+        // egui moves a window whose position asked changes, and this one
+        // stays where the user puts it.
+        let at = match self.float_opened.get(&id) {
+            Some(r) => *r,
+            None => {
+                let home = ctx.input(|i| i.viewport().outer_rect).map(|r| r.center());
+                let r = crate::screens::place(rect, &crate::screens::visible(ctx), home);
+                self.float_opened.insert(id, r);
+                r
+            }
+        };
+        let builder = egui::ViewportBuilder::default()
+            .with_title(format!("{} — Massif", crate::i18n::tr_name(editor.label())))
+            .with_app_id("massif")
+            .with_icon(window_icon())
+            .with_position(at.min)
+            .with_inner_size(at.size())
+            .with_min_inner_size(FLOAT_MIN);
+        let mut close = false;
+        ctx.show_viewport_immediate(float_viewport(id), builder, |ui, _| {
+            let ctx = ui.ctx().clone();
+            let (outer, inner, closing) = ctx.input(|i| {
+                let v = i.viewport();
+                (v.outer_rect, v.inner_rect, v.close_requested())
+            });
+            close = closing;
+            // Kept where the user leaves it, as large: saved with the
+            // workspace.
+            if let (Some(o), Some(i)) = (outer, inner)
+                && let Some(f) = self.layout.current_mut().floating.iter_mut().find(|f| f.id == id)
+            {
+                f.pos = [o.left(), o.top()];
+                f.size = [i.width(), i.height()];
+            }
+            // The keys pressed in it do what they do in Massif's window.
+            if self.tour.is_none() {
+                self.shortcuts(&ctx);
+            }
+            let full = ui.max_rect();
+            let pal = Palette::of(ui);
+            ui.painter().rect_filled(full, 0.0, pal.app_bg);
+            self.area(ui, frame, id, editor, full.shrink(6.0), shown, true);
+        });
+        if close {
+            self.layout.dock_back(id, None, docked);
+        }
+    }
+
     /// A floating panel: an area in a window of its own over the layout,
     /// moved by its title and sized by its corner.
     fn floating(&mut self, ui: &mut Ui, frame: &eframe::Frame, id: AreaId, editor: EditorKind, rect: Rect, shown: &HashSet<EditorKind>) {
@@ -3867,7 +3955,11 @@ impl MassifApp {
     #[allow(clippy::too_many_arguments)]
     fn area(&mut self, ui: &mut Ui, frame: &eframe::Frame, id: AreaId, editor: EditorKind, rect: Rect, shown: &HashSet<EditorKind>, floating: bool) {
         let pal = Palette::of(ui);
-        crate::tour::mark(ui.ctx(), crate::tour::Target::Editor(editor), rect);
+        // In a window of the system's own (a floating panel's).
+        let own_window = ui.ctx().viewport_id() != egui::ViewportId::ROOT;
+        if !own_window {
+            crate::tour::mark(ui.ctx(), crate::tour::Target::Editor(editor), rect);
+        }
         let painter = ui.painter_at(rect.expand(1.0));
         // A card: its title and commands along its top, on the card itself.
         painter.rect_filled(rect, theme::CARD_RADIUS, pal.panel);
@@ -3902,7 +3994,7 @@ impl MassifApp {
                     }
                 })
                 .response
-                .on_hover_text(tr!("Panel commands · drag the title to move it, with Shift onto an area to dock it there"));
+                .on_hover_text(if own_window { tr!("Panel commands · closing its window docks it back") } else { tr!("Panel commands · drag the title to move it, with Shift onto an area to dock it there") });
                 break 'commands;
             }
             if shift && !single && !maximized {
@@ -3938,15 +4030,17 @@ impl MassifApp {
                         }
                     });
                 });
-                if ui
-                    .add_enabled(!single && !maximized, egui::Button::new(theme::with_icon(Icon::PictureInPicture2, tr!("Float"))))
-                    .on_hover_text(tr!("In a window of its own over the layout, to move and size freely"))
-                    .clicked()
-                {
-                    let r = rect.translate(vec2(24.0, 24.0));
+                // In a window of the system's own where egui can open one,
+                // else over the layout.
+                let os = !ui.ctx().embed_viewports();
+                let tip = if os { tr!("In a window of its own, to move anywhere on your screens and size freely") } else { tr!("In a window of its own over the layout, to move and size freely") };
+                if ui.add_enabled(!single && !maximized, egui::Button::new(theme::with_icon(Icon::PictureInPicture2, tr!("Float")))).on_hover_text(tip).clicked() {
                     let screen = ui.ctx().content_rect();
-                    let size = vec2(r.width().min(screen.width() * 0.7), r.height().min(screen.height() * 0.7));
-                    self.layout.detach(id, [r.left(), r.top(), size.x, size.y]);
+                    let size = vec2(rect.width().min(screen.width() * 0.7), rect.height().min(screen.height() * 0.7));
+                    // On the screen: from Massif's window's corner.
+                    let origin = ui.ctx().input(|i| i.viewport().inner_rect).filter(|_| os).map(|w| w.min.to_vec2());
+                    let r = rect.translate(vec2(24.0, 24.0) + origin.unwrap_or_default());
+                    self.layout.detach(id, [r.left(), r.top(), size.x, size.y], origin.is_some());
                 }
                 ui.separator();
                 let label = if maximized { tr!("Restore the layout") } else { tr!("Maximise area") };
@@ -3991,7 +4085,12 @@ impl MassifApp {
             })
             .inner
             .on_hover_cursor(CursorIcon::Grab);
-        if floating {
+        if own_window {
+            // Its window moved by its title too, as by the system's.
+            if title.drag_started() {
+                ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
+            }
+        } else if floating {
             if title.drag_started() {
                 self.dragging_float = Some(id);
             }
@@ -6039,6 +6138,17 @@ impl eframe::App for MassifApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         [0.0, 0.0, 0.0, 1.0]
     }
+}
+
+/// The window of floating panel `id`.
+fn float_viewport(id: AreaId) -> egui::ViewportId {
+    egui::ViewportId::from_hash_of(("massif floating", id))
+}
+
+/// Massif's logo, for the windows of floating panels (decoded once).
+fn window_icon() -> std::sync::Arc<egui::IconData> {
+    static ICON: std::sync::OnceLock<std::sync::Arc<egui::IconData>> = std::sync::OnceLock::new();
+    ICON.get_or_init(|| std::sync::Arc::new(crate::icon())).clone()
 }
 
 /// A command of the bar at the top: an icon in a square, all of them the
@@ -8618,6 +8728,132 @@ mod tests {
         }
         assert!(h.state().layout.current().floating.is_empty(), "docked by the map");
         assert_eq!(h.state().layout.current().root.sibling(info).map(|s| (s.0, s.2, s.3)), Some((map, Dir::Row, true)), "on the map's left");
+    }
+
+    /// Where egui opens windows of the system's own, a floating panel is
+    /// one: its window opens at the area's place on the screen, shows the
+    /// panel's editor, follows where the user moves and sizes it, is saved
+    /// so, and docks the panel back when it is closed or by Dock back.
+    /// (The windows are made here by a stand-in for eframe's: one pass of
+    /// each, nested in Massif's, as eframe does.)
+    #[test]
+    fn floating_panels_are_windows_of_their_own() {
+        use std::{cell::RefCell, rc::Rc};
+        #[derive(Default)]
+        struct Screen {
+            /// The windows drawn this pass: id, title, where asked, size asked.
+            shown: Vec<(egui::ViewportId, String, Option<egui::Pos2>, Option<egui::Vec2>)>,
+            /// Where the user put each window (its inside).
+            moved: HashMap<egui::ViewportId, Rect>,
+            closing: Option<egui::ViewportId>,
+        }
+        let screen = Rc::new(RefCell::new(Screen::default()));
+        let mut h = harness(ThemeChoice::Light);
+        h.ctx.set_embed_viewports(false);
+        {
+            let screen = screen.clone();
+            egui::Context::set_immediate_viewport_renderer(move |ctx, mut viewport| {
+                let id = viewport.ids.this;
+                let b = &viewport.builder;
+                let at = b.position.unwrap_or_default();
+                let size = b.inner_size.unwrap_or(vec2(400.0, 300.0));
+                let inner = screen.borrow().moved.get(&id).copied().unwrap_or(Rect::from_min_size(at + vec2(0.0, 28.0), size));
+                let closing = screen.borrow().closing == Some(id);
+                screen.borrow_mut().shown.push((id, b.title.clone().unwrap_or_default(), b.position, b.inner_size));
+                let info = egui::ViewportInfo {
+                    parent: Some(viewport.ids.parent),
+                    inner_rect: Some(inner),
+                    outer_rect: Some(Rect::from_min_max(inner.min - vec2(0.0, 28.0), inner.max)),
+                    events: if closing { vec![egui::ViewportEvent::Close] } else { Vec::new() },
+                    ..Default::default()
+                };
+                let input = egui::RawInput {
+                    viewport_id: id,
+                    viewports: std::iter::once((id, info)).collect(),
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, inner.size())),
+                    ..Default::default()
+                };
+                let _ = ctx.run_ui(input, |ui| (viewport.viewport_ui_cb)(ui));
+            });
+        }
+        // Massif's window at (100, 50) on the screen.
+        let window = Rect::from_min_size(pos2(100.0, 50.0), h.ctx.content_rect().size());
+        h.input_mut().viewports.entry(egui::ViewportId::ROOT).or_default().inner_rect = Some(window);
+        h.run_steps(4);
+        let mut areas = Vec::new();
+        h.state().layout.current().root.areas(&mut areas);
+        let info = areas.iter().find(|a| a.1 == EditorKind::Info).unwrap().0;
+        let docked_at = area_rect(&h, info);
+        let before = h.state().layout.current().root.count();
+        screen.borrow_mut().shown.clear();
+        area_command(&mut h, info, "Float");
+        let f = h.state().layout.current().floating[0].clone();
+        assert!(f.screen && f.id == info && f.editor == EditorKind::Info, "{f:?}");
+        assert_eq!(h.state().layout.current().root.count(), before - 1);
+        // Its window: where the area was, on the screen, and the Info panel
+        // drawn in it; not over the layout.
+        let vid = float_viewport(info);
+        let shown: Vec<_> = screen.borrow().shown.iter().filter(|w| w.0 == vid).cloned().collect();
+        assert!(!shown.is_empty(), "a window of its own");
+        assert_eq!(shown[0].1, "Info — Massif");
+        assert_eq!(shown[0].2, Some(docked_at.min + window.min.to_vec2() + vec2(24.0, 24.0)));
+        let areas_now: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+        assert!(areas_now.iter().all(|a| a.0 != info), "not in Massif's window");
+        // Moved by the user onto another screen, and sized: kept so, and
+        // the window not moved back.
+        let put = Rect::from_min_size(pos2(-1700.0, 240.0), vec2(520.0, 610.0));
+        screen.borrow_mut().moved.insert(vid, put);
+        screen.borrow_mut().shown.clear();
+        h.run_steps(3);
+        let f = h.state().layout.current().floating[0].clone();
+        assert_eq!((f.pos, f.size), ([-1700.0, 212.0], [520.0, 610.0]));
+        assert!(screen.borrow().shown.iter().filter(|w| w.0 == vid).all(|w| w.2 == shown[0].2), "asked where it first opened");
+        // Saved, and opened there again (no screens known here: as saved).
+        let mut storage = MemoryStorage::default();
+        eframe::App::save(h.state_mut(), &mut storage);
+        let kept = eframe::get_value::<Layout>(&storage, LAYOUT_KEY).unwrap().sanitize();
+        assert_eq!(kept.current().floating, h.state().layout.current().floating);
+        h.state_mut().float_opened.clear();
+        screen.borrow_mut().shown.clear();
+        h.run_steps(2);
+        let again = screen.borrow().shown.iter().find(|w| w.0 == vid).cloned().unwrap();
+        assert_eq!((again.2, again.3), (Some(pos2(-1700.0, 212.0)), Some(vec2(520.0, 610.0))));
+        // Its editor changed in its window: the title follows.
+        h.state_mut().layout.set_editor(info, EditorKind::Brushes);
+        screen.borrow_mut().shown.clear();
+        h.run_steps(2);
+        assert!(screen.borrow().shown.iter().any(|w| w.0 == vid && w.1 == "Brushes — Massif"));
+        h.state_mut().layout.set_editor(info, EditorKind::Info);
+        h.run_steps(2);
+        // Closed: docked back, and its window gone.
+        screen.borrow_mut().closing = Some(vid);
+        h.run_steps(2);
+        screen.borrow_mut().closing = None;
+        assert!(h.state().layout.current().floating.is_empty());
+        assert_eq!(h.state().layout.current().root.editor_of(info), Some(EditorKind::Info));
+        assert_eq!(h.state().layout.current().root.count(), before);
+        screen.borrow_mut().shown.clear();
+        h.run_steps(2);
+        assert!(screen.borrow().shown.iter().all(|w| w.0 != vid), "no window left");
+        // A layout saved with a panel floating over Massif's window (as
+        // before, or where egui cannot open windows) opens it in a window of
+        // its own, on the screen where it was.
+        let mut over = h.state().layout.clone();
+        assert!(over.detach(info, [300.0, 200.0, 320.0, 240.0], false));
+        h.state_mut().layout = over;
+        screen.borrow_mut().shown.clear();
+        screen.borrow_mut().moved.clear();
+        h.run_steps(2);
+        let f = h.state().layout.current().floating[0].clone();
+        assert!(f.screen, "{f:?}");
+        let first = screen.borrow().shown.iter().find(|w| w.0 == vid).cloned().unwrap();
+        assert_eq!(first.2, Some(pos2(400.0, 250.0)));
+        // And back over the layout where egui cannot.
+        h.ctx.set_embed_viewports(true);
+        h.run_steps(2);
+        let f = h.state().layout.current().floating[0].clone();
+        assert!(!f.screen);
+        assert_eq!(area_rect(&h, info).min, pos2(300.0, 200.0));
     }
 
     /// The Render side's workspaces as the other sides', its panels in the
