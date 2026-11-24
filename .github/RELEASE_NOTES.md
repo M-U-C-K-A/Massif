@@ -1,5 +1,7 @@
 Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, with a node-based terrain generator in the spirit of Gaea, written in Rust.
 
+## New in 1.1.0
+
 ## New in 1.0.0
 
 **The Gradient brush is easy to find.** It sat in the Paint row behind an icon of two circles that said little. It now has an icon of its own, a swatch fading from full to empty, marked with a dot until you first try it, and its card says it is new. Paint terrain's Tool Settings also offer it as a third way to paint, beside **One terrain** and **Noise**, and the Gradient brush shows the same choice to go back. The tour and the help point to it.
