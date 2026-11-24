@@ -87,6 +87,14 @@ pub enum Outcome {
         revision: u64,
         dim: usize,
     },
+    /// Ground covers of layer blocks turned into the ground's own layers
+    /// (see `massif_core::surface_layers`), to put in place in one step.
+    SurfaceLayers {
+        grounded: Box<massif_core::surface_layers::Grounded>,
+        /// The document's revision and dimension it was worked out from.
+        revision: u64,
+        dim: usize,
+    },
     /// The relief of a real place written into a copy of the map: the
     /// tiles it changed, to put in place in one undoable step.
     RealTerrain {
@@ -371,6 +379,15 @@ impl Job {
 
     /// Automatic biomes (`biomes`) or paint over the whole of dimension
     /// `dim` of a snapshot of the document at `revision`.
+    /// Turn the ground covers `chosen` into the ground's own layers, over
+    /// a copy of the map.
+    pub fn surface_layers(ctx: &egui::Context, snapshot: World, dim: usize, chosen: Vec<massif_core::surface_layers::SurfaceCover>, revision: u64) -> Job {
+        Job::spawn(JobKind::Auto, tr!("Covers of layers made the ground's own").to_owned(), None, ctx, move || {
+            let grounded = massif_core::surface_layers::to_ground(&snapshot.dims[dim], &snapshot.meta, &snapshot.registry, &chosen);
+            Outcome::SurfaceLayers { grounded: Box::new(grounded), revision, dim }
+        })
+    }
+
     pub fn auto(ctx: &egui::Context, mut snapshot: World, dim: usize, rules: massif_core::auto::AutoRules, biomes: bool, revision: u64) -> Job {
         use massif_core::auto::{Reader, Steps, base_terrain, biomes_over_the_map_with, paint_over_the_map_with};
         let progress = Arc::new(Steps::default());

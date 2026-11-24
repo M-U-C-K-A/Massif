@@ -3427,5 +3427,12 @@
  },
  "Not found, kept in their place: pick each with Find its file… among the reference images.": "No encontradas, guardadas en su sitio: elija cada una con Buscar su archivo… entre las imágenes de referencia.",
  "Find its file…": "Buscar su archivo…",
- "Find its file": "Buscar su archivo"
+ "Find its file": "Buscar su archivo",
+ "Covers of layers made the ground's own": "Coberturas de capas convertidas en suelo",
+ "Covers of layers: {meanwhile}, nothing was done": "Coberturas de capas: {meanwhile}, no se hizo nada",
+ "Covers of layers made ground": "Coberturas de capas a suelo",
+ "Covers of layers made the ground's own: {columns} columns raised and smoothed in {secs:.1} s": "Coberturas de capas convertidas en suelo: {columns} columnas elevadas y suavizadas en {secs:.1} s",
+ "Covers of layers": "Coberturas de capas",
+ "These ground covers are layers of a block laid over the land. Ticked, they become the ground's own: the land raised by their layers, its top that block, smoothed with layers on export, as they look now.": "Estas coberturas son capas de un bloque puestas sobre el terreno. Marcadas, pasan a ser el propio suelo: el terreno sube según sus capas, su cara superior es ese bloque, suavizado con capas al exportar, tal como se ven ahora.",
+ "Make them the ground's own": "Convertirlas en suelo"
 }

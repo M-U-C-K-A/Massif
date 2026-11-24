@@ -60,6 +60,7 @@ pub mod river;
 pub mod road;
 pub mod selection;
 pub mod shapes;
+pub mod surface_layers;
 pub mod stamps;
 pub mod thumbnail;
 pub mod treepack;

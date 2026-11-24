@@ -393,7 +393,9 @@ enum Dialog {
     /// The rules of the automatic biomes (false) or paint (true).
     AutoRules(bool),
     /// What an import brought in, with the file's thumbnail.
-    ImportReport(Box<massif_legacy::ImportReport>, Option<egui::TextureHandle>),
+    /// The report of an import, its picture, and the ground covers of
+    /// layer blocks it brought, each ticked to become the ground's own.
+    ImportReport(Box<massif_legacy::ImportReport>, Option<egui::TextureHandle>, Vec<(massif_core::surface_layers::SurfaceCover, bool)>),
     /// The help, at a topic.
     Help(crate::help::HelpState),
     /// A filter over the whole map: its settings, the map before and after.
@@ -3274,7 +3276,26 @@ impl MassifApp {
                         let color = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
                         Some(ctx.load_texture("import thumbnail", color, egui::TextureOptions::LINEAR))
                     });
-                    self.dialog = Some(Dialog::ImportReport(report, thumbnail));
+                    let mods = crate::blocks::mod_blocks();
+                    let known = massif_core::shapes::Known { vanilla: &crate::blocks::vanilla_exists, mods: &mods };
+                    let layers = massif_core::surface_layers::surface_covers(&self.doc.world.registry, &known).into_iter().filter(|c| report.ground_covers.contains(&c.cover)).map(|c| (c, true)).collect();
+                    self.dialog = Some(Dialog::ImportReport(report, thumbnail, layers));
+                }
+                Outcome::SurfaceLayers { grounded, revision, dim } => {
+                    if other_map || revision != self.doc.revision || dim != self.doc.dim {
+                        crate::sounds::play(Cue::Warning);
+                        self.say(ctx, tr!("Covers of layers: {meanwhile}, nothing was done", meanwhile), true, None);
+                    } else {
+                        let massif_core::surface_layers::Grounded { dimension, meta, registry, columns } = *grounded;
+                        self.doc.replace_dimension_with(dim, dimension, meta, registry, tr!("Covers of layers made ground"));
+                        self.map_cache.invalidate_all();
+                        self.view3d.invalidate_all();
+                        self.sculpt3d.invalidate_all();
+                        self.extra3d.iter_mut().for_each(View3d::invalidate_all);
+                        let msg = tr!("Covers of layers made the ground's own: {columns} columns raised and smoothed in {secs:.1} s", columns, secs);
+                        self.task_done(ctx, Cue::Ready, tr!("Done"), &msg, secs);
+                        self.say(ctx, msg, false, None);
+                    }
                 }
                 Outcome::Auto { biomes, tiles, columns, revision, dim } => {
                     let label = if biomes { tr!("Auto biome") } else { tr!("Auto paint") };
@@ -6182,8 +6203,9 @@ impl MassifApp {
                     self.dialog = Some(Dialog::Export(form));
                 }
             }
-            Dialog::ImportReport(report, thumbnail) => {
+            Dialog::ImportReport(report, thumbnail, mut layers) => {
                 let mut save = false;
+                let mut ground = false;
                 let response = modal(ctx, "import report").show(ctx, |ui| {
                     ui.set_width(520.0);
                     let pal = Palette::of(ui);
@@ -6246,6 +6268,20 @@ impl MassifApp {
                                 });
                                 ui.end_row();
                             }
+                            if !layers.is_empty() {
+                                ui.label(RichText::new(tr!("Covers of layers")).color(pal.weak));
+                                ui.vertical(|ui| {
+                                    ui.label(tr!("These ground covers are layers of a block laid over the land. Ticked, they become the ground's own: the land raised by their layers, its top that block, smoothed with layers on export, as they look now."));
+                                    for (c, on) in layers.iter_mut() {
+                                        let blocks: Vec<&str> = c.plants.iter().map(|p| p.0.as_str()).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+                                        crate::widgets::checkbox(ui, on, format!("{} — {}", c.name, blocks.join(", ")));
+                                    }
+                                    if ui.add_enabled(layers.iter().any(|l| l.1), egui::Button::new(tr!("Make them the ground's own"))).clicked() {
+                                        ground = true;
+                                    }
+                                });
+                                ui.end_row();
+                            }
                             if report.overlays > 0 {
                                 ui.label(RichText::new(tr!("Overlays")).color(pal.weak));
                                 ui.vertical(|ui| {
@@ -6279,10 +6315,15 @@ impl MassifApp {
                 if response.should_close() {
                     keep = false;
                 }
+                if ground {
+                    let chosen: Vec<massif_core::surface_layers::SurfaceCover> = layers.drain(..).filter(|l| l.1).map(|l| l.0).collect();
+                    let snapshot = self.doc.world.snapshot();
+                    self.jobs.push(Job::surface_layers(ctx, snapshot, self.doc.dim, chosen, self.doc.revision).on(self.doc.generation));
+                }
                 if save {
                     self.save(ctx, true);
                 } else if keep {
-                    self.dialog = Some(Dialog::ImportReport(report, thumbnail));
+                    self.dialog = Some(Dialog::ImportReport(report, thumbnail, layers));
                 }
             }
             Dialog::Origin => {

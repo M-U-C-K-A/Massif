@@ -3585,5 +3585,12 @@
  },
  "Not found, kept in their place: pick each with Find its file… among the reference images.": "Не найдены, оставлены на месте: выберите каждое через «Найти файл…» среди опорных изображений.",
  "Find its file…": "Найти файл…",
- "Find its file": "Найти файл"
+ "Find its file": "Найти файл",
+ "Covers of layers made the ground's own": "Покровы из слоёв стали самой землёй",
+ "Covers of layers: {meanwhile}, nothing was done": "Покровы из слоёв: {meanwhile}, ничего не сделано",
+ "Covers of layers made ground": "Покровы из слоёв в землю",
+ "Covers of layers made the ground's own: {columns} columns raised and smoothed in {secs:.1} s": "Покровы из слоёв стали землёй: {columns} столбцов поднято и сглажено за {secs:.1} с",
+ "Covers of layers": "Покровы из слоёв",
+ "These ground covers are layers of a block laid over the land. Ticked, they become the ground's own: the land raised by their layers, its top that block, smoothed with layers on export, as they look now.": "Эти покровы — слои блока, положенные на землю. Отмеченные, они станут самой землёй: земля поднимется на их слои, сверху будет этот блок, сглаженный слоями при экспорте, как сейчас.",
+ "Make them the ground's own": "Сделать землёй"
 }

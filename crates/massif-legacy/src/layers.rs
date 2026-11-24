@@ -187,6 +187,8 @@ pub struct Converter {
     /// they were (a `.world`'s), rather than [`Conv::GroundCover`] (a
     /// `.layer` file's, a script's).
     pub lay_covers: bool,
+    /// The ground covers made of custom ground covers, by number.
+    pub laid: Vec<u16>,
 }
 
 impl Converter {
@@ -237,7 +239,9 @@ impl Converter {
                     def.palette = palette_of(arena, key, &mut mapper.registry);
                     let sink = if thickness < 0 { def.height[0] } else { 0 };
                     self.ground_covers.push(cover);
-                    return vec![(Conv::Laid { cover: mapper.registry.add_cover(def), sink }, 1.0)];
+                    let n = mapper.registry.add_cover(def);
+                    self.laid.push(n);
+                    return vec![(Conv::Laid { cover: n, sink }, 1.0)];
                 }
                 self.ground_covers.push(cover);
                 vec![(Conv::GroundCover(self.ground_covers.len() as u16 - 1), 1.0)]

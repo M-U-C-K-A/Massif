@@ -78,6 +78,14 @@ becomes a layer of the Layers panel, painted where it was:
   they are thick. One that takes the place of the top of the land lies on
   the ground lowered under it. Where several overlap, a block shows one of
   them, as in WorldPainter's export.
+- **Covers of layers** — ground covers whose blocks are the layers of a
+  block (`conquest:grass_block_layer[layers=3]`, snow layers) — are listed
+  in the import report, ticked. **Make them the ground's own** turns those
+  you keep ticked into the land itself: each column rises by its layers'
+  eighths, its top becomes the full block they are layers of (its terrain
+  stays when it already is), and Smooth terrain lays the same layers on
+  export, now from the land's true height, which the map, the 3D view, the
+  brushes and the smoothing all follow. It is one step to undo.
 - **Forests, tree pack layers and custom object layers** become tree and
   object layers with about as many trees as WorldPainter's export stands:
   the import plays WorldPainter's placement with your objects' own shapes

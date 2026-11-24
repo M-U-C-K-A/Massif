@@ -100,6 +100,9 @@ pub struct ImportReport {
     /// The files of those not found (by their path, or by their name beside
     /// the world): kept with their place, to find again.
     pub missing_images: Vec<String>,
+    /// The ground covers made of the world's custom ground covers, by
+    /// number.
+    pub ground_covers: Vec<u16>,
 }
 
 impl ImportReport {
@@ -957,6 +960,7 @@ pub fn import_stream<R: Read + Send>(reader: R, progress: &ImportProgress) -> Re
         .map_or(sea_level + 1, block_top);
 
     report.overlays = references.len();
+    report.ground_covers = converter.laid.clone();
     report.layers = layers.into_iter().collect();
     report.layers.sort_by_key(|l| std::cmp::Reverse(l.1));
     report.converted = converted_layers.into_iter().collect();
@@ -1591,6 +1595,7 @@ mod tests {
         let (world, report) = import_stream(&bytes[..], &progress).unwrap();
         assert!(report.layers.is_empty(), "nothing left out: {:?}", report.layers);
         let reg = &world.registry;
+        assert_eq!(report.ground_covers.iter().map(|&n| reg.cover(n).unwrap().name.as_str()).collect::<Vec<_>>(), covers.iter().map(|c| c.0).collect::<Vec<_>>());
         let vanilla = Registry::vanilla();
         assert_eq!(reg.terrains.len(), vanilla.terrains.len(), "no terrain made: {:?}", reg.terrains.iter().skip(vanilla.terrains.len()).map(|t| &t.name).collect::<Vec<_>>());
         assert!(reg.terrains.iter().all(|t| !t.name.contains(" on ")));

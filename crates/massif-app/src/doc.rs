@@ -429,6 +429,13 @@ impl Document {
         self.after_history();
     }
 
+    /// Put `dimension` in place of dimension `dim`, with the map's settings
+    /// `meta` and blocks and layers `registry`, as one step to undo.
+    pub fn replace_dimension_with(&mut self, dim: usize, dimension: massif_core::world::Dimension, meta: massif_core::WorldMeta, registry: massif_core::registry::Registry, label: &str) {
+        self.history.replace_dimension_and_settings(&mut self.world, dim, dimension, Some((meta, registry)), label);
+        self.after_history();
+    }
+
     /// Take back every change made to a map open read-only. Returns whether
     /// there was one.
     pub fn take_back(&mut self) -> bool {

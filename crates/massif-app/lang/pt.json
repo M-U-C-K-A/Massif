@@ -3427,5 +3427,12 @@
  },
  "Not found, kept in their place: pick each with Find its file… among the reference images.": "Não encontradas, mantidas no lugar: escolha cada uma com Encontrar o arquivo… nas imagens de referência.",
  "Find its file…": "Encontrar o arquivo…",
- "Find its file": "Encontrar o arquivo"
+ "Find its file": "Encontrar o arquivo",
+ "Covers of layers made the ground's own": "Coberturas de camadas tornadas o próprio solo",
+ "Covers of layers: {meanwhile}, nothing was done": "Coberturas de camadas: {meanwhile}, nada foi feito",
+ "Covers of layers made ground": "Coberturas de camadas em solo",
+ "Covers of layers made the ground's own: {columns} columns raised and smoothed in {secs:.1} s": "Coberturas de camadas tornadas solo: {columns} colunas elevadas e suavizadas em {secs:.1} s",
+ "Covers of layers": "Coberturas de camadas",
+ "These ground covers are layers of a block laid over the land. Ticked, they become the ground's own: the land raised by their layers, its top that block, smoothed with layers on export, as they look now.": "Estas coberturas são camadas de um bloco postas sobre o terreno. Marcadas, tornam-se o próprio solo: o terreno sobe com as camadas, o topo passa a ser esse bloco, suavizado com camadas na exportação, como aparecem agora.",
+ "Make them the ground's own": "Torná-las o solo"
 }
