@@ -276,7 +276,7 @@ def main() -> int:
         f"level-name=massif-check\nonline-mode=false\nserver-port={port}\nspawn-protection=0\nmax-players=1\n"
         "enable-rcon=false\nenable-query=false\nview-distance=4\nsimulation-distance=4\nsync-chunk-writes=true\n"
     )
-    java = args.java or find_java(args.minecraft)
+    java = args.java or find_java(args.minecraft, args.version)
     cp = os.pathsep.join(classpath(args.minecraft, args.version))
     cmd = [java, "-Xmx3G", "-cp", cp, "net.minecraft.server.Main", "--nogui", "--universe", str(work), "--world", "massif-check"]
     server = subprocess.Popen(cmd, cwd=work, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)

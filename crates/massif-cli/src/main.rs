@@ -11,7 +11,7 @@ const USAGE: &str = "\
 massif-cli — Massif worlds from the command line
 
 USAGE
-  massif-cli new <out.massif> [--size WxD] [--landform NAME] [--seed N] [--name TEXT]
+  massif-cli new <out.massif> [--size WxD] [--landform NAME] [--seed N] [--name TEXT] [--limits MIN..MAX] [--relief BLOCKS]
   massif-cli info <world.massif>
   massif-cli verify <world.massif>
   massif-cli export <world.massif> <folder> [--version V] [--void] [--survival] [--no-ores] [--overwrite]
@@ -127,6 +127,19 @@ fn cmd_new(mut args: Args) -> Res<()> {
     }
     if let Some(name) = args.option("--name")? {
         params.name = name;
+    }
+    if let Some(relief) = args.option("--relief")? {
+        params.relief = relief.parse().map_err(|_| "--relief expects a number of blocks")?;
+    }
+    // The build limits, past Minecraft's own: the export adds a data pack.
+    if let Some(limits) = args.option("--limits")? {
+        let (lo, hi) = limits.split_once("..").ok_or("--limits expects MIN..MAX, for example -64..640")?;
+        let (lo, hi): (i32, i32) = (lo.parse().map_err(|_| "--limits: bad bottom")?, hi.parse().map_err(|_| "--limits: bad top")?);
+        let (floor, ceiling) = massif_core::generate::MAX_LIMITS;
+        if lo < floor || hi > ceiling || lo % 16 != 0 || hi % 16 != 0 || lo >= hi {
+            return Err(format!("--limits: multiples of 16 from {floor} to {ceiling}, the bottom under the top"));
+        }
+        (params.min_y, params.max_y) = (lo, hi);
     }
     let [out] = args.positional(["<out.massif>"])?;
 

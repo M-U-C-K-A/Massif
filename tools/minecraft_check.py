@@ -33,10 +33,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def find_java(minecraft: Path) -> str:
-    runtimes = [Path.home() / "Library/Application Support/minecraft/runtime", minecraft / "runtime"]
-    for base in runtimes:
-        for name in ("java-runtime-delta", "java-runtime-epsilon", "java-runtime-gamma"):
+def find_java(minecraft: Path, version: str | None = None) -> str:
+    # The Java the version asks for (26.1 and later: Java 25, the launcher's
+    # java-runtime-epsilon), then the others.
+    names = ["java-runtime-delta", "java-runtime-epsilon", "java-runtime-gamma"]
+    if version:
+        try:
+            meta = json.loads((minecraft / "versions" / version / f"{version}.json").read_text())
+            wanted = meta.get("javaVersion", {}).get("component")
+            if wanted:
+                names = [wanted] + [n for n in names if n != wanted]
+        except (OSError, ValueError):
+            pass
+    runtimes = [Path.home() / "Library/Application Support/minecraft/runtime", minecraft / "runtime", minecraft / "java"]
+    for name in names:
+        for base in runtimes:
             for java in base.glob(f"{name}/**/bin/java"):
                 if java.is_file():
                     return str(java)
@@ -114,7 +125,7 @@ def main() -> int:
         f"level-name=massif-check\nonline-mode=false\nserver-port={port}\nspawn-protection=0\nmax-players=1\n"
         "enable-rcon=false\nenable-query=false\nview-distance=4\nsimulation-distance=4\nsync-chunk-writes=true\n"
     )
-    java = args.java or find_java(args.minecraft)
+    java = args.java or find_java(args.minecraft, args.version)
     cp = os.pathsep.join(classpath(args.minecraft, args.version))
     cmd = [java, "-Xmx3G", "-cp", cp, "net.minecraft.server.Main", "--nogui", "--universe", str(work), "--world", "massif-check"]
     print("starting", args.version, "with", java)

@@ -347,7 +347,33 @@ fn height_pack(dir: &Path, target: &Target, min_y: i32, max_y: i32) -> io::Resul
 "#
     );
     std::fs::write(pack.join("pack.mcmeta"), mcmeta)?;
-    // What 1.19 added; the way 1.20.5 writes a range.
+    // The overworld's own type, as the version has it, with the map's
+    // limits.
+    std::fs::write(types.join("overworld.json"), overworld_type(target, bottom, height))?;
+    Ok(Some(format!("file/{name}")))
+}
+
+/// The overworld's dimension type, as `target` has it, its build limits
+/// `bottom` and `bottom + height`. The version's own type: one that lacks
+/// a field the version wants (26.1 wants `has_ender_dragon_fight`) fails to
+/// load, and the game opens the world without the data pack, cut at its
+/// own limits; one that leaves out what the version moved into attributes
+/// (1.21.11: the sky, the fog, the music, the beds…) loses them.
+pub fn overworld_type(target: &Target, bottom: i32, height: i32) -> String {
+    // From 1.21.11 and 26.1 on, the game's own file, its limits changed.
+    let own = match target.data_version {
+        5023.. => Some(include_str!("dimension_type/overworld-26.3.json")),
+        4786.. => Some(include_str!("dimension_type/overworld-26.1.json")),
+        4671.. => Some(include_str!("dimension_type/overworld-1.21.11.json")),
+        _ => None,
+    };
+    if let Some(own) = own {
+        return own
+            .replace(r#""min_y": -64,"#, &format!(r#""min_y": {bottom},"#))
+            .replace(r#""height": 384,"#, &format!(r#""height": {height},"#))
+            .replace(r#""logical_height": 384,"#, &format!(r#""logical_height": {height},"#));
+    }
+    // What 1.19 added; the way 1.20.5 writes a range; 1.21.6's clouds.
     let monsters = match target.data_version {
         ..3105 => String::new(),
         3105..3837 => r#",
@@ -359,7 +385,8 @@ fn height_pack(dir: &Path, target: &Target, min_y: i32, max_y: i32) -> io::Resul
   "monster_spawn_block_light_limit": 0"#
             .to_owned(),
     };
-    let overworld = format!(
+    let clouds = if target.data_version >= 4435 { ",\n  \"cloud_height\": 192" } else { "" };
+    format!(
         r##"{{
   "ultrawarm": false,
   "natural": true,
@@ -375,12 +402,10 @@ fn height_pack(dir: &Path, target: &Target, min_y: i32, max_y: i32) -> io::Resul
   "height": {height},
   "logical_height": {height},
   "infiniburn": "#minecraft:infiniburn_overworld",
-  "effects": "minecraft:overworld"{monsters}
+  "effects": "minecraft:overworld"{monsters}{clouds}
 }}
 "##
-    );
-    std::fs::write(types.join("overworld.json"), overworld)?;
-    Ok(Some(format!("file/{name}")))
+    )
 }
 
 /// Copy a file, or a folder and everything in it.

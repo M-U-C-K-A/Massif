@@ -1193,6 +1193,35 @@ fn tall_maps_get_their_build_limits() {
     let _ = std::fs::remove_dir_all(&dir2);
 }
 
+/// The overworld's type in the height pack is each version's own, its
+/// limits changed: 26.1 wants `has_ender_dragon_fight` (without it the
+/// game would not load the pack, and the world would open cut at 320),
+/// 1.21.11 has the sky, fog, music and beds in attributes, 1.21.6 has the
+/// clouds' height. Every one is JSON with the limits asked.
+#[test]
+fn the_height_pack_has_each_versions_overworld() {
+    use massif_anvil::export::overworld_type;
+    for (name, wants, lacks) in [
+        ("1.18.2", &["ultrawarm", "effects", "bed_works"][..], &["monster_spawn_light_level", "cloud_height", "attributes"][..]),
+        ("1.20.4", &["monster_spawn_light_level", "effects"][..], &["cloud_height", "attributes"][..]),
+        ("1.21.8", &["cloud_height", "effects"][..], &["attributes"][..]),
+        ("1.21.11", &["attributes", "timelines"][..], &["has_ender_dragon_fight", "effects", "ultrawarm"][..]),
+        ("26.1", &["attributes", "has_ender_dragon_fight", "default_clock"][..], &["effects"][..]),
+        ("26.2", &["has_ender_dragon_fight"][..], &[][..]),
+        ("26.3", &["has_ender_dragon_fight", "minecraft:gameplay/straw_bed_rule"][..], &[][..]),
+    ] {
+        let json = overworld_type(&Target::release(name).unwrap(), -128, 1152);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap_or_else(|e| panic!("{name}: {e}\n{json}"));
+        assert_eq!((value["min_y"].as_i64(), value["height"].as_i64(), value["logical_height"].as_i64()), (Some(-128), Some(1152), Some(1152)), "{name}");
+        for key in wants {
+            assert!(json.contains(&format!("\"{key}\"")), "{name} wants {key}");
+        }
+        for key in lacks {
+            assert!(!json.contains(&format!("\"{key}\"")), "{name} has no {key}");
+        }
+    }
+}
+
 #[test]
 fn unusual_worlds_are_handled() {
     // An empty map has nothing to export.
