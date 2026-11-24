@@ -380,7 +380,7 @@ pub fn draw(ui: &mut Ui, painter: &egui::Painter, canvas: Rect, id: egui::Id, sc
 }
 
 /// A hint at the foot of the map.
-fn hint(painter: &egui::Painter, canvas: Rect, text: &str) {
+pub(crate) fn hint(painter: &egui::Painter, canvas: Rect, text: &str) {
     let at = canvas.center_bottom() - vec2(0.0, 22.0);
     let galley = painter.layout_no_wrap(text.to_owned(), FontId::proportional(12.5), Color32::from_gray(235));
     let back = Rect::from_center_size(at, galley.size() + vec2(24.0, 12.0));
@@ -392,9 +392,16 @@ fn hint(painter: &egui::Painter, canvas: Rect, text: &str) {
 /// The bar over a road being laid out: what it gives, Build road and
 /// Cancel. `Some(true)`: build it; `Some(false)`: drop it.
 fn bar(ui: &mut Ui, painter: &egui::Painter, canvas: Rect, id: egui::Id, summary: &str, ready: bool) -> Option<bool> {
+    draft_bar(ui, painter, canvas, id, summary, tr!("Build road"), ready)
+}
+
+/// The bar over a draft laid out on the map (a road, a curve): what it
+/// gives, its button `go` (Enter) and Cancel (Escape). `Some(true)`: go;
+/// `Some(false)`: drop it.
+pub(crate) fn draft_bar(ui: &mut Ui, painter: &egui::Painter, canvas: Rect, id: egui::Id, summary: &str, go: &str, ready: bool) -> Option<bool> {
     let font = FontId::proportional(12.5);
     let text = painter.layout_no_wrap(summary.to_owned(), font.clone(), Color32::from_gray(225));
-    let go = painter.layout_no_wrap(tr!("Build road").to_owned(), font.clone(), Color32::WHITE);
+    let go = painter.layout_no_wrap(go.to_owned(), font.clone(), Color32::WHITE);
     let enter = painter.layout_no_wrap("⏎".to_owned(), FontId::proportional(11.0), Color32::from_white_alpha(170));
     let cancel = painter.layout_no_wrap(tr!("Cancel").to_owned(), font, Color32::from_gray(210));
     let esc = painter.layout_no_wrap("esc".to_owned(), FontId::proportional(10.5), Color32::from_gray(130));

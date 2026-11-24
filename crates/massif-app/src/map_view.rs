@@ -1422,6 +1422,11 @@ impl MapView {
                 // Alt + click, either button: what is under the cursor, as
                 // WorldPainter's eyedropper.
                 *feedback = tools::pick(doc, tools, bx, bz).or(feedback.take());
+            } else if tools.tool == Tool::Annotate && tools.annotation_curve {
+                if let Some(p) = pointer {
+                    let screen = |q: [f32; 2]| self.to_screen(canvas, q[0] as f64, q[1] as f64);
+                    *feedback = crate::curve_draft::press(tools, [x as f32, z as f32], p, secondary, &screen, self.zoom).or(feedback.take());
+                }
             } else if tools.tool == Tool::Road {
                 if let Some(p) = pointer {
                     let screen = |q: (f32, f32)| self.to_screen(canvas, q.0 as f64, q.1 as f64);
@@ -1534,6 +1539,12 @@ impl MapView {
                 }
                 _ => self.river_grab = None,
             }
+        }
+        if tools.tool == Tool::Annotate
+            && tools.annotation_curve
+            && let Some(msg) = crate::curve_draft::follow(doc, tools, world_pointer.map(|(x, z)| [x as f32, z as f32]), down[0], ui)
+        {
+            *feedback = Some(msg);
         }
         if tools.tool == Tool::Road
             && let Some(msg) = crate::road_draft::follow(doc, tools, world_pointer.map(|(x, z)| (x as f32, z as f32)), down[0], ui)
@@ -1887,6 +1898,11 @@ impl MapView {
         } else {
             self.spring = None;
         }
+        if tools.tool == Tool::Annotate && tools.annotation_curve {
+            let screen = |q: [f32; 2]| self.to_screen(canvas, q[0] as f64, q[1] as f64);
+            let hover = pointer.filter(|_| response.hovered());
+            crate::curve_draft::draw(ui, &painter, canvas, response.id, &screen, self.zoom, hover, doc, tools, feedback);
+        }
         if tools.tool == Tool::Road {
             let screen = |q: (f32, f32)| self.to_screen(canvas, q.0 as f64, q.1 as f64);
             let hover = pointer.filter(|_| response.hovered());
@@ -1904,7 +1920,7 @@ impl MapView {
         {
             if panning {
                 ui.ctx().set_cursor_icon(if down[0] { CursorIcon::Grabbing } else { CursorIcon::Grab });
-            } else if tools.tool.uses_brush() {
+            } else if tools.tool.uses_brush() && !(tools.tool == Tool::Annotate && tools.annotation_curve) {
                 let brush = &tools.brush;
                 let shadow = Line::new(3.0, Color32::from_black_alpha(90));
                 let line = Line::new(1.4, Color32::WHITE);
@@ -2024,7 +2040,7 @@ impl MapView {
                     }
                 }
                 pointer_mark(ui.ctx(), &painter, p);
-            } else if (tools.tool != Tool::River || tools.river_draft.is_none()) && (tools.tool != Tool::Road || tools.road_draft.is_none()) {
+            } else if (tools.tool != Tool::River || tools.river_draft.is_none()) && (tools.tool != Tool::Road || tools.road_draft.is_none()) && !(tools.tool == Tool::Annotate && tools.annotation_curve) {
                 pointer_mark(ui.ctx(), &painter, p);
             }
         }

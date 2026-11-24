@@ -3447,5 +3447,21 @@
  "Show Annotations": "Anmerkungen anzeigen",
  "Hide all the annotations, on the map and in 3D": "Alle Anmerkungen ausblenden, auf der Karte und in 3D",
  "Show all the annotations, on the map and in 3D": "Alle Anmerkungen anzeigen, auf der Karte und in 3D",
- "Shown on the map and in 3D, as in WorldPainter, and never exported. The eye, the pen button in the map's header and View ▸ Show Annotations show or hide them all.": "Auf der Karte und in 3D angezeigt, wie in WorldPainter, und nie exportiert. Das Auge, der Stift-Knopf in der Kopfzeile der Karte und Ansicht ▸ Anmerkungen anzeigen blenden sie alle ein oder aus."
+ "Shown on the map and in 3D, as in WorldPainter, and never exported. The eye, the pen button in the map's header and View ▸ Show Annotations show or hide them all.": "Auf der Karte und in 3D angezeigt, wie in WorldPainter, und nie exportiert. Das Auge, der Stift-Knopf in der Kopfzeile der Karte und Ansicht ▸ Anmerkungen anzeigen blenden sie alle ein oder aus.",
+ "A curve needs two points at least": "Eine Kurve braucht mindestens zwei Punkte",
+ "Annotation curve": "Anmerkungskurve",
+ "Bézier": "Bézier",
+ "Bézier: the point picked shows its handles; drag them to bend the curve.": "Bézier: Der gewählte Punkt zeigt seine Griffe; ziehe sie, um die Kurve zu biegen.",
+ "Click on the map: where the curve starts": "Klicke auf die Karte: wo die Kurve beginnt",
+ "Click to place points; drag a point to move it, the curve to add one; right-click or Delete takes one off. Enter paints it, Escape drops it.": "Klicke, um Punkte zu setzen; ziehe einen Punkt, um ihn zu verschieben, die Kurve, um einen hinzuzufügen; Rechtsklick oder Entf entfernt einen. Enter malt sie, Escape verwirft sie.",
+ "Click where the curve goes next": "Klicke, wohin die Kurve als Nächstes geht",
+ "Curve dropped": "Kurve verworfen",
+ "End width": "Endbreite",
+ "Paint curve": "Kurve malen",
+ "Painted a curve of {length:.0} blocks": "Kurve von {length:.0} Blöcken gemalt",
+ "Smooth: the curve runs through every point.": "Glatt: Die Kurve läuft durch jeden Punkt.",
+ "Start width": "Startbreite",
+ "Straight": "Gerade",
+ "Straight: lines from point to point.": "Gerade: Linien von Punkt zu Punkt.",
+ "{length:.0} blocks · {n} points": "{length:.0} Blöcke · {n} Punkte"
 }

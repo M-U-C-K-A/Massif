@@ -1705,14 +1705,47 @@ pub fn annotation_swatches(ui: &mut Ui, size: f32, picked: Option<u16>, palette:
     clicked
 }
 
-/// The Annotations tool: the colours to annotate with (a click picks one;
-/// the map's own made with the colour picker), the opacity of the one
-/// picked, and the eye that shows or hides them all.
+/// The Annotations tool: brush or curve, the colours to annotate with (a
+/// click picks one; the map's own made with the colour picker), the
+/// opacity of the one picked, and how curves are drawn.
 fn annotation_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
     use massif_core::annotations::PRESETS;
+    use massif_core::curve::Interp;
     ui.horizontal(|ui| {
+        if let Some(k) = crate::widgets::button_group(ui, "annotation shape", &[tr!("Brush"), tr!("Curve")], &[!tools.annotation_curve, tools.annotation_curve]) {
+            tools.annotation_curve = k == 1;
+            if !tools.annotation_curve {
+                tools.curve_draft = None;
+            }
+        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| annotations_eye(ui, tools));
     });
+    if tools.annotation_curve {
+        ui.add_space(6.0);
+        let c = &mut tools.curve;
+        let kinds = [Interp::CatmullRom, Interp::Bezier, Interp::Polyline];
+        if let Some(k) = crate::widgets::button_group(ui, "curve kind", &[tr!("Smooth"), tr!("Bézier"), tr!("Straight")], &kinds.map(|k| k == c.interp)) {
+            c.interp = kinds[k];
+        }
+        ui.add_space(6.0);
+        crate::widgets::well(ui, |ui| {
+            crate::widgets::row(ui, tr!("Start width"), |ui| {
+                ui.add(crate::widgets::Field::new(&mut c.width, 0.0..=200.0).suffix(tr!(" blocks")).width(110.0));
+            });
+            crate::widgets::row(ui, tr!("End width"), |ui| {
+                ui.add(crate::widgets::Field::new(&mut c.end_width, 0.0..=200.0).suffix(tr!(" blocks")).width(110.0));
+            });
+        });
+        hint(
+            ui,
+            match c.interp {
+                Interp::CatmullRom => tr!("Smooth: the curve runs through every point."),
+                Interp::Bezier => tr!("Bézier: the point picked shows its handles; drag them to bend the curve."),
+                Interp::Polyline => tr!("Straight: lines from point to point."),
+            },
+        );
+        hint(ui, tr!("Click to place points; drag a point to move it, the curve to add one; right-click or Delete takes one off. Enter paints it, Escape drops it."));
+    }
     ui.add_space(8.0);
     let palette = &mut doc.world.registry.annotations;
     if palette.color(tools.annotation).is_none() {

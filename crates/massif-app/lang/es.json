@@ -3444,5 +3444,21 @@
  "Show Annotations": "Mostrar anotaciones",
  "Hide all the annotations, on the map and in 3D": "Ocultar todas las anotaciones, en el mapa y en 3D",
  "Show all the annotations, on the map and in 3D": "Mostrar todas las anotaciones, en el mapa y en 3D",
- "Shown on the map and in 3D, as in WorldPainter, and never exported. The eye, the pen button in the map's header and View ▸ Show Annotations show or hide them all.": "Se muestran en el mapa y en 3D, como en WorldPainter, y nunca se exportan. El ojo, el botón del lápiz en la cabecera del mapa y Ver ▸ Mostrar anotaciones las muestran u ocultan todas."
+ "Shown on the map and in 3D, as in WorldPainter, and never exported. The eye, the pen button in the map's header and View ▸ Show Annotations show or hide them all.": "Se muestran en el mapa y en 3D, como en WorldPainter, y nunca se exportan. El ojo, el botón del lápiz en la cabecera del mapa y Ver ▸ Mostrar anotaciones las muestran u ocultan todas.",
+ "A curve needs two points at least": "Una curva necesita al menos dos puntos",
+ "Annotation curve": "Curva de anotación",
+ "Bézier": "Bézier",
+ "Bézier: the point picked shows its handles; drag them to bend the curve.": "Bézier: el punto elegido muestra sus tiradores; arrástralos para curvar la curva.",
+ "Click on the map: where the curve starts": "Haz clic en el mapa: donde empieza la curva",
+ "Click to place points; drag a point to move it, the curve to add one; right-click or Delete takes one off. Enter paints it, Escape drops it.": "Haz clic para colocar puntos; arrastra un punto para moverlo, la curva para añadir uno; clic derecho o Supr quita uno. Intro la pinta, Escape la descarta.",
+ "Click where the curve goes next": "Haz clic donde sigue la curva",
+ "Curve dropped": "Curva descartada",
+ "End width": "Ancho final",
+ "Paint curve": "Pintar curva",
+ "Painted a curve of {length:.0} blocks": "Curva de {length:.0} bloques pintada",
+ "Smooth: the curve runs through every point.": "Suave: la curva pasa por cada punto.",
+ "Start width": "Ancho inicial",
+ "Straight": "Recta",
+ "Straight: lines from point to point.": "Recta: líneas de punto a punto.",
+ "{length:.0} blocks · {n} points": "{length:.0} bloques · {n} puntos"
 }

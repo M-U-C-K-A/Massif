@@ -32,7 +32,7 @@ two plants or two tree species never pile up on a block.
 | Sub-canopy | Bushes, hazel, holly growing under the trees | Under the trees |
 | Underground pockets | Gravel, clay, a mod's stone: blobs of other blocks in the rock | Underground |
 | Tree sizes | Where bushes, small, medium or large trees grow | Size |
-| Annotations | Marks in colour (WorldPainter's fifteen and the map's own), to plan the map | Notes |
+| Annotations | Marks in colour (WorldPainter's fifteen and the map's own), painted or drawn as curves, to plan the map | Notes |
 
 The **Trees** slot is WorldPainter's "base tree" and the **Cover** slot its
 "base plant", as the Conquest Reforged team uses them: a block has one of

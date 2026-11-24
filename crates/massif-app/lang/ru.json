@@ -3602,5 +3602,21 @@
  "Show Annotations": "Показывать пометки",
  "Hide all the annotations, on the map and in 3D": "Скрыть все пометки, на карте и в 3D",
  "Show all the annotations, on the map and in 3D": "Показать все пометки, на карте и в 3D",
- "Shown on the map and in 3D, as in WorldPainter, and never exported. The eye, the pen button in the map's header and View ▸ Show Annotations show or hide them all.": "Видны на карте и в 3D, как в WorldPainter, и никогда не экспортируются. Глаз, кнопка с пером в заголовке карты и Вид ▸ Показывать пометки показывают или скрывают их все."
+ "Shown on the map and in 3D, as in WorldPainter, and never exported. The eye, the pen button in the map's header and View ▸ Show Annotations show or hide them all.": "Видны на карте и в 3D, как в WorldPainter, и никогда не экспортируются. Глаз, кнопка с пером в заголовке карты и Вид ▸ Показывать пометки показывают или скрывают их все.",
+ "A curve needs two points at least": "Кривой нужны хотя бы две точки",
+ "Annotation curve": "Кривая пометки",
+ "Bézier": "Безье",
+ "Bézier: the point picked shows its handles; drag them to bend the curve.": "Безье: у выбранной точки видны её рычаги; тяните их, чтобы изогнуть кривую.",
+ "Click on the map: where the curve starts": "Щёлкните по карте: там, где начинается кривая",
+ "Click to place points; drag a point to move it, the curve to add one; right-click or Delete takes one off. Enter paints it, Escape drops it.": "Щелчками ставьте точки; тяните точку, чтобы сдвинуть её, кривую — чтобы добавить точку; правый щелчок или Delete убирает точку. Enter рисует кривую, Escape отменяет её.",
+ "Click where the curve goes next": "Щёлкните, куда кривая идёт дальше",
+ "Curve dropped": "Кривая отменена",
+ "End width": "Ширина в конце",
+ "Paint curve": "Нарисовать кривую",
+ "Painted a curve of {length:.0} blocks": "Нарисована кривая длиной {length:.0} бл.",
+ "Smooth: the curve runs through every point.": "Плавная: кривая проходит через каждую точку.",
+ "Start width": "Ширина в начале",
+ "Straight": "Прямая",
+ "Straight: lines from point to point.": "Прямая: отрезки от точки к точке.",
+ "{length:.0} blocks · {n} points": "{length:.0} бл. · точек: {n}"
 }

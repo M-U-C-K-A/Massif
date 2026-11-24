@@ -56,6 +56,7 @@ mod snowfall_ui;
 mod reticle;
 mod run_script;
 mod road_draft;
+mod curve_draft;
 mod select;
 mod settings_backup;
 #[cfg(test)]

@@ -438,10 +438,17 @@ pub struct ToolState {
     /// The colour annotations are painted in: 1 to 15, WorldPainter's, or
     /// one of the map's own (see [`massif_core::annotations`]).
     pub annotation: u16,
+    /// The Annotations tool draws curves through points rather than
+    /// painting with the brush.
+    pub annotation_curve: bool,
     /// The annotations show, on the map and in 3D (the eye of the
     /// Annotations tool, the pen of the map's header, View ▸ Show
     /// Annotations).
     pub show_annotations: bool,
+    /// How its curves are drawn, and the curve being drawn.
+    pub curve: crate::curve_draft::CurveSettings,
+    #[serde(skip)]
+    pub curve_draft: Option<crate::curve_draft::CurveDraft>,
     /// The tree size painted, 1 (bushes) to 4 (large trees).
     pub tree_size: u16,
     /// The layer of underground pockets painted, by its number (0: none
@@ -1088,7 +1095,10 @@ impl Default for ToolState {
             cover: 1,
             object_layer: 0,
             annotation: 14,
+            annotation_curve: false,
             show_annotations: true,
+            curve: Default::default(),
+            curve_draft: None,
             tree_size: 2,
             pocket_layer: 0,
             slab_block: None,

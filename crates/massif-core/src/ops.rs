@@ -594,6 +594,60 @@ pub fn paint_annotation(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, color:
     paint_plane(edit, brush, cx, cz, salt, color.min(crate::annotations::MAX), None, None, |t| &mut t.annotations);
 }
 
+/// Paint annotation `color` along a ribbon: the columns whose middle lies
+/// within half its width of its middle line (see
+/// [`crate::curve::Curve::ribbon`]). A ribbon narrower than a block still
+/// marks the columns it crosses.
+pub fn paint_annotation_ribbon(edit: &mut Edit, ribbon: &[([f32; 2], f32)], color: u16) {
+    let color = color.min(crate::annotations::MAX);
+    // The pieces of the ribbon: from one sample to the next, with their
+    // half widths.
+    let pieces: Vec<([f32; 2], [f32; 2], f32, f32)> = match ribbon {
+        [] => return,
+        [one] => vec![(one.0, one.0, one.1 / 2.0, one.1 / 2.0)],
+        _ => ribbon.windows(2).map(|w| (w[0].0, w[1].0, w[0].1 / 2.0, w[1].1 / 2.0)).collect(),
+    };
+    let reach = |a: f32| a.max(0.71);
+    let (mut x0, mut z0, mut x1, mut z1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for &(a, b, ra, rb) in &pieces {
+        let r = reach(ra.max(rb));
+        x0 = x0.min(a[0].min(b[0]) - r);
+        z0 = z0.min(a[1].min(b[1]) - r);
+        x1 = x1.max(a[0].max(b[0]) + r);
+        z1 = z1.max(a[1].max(b[1]) + r);
+    }
+    let footprint = BlockRect::new(x0.floor() as i32, z0.floor() as i32, x1.ceil() as i32 + 1, z1.ceil() as i32 + 1);
+    edit.par_tiles(footprint.tiles(), footprint, false, |_, clip, tile| {
+        let slab = tile.bottom.is_some();
+        for &(a, b, ra, rb) in &pieces {
+            let r = reach(ra.max(rb));
+            let px0 = ((a[0].min(b[0]) - r).floor() as i32).max(clip.x0);
+            let px1 = ((a[0].max(b[0]) + r).ceil() as i32 + 1).min(clip.x1);
+            let pz0 = ((a[1].min(b[1]) - r).floor() as i32).max(clip.z0);
+            let pz1 = ((a[1].max(b[1]) + r).ceil() as i32 + 1).min(clip.z1);
+            let d = [b[0] - a[0], b[1] - a[1]];
+            let len2 = d[0] * d[0] + d[1] * d[1];
+            for z in pz0..pz1 {
+                for x in px0..px1 {
+                    let p = [x as f32 + 0.5 - a[0], z as f32 + 0.5 - a[1]];
+                    let t = if len2 > 0.0 { ((p[0] * d[0] + p[1] * d[1]) / len2).clamp(0.0, 1.0) } else { 0.0 };
+                    let (ex, ez) = (p[0] - d[0] * t, p[1] - d[1] * t);
+                    // At least the columns the line crosses (half a block's
+                    // diagonal), however thin.
+                    let half = (ra + (rb - ra) * t).max(0.5);
+                    if ex * ex + ez * ez > half * half && !(ex.abs() <= 0.5 && ez.abs() <= 0.5) {
+                        continue;
+                    }
+                    let i = local_index(x, z);
+                    if slab && !tile.present(i) {
+                        continue;
+                    }
+                    tile.annotations.set(i, color);
+                }
+            }
+        }
+    });
+}
 
 /// Paint a sub-canopy object layer by its number (0 removes it): beside
 /// the base object layer of each column, not in its place. `salt` should
@@ -2055,6 +2109,34 @@ mod tests {
         assert_eq!((at(&w, 10, 10), at(&w, 15, 10)), (0, 14));
         hist.undo(&mut w);
         assert_eq!(at(&w, 10, 10), 14);
+    }
+
+    /// A curve's ribbon is painted as wide as it is at each point, every
+    /// column along it at least however thin, and is undone in one step.
+    #[test]
+    fn a_curves_ribbon_is_painted_widening() {
+        use crate::curve::{Curve, CurvePoint, Interp};
+        let mut w = world(1);
+        let mut hist = History::default();
+        let at = |w: &World, x: i32, z: i32| w.dims[0].ground().view(TilePos::containing(x, z)).unwrap().annotations.get(local_index(x, z));
+        let curve = Curve { points: vec![CurvePoint::new([4.0, 20.0]), CurvePoint::new([100.0, 20.0])], interp: Interp::CatmullRom };
+        hist.begin("curve", 0);
+        paint_annotation_ribbon(&mut hist.edit(&mut w, 0), &curve.ribbon(2.0, 20.0), 20);
+        hist.commit();
+        let across = |x: i32| (0..64).filter(|&z| at(&w, x, z) == 20).count();
+        assert!((1..=3).contains(&across(6)), "narrow at its start: {}", across(6));
+        assert!((17..=21).contains(&across(98)), "wide at its end: {}", across(98));
+        assert!(across(52) > across(6) && across(52) < across(98));
+        assert_eq!(at(&w, 110, 20), 0, "nothing past its end");
+        // A hair-thin diagonal still marks a line of columns, without gaps.
+        let thin = Curve { points: vec![CurvePoint::new([0.0, 30.0]), CurvePoint::new([30.0, 60.0])], interp: Interp::Polyline };
+        hist.begin("thin", 0);
+        paint_annotation_ribbon(&mut hist.edit(&mut w, 0), &thin.ribbon(0.1, 0.1), 3);
+        hist.commit();
+        assert!((2..28).all(|x| (28..62).any(|z| at(&w, x, z) == 3)));
+        hist.undo(&mut w);
+        hist.undo(&mut w);
+        assert_eq!(at(&w, 98, 20), 0);
     }
 
     fn select(w: &mut World, hist: &mut History, s: crate::selection::Selection) {

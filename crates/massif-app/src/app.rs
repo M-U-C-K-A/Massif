@@ -4046,7 +4046,9 @@ impl MassifApp {
         let map = areas.iter().filter(|(id, _)| self.layout.current().root.editor_of(*id) == Some(EditorKind::Map)).map(|(_, r)| *r).max_by(|a, b| a.area().total_cmp(&b.area()));
         // Over the bar of a river or a road being laid out, at the bottom of
         // the map, so that its buttons stay in reach.
-        let drafting = (self.tools.tool == Tool::River && self.tools.river_draft.is_some()) || (self.tools.tool == Tool::Road && self.tools.road_draft.is_some());
+        let drafting = (self.tools.tool == Tool::River && self.tools.river_draft.is_some())
+            || (self.tools.tool == Tool::Road && self.tools.road_draft.is_some())
+            || (self.tools.tool == Tool::Annotate && self.tools.annotation_curve && self.tools.curve_draft.is_some());
         let lift = if drafting { crate::map_view::DRAFT_BAR + 6.0 - theme::PAD } else { 0.0 };
         let (corner, room) = match map {
             Some(map) if map.width() > 320.0 => (map.right_bottom() - vec2(theme::PAD, crate::map_view::FOOTER + theme::PAD + lift), map.width() - 2.0 * theme::PAD),
@@ -14835,6 +14837,101 @@ mod tests {
         assert!(h.state().doc.revision != revision);
         let probe = crate::tools::probe(&h.state().doc, mid.0.floor() as i32, mid.1.floor() as i32).unwrap();
         assert_ne!(probe.terrain, path.0);
+    }
+
+    /// The Annotations tool's curves: points placed on the map, one moved,
+    /// one added on the curve, the handle of a Bézier point dragged, a
+    /// ribbon from 4 to 14 blocks wide in a colour of the map's own shown
+    /// as it is edited; Enter paints it as an annotation in one step,
+    /// shown in 3D too, and View ▸ Show Annotations hides it everywhere.
+    /// Needs a GPU: runs with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn annotation_curves_are_drawn_and_painted() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        let own;
+        {
+            let app = h.state_mut();
+            let world = generate(&GenParams { tiles_x: 8, tiles_z: 8, landform: Landform::Hills, ..GenParams::default() });
+            app.doc = crate::doc::Document::new(world, None, 7);
+            app.map_cache.invalidate_all();
+            app.view3d.invalidate_all();
+            app.tools.select(Tool::Annotate);
+            app.tools.annotation_curve = true;
+            app.tools.curve = crate::curve_draft::CurveSettings { interp: massif_core::curve::Interp::Bezier, width: 4.0, end_width: 14.0 };
+            own = app.doc.world.registry.annotations.number_of([40, 120, 255]).unwrap();
+            app.doc.world.registry.annotations.set_opacity(own, 90);
+            app.tools.annotation = own;
+        }
+        h.run_steps(5);
+        let at = |h: &egui_kittest::Harness<'_, MassifApp>, p: (f32, f32)| h.state().maps.values().next().unwrap().screen_of(p.0 as f64, p.1 as f64);
+        let pts = [(-300.0, 200.0), (-120.0, -60.0), (80.0, 120.0), (280.0, -200.0)];
+        for p in pts {
+            let q = at(&h, p);
+            click_on(&mut h, q, egui::PointerButton::Primary);
+        }
+        assert_eq!(h.state().tools.curve_draft.as_ref().unwrap().curve.points.len(), 4);
+        // A point moved, one added by dragging the curve.
+        let second = at(&h, pts[1]);
+        drag_on(&mut h, second, second + vec2(0.0, -30.0));
+        let mid = {
+            let c = &h.state().tools.curve_draft.as_ref().unwrap().curve;
+            let m = c.at(1, 0.5);
+            at(&h, (m[0], m[1]))
+        };
+        drag_on(&mut h, mid, mid + vec2(10.0, 40.0));
+        assert_eq!(h.state().tools.curve_draft.as_ref().unwrap().curve.points.len(), 5);
+        // The handle of the point picked (the one just added), dragged.
+        let handle = {
+            let d = h.state().tools.curve_draft.as_ref().unwrap();
+            let k = d.picked.unwrap();
+            let (a, hd) = (d.curve.points[k].at, d.curve.handle(k));
+            at(&h, (a[0] + hd[0], a[1] + hd[1]))
+        };
+        drag_on(&mut h, handle, handle + vec2(60.0, 50.0));
+        let d = h.state().tools.curve_draft.clone().unwrap();
+        assert!(d.curve.points[d.picked.unwrap()].handle.is_some(), "the handle is the point's own");
+        h.event(egui::Event::PointerMoved(at(&h, (0.0, 300.0))));
+        h.run_steps(3);
+        h.render().unwrap().save(dir.join("annotation-curve-editing.png")).unwrap();
+        h.event(egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+        h.run_steps(10);
+        assert!(h.state().tools.curve_draft.is_none());
+        assert_eq!(h.state().doc.history.undo_label(), Some("Annotation curve"));
+        let end = d.curve.points.last().unwrap().at;
+        let tile = h.state().doc.dimension().ground().view(massif_core::TilePos::containing(end[0] as i32, end[1] as i32)).unwrap().annotations.get(massif_core::coords::local_index(end[0] as i32, end[1] as i32));
+        assert_eq!(tile, own, "painted in the map's own colour");
+        h.render().unwrap().save(dir.join("annotation-curve-painted.png")).unwrap();
+        {
+            let app = h.state_mut();
+            app.layout.activate(3);
+            app.view3d.camera.distance = 520.0;
+            app.view3d.camera.pitch = 0.75;
+        }
+        h.run_steps(5);
+        while h.state().view3d.pending() > 0 {
+            h.step();
+        }
+        h.run_steps(3);
+        let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
+        image::save_buffer(dir.join("annotation-curve-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+        // Hidden from the View menu: on the map and in 3D.
+        let ctx = h.ctx.clone();
+        h.state_mut().command(&ctx, Command::ShowAnnotations);
+        assert!(!h.state().tools.show_annotations);
+        h.run_steps(5);
+        while h.state().view3d.pending() > 0 {
+            h.step();
+        }
+        h.run_steps(3);
+        let (_, _, hidden) = h.state().view3d.read_back().expect("the 3D view rendered");
+        assert_ne!(hidden, rgba, "the 3D view without the annotations");
+        image::save_buffer(dir.join("annotation-curve-3d-hidden.png"), &hidden, w, hgt, image::ColorType::Rgba8).unwrap();
+        // Undone in one step.
+        h.state_mut().doc.undo();
+        assert_eq!(h.state().doc.dimension().ground().view(massif_core::TilePos::containing(end[0] as i32, end[1] as i32)).unwrap().annotations.get(massif_core::coords::local_index(end[0] as i32, end[1] as i32)), 0);
     }
 
     /// Rivers on the map, converted over it: the ground is left as it is,

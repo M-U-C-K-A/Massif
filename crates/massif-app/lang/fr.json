@@ -3510,5 +3510,21 @@
  "Show Annotations": "Afficher les annotations",
  "Hide all the annotations, on the map and in 3D": "Masquer toutes les annotations, sur la carte et en 3D",
  "Show all the annotations, on the map and in 3D": "Afficher toutes les annotations, sur la carte et en 3D",
- "Shown on the map and in 3D, as in WorldPainter, and never exported. The eye, the pen button in the map's header and View ▸ Show Annotations show or hide them all.": "Affichées sur la carte et en 3D, comme dans WorldPainter, et jamais exportées. L’œil, le bouton stylo dans l’en-tête de la carte et Affichage ▸ Afficher les annotations les affichent ou les masquent toutes."
+ "Shown on the map and in 3D, as in WorldPainter, and never exported. The eye, the pen button in the map's header and View ▸ Show Annotations show or hide them all.": "Affichées sur la carte et en 3D, comme dans WorldPainter, et jamais exportées. L’œil, le bouton stylo dans l’en-tête de la carte et Affichage ▸ Afficher les annotations les affichent ou les masquent toutes.",
+ "A curve needs two points at least": "Une courbe demande au moins deux points",
+ "Annotation curve": "Courbe d’annotation",
+ "Bézier": "Bézier",
+ "Bézier: the point picked shows its handles; drag them to bend the curve.": "Bézier : le point choisi montre ses poignées ; faites-les glisser pour courber la courbe.",
+ "Click on the map: where the curve starts": "Cliquez sur la carte : là où la courbe commence",
+ "Click to place points; drag a point to move it, the curve to add one; right-click or Delete takes one off. Enter paints it, Escape drops it.": "Cliquez pour poser des points ; faites glisser un point pour le déplacer, la courbe pour en ajouter un ; clic droit ou Suppr en retire un. Entrée la peint, Échap l’abandonne.",
+ "Click where the curve goes next": "Cliquez là où la courbe va ensuite",
+ "Curve dropped": "Courbe abandonnée",
+ "End width": "Largeur de fin",
+ "Paint curve": "Peindre la courbe",
+ "Painted a curve of {length:.0} blocks": "Courbe de {length:.0} blocs peinte",
+ "Smooth: the curve runs through every point.": "Lisse : la courbe passe par chaque point.",
+ "Start width": "Largeur de départ",
+ "Straight": "Droite",
+ "Straight: lines from point to point.": "Droite : des segments d’un point à l’autre.",
+ "{length:.0} blocks · {n} points": "{length:.0} blocs · {n} points"
 }

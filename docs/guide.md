@@ -1339,6 +1339,21 @@ exported. The right button rubs them out.
 - **Show or hide them all**, on the map and in 3D alike: the eye in the
   tool's settings and beside the colours of the Layers panel, the pen button
   in the map's header, or **View ▸ Show Annotations**.
+- **Curves**: **Curve** at the top of the tool's settings, in place of
+  **Brush**, draws annotations as curves, as Axiom's Path tool: click to
+  place points, drag a point to move it, drag the curve to add a point
+  there, right-click a point (or Delete, for the one picked) to take it
+  off. It runs **Smooth** (a Catmull-Rom spline through every point),
+  **Bézier** (the point picked shows two handles, mirrored; drag one to bend
+  the curve there) or **Straight** (from point to point). It is drawn as the
+  ribbon it will paint, from its **Start width** to its **End width**, in the
+  colour picked. It stays a curve to edit until **Paint curve** (Enter)
+  paints it, in one step to undo; from then on it is an annotation like any
+  other, rubbed out the same way. Escape drops it.
+
+The curve is a shape of its own in Massif's core (`massif_core::curve`), apart
+from the annotations: the River and Road tools are meant to follow one later,
+a river or a road laid along a curve drawn first.
 
 ### Base layers, sub-canopy and tree sizes
 
