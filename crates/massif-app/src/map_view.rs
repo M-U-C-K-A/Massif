@@ -1263,6 +1263,8 @@ impl MapView {
         let mut placed = false;
         let on_reference = self.stroke.is_none()
             && !self.view3d_grab
+            && tools.filter_pick.is_none()
+            && tools.region_pick.is_none()
             && references.interact(
                 ui,
                 &mut doc.world.meta.references,
@@ -1418,7 +1420,18 @@ impl MapView {
             let secondary = button == PointerButton::Secondary;
             let inverse = secondary;
             let (bx, bz) = (x.floor() as i32, z.floor() as i32);
-            if modifiers.alt {
+            if let Some(pick) = &mut tools.region_pick {
+                // Test Export's regions: a click takes or leaves one.
+                if !secondary {
+                    pick.press(bx, bz);
+                }
+            } else if tools.filter_pick.is_some() {
+                // The filters' eyedropper: what is here is offered to pick
+                // from, the tool does nothing.
+                if !secondary && let Some(p) = pointer {
+                    tools.filter_pick_at = Some(((bx, bz), p));
+                }
+            } else if modifiers.alt {
                 // Alt + click, either button: what is under the cursor, as
                 // WorldPainter's eyedropper.
                 *feedback = tools::pick(doc, tools, bx, bz).or(feedback.take());
@@ -1575,6 +1588,21 @@ impl MapView {
             doc.undo();
             *feedback = Some(tr!("Stroke cancelled").into());
         }
+        // Test Export's regions: a drag goes on taking or leaving them.
+        if let Some(pick) = &mut tools.region_pick {
+            match world_pointer {
+                Some((x, z)) if down[0] && pick.drag.is_some() => pick.press(x.floor() as i32, z.floor() as i32),
+                _ if !down[0] => pick.drag = None,
+                _ => {}
+            }
+        }
+        // The Pencil follows every place the pointer went through
+        // this frame, not only the last.
+        let passed: Vec<(f64, f64)> = if tools.pencil {
+            ui.input(|i| i.events.iter().filter_map(|e| if let egui::Event::PointerMoved(p) = e { Some(*p) } else { None }).collect::<Vec<_>>()).into_iter().map(|p| self.to_world(canvas, p)).collect()
+        } else {
+            Vec::new()
+        };
         if let Some(stroke) = &mut self.stroke {
             let held = if stroke.secondary() { down[1] } else { down[0] };
             if held {
@@ -1790,7 +1818,18 @@ impl MapView {
             painter.rect_stroke(outline, 0, Line::new(1.0, theme::scale(pal.border, 0.85)), StrokeKind::Outside);
         }
 
-        if self.grid {
+        // The regions picked for a Test Export, over the region files' grid.
+        if let Some(pick) = &tools.region_pick {
+            let size = REGION_SIZE as f64;
+            for &(rx, rz) in &pick.regions {
+                let r = Rect::from_min_max(self.to_screen(canvas, rx as f64 * size, rz as f64 * size), self.to_screen(canvas, (rx + 1) as f64 * size, (rz + 1) as f64 * size));
+                if r.intersects(canvas) {
+                    painter.rect_filled(r.intersect(canvas), 0, pal.accent.gamma_multiply(0.28));
+                    painter.rect_stroke(r, 0, Line::new(2.0, pal.accent), StrokeKind::Inside);
+                }
+            }
+        }
+        if self.grid || tools.region_pick.is_some() {
             self.draw_grid(&painter, canvas, pal);
         }
 
@@ -1929,7 +1968,11 @@ impl MapView {
         if let Some(p) = pointer.filter(|p| canvas.contains(*p))
             && (response.hovered() || self.stroke.is_some())
         {
-            if panning {
+            if tools.region_pick.is_some() && !panning {
+                ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+            } else if tools.filter_pick.is_some() && !panning {
+                ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+            } else if panning {
                 ui.ctx().set_cursor_icon(if down[0] { CursorIcon::Grabbing } else { CursorIcon::Grab });
             } else if tools.tool.uses_brush() && !(tools.tool == Tool::Annotate && tools.annotation_curve) {
                 let shown = tools.shown_brush().into_owned();

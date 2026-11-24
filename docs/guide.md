@@ -537,7 +537,15 @@ selection (draw a rectangle, an ellipse or a lasso with the Select tools
 first), the 384 × 384 blocks around the middle of the map view, or blocks
 typed in; the tiles of 128 blocks it reaches are written to a world of
 their own beside the export ("… test"), to check the result in the game
-quickly.
+quickly. **Regions** tests whole region files, as WorldPainter's test
+export does: **Pick on the map…** makes way for the map, with the region
+files' grid and names over it; a click takes a region of 512 × 512 blocks
+(again leaves it), a drag goes on taking or leaving them, and **Done** at
+the foot of the window comes back to the dialog (Esc cancels). For the
+other parts, **Snap to regions** rounds them out to the whole region files
+they reach, as merging maps region by region wants them. Either way the
+dialog lists the region files it will write (`r.0.-1.mca`…), and the test
+world has those files and no others.
 
 The versions offered go from 1.7.10 to 26.3, and every newer game
 installed on the computer. From 1.18.2 on (1.19, 1.20, 1.21 up to 1.21.11,

@@ -60,6 +60,9 @@ pub struct ExportOptions {
     /// Only export the tiles the dimension's selection holds (all of the
     /// map when it has none), for testing a part of it.
     pub selection_only: bool,
+    /// Only export these region files, by their coordinates (`r.x.z.mca`),
+    /// for testing whole regions.
+    pub regions: Option<std::collections::BTreeSet<(i32, i32)>>,
     /// The version of Minecraft the world is written for.
     pub target: Target,
     /// The blocks of the mods read, by id, with the names of their
@@ -86,6 +89,7 @@ impl Default for ExportOptions {
             spawn: None,
             area: None,
             selection_only: false,
+            regions: None,
             target: Target::default(),
             mod_blocks: Default::default(),
         }
@@ -157,7 +161,9 @@ pub fn export(
             pos.x.div_euclid(TILES_PER_REGION),
             pos.z.div_euclid(TILES_PER_REGION),
         );
-        regions.entry(key).or_default().push(pos);
+        if options.regions.as_ref().is_none_or(|only| only.contains(&key)) {
+            regions.entry(key).or_default().push(pos);
+        }
     }
     if regions.is_empty() {
         return Err(ExportError::Empty);

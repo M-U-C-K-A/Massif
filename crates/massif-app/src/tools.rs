@@ -540,6 +540,35 @@ pub struct ToolState {
     /// How hard the brush presses drawn over the map, under the pointer (its
     /// lines show either way).
     pub show_strength: bool,
+    /// The Pencil, as WorldPainter's: the brushes draw a hard line at full
+    /// strength, block after block, unbroken however fast the mouse goes.
+    pub pencil: bool,
+    /// The Pencil's width in blocks (odd: 1, 3, 5…).
+    pub pencil_width: u16,
+    /// The order of the filters' list of what the map holds.
+    pub filter_sort: FilterSort,
+    /// What the filters were last set to be on, latest first.
+    pub filter_recent: Vec<massif_core::filter::Match>,
+    /// What the map holds, for the filters' list to show first; set by
+    /// the window while the list is open.
+    #[serde(skip)]
+    pub filter_used: Option<std::sync::Arc<std::collections::HashSet<massif_core::filter::Match>>>,
+    /// The filters' list is open: the window keeps `filter_used` up to date.
+    #[serde(skip)]
+    pub filter_list_open: bool,
+    /// The eyedropper of a filter is in hand: a click on the map (2D or
+    /// 3D) picks what the filter is on there, for Only on (`true`) or
+    /// Except on (`false`), rather than the tool acting.
+    #[serde(skip)]
+    pub filter_pick: Option<bool>,
+    /// Where it was clicked: the column, and the point of the screen to
+    /// show what is there by.
+    #[serde(skip)]
+    pub filter_pick_at: Option<((i32, i32), egui::Pos2)>,
+    /// Test Export's regions being picked on the map: a click or a drag
+    /// takes whole region files rather than the tool acting.
+    #[serde(skip)]
+    pub region_pick: Option<RegionPick>,
     /// What a new shape does to the selection when no key says otherwise.
     pub select_mode: massif_core::selection::Combine,
     /// Blocks over which a new shape's edge fades, on either side.
@@ -1136,6 +1165,15 @@ impl Default for ToolState {
             pattern: PatternSettings::default(),
             gradient: Default::default(),
             show_strength: true,
+            pencil: false,
+            pencil_width: 1,
+            filter_sort: FilterSort::Used,
+            filter_recent: Vec::new(),
+            filter_used: None,
+            filter_list_open: false,
+            filter_pick: None,
+            filter_pick_at: None,
+            region_pick: None,
             select_mode: Default::default(),
             select_feather: 0,
             select_by: Default::default(),
@@ -1241,6 +1279,51 @@ impl ToolState {
             SurfaceChoice::Top => Surface::Top,
             SurfaceChoice::Bottom => Surface::Bottom,
         }
+    }
+}
+
+/// Region files of the game being picked on the map for a Test Export.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RegionPick {
+    /// Those picked, by their coordinates (`r.x.z.mca`).
+    pub regions: std::collections::BTreeSet<(i32, i32)>,
+    /// A drag under way: whether it takes (`true`) or leaves the regions it
+    /// goes over, as the first one it pressed on was not or was picked.
+    pub drag: Option<bool>,
+}
+
+impl RegionPick {
+    /// The button pressed or held over block `(x, z)`: the region there
+    /// changes as the press does, the first one deciding which way.
+    pub fn press(&mut self, x: i32, z: i32) {
+        let r = (x.div_euclid(crate::map_view::REGION_SIZE), z.div_euclid(crate::map_view::REGION_SIZE));
+        let take = *self.drag.get_or_insert(!self.regions.contains(&r));
+        if take {
+            self.regions.insert(r);
+        } else {
+            self.regions.remove(&r);
+        }
+    }
+}
+
+/// The order of the filters' list of terrains, biomes and layers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum FilterSort {
+    /// What the map holds first, then the rest, each by name.
+    #[default]
+    Used,
+    /// What the filters were set to lately first.
+    Recent,
+    /// By name.
+    Name,
+}
+
+impl ToolState {
+    /// Put `m` first among what the filters were lately set to.
+    pub fn filter_used_now(&mut self, m: massif_core::filter::Match) {
+        self.filter_recent.retain(|r| *r != m);
+        self.filter_recent.insert(0, m);
+        self.filter_recent.truncate(24);
     }
 }
 

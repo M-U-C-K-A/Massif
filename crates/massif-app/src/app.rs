@@ -263,6 +263,9 @@ enum TestArea {
     View,
     /// Blocks typed in.
     Blocks,
+    /// Whole region files (`r.x.z.mca`, 512 × 512 blocks), picked on the
+    /// map, as WorldPainter's test export picks them.
+    Regions,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -298,6 +301,15 @@ struct ExportForm {
     test_area: TestArea,
     /// The blocks of a test of blocks typed in: west, north, width, depth.
     test_blocks: [i32; 4],
+    /// The region files picked on the map, by their coordinates.
+    test_regions: std::collections::BTreeSet<(i32, i32)>,
+    /// The other parts rounded out to whole region files.
+    snap_regions: bool,
+    /// The region files the selection reaches, when the map has one.
+    selection_regions: std::collections::BTreeSet<(i32, i32)>,
+    /// Pick on the map pressed: the dialog makes way for the map until the
+    /// regions are picked.
+    pick_regions: bool,
     /// The selection's bounds, when the map has one.
     selection_rect: Option<massif_core::BlockRect>,
     /// A border just around the map: centre and size.
@@ -1161,6 +1173,12 @@ impl MassifApp {
             diorama: Default::default(),
             sculpt3d: View3d::default(),
             hover: None,
+            presence: Default::default(),
+            used: None,
+            pick_shown: None,
+            region_form: None,
+            finding: None,
+            inspected: None,
             map_center: None,
             active_map: None,
             jobs: Vec::new(),
@@ -3279,6 +3297,10 @@ impl MassifApp {
             testing: false,
             test_area: if self.doc.selection().is_some() { TestArea::Selection } else { TestArea::View },
             test_blocks: [centre.0 - 192, centre.1 - 192, 384, 384],
+            test_regions: Default::default(),
+            snap_regions: false,
+            pick_regions: false,
+            selection_regions: self.doc.selection().map(|s| s.positions().map(|p| (p.x.div_euclid(4), p.z.div_euclid(4))).collect()).unwrap_or_default(),
             selection_rect: self.doc.selection().and_then(|s| s.bounds()),
             fit: self.doc.dimension().bounds().map(|(lo, hi)| {
                 let (x0, z0) = (lo.x as f64 * 128.0, lo.z as f64 * 128.0);
@@ -6342,6 +6364,14 @@ impl MassifApp {
                 if response.should_close() {
                     keep = false;
                 }
+                if form.pick_regions {
+                    // The map takes the clicks until the regions are picked.
+                    form.pick_regions = false;
+                    self.tools.region_pick = Some(crate::tools::RegionPick { regions: form.test_regions.clone(), drag: None });
+                    self.region_form = Some(form);
+                    self.layout.switch_side(false);
+                    return;
+                }
                 if let Some(test) = start {
                     let mut options = ExportOptions {
                         level_name: Some(form.name.trim().to_owned()),
@@ -6378,11 +6408,24 @@ impl MassifApp {
                         let rect = form.test_rect();
                         options.area = Some((TilePos::containing(rect.x0, rect.z0), TilePos::containing(rect.x1 - 1, rect.z1 - 1)));
                         options.selection_only = form.test_area == TestArea::Selection && form.selection_rect.is_some();
+                        // Whole region files: those listed, and all of them.
+                        if form.whole_regions() {
+                            options.regions = Some(form.test_region_files());
+                            options.area = None;
+                            options.selection_only = false;
+                        }
                         options.overwrite = false;
                         options.level_name = Some(tr!("{trim} (test)", trim = form.name.trim()));
                         dir = massif_anvil::unique_dir(&form.parent, &format!("{} test", form.name.trim()));
                         // Spawn in the middle of what is exported.
                         let (cx, cz) = ((rect.x0 + rect.x1) / 2, (rect.z0 + rect.z1) / 2);
+                        let (cx, cz) = if form.whole_regions() {
+                            // In the middle of the region file nearest the middle.
+                            let half = crate::map_view::REGION_SIZE / 2;
+                            form.test_region_files().into_iter().map(|(x, z)| (x * 2 * half + half, z * 2 * half + half)).min_by_key(|&(x, z)| ((x - cx) as i64).pow(2) + ((z - cz) as i64).pow(2)).unwrap_or((cx, cz))
+                        } else {
+                            (cx, cz)
+                        };
                         options.spawn = Some([cx, form.spawn[1].max(self.doc.world.meta.sea_level + 1), cz]);
                     }
                     if form.ores != self.doc.world.meta.ores.on {
@@ -6821,6 +6864,8 @@ impl MassifApp {
         if let Some(msg) = self.feedback.take() {
             self.say(&ctx, msg, false, None);
         }
+        self.filter_pick_ui(&ctx);
+        self.region_pick_ui(&ctx);
         // A flood beyond a hollow to ask about.
         if self.dialog.is_none()
             && let Some(ask) = self.tools.flood_ask.take()
@@ -7381,10 +7426,44 @@ fn export_general(ui: &mut Ui, form: &mut ExportForm) {
     });
 }
 
+/// The region file of the game a block is written to.
+fn region_of(x: i32, z: i32) -> (i32, i32) {
+    (x.div_euclid(crate::map_view::REGION_SIZE), z.div_euclid(crate::map_view::REGION_SIZE))
+}
+
+/// The region files the blocks of `r` reach.
+fn regions_of(r: massif_core::BlockRect) -> std::collections::BTreeSet<(i32, i32)> {
+    let ((x0, z0), (x1, z1)) = (region_of(r.x0, r.z0), region_of(r.x1 - 1, r.z1 - 1));
+    (z0..=z1).flat_map(|z| (x0..=x1).map(move |x| (x, z))).collect()
+}
+
 impl ExportForm {
+    /// The region files a Test Export writes to: those picked, or those
+    /// the part chosen reaches (the selection's, by its tiles).
+    fn test_region_files(&self) -> std::collections::BTreeSet<(i32, i32)> {
+        match self.test_area {
+            TestArea::Regions => self.test_regions.clone(),
+            TestArea::Selection if self.selection_rect.is_some() => self.selection_regions.clone(),
+            _ => regions_of(self.test_rect()),
+        }
+    }
+
+    /// Whether the test writes whole region files.
+    fn whole_regions(&self) -> bool {
+        self.test_area == TestArea::Regions || self.snap_regions
+    }
+
     /// The blocks a Test Export writes (the tiles of 128 blocks it reaches).
     fn test_rect(&self) -> massif_core::BlockRect {
         let (cx, cz) = self.test_centre;
+        if self.test_area == TestArea::Regions {
+            let size = crate::map_view::REGION_SIZE;
+            let x0 = self.test_regions.iter().map(|r| r.0).min().unwrap_or(0);
+            let z0 = self.test_regions.iter().map(|r| r.1).min().unwrap_or(0);
+            let x1 = self.test_regions.iter().map(|r| r.0).max().unwrap_or(0);
+            let z1 = self.test_regions.iter().map(|r| r.1).max().unwrap_or(0);
+            return massif_core::BlockRect::new(x0 * size, z0 * size, (x1 + 1) * size, (z1 + 1) * size);
+        }
         match (self.test_area, self.selection_rect) {
             (TestArea::Selection, Some(r)) => r,
             (TestArea::Blocks, _) => {
@@ -7414,6 +7493,7 @@ fn export_test_area(ui: &mut Ui, form: &mut ExportForm) -> bool {
     }
     areas.push((TestArea::View, tr!("Around the view")));
     areas.push((TestArea::Blocks, tr!("These blocks")));
+    areas.push((TestArea::Regions, tr!("Regions")));
     crate::widgets::well(ui, |ui| {
         crate::widgets::row(ui, tr!("Part of the map"), |ui| {
             let labels: Vec<&str> = areas.iter().map(|a| a.1).collect();
@@ -7437,11 +7517,43 @@ fn export_test_area(ui: &mut Ui, form: &mut ExportForm) -> bool {
                 ui.add(crate::widgets::Field::new(&mut b[2], 1..=65_536).text(tr!("width ")));
             });
         }
+        if form.test_area == TestArea::Regions {
+            crate::widgets::row(ui, tr!("Region files"), |ui| {
+                if ui.button(theme::with_icon(Icon::Grid3x3, tr!("Pick on the map…"))).clicked() {
+                    form.pick_regions = true;
+                }
+            });
+        } else {
+            crate::widgets::row(ui, tr!("Snap to regions"), |ui| {
+                crate::widgets::switch(ui, &mut form.snap_regions).on_hover_text(tr!("Round the part out to whole region files of 512 × 512 blocks, as merging maps wants them"));
+            });
+        }
     });
-    let r = form.test_rect();
-    let (t0, t1) = (TilePos::containing(r.x0, r.z0), TilePos::containing(r.x1 - 1, r.z1 - 1));
-    let tiles = (t1.x - t0.x + 1) * (t1.z - t0.z + 1);
-    ui.add(egui::Label::new(RichText::new(trn!("{w} × {d} blocks from x {x}, z {z}: the {n} tile of 128 blocks it reaches.", "{w} × {d} blocks from x {x}, z {z}: the {n} tiles of 128 blocks it reaches.", n = tiles, w = r.width(), d = r.depth(), x = r.x0, z = r.z0)).size(11.5).color(pal.weak)).wrap());
+    let files = form.test_region_files();
+    if form.whole_regions() {
+        if files.is_empty() {
+            ui.label(RichText::new(tr!("No region picked yet: Pick on the map…, then click or drag over the regions.")).size(11.5).color(pal.weak));
+        } else {
+            let r = form.test_rect();
+            ui.add(egui::Label::new(RichText::new(trn!("{n} whole region file of 512 × 512 blocks, within x {x0} … {x1}, z {z0} … {z1}:", "{n} whole region files of 512 × 512 blocks, within x {x0} … {x1}, z {z0} … {z1}:", n = files.len(), x0 = r.x0, x1 = r.x1 - 1, z0 = r.z0, z1 = r.z1 - 1)).size(11.5).color(pal.weak)).wrap());
+        }
+    } else {
+        let r = form.test_rect();
+        let (t0, t1) = (TilePos::containing(r.x0, r.z0), TilePos::containing(r.x1 - 1, r.z1 - 1));
+        let tiles = (t1.x - t0.x + 1) * (t1.z - t0.z + 1);
+        ui.add(egui::Label::new(RichText::new(trn!("{w} × {d} blocks from x {x}, z {z}: the {n} tile of 128 blocks it reaches.", "{w} × {d} blocks from x {x}, z {z}: the {n} tiles of 128 blocks it reaches.", n = tiles, w = r.width(), d = r.depth(), x = r.x0, z = r.z0)).size(11.5).color(pal.weak)).wrap());
+        if !files.is_empty() {
+            ui.label(RichText::new(trn!("In {n} region file:", "In {n} region files:", n = files.len())).size(11.5).color(pal.weak));
+        }
+    }
+    // The region files it writes, by name, as the game names them.
+    if !files.is_empty() {
+        const SHOWN: usize = 12;
+        let names: Vec<String> = files.iter().take(SHOWN).map(|&(x, z)| crate::map_view::region_name(x as i64, z as i64)).collect();
+        let more = files.len().saturating_sub(SHOWN);
+        let text = if more > 0 { format!("{}  {}", names.join("  "), tr!("and {more} more", more)) } else { names.join("  ") };
+        ui.add(egui::Label::new(RichText::new(text).monospace().size(11.0)).wrap());
+    }
     ui.add_space(10.0);
     let mut go = false;
     ui.horizontal(|ui| {
@@ -7449,7 +7561,8 @@ fn export_test_area(ui: &mut Ui, form: &mut ExportForm) -> bool {
             form.testing = false;
         }
         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-            if ui.add_enabled(!form.name.trim().is_empty(), theme::primary_button(ui, tr!("Export the test"))).clicked() {
+            let ready = !form.name.trim().is_empty() && !(form.test_area == TestArea::Regions && form.test_regions.is_empty());
+            if ui.add_enabled(ready, theme::primary_button(ui, tr!("Export the test"))).clicked() {
                 go = true;
             }
         });
@@ -7692,6 +7805,9 @@ mod reference_tests;
 #[cfg(test)]
 #[path = "diorama_tests.rs"]
 mod diorama_tests;
+#[cfg(test)]
+#[path = "jack_tools_tests.rs"]
+mod jack_tools_tests;
 
 #[cfg(test)]
 #[path = "ideas_tests.rs"]
