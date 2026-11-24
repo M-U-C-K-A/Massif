@@ -1329,7 +1329,7 @@ fn plane_of(old: u16, strength: f32, colour: u16, target: Target, mode: Mode, x:
         Target::Annotations(Some(c)) => (c.clamp(1, 15), Some(0)),
         Target::Terrain(t) => (t, None),
         Target::Biome(b) => (b, Some(0)),
-        Target::TreeSize(n) => (n.clamp(1, crate::tile::SIZE_LARGE), Some(0)),
+        Target::TreeSize(n) => (n.clamp(1, crate::tile::SIZE_MAX), Some(0)),
         Target::Cover(n) | Target::Trees(n) | Target::Understory(n) | Target::Pockets(n) => (n, Some(0)),
         _ => return old,
     };

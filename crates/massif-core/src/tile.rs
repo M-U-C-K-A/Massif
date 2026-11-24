@@ -60,6 +60,9 @@ const TAG_SLABS: u8 = 12;
 pub const SIZE_ANY: u16 = 0;
 pub const SIZE_BUSHES: u16 = 1;
 pub const SIZE_LARGE: u16 = 4;
+/// The most tree sizes a map may have (see
+/// [`crate::registry::Registry::tree_sizes`]).
+pub const SIZE_MAX: u16 = 32;
 
 /// One tile of one level.
 ///

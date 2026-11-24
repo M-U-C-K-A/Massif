@@ -571,6 +571,36 @@ pub struct Registry {
     /// is shown after these.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub palettes: Vec<String>,
+    /// The tree sizes Tree sizes paints and objects are sorted into,
+    /// numbered from 1 in the `sizes` plane of a tile: the four of every
+    /// map (Bushes, Small, Medium and Large trees), then the map's own.
+    #[serde(default = "vanilla_tree_sizes", skip_serializing_if = "is_vanilla_tree_sizes")]
+    pub tree_sizes: Vec<TreeSize>,
+}
+
+/// A size of tree: a mask Tree sizes paints, and that each object of a
+/// layer belongs to (see [`crate::objects::ObjectDef::tree_size`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TreeSize {
+    /// Its name: one of the four of every map in English (shown in the
+    /// language of the interface), or the user's own.
+    pub name: String,
+    /// Its colour over the map.
+    pub color: [u8; 3],
+    /// Removed: no longer offered; where it was painted, and for the
+    /// objects set to it, any size stands. (Its number stays taken, so that
+    /// an undo finds what it painted.)
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub removed: bool,
+}
+
+/// The four tree sizes of every map.
+pub fn vanilla_tree_sizes() -> Vec<TreeSize> {
+    [("Bushes", [214, 226, 124]), ("Small trees", [140, 196, 86]), ("Medium trees", [60, 142, 70]), ("Large trees", [22, 86, 56])].into_iter().map(|(name, color)| TreeSize { name: name.to_owned(), color, removed: false }).collect()
+}
+
+fn is_vanilla_tree_sizes(sizes: &Vec<TreeSize>) -> bool {
+    *sizes == vanilla_tree_sizes()
 }
 
 impl Registry {
@@ -606,6 +636,17 @@ impl Registry {
 
     /// The object layer numbered `n` in a tile's object plane; `None` for
     /// 0, for a number past the list, and for a removed layer.
+    /// Tree size `n` (from 1), if the map has it (and it was not removed).
+    pub fn tree_size(&self, n: u16) -> Option<&TreeSize> {
+        self.tree_sizes.get((n as usize).checked_sub(1)?).filter(|t| !t.removed)
+    }
+
+    /// Size `n` as placements take it: 0 (any) for one the map does not
+    /// have.
+    pub fn live_size(&self, n: u16) -> u16 {
+        if self.tree_size(n).is_some() { n } else { 0 }
+    }
+
     pub fn object_layer(&self, n: u16) -> Option<&crate::objects::ObjectLayerDef> {
         let def = self.object_layers.get((n as usize).checked_sub(1)?)?;
         (!def.removed).then_some(def)
@@ -691,6 +732,7 @@ impl Registry {
             pockets: Vec::new(),
             combined: Vec::new(),
             palettes: Vec::new(),
+            tree_sizes: vanilla_tree_sizes(),
             well_known: WellKnown {
                 stone: BlockId(0),
                 deepslate: BlockId(0),

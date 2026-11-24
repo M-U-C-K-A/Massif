@@ -51,12 +51,45 @@ the land the layers lie on.
 ## Masks
 
 A **mask** is a layer that other layers read. **Tree sizes** marks where
-bushes, small, medium and large trees grow; a tree layer painted over it
-takes its objects of the size marked: paint the sizes first, then one
-species brush over everything. A layer's objects are split by their height
-into the four sizes, a quarter of them each; every kind of tree of the packs
-comes in the four sizes. Masks are never exported, and neither are
-annotations.
+bushes, small, medium and large trees grow — or sizes of your own; a tree
+layer painted over it takes its objects of the size marked: paint the
+sizes first, then one species brush over everything. Masks are never
+exported, and neither are annotations.
+
+### Tree sizes
+
+Every map has four sizes, Bushes, Small, Medium and Large trees; the Tree
+sizes tool's settings add sizes of your own (Tiny, Forest, Open-grown…),
+rename them, recolour them, and remove one's own (where it was painted,
+any size stands). Each object of a layer has its size: set by hand in the
+layer's object list (**Tree size**), or **Auto**, guessed from its height
+among the layer's other objects left on Auto (the lowest quarter bushes,
+then small, medium and large trees). Where a layer has no object of the
+size marked, the nearest size it has stands.
+
+A layer can be spaced **by canopy** (new layers of imported objects
+are) or **on a grid**. On a grid, at most one object stands in each
+square of the layer's spacing, whatever its size, as WorldPainter places
+them: a spacing wide enough for broad crowns leaves narrow trees far
+apart. **By canopy**, each object has the radius of its crown: measured
+from its leaves (how far from the middle of the leaves the columns
+holding leaves reach, the farthest tenth left out, so a stray branch or
+the trunk does not count; an object without leaves is measured by all its
+blocks), or set by hand in the object list (**Canopy**). Two neighbours
+stand at least as far apart as their radii added, so that at full density
+their crowns touch without overlapping, narrow and wide trees mixed, and
+never closer than the layer's **Least gap** between trunks. The wider
+crowns are placed first and the narrow ones fill what they leave, as
+under a real canopy. Measured on a forest of narrow (radius 1–2) and wide
+(5–6) trees at full density: 61 % of the land under a crown and no
+clearing wider than 4.4 blocks, against 32 % and 10.2 blocks on a grid
+of 14. The same holds across the edges of tiles, by what is painted on
+the ground there.
+
+Each layer has a **density of each size**, a share of its density: 40 %
+bushes, 100 % large trees… By canopy, the density thins the trees that
+stand, leaving clearings rather than room for others. Crowns are circles
+for now; irregular shapes may come later.
 
 **Edit ▸ Import mask…** paints any of these from an image, as WorldPainter's
 Import mask: the annotations (each pixel's nearest of the 15 colours, or one
@@ -85,6 +118,14 @@ emptied, the biome back to automatic, and the terrain put back as Paint
 terrain's right button puts it. Its pockets go into the rock of the
 ground, whatever level is edited. A WorldPainter combined layer comes in
 as one, its layers at their factors.
+
+### Later: objects one block up
+
+Conquest Reforged's trees are made to stand one block over the ground, so
+that a layer (moss, roots, a ground cover of its own) can be painted under
+them. An object's own rules can raise it already (**Raised by** 1); a
+layer-wide setting, or a Conquest preset that raises its trees and lets a
+cover grow under them, is left for later.
 
 ## Order, visibility and lock
 
@@ -133,7 +174,7 @@ A ground cover's or a tree layer's settings open in a dialog of their own
 name and colour (a ground cover's with the opacity it shows at on the map),
 and what its kind needs — a plant layer's plants, density
 and what it does to the water (Frost, Lava), a tree layer's objects and
-their sizes, spacing, density, turn and slot (Base or Sub-canopy), a
+their sizes and canopies, spacing (by canopy or on a grid), density and density of each size, turn and slot (Base or Sub-canopy), a
 pocket layer's blocks, share of the rock, size and heights, a combined
 layer's layer of each slot and its share. A double-click renames a layer.
 Each section has its button to add one: New combined, New mix, New

@@ -1492,7 +1492,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
             Tool::Objects if understory => ops::paint_understory(&mut edit, brush, x, z, tools.object_layer, stroke.salt),
             Tool::Objects if invert => ops::erase_objects(&mut edit, brush, x, z, tools.object_layer, stroke.salt),
             Tool::Objects => ops::paint_objects(&mut edit, brush, x, z, tools.object_layer, stroke.salt),
-            Tool::TreeSize => ops::paint_tree_size(&mut edit, brush, x, z, if invert { 0 } else { tools.tree_size.clamp(1, 4) }, stroke.salt),
+            Tool::TreeSize => ops::paint_tree_size(&mut edit, brush, x, z, if invert { 0 } else { tools.tree_size.clamp(1, massif_core::tile::SIZE_MAX) }, stroke.salt),
             Tool::Pockets if invert => ops::erase_pockets(&mut edit, brush, x, z, tools.pocket_layer, stroke.salt),
             Tool::Pockets => ops::paint_pockets(&mut edit, brush, x, z, tools.pocket_layer, stroke.salt),
             Tool::Slabs => ops::paint_slabs(&mut edit, brush, x, z, if invert { 0 } else { slabs }, stroke.salt),

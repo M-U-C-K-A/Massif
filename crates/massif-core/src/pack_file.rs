@@ -221,6 +221,27 @@ pub struct PackLayer {
     /// A sub-canopy layer (see [`crate::objects::ObjectLayerDef::understory`]).
     #[serde(default, skip_serializing_if = "crate::registry::is_false")]
     pub understory: bool,
+    /// How it spaces its objects, its least distance between trunks and
+    /// the density of each tree size (see
+    /// [`crate::objects::ObjectLayerDef::spacing_mode`]).
+    #[serde(default, skip_serializing_if = "is_grid")]
+    pub spacing_mode: crate::objects::Spacing,
+    #[serde(default = "three", skip_serializing_if = "is_three")]
+    pub min_gap: u8,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub size_density: Vec<f32>,
+}
+
+fn is_grid(s: &crate::objects::Spacing) -> bool {
+    *s == crate::objects::Spacing::Grid
+}
+
+fn three() -> u8 {
+    3
+}
+
+fn is_three(n: &u8) -> bool {
+    *n == 3
 }
 
 /// An object: blocks in a box. Its blocks are in `objects/<n>.bin`.
@@ -361,6 +382,9 @@ impl Pack {
                 sink: l.sink,
                 replace: l.replace,
                 understory: l.understory,
+                spacing_mode: l.spacing_mode,
+                min_gap: l.min_gap,
+                size_density: l.size_density.clone(),
             });
         }
         content
@@ -510,6 +534,13 @@ impl Pack {
             l.spacing = l.spacing.clamp(1, 1024);
             l.density = finite(l.density, 0.0, 1.0, "a layer's density")?;
             l.sink = l.sink.clamp(-256, 256);
+            l.min_gap = l.min_gap.max(1);
+            if l.size_density.len() > crate::tile::SIZE_MAX as usize || l.size_density.iter().any(|d| !d.is_finite()) {
+                return Err(invalid(format!("object layer {:?} has densities of sizes out of range", l.name)));
+            }
+            for d in &mut l.size_density {
+                *d = d.clamp(0.0, 1.0);
+            }
         }
         for o in &mut c.objects {
             o.name = clean_text(&o.name, 128, false);
@@ -689,6 +720,8 @@ impl Pack {
                         colors: o.colors.clone(),
                         tree_size: 0,
                         rules: None,
+                        canopy: 0.0,
+                        measured: Default::default(),
                     });
                     let k = reg.objects.len() as u32 - 1;
                     added.push((choice.object, k));
@@ -715,6 +748,9 @@ impl Pack {
             locked: false,
             order: 0,
             palette: String::new(),
+            spacing_mode: l.spacing_mode,
+            min_gap: l.min_gap,
+            size_density: l.size_density.clone(),
         })
     }
 
@@ -921,7 +957,7 @@ fn same_terrain(a: &PackTerrain, b: &PackTerrain) -> bool {
 /// Whether a map's layer stands the very objects of a pack's layer, the
 /// same way, whatever its name and colours.
 fn layer_fits(reg: &Registry, def: &crate::objects::ObjectLayerDef, l: &PackLayer, objects: &[PackObject]) -> bool {
-    (def.spacing, def.density, def.rotate, def.mirror, def.soil_only, def.underwater, def.sink, def.replace, def.understory) == (l.spacing, l.density, l.rotate, l.mirror, l.soil_only, l.underwater, l.sink, l.replace, l.understory)
+    (def.spacing, def.density, def.rotate, def.mirror, def.soil_only, def.underwater, def.sink, def.replace, def.understory, def.spacing_mode, def.min_gap, &def.size_density) == (l.spacing, l.density, l.rotate, l.mirror, l.soil_only, l.underwater, l.sink, l.replace, l.understory, l.spacing_mode, l.min_gap, &l.size_density)
         && def.objects.len() == l.objects.len()
         && def.objects.iter().zip(&l.objects).all(|(&(k, weight), choice)| {
             let (Some(p), q) = (reg.objects.get(k as usize), &objects[choice.object as usize]) else { return false };

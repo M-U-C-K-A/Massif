@@ -10,7 +10,7 @@
 //! map, the 3D view and the export all ask [`tile_placements`], so they
 //! agree.
 
-use crate::compose::{Materializer, TileStack, hash2};
+use crate::compose::{Materializer, Span, TileStack, hash2};
 use crate::coords::{BlockRect, TilePos, local_index};
 use crate::registry::{Registry, is_soil};
 use serde::{Deserialize, Serialize};
@@ -72,6 +72,28 @@ pub struct ObjectDef {
     /// object attributes. `None`: as its layer says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rules: Option<Box<ObjectRules>>,
+    /// The radius of its canopy in blocks, set by hand; 0 to have it
+    /// measured from its leaves (see [`ObjectDef::canopy_radius`]).
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub canopy: f32,
+    /// Its canopy's radius as measured, once.
+    #[serde(skip)]
+    pub measured: Measured,
+}
+
+/// A value measured from an object's blocks once, then kept (never part
+/// of what the object is: two objects are equal whatever was measured).
+#[derive(Debug, Clone, Default)]
+pub struct Measured(std::sync::OnceLock<f32>);
+
+impl PartialEq for Measured {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+fn is_zero_f32(n: &f32) -> bool {
+    *n == 0.0
 }
 
 fn is_zero_u8(n: &u8) -> bool {
@@ -325,6 +347,8 @@ impl ObjectDef {
             colors: Vec::new(),
             tree_size: 0,
             rules: None,
+            canopy: 0.0,
+            measured: Measured::default(),
         };
         def.normalise();
         def.anchor = def.find_anchor();
@@ -423,6 +447,54 @@ impl ObjectDef {
         def.source = self.source.clone();
         def.rules = self.rules.clone();
         def
+    }
+
+    /// The radius of its canopy, in blocks: set by hand, or measured (see
+    /// [`ObjectDef::measure_canopy`]).
+    pub fn canopy_radius(&self) -> f32 {
+        if self.canopy > 0.0 { self.canopy } else { self.measured_canopy() }
+    }
+
+    /// [`ObjectDef::measure_canopy`], measured once.
+    pub fn measured_canopy(&self) -> f32 {
+        *self.measured.0.get_or_init(|| self.measure_canopy())
+    }
+
+    /// The radius of its canopy as its blocks say: how far from the middle
+    /// of its leaves the columns holding leaves reach, the farthest tenth
+    /// of them left out (a branch or a leaf sticking out); its trunk is not
+    /// leaves. An object without leaves (a rock, a dead tree) is measured by
+    /// all its blocks. Half a block at least.
+    pub fn measure_canopy(&self) -> f32 {
+        let [w, h, l] = self.size.map(|s| s as usize);
+        let leafy: Vec<bool> = self.palette.iter().map(|s| s.split('[').next().unwrap_or(s).ends_with("leaves")).collect();
+        let columns = |leaves_only: bool| -> Vec<(f32, f32)> {
+            let mut out = Vec::new();
+            for z in 0..l {
+                for x in 0..w {
+                    if (0..h).any(|y| {
+                        let k = self.at(x, y, z) as usize;
+                        k != 0 && (!leaves_only || leafy[k])
+                    }) {
+                        out.push((x as f32 + 0.5, z as f32 + 0.5));
+                    }
+                }
+            }
+            out
+        };
+        let mut cols = columns(true);
+        if cols.is_empty() {
+            cols = columns(false);
+        }
+        if cols.is_empty() {
+            return 0.5;
+        }
+        let n = cols.len() as f32;
+        let (cx, cz) = (cols.iter().map(|c| c.0).sum::<f32>() / n, cols.iter().map(|c| c.1).sum::<f32>() / n);
+        let mut d: Vec<f32> = cols.iter().map(|c| ((c.0 - cx).powi(2) + (c.1 - cz).powi(2)).sqrt()).collect();
+        d.sort_by(f32::total_cmp);
+        let k = ((d.len() as f32 * 0.9).ceil() as usize).clamp(1, d.len()) - 1;
+        (d[k] + 0.5).max(0.5)
     }
 
     /// The object as its own rules place it, when they change its blocks:
@@ -686,6 +758,53 @@ pub struct ObjectLayerDef {
     /// stays in its section).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub palette: String,
+    /// How its objects are spaced: on a grid of its spacing, or by their
+    /// canopies. Layers of before canopies were measured keep the grid.
+    #[serde(default, skip_serializing_if = "Spacing::is_grid")]
+    pub spacing_mode: Spacing,
+    /// By canopies: the least distance between two trunks, in blocks.
+    #[serde(default = "default_gap", skip_serializing_if = "is_default_gap")]
+    pub min_gap: u8,
+    /// The density of each tree size (by size − 1), as a share of the
+    /// layer's: 1 for a size not listed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub size_density: Vec<f32>,
+}
+
+/// How an object layer spaces its objects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum Spacing {
+    /// At most one in each square of the layer's spacing: the same
+    /// distance for every object, as WorldPainter places them.
+    #[default]
+    Grid,
+    /// By their canopies: two neighbours stand at least as far apart as
+    /// their canopies' radii added (their crowns touch, at full density,
+    /// and do not overlap), and never closer than the layer's least
+    /// distance between trunks.
+    Canopy,
+}
+
+impl Spacing {
+    fn is_grid(&self) -> bool {
+        *self == Spacing::Grid
+    }
+}
+
+fn default_gap() -> u8 {
+    3
+}
+
+fn is_default_gap(n: &u8) -> bool {
+    *n == 3
+}
+
+impl ObjectLayerDef {
+    /// The density of tree size `size` (from 1; 0: any), as a share of the
+    /// layer's.
+    pub fn size_share(&self, size: u16) -> f32 {
+        (size as usize).checked_sub(1).and_then(|k| self.size_density.get(k)).copied().unwrap_or(1.0).clamp(0.0, 1.0)
+    }
 }
 
 impl ObjectLayerDef {
@@ -710,20 +829,28 @@ impl ObjectLayerDef {
             locked: false,
             order: 0,
             palette: String::new(),
+            spacing_mode: Spacing::Grid,
+            min_gap: default_gap(),
+            size_density: Vec::new(),
         }
     }
 
     /// The size of each of its objects (in the order of
-    /// [`ObjectLayerDef::objects`]), from 1 (bushes) to 4 (large trees): a
-    /// quarter of them each, by their height, the lowest first.
+    /// [`ObjectLayerDef::objects`]), a size of
+    /// [`Registry::tree_sizes`] from 1: the size set on the object by
+    /// hand, else a guess from its height among the others guessed, the
+    /// lowest a quarter bushes, then small, medium and large trees.
     pub fn size_classes(&self, reg: &Registry) -> Vec<u8> {
-        let height = |k: usize| self.objects.get(k).and_then(|o| reg.objects.get(o.0 as usize)).map_or(0, |d| d.size[1]);
-        let mut order: Vec<usize> = (0..self.objects.len()).collect();
+        let def = |k: usize| self.objects.get(k).and_then(|o| reg.objects.get(o.0 as usize));
+        let height = |k: usize| def(k).map_or(0, |d| d.size[1]);
+        let set = |k: usize| def(k).map_or(0, |d| reg.live_size(d.tree_size as u16) as u8);
+        let mut order: Vec<usize> = (0..self.objects.len()).filter(|&k| set(k) == 0).collect();
         order.sort_by_key(|&k| (height(k), k));
         let n = order.len().max(1);
-        let mut classes = vec![1u8; self.objects.len()];
+        let most = reg.tree_sizes.len().clamp(1, 4);
+        let mut classes: Vec<u8> = (0..self.objects.len()).map(set).collect();
         for (rank, k) in order.into_iter().enumerate() {
-            classes[k] = 1 + (rank * 4 / n) as u8;
+            classes[k] = (1 + rank * 4 / n).min(most) as u8;
         }
         classes
     }
@@ -759,13 +886,21 @@ impl ObjectLayerDef {
     /// square `(i, j)` of its grid, before the land there is asked: the
     /// spot, the object, its turn. `None` when the square stays empty.
     pub fn candidate(&self, seed: u64, number: u16, i: i32, j: i32) -> Option<Candidate> {
+        self.candidate_in(seed, number, 0, self.spacing.max(1) as i32, self.density, i, j)
+    }
+
+    /// [`ObjectLayerDef::candidate`] in a grid of its own (`size`, 0 for
+    /// the layer's), of squares `spacing` blocks wide, standing in a share
+    /// `density` of them.
+    #[allow(clippy::too_many_arguments)]
+    pub fn candidate_in(&self, seed: u64, number: u16, size: u16, spacing: i32, density: f32, i: i32, j: i32) -> Option<Candidate> {
         if self.removed {
             return None;
         }
-        let s = self.spacing.max(1) as i32;
-        let salt = seed ^ (number as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ 0x6f62_6a65_6374;
+        let s = spacing.max(1);
+        let salt = seed ^ (number as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ 0x6f62_6a65_6374 ^ (size as u64).wrapping_mul(0xa076_1d64_78bd_642f);
         let h = |k: u64| hash2(i, j, salt.wrapping_add(k.wrapping_mul(0x5851_f42d_4c95_7f2d)));
-        let density = self.density.clamp(0.0, 1.0);
+        let density = density.clamp(0.0, 1.0);
         if density < 1.0 && h(0) as f32 >= density * u32::MAX as f32 {
             return None;
         }
@@ -785,6 +920,8 @@ impl ObjectLayerDef {
             spin: (h(4) % 4) as u8,
             flip: h(5) & 1 == 1,
             lift: h(6),
+            keep: h(7),
+            rank: h(8),
         })
     }
 }
@@ -806,6 +943,10 @@ pub struct Candidate {
     pub spin: u8,
     pub flip: bool,
     pub lift: u32,
+    /// Its draw against the density of its tree size.
+    pub keep: u32,
+    /// Spaced by canopies, its rank: of two too close, the higher stands.
+    pub rank: u32,
 }
 
 /// An object standing on the map.
@@ -1006,87 +1147,221 @@ pub fn tile_placements(reg: &Registry, mat: &Materializer, seed: u64, lava: bool
     for (under, n) in painted {
         let Some(layer) = reg.object_layer(n) else { continue };
         let classes = layer.size_classes(reg);
-        let s = layer.spacing.max(1) as i32;
-        let (i0, i1) = (ox.div_euclid(s), (ox + 127).div_euclid(s));
-        let (j0, j1) = (oz.div_euclid(s), (oz + 127).div_euclid(s));
-        for j in j0..=j1 {
-            for i in i0..=i1 {
-                let Some(c) = layer.candidate(seed, n, i, j) else { continue };
-                if TilePos::containing(c.x, c.z) != pos || reg.objects.get(c.object as usize).is_none() {
-                    continue;
-                }
-                let cell = local_index(c.x, c.z);
-                stack.spans(cell, &mut spans);
-                let Some(top) = spans.last().copied() else { continue };
-                let here = if under { stack.surface_understory(cell, &top) } else { stack.surface_objects(cell, &top) };
-                if here != n {
-                    continue;
-                }
-                // The size of tree asked for here, if any.
-                let object = match stack.surface_size(cell, &top) {
-                    0 => c.object,
-                    size => match layer.pick(c.pick, size, &classes) {
-                        Some(o) if reg.objects.get(o as usize).is_some() => o,
-                        _ => continue,
-                    },
-                };
-                stack.fluids(cell, &spans, &mut fluids);
-                let liquid = fluids.iter().find(|f| f.0 == top.y1).copied();
-                let wet = liquid.is_some();
-                let Some(rules) = reg.objects[object as usize].rules.as_deref() else {
-                    if wet != layer.underwater || (wet && lava) {
-                        continue;
+        let class_of = |object: u32| layer.objects.iter().position(|o| o.0 == object).and_then(|row| classes.get(row)).map_or(0, |&c| c as u16);
+        // What is painted on the top of a column of the tile: its layer
+        // there, and the size asked.
+        let top_of = |x: i32, z: i32, spans: &mut Vec<Span>| {
+            let cell = local_index(x, z);
+            stack.spans(cell, spans);
+            let top = spans.last().copied()?;
+            let here = if under { stack.surface_understory(cell, &top) } else { stack.surface_objects(cell, &top) };
+            (here == n).then(|| (top, reg.live_size(stack.surface_size(cell, &top))))
+        };
+        // The object of a spot, and its size: of the size asked there, or
+        // any.
+        let choose = |c: &Candidate, asked: u16, thin: bool| -> Option<(u32, u16)> {
+            let (object, size) = match asked {
+                0 => (c.object, class_of(c.object)),
+                size => (layer.pick(c.pick, size, &classes)?, size),
+            };
+            reg.objects.get(object as usize)?;
+            // The density of its size.
+            (!thin || layer.size_density.is_empty() || (c.keep as f32) < layer.size_share(size) * u32::MAX as f32).then_some((object, size))
+        };
+        let spots: Vec<(Candidate, u32, u16)> = match layer.spacing_mode {
+            Spacing::Grid => {
+                let mut spots = Vec::new();
+                let s = layer.spacing.max(1) as i32;
+                let (i0, i1) = (ox.div_euclid(s), (ox + 127).div_euclid(s));
+                let (j0, j1) = (oz.div_euclid(s), (oz + 127).div_euclid(s));
+                for j in j0..=j1 {
+                    for i in i0..=i1 {
+                        let Some(c) = layer.candidate(seed, n, i, j) else { continue };
+                        if TilePos::containing(c.x, c.z) != pos || reg.objects.get(c.object as usize).is_none() {
+                            continue;
+                        }
+                        let Some((_, asked)) = top_of(c.x, c.z, &mut spans) else { continue };
+                        if let Some((object, size)) = choose(&c, asked, true) {
+                            spots.push((c, object, size));
+                        }
                     }
-                    if layer.soil_only && !is_soil(&reg.block(mat.block(&top, c.x, top.y1 - 1, c.z, wet)).state) {
-                        continue;
-                    }
-                    out.push(Placement {
-                        layer: n,
-                        object,
-                        x: c.x,
-                        y: top.y1 - layer.sink as i32,
-                        z: c.z,
-                        turn: c.turn,
-                        mirror: c.mirror,
-                        under,
-                    });
-                    continue;
-                };
-                // Its own rules: on the floor of the water or lava, or on
-                // its top, if it may.
-                let kind = liquid.map(|_| lava);
-                let floor = !wet || rules.may_stand(kind, true);
-                if !rules.may_stand(kind, floor) {
+                }
+                spots
+            }
+            Spacing::Canopy => canopy_spots(reg, layer, seed, n, under, stack, pos, &choose),
+        };
+        for (c, object, _) in spots {
+            let cell = local_index(c.x, c.z);
+            stack.spans(cell, &mut spans);
+            let Some(top) = spans.last().copied() else { continue };
+            stack.fluids(cell, &spans, &mut fluids);
+            let liquid = fluids.iter().find(|f| f.0 == top.y1).copied();
+            let wet = liquid.is_some();
+            let Some(rules) = reg.objects[object as usize].rules.as_deref() else {
+                if wet != layer.underwater || (wet && lava) {
                     continue;
                 }
-                if floor && layer.soil_only && !is_soil(&reg.block(mat.block(&top, c.x, top.y1 - 1, c.z, wet)).state) {
-                    continue;
-                }
-                let ground = if floor { top.y1 } else { liquid.map_or(top.y1, |f| f.1) };
-                let v = rules.variation as i32;
-                let lift = if v > 0 { (c.lift % (v as u32 + 1)) as i32 - (v + 1) / 2 } else { 0 };
-                let y = if rules.fixed_height { rules.offset as i32 + lift } else { ground + rules.offset as i32 + lift - layer.sink as i32 };
-                // Floating over the ground only when it may stand on air.
-                if rules.fixed_height && y > ground && !rules.on_air {
+                if layer.soil_only && !is_soil(&reg.block(mat.block(&top, c.x, top.y1 - 1, c.z, wet)).state) {
                     continue;
                 }
                 out.push(Placement {
                     layer: n,
                     object,
                     x: c.x,
-                    y,
+                    y: top.y1 - layer.sink as i32,
                     z: c.z,
-                    turn: match rules.turning {
-                        Turning::Random => c.spin,
-                        Turning::Fixed(t) => t & 3,
-                    },
-                    mirror: match rules.mirroring {
-                        Mirroring::Random => c.flip,
-                        Mirroring::Never => false,
-                        Mirroring::Always => true,
-                    },
+                    turn: c.turn,
+                    mirror: c.mirror,
                     under,
                 });
+                continue;
+            };
+            // Its own rules: on the floor of the water or lava, or on its
+            // top, if it may.
+            let kind = liquid.map(|_| lava);
+            let floor = !wet || rules.may_stand(kind, true);
+            if !rules.may_stand(kind, floor) {
+                continue;
+            }
+            if floor && layer.soil_only && !is_soil(&reg.block(mat.block(&top, c.x, top.y1 - 1, c.z, wet)).state) {
+                continue;
+            }
+            let ground = if floor { top.y1 } else { liquid.map_or(top.y1, |f| f.1) };
+            let v = rules.variation as i32;
+            let lift = if v > 0 { (c.lift % (v as u32 + 1)) as i32 - (v + 1) / 2 } else { 0 };
+            let y = if rules.fixed_height { rules.offset as i32 + lift } else { ground + rules.offset as i32 + lift - layer.sink as i32 };
+            // Floating over the ground only when it may stand on air.
+            if rules.fixed_height && y > ground && !rules.on_air {
+                continue;
+            }
+            out.push(Placement {
+                layer: n,
+                object,
+                x: c.x,
+                y,
+                z: c.z,
+                turn: match rules.turning {
+                    Turning::Random => c.spin,
+                    Turning::Fixed(t) => t & 3,
+                },
+                mirror: match rules.mirroring {
+                    Mirroring::Random => c.flip,
+                    Mirroring::Never => false,
+                    Mirroring::Always => true,
+                },
+                under,
+            });
+        }
+    }
+    out
+}
+
+/// A spot of a layer spaced by canopies: where, the object, its tree size,
+/// its canopy's radius.
+type Spot = (Candidate, u32, u16, f32);
+
+/// The object of a spot and its tree size, given the size asked there and
+/// whether a size's density thins it (see [`tile_placements`]).
+type Choose<'a> = &'a dyn Fn(&Candidate, u16, bool) -> Option<(u32, u16)>;
+
+/// The spots of layer `n` (`layer`) spaced by their canopies standing with
+/// their anchor in tile `pos`: its whole spacing model in one place.
+///
+/// Candidates lie on a fine grid (a square of the layer's least distance
+/// between trunks), each with a rank, the wider crowns ranked first. A
+/// candidate stands unless one of a higher rank that stands itself is too
+/// close: closer than the two canopies' radii added, or than the least
+/// distance between trunks.
+/// That decides the same on every tile (a candidate's neighbours across
+/// a tile's edge are read from what is painted on the ground there), and
+/// at full density fills the land with crowns that touch without
+/// overlapping, narrow and wide ones mixed. The layer's density, and each
+/// size's, then thin the trees that stand.
+#[allow(clippy::too_many_arguments)]
+fn canopy_spots(reg: &Registry, layer: &ObjectLayerDef, seed: u64, n: u16, under: bool, stack: &TileStack, pos: TilePos, choose: Choose) -> Vec<(Candidate, u32, u16)> {
+    use std::collections::HashMap;
+    const SALT: u16 = 0xca;
+    let gap = layer.min_gap.max(1) as f32;
+    let g = (gap.ceil() as i32).max(2);
+    let r_max = layer.objects.iter().filter_map(|o| reg.objects.get(o.0 as usize)).map(ObjectDef::canopy_radius).fold(0.0f32, f32::max);
+    // What would stand in cell `(i, j)`, its neighbours aside.
+    let look = |i: i32, j: i32| -> Option<Spot> {
+        let c = layer.candidate_in(seed, n, SALT, g, 1.0, i, j)?;
+        let (objects, understory, asked) = if TilePos::containing(c.x, c.z) == pos {
+            let cell = local_index(c.x, c.z);
+            let mut spans = Vec::new();
+            stack.spans(cell, &mut spans);
+            let top = spans.last().copied()?;
+            (stack.surface_objects(cell, &top), stack.surface_understory(cell, &top), stack.surface_size(cell, &top))
+        } else {
+            stack.ground_layers_at(c.x, c.z)
+        };
+        if (if under { understory } else { objects }) != n {
+            return None;
+        }
+        let (object, size) = choose(&c, reg.live_size(asked), false)?;
+        Some((c, object, size, reg.objects[object as usize].canopy_radius()))
+    };
+    struct Model<'a> {
+        look: &'a dyn Fn(i32, i32) -> Option<Spot>,
+        seen: HashMap<(i32, i32), Option<Spot>>,
+        decided: HashMap<(i32, i32), bool>,
+        g: i32,
+        gap: f32,
+        r_max: f32,
+    }
+    impl Model<'_> {
+        fn spot(&mut self, at: (i32, i32)) -> Option<Spot> {
+            let look = self.look;
+            *self.seen.entry(at).or_insert_with(|| look(at.0, at.1))
+        }
+
+        /// Whether the candidate of cell `at` stands.
+        fn stands(&mut self, at: (i32, i32)) -> bool {
+            if let Some(&d) = self.decided.get(&at) {
+                return d;
+            }
+            let Some(a) = self.spot(at) else {
+                self.decided.insert(at, false);
+                return false;
+            };
+            let reach = ((a.3 + self.r_max).max(self.gap) / self.g as f32).ceil() as i32 + 1;
+            // The wider crowns first, then by rank: the narrow trees fill
+            // what the wide ones leave, as under a real canopy.
+            let order = |s: &Spot, at: (i32, i32)| ((s.3 * 4.0) as u32, s.0.rank, at);
+            let mine = order(&a, at);
+            let mut free = true;
+            'near: for dj in -reach..=reach {
+                for di in -reach..=reach {
+                    let at_b = (at.0 + di, at.1 + dj);
+                    let Some(b) = (if (di, dj) == (0, 0) { None } else { self.spot(at_b) }) else { continue };
+                    if order(&b, at_b) <= mine {
+                        continue;
+                    }
+                    let need = (a.3 + b.3).max(self.gap);
+                    let (dx, dz) = ((b.0.x - a.0.x) as f32, (b.0.z - a.0.z) as f32);
+                    if dx * dx + dz * dz < need * need && self.stands(at_b) {
+                        free = false;
+                        break 'near;
+                    }
+                }
+            }
+            self.decided.insert(at, free);
+            free
+        }
+    }
+    let mut model = Model { look: &look, seen: HashMap::new(), decided: HashMap::new(), g, gap, r_max };
+    let (ox, oz) = pos.origin();
+    let mut out = Vec::new();
+    for j in oz.div_euclid(g)..=(oz + 127).div_euclid(g) {
+        for i in ox.div_euclid(g)..=(ox + 127).div_euclid(g) {
+            let Some(a) = model.spot((i, j)) else { continue };
+            // The density thins the trees that stand, leaving clearings
+            // (rather than leaving room to others: at full density the
+            // crowns would fill the land whatever it is).
+            let kept = layer.density.clamp(0.0, 1.0) * layer.size_share(a.2);
+            if TilePos::containing(a.0.x, a.0.z) == pos && model.stands((i, j)) && (kept >= 1.0 || (a.0.keep as f32) < kept * u32::MAX as f32) {
+                out.push((a.0, a.1, a.2));
             }
         }
     }
@@ -1368,6 +1643,147 @@ mod tests {
         assert_eq!(classes, [1, 3]);
         assert_eq!(few.pick(5, 4, &classes), Some(0), "large: the 9 high");
         assert_eq!(few.pick(5, 2, &classes), Some(1), "small: as near to the bush as to the medium, the smaller");
+    }
+
+    /// A size set by hand stands in for the guess from the height; the
+    /// others are guessed among themselves.
+    #[test]
+    fn sizes_set_by_hand() {
+        let mut reg = Registry::vanilla();
+        for h in [9u16, 2, 7, 4] {
+            reg.objects.push(pole(&format!("{h} high"), h));
+        }
+        reg.objects[0].tree_size = 1;
+        reg.tree_sizes.push(crate::registry::TreeSize { name: "Forest".into(), color: [1, 2, 3], removed: false });
+        reg.objects[2].tree_size = 5;
+        let layer = ObjectLayerDef::new("Poles", &[0, 1, 2, 3], &reg);
+        let classes = layer.size_classes(&reg);
+        assert_eq!(classes[0], 1, "the 9 high, a bush by hand");
+        assert_eq!(classes[2], 5, "a size of the map's own");
+        assert_eq!((classes[1], classes[3]), (1, 3), "the two others guessed between themselves: the lower half, then the upper");
+        assert_eq!(layer.pick(17, 5, &classes), Some(2));
+    }
+
+    /// A tree of a round crown `r` blocks across from its trunk: a trunk
+    /// three high, a disc of leaves on it.
+    fn crowned(name: &str, r: i32) -> ObjectDef {
+        let side = (2 * r + 1) as usize;
+        let mut blocks = vec![0u16; side * 4 * side];
+        let at = |x: usize, y: usize, z: usize| x + z * side + y * side * side;
+        for y in 0..3 {
+            blocks[at(r as usize, y, r as usize)] = 1;
+        }
+        for z in 0..side {
+            for x in 0..side {
+                let (dx, dz) = (x as i32 - r, z as i32 - r);
+                if dx * dx + dz * dz <= r * r {
+                    blocks[at(x, 3, z)] = 2;
+                }
+            }
+        }
+        ObjectDef::new(name, [side as u16, 4, side as u16], vec!["minecraft:air".into(), "minecraft:oak_log[axis=y]".into(), "minecraft:oak_leaves".into()], blocks)
+    }
+
+    /// A canopy is measured from its leaves, not its trunk, a stray leaf
+    /// left out; by hand, it is as set.
+    #[test]
+    fn canopies_are_measured_from_the_leaves() {
+        let mut wide = crowned("Wide", 5);
+        assert!((wide.canopy_radius() - 5.0).abs() < 0.8, "{}", wide.canopy_radius());
+        let narrow = crowned("Narrow", 1);
+        assert!(narrow.canopy_radius() < 2.0, "{}", narrow.canopy_radius());
+        // A stray leaf far out on a branch hardly counts.
+        let mut stray = crowned("Stray", 5);
+        let side = 11;
+        stray.blocks[side - 1] = 2;
+        stray.measured = Measured::default();
+        assert!(stray.canopy_radius() < wide.canopy_radius() + 0.6);
+        wide.canopy = 7.5;
+        assert_eq!(wide.canopy_radius(), 7.5);
+        assert!((pole("Rock", 3).canopy_radius() - 0.5).abs() < 1e-3, "no leaves: by its blocks");
+    }
+
+    /// A forest of narrow and wide trees mixed, spaced by their canopies at
+    /// full density: no two crowns overlap, across the edges of tiles too,
+    /// and they fill the land with no big gaps — measured as the share of
+    /// the land under a crown, and the widest clearing. On a grid wide
+    /// enough for the wide crowns, as before, the narrow trees stand far
+    /// apart and the land is barer. A size's density thins its trees.
+    #[test]
+    fn trees_are_spaced_by_their_canopies() {
+        let mut w = generate(&GenParams { tiles_x: 4, tiles_z: 2, seed: 5, ..GenParams::default() });
+        for (name, r) in [("Narrow", 1), ("Slim", 2), ("Wide", 5), ("Broad", 6)] {
+            let mut t = crowned(name, r);
+            t.tree_size = if r < 3 { 2 } else { 4 };
+            w.registry.objects.push(t);
+        }
+        let mut forest = ObjectLayerDef::new("Forest", &[0, 1, 2, 3], &w.registry);
+        (forest.soil_only, forest.density, forest.spacing, forest.spacing_mode) = (false, 1.0, 14, Spacing::Canopy);
+        let n = w.registry.add_object_layer(forest);
+        let flat = crate::Brush { radius: 200.0, shape: crate::BrushShape::Square, profile: crate::Profile::Constant, strength: 1.0, ..crate::Brush::default() };
+        let mut h = History::default();
+        h.begin("forest", 0);
+        {
+            let mut e = h.edit(&mut w, 0);
+            crate::ops::set_height(&mut e, &flat, 0.0, 0.0, 80.0, crate::ops::Surface::Top);
+            crate::ops::paint_objects(&mut e, &flat, 0.0, 0.0, n, 1);
+        }
+        h.commit();
+        let tiles: Vec<TilePos> = (-2..2).flat_map(|x| (-1..1).map(move |z| TilePos::new(x, z))).collect();
+        let placements = |w: &crate::world::World| {
+            let dim = &w.dims[0];
+            let mat = Materializer::new(&w.registry, w.meta.seed, dim.min_y);
+            let mut all = Vec::new();
+            for &pos in &tiles {
+                let stack = TileStack::new(dim, pos, true).unwrap();
+                let here = tile_placements(&w.registry, &mat, 1, false, &stack, pos);
+                assert_eq!(here, tile_placements(&w.registry, &mat, 1, false, &stack, pos), "the same every time");
+                all.extend(here);
+            }
+            all
+        };
+        // The share of the inner land under a crown, and the widest
+        // clearing (the farthest a column is from every crown).
+        let measure = |w: &crate::world::World, all: &[Placement]| -> (f64, f64) {
+            let radius = |p: &Placement| w.registry.objects[p.object as usize].canopy_radius() as f64;
+            let (mut covered, mut total, mut widest) = (0usize, 0usize, 0f64);
+            for z in -110..110 {
+                for x in (-190..190).step_by(2) {
+                    total += 1;
+                    let clear = all.iter().map(|p| (((p.x - x) as f64).powi(2) + ((p.z - z) as f64).powi(2)).sqrt() - radius(p)).fold(f64::MAX, f64::min);
+                    if clear <= 0.0 {
+                        covered += 1;
+                    }
+                    widest = widest.max(clear);
+                }
+            }
+            (covered as f64 / total as f64, widest)
+        };
+        let all = placements(&w);
+        let r = |p: &Placement| w.registry.objects[p.object as usize].canopy_radius();
+        for (k, a) in all.iter().enumerate() {
+            for b in &all[k + 1..] {
+                let d = (((a.x - b.x).pow(2) + (a.z - b.z).pow(2)) as f32).sqrt();
+                assert!(d >= (r(a) + r(b)).max(3.0) - 1e-3, "{a:?} and {b:?} {d} apart, crowns {} and {}", r(a), r(b));
+            }
+        }
+        let narrow = all.iter().filter(|p| p.object < 2).count();
+        assert!(narrow > 200 && all.len() - narrow > 50, "both kinds: {narrow} narrow, {} wide", all.len() - narrow);
+        let (cover, clearing) = measure(&w, &all);
+        // The grid of 14 the wide crowns need, as before.
+        w.registry.object_layers[0].spacing_mode = Spacing::Grid;
+        let grid = placements(&w);
+        let (grid_cover, grid_clearing) = measure(&w, &grid);
+        println!("by canopies: {} trees, {:.0}% of the land under a crown, widest clearing {clearing:.1}; on a grid of 14: {} trees, {:.0}%, {grid_clearing:.1}", all.len(), cover * 100.0, grid.len(), grid_cover * 100.0);
+        assert!(cover > 0.58, "crowns touch: {:.0}% covered", cover * 100.0);
+        assert!(clearing < 5.0, "no big gaps (narrower than a wide crown): widest clearing {clearing:.1}");
+        assert!(cover > grid_cover + 0.2 && all.len() > 2 * grid.len());
+        // Large trees at a quarter of the density: fewer of them.
+        w.registry.object_layers[0].spacing_mode = Spacing::Canopy;
+        w.registry.object_layers[0].size_density = vec![1.0, 1.0, 1.0, 0.25];
+        let thinned = placements(&w);
+        let wide = |all: &[Placement]| all.iter().filter(|p| p.object >= 2).count();
+        assert!(wide(&thinned) * 2 < wide(&all), "{} large trees, {} before", wide(&thinned), wide(&all));
     }
 
     /// A sub-canopy layer is painted beside the base one and stands its

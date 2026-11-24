@@ -689,7 +689,7 @@ pub fn set_value(b: Bound, v: i32, t: &mut Tile, i: usize, x: i32, z: i32, min_y
                         Part::Cover => t.cover.set(i, c.layer),
                         Part::Trees => t.objects.set(i, c.layer),
                         Part::Under => t.understory.set(i, c.layer),
-                        Part::Size => t.sizes.set(i, c.layer.min(massif_core::tile::SIZE_LARGE)),
+                        Part::Size => t.sizes.set(i, c.layer.min(massif_core::tile::SIZE_MAX)),
                         Part::Pockets => t.pockets.set(i, c.layer),
                     }
                 }

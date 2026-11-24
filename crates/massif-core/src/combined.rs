@@ -96,7 +96,7 @@ impl CombinedDef {
                     Some(_) => Part::Trees,
                     None => continue,
                 },
-                Part::Size if (1..=crate::tile::SIZE_LARGE).contains(&c.layer) => Part::Size,
+                Part::Size if reg.tree_size(c.layer).is_some() => Part::Size,
                 Part::Pockets if reg.pocket(c.layer).is_some() => Part::Pockets,
                 _ => continue,
             };

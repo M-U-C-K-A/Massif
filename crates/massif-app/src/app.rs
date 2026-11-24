@@ -7379,9 +7379,15 @@ fn covers_key(reg: &massif_core::Registry) -> u64 {
     }
     for l in &reg.object_layers {
         (l.spacing, l.density.to_bits(), l.rotate, l.mirror, l.soil_only, l.underwater, l.sink, l.replace, l.removed, l.hidden, &l.objects).hash(&mut h);
+        (l.spacing_mode, l.min_gap, l.size_density.iter().map(|d| d.to_bits()).collect::<Vec<_>>()).hash(&mut h);
     }
     for o in &reg.objects {
-        (o.size, o.anchor, &o.colors).hash(&mut h);
+        (o.size, o.anchor, &o.colors, o.tree_size, o.canopy.to_bits()).hash(&mut h);
+        // Its own rules turn, raise and keep it off where they say.
+        o.rules.as_ref().map(|r| format!("{r:?}")).hash(&mut h);
+    }
+    for t in &reg.tree_sizes {
+        (t.color, t.removed).hash(&mut h);
     }
     h.finish()
 }

@@ -238,6 +238,25 @@ fn editor(ui: &mut Ui, reg: &mut Registry, k: usize, rows: &[usize]) -> bool {
                 edits.push(Box::new(move |_, w| *w = weight));
             }
         });
+        // Its tree size, by hand or guessed from its height.
+        let guess = layer.size_classes(reg).get(rows[0]).copied().unwrap_or(1);
+        crate::widgets::row(ui, &name_of(tr!("Tree size"), mixed(&|d, _| d.tree_size.to_string())), |ui| {
+            if let Some(size) = crate::tree_sizes::object_size(ui, reg, ("object tree size", k), first.tree_size, guess) {
+                edits.push(Box::new(move |d, _| d.tree_size = size));
+            }
+        });
+        // Its canopy's radius: measured, or set by hand.
+        let measured = first.measured_canopy();
+        let mut canopy = if first.canopy > 0.0 { first.canopy } else { 0.0 };
+        crate::widgets::row(ui, &name_of(tr!("Canopy"), mixed(&|d, _| d.canopy.to_bits().to_string())), |ui| {
+            let field = crate::widgets::Field::new(&mut canopy, 0.0..=32.0)
+                .width(120.0)
+                .custom_formatter(move |v, _| if v <= 0.0 { tr!("Auto ({r:.1})", r = measured) } else { tr!("{v:.1} blocks", v) })
+                .custom_parser(|s| s.trim().trim_end_matches(|c: char| !c.is_ascii_digit() && c != '.').trim().parse::<f64>().ok().or(Some(0.0)));
+            if ui.add(field).on_hover_text(tr!("The radius of its crown: two trees spaced by canopy stand as far apart as their radii added. Auto: measured from its leaves")).changed() {
+                edits.push(Box::new(move |d, _| d.canopy = canopy.max(0.0)));
+            }
+        });
         // Its origin: the block of it set on the spot over the ground.
         if !several {
             let mut anchor = first.anchor.map(|a| a as i32);

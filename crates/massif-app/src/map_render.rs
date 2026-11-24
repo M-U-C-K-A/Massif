@@ -360,9 +360,6 @@ impl MapMode {
     }
 }
 
-/// The colours of the tree sizes over the map, bushes to large trees: pale
-/// to dark greens.
-pub const SIZE_COLORS: [[u8; 3]; 4] = [[214, 226, 124], [140, 196, 86], [60, 142, 70], [22, 86, 56]];
 
 /// Everything that changes the colour of a texel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -738,7 +735,7 @@ impl<'a> Colorizer<'a> {
         }
         // Tree sizes, under the annotations.
         if self.style.sizes
-            && let Some(&color) = c.size.checked_sub(1).and_then(|k| SIZE_COLORS.get(k as usize))
+            && let Some(color) = self.reg.tree_size(c.size as u16).map(|t| t.color)
         {
             out = mix(out, color.map(|v| v as f32), 0.6);
         }
@@ -1144,7 +1141,7 @@ fn draw_objects(key: ChunkKey, sources: &Sources, colorizer: &Colorizer, pixels:
         // With the tree sizes shown, each tree takes the colour of its size.
         let tint = if colorizer.style.sizes {
             let at = sources.sample(0, p.x, p.z);
-            at.size.checked_sub(1).and_then(|k| SIZE_COLORS.get(k as usize)).map(|c| c.map(|v| v as f32))
+            colorizer.reg.tree_size(at.size as u16).map(|t| t.color.map(|v| v as f32))
         } else {
             None
         };

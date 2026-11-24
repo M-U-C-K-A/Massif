@@ -600,11 +600,10 @@ pub fn paint_understory(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, layer:
     paint_plane(edit, brush, cx, cz, salt, layer, Some(crate::registry::Slot::Objects), None, |t| &mut t.understory);
 }
 
-/// Paint the size of tree the objects standing there take, from
-/// [`crate::tile::SIZE_BUSHES`] to [`crate::tile::SIZE_LARGE`] (0: any
-/// size). `salt` should change from dab to dab.
+/// Paint the size of tree the objects standing there take: a size of
+/// [`crate::registry::Registry::tree_sizes`], from 1 (0: any size). `salt` should change from dab to dab.
 pub fn paint_tree_size(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, size: u16, salt: u64) {
-    paint_plane(edit, brush, cx, cz, salt, size.min(crate::tile::SIZE_LARGE), None, None, |t| &mut t.sizes);
+    paint_plane(edit, brush, cx, cz, salt, size.min(crate::tile::SIZE_MAX), None, None, |t| &mut t.sizes);
 }
 
 /// Move what is painted of object layer `n` to the sub-canopy plane
@@ -681,7 +680,7 @@ pub fn paint_parts(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, parts: &[cr
             Part::Cover => paint_plane(edit, brush, cx, cz, salt, c.layer, Some(Slot::Cover), share, |t| &mut t.cover),
             Part::Trees => paint_plane(edit, brush, cx, cz, salt, c.layer, Some(Slot::Objects), share, |t| &mut t.objects),
             Part::Under => paint_plane(edit, brush, cx, cz, salt, c.layer, Some(Slot::Objects), share, |t| &mut t.understory),
-            Part::Size => paint_plane(edit, brush, cx, cz, salt, c.layer.min(crate::tile::SIZE_LARGE), None, share, |t| &mut t.sizes),
+            Part::Size => paint_plane(edit, brush, cx, cz, salt, c.layer.min(crate::tile::SIZE_MAX), None, share, |t| &mut t.sizes),
             Part::Pockets => paint_plane(edit, brush, cx, cz, salt, c.layer, Some(Slot::Pockets), share, |t| &mut t.pockets),
         }
     }

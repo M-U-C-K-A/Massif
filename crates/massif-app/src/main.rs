@@ -69,6 +69,7 @@ mod terrain_view;
 mod theme;
 mod tools;
 mod tour;
+mod tree_sizes;
 mod update;
 mod versions;
 mod view3d;

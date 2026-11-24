@@ -41,6 +41,9 @@ pub struct TileStack<'a> {
     layers: Vec<Layer<'a>>,
     /// Sculpted chunks over the tile, per column of chunks.
     sculpt: Option<Vec<Vec<(i32, &'a crate::voxel::VoxelChunk)>>>,
+    /// The dimension it was gathered from, to ask what is painted on the
+    /// ground of the tiles around it (see [`TileStack::ground_layers_at`]).
+    around: Option<&'a Dimension>,
 }
 
 impl<'a> TileStack<'a> {
@@ -62,7 +65,19 @@ impl<'a> TileStack<'a> {
                 layers.push((index, level.kind, tile));
             }
         }
-        Some(Self::gather(dim.min_y, dim.max_y, &dim.voxels, pos, layers))
+        let mut stack = Self::gather(dim.min_y, dim.max_y, &dim.voxels, pos, layers);
+        stack.around = Some(dim);
+        Some(stack)
+    }
+
+    /// The object layer, sub-canopy layer and tree size painted on the
+    /// ground of column `(x, z)`, anywhere on the map, when the stack was
+    /// gathered from a dimension: to space objects across the edges of
+    /// tiles. `(0, 0, 0)` where nothing is, or nothing can be known.
+    pub fn ground_layers_at(&self, x: i32, z: i32) -> (u16, u16, u16) {
+        let Some(tile) = self.around.and_then(|d| d.ground().view(TilePos::containing(x, z))) else { return (0, 0, 0) };
+        let cell = crate::coords::local_index(x, z);
+        (tile.objects.get(cell), tile.understory.get(cell), tile.sizes.get(cell))
     }
 
     /// A stack of the given tiles — `(level index, kind, tile)`, the
@@ -75,6 +90,7 @@ impl<'a> TileStack<'a> {
             max_y,
             layers: layers.into_iter().map(|(index, kind, tile)| Layer { kind, index, tile }).collect(),
             sculpt: crate::voxel::tile_columns(voxels, pos),
+            around: None,
         }
     }
 

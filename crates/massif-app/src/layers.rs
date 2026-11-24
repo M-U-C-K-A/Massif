@@ -520,7 +520,7 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
             }
         });
     });
-    if let Some(n) = crate::panels::size_swatches(ui, 20.0, (tools.tool == Tool::TreeSize).then_some(tools.tree_size), false) {
+    if let Some(n) = crate::tree_sizes::swatches(ui, &doc.world.registry, 20.0, (tools.tool == Tool::TreeSize).then_some(tools.tree_size), false) {
         tools.tree_size = n;
         tools.select(Tool::TreeSize);
     }

@@ -171,7 +171,7 @@ pub fn set(s: &mut Session, w: usize, dim: i32, what: &str, x0: i32, z0: i32, x1
         "cover" => reg.covers.len() + 1,
         "trees" | "understory" => reg.object_layers.len() + 1,
         "pockets" => reg.pockets.len() + 1,
-        "sizes" => massif_core::tile::SIZE_LARGE as usize + 1,
+        "sizes" => reg.tree_sizes.len() + 1,
         _ => usize::MAX,
     };
     let as_f32 = |k: usize| -> f32 {

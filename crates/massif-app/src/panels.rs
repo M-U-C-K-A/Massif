@@ -534,7 +534,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
         Tool::Cover => cover_settings(ui, tools, doc, blocks),
         Tool::Objects => object_settings(ui, tools, doc, blocks),
         Tool::Annotate => annotation_settings(ui, tools),
-        Tool::TreeSize => tree_size_settings(ui, tools),
+        Tool::TreeSize => tree_size_settings(ui, tools, doc),
         Tool::Pockets => pocket_settings(ui, tools, doc, blocks),
         Tool::Slabs => {
             slab_settings(ui, tools, blocks, "tool");
@@ -1282,7 +1282,9 @@ pub fn import_objects(doc: &mut Document, tools: &mut ToolState, files: &[std::p
             Some(layer) => layer.objects.extend(added.iter().map(|&k| (k, 1))),
             None => {
                 let name = if added.len() == 1 { reg.objects[added[0] as usize].name.clone() } else { tr!("{name} and {value} more", name = reg.objects[added[0] as usize].name, value = added.len() - 1) };
-                let layer = massif_core::objects::ObjectLayerDef::new(&name, &added, reg);
+                let mut layer = massif_core::objects::ObjectLayerDef::new(&name, &added, reg);
+                // Trees of one's own, spaced by their canopies.
+                layer.spacing_mode = massif_core::objects::Spacing::Canopy;
                 tools.object_layer = reg.add_object_layer(layer);
             }
         }
@@ -1449,6 +1451,7 @@ pub fn object_layer_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Documen
     }
     let k = k.expect("checked above");
     let reg = &mut doc.world.registry;
+    let sizes: Vec<(u16, String)> = crate::tree_sizes::live(reg).map(|(n, t)| (n, crate::tree_sizes::name_of(t))).collect();
     let objects = std::mem::take(&mut reg.objects);
     let layer = &mut reg.object_layers[k];
     ui.add_space(4.0);
@@ -1461,9 +1464,23 @@ pub fn object_layer_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Documen
             layer.color = [c.r(), c.g(), c.b()];
         }
     });
-    tip_row(ui, tr!("Spacing"), tr!("One object at most in each square of this side"), |ui| {
-        ui.add(crate::widgets::Field::new(&mut layer.spacing, 2..=256).suffix(tr!(" blocks")).max_decimals(0))
+    // Spaced by their canopies, or on a grid.
+    use massif_core::objects::Spacing;
+    ui.horizontal(|ui| {
+        crate::widgets::name_label(ui, tr!("Spaced"), vec2(72.0, 18.0));
+        if let Some(c) = crate::widgets::button_group_named(ui, "object spacing", &[tr!("By canopy"), tr!("On a grid")], &[tr!("Neighbours stand as far apart as their canopies' radii added: crowns touch at full density, narrow and wide ones mixed"), tr!("One object at most in each square of the spacing, whatever its size, as WorldPainter places them")], &[layer.spacing_mode == Spacing::Canopy, layer.spacing_mode == Spacing::Grid]) {
+            layer.spacing_mode = if c == 0 { Spacing::Canopy } else { Spacing::Grid };
+        }
     });
+    if layer.spacing_mode == Spacing::Canopy {
+        tip_row(ui, tr!("Least gap"), tr!("The least distance between two trunks, in blocks: very narrow trees never stand closer"), |ui| {
+            ui.add(crate::widgets::Field::new(&mut layer.min_gap, 1..=32).suffix(tr!(" blocks")).max_decimals(0))
+        });
+    } else {
+        tip_row(ui, tr!("Spacing"), tr!("One object at most in each square of this side"), |ui| {
+            ui.add(crate::widgets::Field::new(&mut layer.spacing, 2..=256).suffix(tr!(" blocks")).max_decimals(0))
+        });
+    }
     tip_row(ui, tr!("Density"), tr!("Share of those squares where one stands"), |ui| {
         ui.add(
             crate::widgets::Field::new(&mut layer.density, 0.0..=1.0)
@@ -1474,6 +1491,29 @@ pub fn object_layer_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Documen
     tip_row(ui, tr!("Sink"), tr!("How many blocks into the ground they go (rocks bedded in)"), |ui| {
         ui.add(crate::widgets::Field::new(&mut layer.sink, -16..=32).suffix(tr!(" blocks")).max_decimals(0))
     });
+    // The density of each tree size, a share of the layer's.
+    section(ui, Icon::ChartNoAxesColumnIncreasing, tr!("Density of each size"));
+    for (n, name) in &sizes {
+        let k = *n as usize - 1;
+        let mut share = layer.size_density.get(k).copied().unwrap_or(1.0);
+        let changed = tip_row(ui, name, tr!("A share of the layer's density for its trees of this size: where it is painted, and among the others where no size is"), |ui| {
+            ui.add(
+                crate::widgets::Field::new(&mut share, 0.0..=1.0)
+                    .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                    .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
+            )
+        });
+        if changed {
+            if layer.size_density.len() <= k {
+                layer.size_density.resize(k + 1, 1.0);
+            }
+            layer.size_density[k] = share;
+            // All at 100%: as without them.
+            while layer.size_density.last() == Some(&1.0) {
+                layer.size_density.pop();
+            }
+        }
+    }
     ui.horizontal(|ui| {
         crate::widgets::checkbox(ui, &mut layer.rotate, tr!("Turn at random")).on_hover_text(tr!("A quarter turn picked for each"));
         crate::widgets::checkbox(ui, &mut layer.mirror, tr!("Mirror")).on_hover_text(tr!("Half of them mirrored"));
@@ -1581,68 +1621,25 @@ pub fn plant_name(state: &str) -> String {
     c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
 }
 
-/// The name of tree size `n` (1 to 4).
-pub fn size_name(n: u16) -> &'static str {
-    match n {
-        1 => tr!("Bushes"),
-        2 => tr!("Small trees"),
-        3 => tr!("Medium trees"),
-        _ => tr!("Large trees"),
-    }
-}
-
-/// The four tree sizes as swatches `size` points wide in their colours, the
-/// one of `picked` ringed, each named beside it when `named`; returns the
-/// one clicked.
-pub fn size_swatches(ui: &mut Ui, size: f32, picked: Option<u16>, named: bool) -> Option<u16> {
-    let pal = Palette::of(ui);
-    let mut clicked = None;
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = vec2(size / 4.0, size / 6.0);
-        for (k, color) in crate::map_render::SIZE_COLORS.iter().enumerate() {
-            let n = k as u16 + 1;
-            let name = size_name(n);
-            let width = if named { size + 8.0 + ui.painter().layout_no_wrap(name.to_owned(), egui::FontId::proportional(12.0), pal.text).size().x + 8.0 } else { size };
-            let (rect, response) = ui.allocate_exact_size(vec2(width, size), Sense::click());
-            response.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, picked == Some(n), name));
-            let painter = ui.painter();
-            let radius = theme::TILE_RADIUS / 2;
-            let swatch = Rect::from_min_size(rect.min, vec2(size, size)).shrink(size / 8.0);
-            painter.rect(swatch, radius, theme::rgb(*color), Stroke::new(1.0, pal.border), StrokeKind::Inside);
-            // A tree, as tall as the size.
-            let h = swatch.height() * (0.35 + 0.15 * n as f32);
-            let foot = swatch.center_bottom() - vec2(0.0, swatch.height() * 0.12);
-            painter.circle_filled(foot - vec2(0.0, h * 0.6), h * 0.35, Color32::from_black_alpha(90));
-            painter.line_segment([foot, foot - vec2(0.0, h * 0.4)], Stroke::new(1.5, Color32::from_black_alpha(110)));
-            if named {
-                painter.text(rect.left_center() + vec2(size + 6.0, 0.0), egui::Align2::LEFT_CENTER, name, egui::FontId::proportional(12.0), pal.text);
-            }
-            if picked == Some(n) {
-                painter.rect_stroke(rect, radius, Stroke::new(2.0, pal.accent), StrokeKind::Inside);
-            } else if response.hovered() {
-                painter.rect_stroke(rect, radius, Stroke::new(1.0, pal.text), StrokeKind::Inside);
-            }
-            let response = if named { response } else { response.on_hover_text(name) };
-            if response.clicked() {
-                clicked = Some(n);
-            }
-        }
-    });
-    clicked
-}
-
-/// The tree sizes to paint: a click picks one.
-fn tree_size_settings(ui: &mut Ui, tools: &mut ToolState) {
-    if let Some(n) = size_swatches(ui, 26.0, Some(tools.tree_size), true) {
+/// The tree sizes to paint: a click picks one; under them, the map's
+/// sizes to edit (their names, colours and spacings) and one's own to add.
+fn tree_size_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
+    if let Some(n) = crate::tree_sizes::swatches(ui, &doc.world.registry, 26.0, Some(tools.tree_size), true) {
         tools.tree_size = n;
     }
-    hint(ui, tr!("Paint the sizes first, then a species over them (one object layer, such as Oaks): where Small trees is marked, only its small oaks stand. A layer's objects are split by height into four sizes, a quarter each; where it has none of a size, the nearest one."));
+    hint(ui, tr!("Paint the sizes first, then a species over them (one object layer, such as Oaks): where Small trees is marked, only its small oaks stand. Each object's size is set in its layer's settings (Auto: guessed from its height); where a layer has none of a size, the nearest one."));
     ui.add_space(4.0);
     crate::widgets::well(ui, |ui| {
         crate::widgets::row(ui, tr!("Show over the map with every tool"), |ui| {
             crate::widgets::switch(ui, &mut tools.show_sizes);
         });
     });
+    ui.add_space(6.0);
+    section(ui, Icon::ChartNoAxesColumnIncreasing, tr!("Sizes of this map"));
+    if crate::tree_sizes::editor(ui, &mut doc.world.registry) {
+        doc.mark_changed();
+    }
+    hint(ui, tr!("How far apart trees stand, by their canopies or on a grid, and the density of each size are set in each object layer's settings."));
 }
 
 /// The name of annotation colour `n` (1 to 15).
@@ -2072,7 +2069,7 @@ pub fn part_choices(reg: &Registry, part: massif_core::combined::Part) -> Vec<(u
         Part::Biome => reg.biomes.iter().enumerate().skip(1).map(|(k, b)| (k as u16, b.name.clone())).collect(),
         Part::Cover => reg.covers.iter().enumerate().filter(|(_, c)| live(c.removed)).map(|(k, c)| (k as u16 + 1, c.name.clone())).collect(),
         Part::Trees | Part::Under => reg.object_layers.iter().enumerate().filter(|(_, l)| live(l.removed) && l.understory == (part == Part::Under)).map(|(k, l)| (k as u16 + 1, l.name.clone())).collect(),
-        Part::Size => (1..=4).map(|n| (n, size_name(n).to_owned())).collect(),
+        Part::Size => crate::tree_sizes::live(reg).map(|(n, t)| (n, crate::tree_sizes::name_of(t))).collect(),
         Part::Pockets => reg.pockets.iter().enumerate().filter(|(_, p)| live(p.removed)).map(|(k, p)| (k as u16 + 1, p.name.clone())).collect(),
     }
 }
