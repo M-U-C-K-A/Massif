@@ -1571,6 +1571,13 @@ impl MapView {
                 let (hold, note) = tools::press_water(doc, tools, bx, bz, inverse, secondary && modifiers.shift);
                 *feedback = note.or(feedback.take());
                 self.water = hold.map(|h| (h, secondary));
+            } else if tools.tool == Tool::Structure && !secondary {
+                // Structures: a click or a drag, on a structure placed or
+                // on free land.
+                if let Some(p) = pointer {
+                    let screen = |q: (f32, f32)| self.to_screen(canvas, q.0 as f64, q.1 as f64);
+                    *feedback = crate::structure_tool::press(doc, tools, (x, z), p, &screen).or(feedback.take());
+                }
             } else if tools.tool.is_click() {
                 *feedback = tools::click(doc, tools, bx, bz, inverse);
             } else if tools.tool.uses_brush() {
@@ -1586,6 +1593,18 @@ impl MapView {
                     }
                     self.stroke = Some(stroke);
                 }
+            }
+        }
+        // A drag of the Structures tool follows the pointer; let go, it
+        // places, moves or resizes.
+        if tools.structure.rt.gesture().is_some() {
+            if down[0] && tools.tool == Tool::Structure {
+                if let Some(at) = world_pointer {
+                    crate::structure_tool::drag(tools, at);
+                }
+                ui.ctx().request_repaint();
+            } else {
+                *feedback = crate::structure_tool::release(doc, tools).or(feedback.take());
             }
         }
         // A held anchor of the river follows the pointer; let go, its
@@ -2028,7 +2047,7 @@ impl MapView {
         }
         if matches!(tools.tool, Tool::Structure | Tool::Village) {
             let screen = |q: (f32, f32)| self.to_screen(canvas, q.0 as f64, q.1 as f64);
-            let hover = pointer.filter(|_| response.hovered() && tools.tool == Tool::Structure).map(|p| self.to_world(canvas, p)).map(|(x, z)| (x.floor() as i32, z.floor() as i32));
+            let hover = pointer.filter(|_| response.hovered()).map(|p| self.to_world(canvas, p)).map(|(x, z)| (x.floor() as i32, z.floor() as i32));
             crate::structure_tool::draw(ui.ctx(), &painter, canvas, &screen, self.zoom, hover, doc, tools);
             if hover.is_some() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);

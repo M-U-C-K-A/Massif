@@ -1,35 +1,69 @@
 # Structures
 
-The **Structure** tool (Decor group) places the game's own structures with a
-click: a village, an Ancient City with its warden, Trial Chambers, a
-stronghold with its End portal, a shipwreck. Massif reads them from **your
-own game** — the jar the launcher installed, and the jars of your mods — and
-assembles them the way the game does. Nothing of Minecraft ships with Massif.
+The **Structures** tool (Decor group) places villages and the game's own
+structures: a village of the game's or of a builder's pack, an Ancient City
+with its warden, Trial Chambers, a stronghold with its End portal, a
+shipwreck. Massif reads the game's from **your own game** — the jar the
+launcher installed, and the jars of your mods — and assembles them the way
+the game does. Nothing of Minecraft ships with Massif.
 
 ## Placing one
 
-1. Pick **Structure** in the Decor group.
-2. Choose what to place in Tool Settings: villages (plains, desert, savanna,
-   taiga, snowy), a pillager outpost, the desert and jungle temples, a witch
-   hut, an igloo, a shipwreck, ocean ruins (cold or warm), an Ancient City,
-   Trial Chambers, a stronghold, trail ruins, a bastion remnant.
-3. Point at the map: the outline of its pieces follows the pointer, with its
-   size. Click to place it, on the map or in the 3D view.
+1. Pick **Structures** in the Decor group.
+2. In Tool Settings, pick what to place: under **Villages**, a theme (the
+   game's plains, desert, savanna, taiga, snowy, or a pack's: **Add a
+   pack…**); under **The game's structures**, a pillager outpost, the
+   desert and jungle temples, a witch hut, an igloo, a shipwreck, ocean
+   ruins, an Ancient City, Trial Chambers, a stronghold, trail ruins, a
+   bastion remnant.
+3. On the map:
+   - **click** to place it there — a village of the size chosen, centred on
+     the click;
+   - or, for a village, **drag a rectangle**: the village fills it.
+   With a selection on the map, **Fill the selection** builds a village in
+   it, as the village brush did.
 
-Each placement is one step to undo. A right-click on a structure takes it
-away (also one step). **Draw it again** puts another draw of the last one
-in its place.
+No selection is needed. Each placement is one step to undo.
+
+## Changing one placed
+
+Click a village or a structure placed: it is **selected** — its outline
+in the accent colour, a village's four corners as handles — and its
+settings show under **Selected** in Tool Settings.
+
+- **Drag it** to move it: it is built again where you let go.
+- **Drag a village's corner** to resize it: it is built again over the new
+  rectangle, as many houses as it then holds.
+- Change a village's **Size**, **Houses**, **Roads** (dirt, gravel, stone, or
+  the pack's own), **Walls** or **Draw**: it is built again a moment after
+  you stop changing them.
+- **Draw it again** (a structure of the game's) puts another draw in its
+  place.
+- **Take it away**, or a right-click on it, removes it.
+
+Each is one step to undo. A village built again or taken away gives the
+land back as it found it: the levelling under its buildings goes with it.
+Villages and structures placed before 1.2 can be taken away but not moved
+(they were not kept with what made them).
 
 | Setting | What it does |
 |---|---|
-| **Structure** | What to place. |
+| **Size** | A village's square: small (112 blocks), medium (192), large (320); its houses follow (8, 18, 36). |
+| **Houses** | How many houses the village holds: it reaches along its roads as far as it needs to. |
+| **Roads** | The blocks of its streets. |
+| **Walls** | Ramparts round the village, towers at the corners, gates where its main roads leave. |
 | **Height** | For those placed at a depth (Ancient City, Trial Chambers, stronghold): the height of their start, the game's by default — an Ancient City's halls then lie between y −52 and y −22. |
 | **Turn** | Any (drawn), or a quarter turn of your choice. |
 | **Draw** | The draw it is assembled from: the same draw at the same place gives the same structure. The dice button draws another. |
-| **Flatten the land under its buildings** | Villages, outposts, temples, igloos: the land under each building is raised or cut to its floor, with a slope of a few blocks to the land around. Paths follow the land as it then is. |
+| **Flatten the land under its buildings** | Outposts, temples, igloos: the land under each building is raised or cut to its floor. |
 
-The **Placed** list under the settings names every structure on the map,
-with where it is; its bin button takes one away.
+The **Placed** list names every structure on the map, with where it is; a
+click on one selects it.
+
+**Not yet:** the game's `/locate` and eyes of ender find only the
+structures the game places itself — it looks for them where its world seed
+puts them. Placing yours where the game would look is for a later version.
+Woodland mansions and ocean monuments are not offered yet.
 
 ## What comes with them
 
@@ -45,7 +79,7 @@ with where it is; its bin button takes one away.
 - **Trial Chambers** are walled in by rock where a cave runs by, as the game
   does.
 
-## The village brush
+## Villages
 
 **Village brush** (Decor group) fills the selection with a village sized by
 it: a hamlet round a well for about 100 × 100 blocks, a village round its

@@ -100,7 +100,7 @@ impl Tool {
             &[Tool::PaintTerrain, Tool::Gradient, Tool::PaintBiome, Tool::AutoPaint, Tool::AutoBiome, Tool::Annotate],
         ),
         (SELECT_GROUP, Icon::SquareDashed, &[Tool::SelectRect, Tool::SelectEllipse, Tool::SelectLasso, Tool::SelectBrush]),
-        (tn!("Decor"), Icon::Shrub, &[Tool::Cover, Tool::Objects, Tool::TreeSize, Tool::Pockets, Tool::Slabs, Tool::Combined, Tool::Structure, Tool::Village]),
+        (tn!("Decor"), Icon::Shrub, &[Tool::Cover, Tool::Objects, Tool::TreeSize, Tool::Pockets, Tool::Slabs, Tool::Combined, Tool::Structure]),
         (WATER_GROUP, Icon::Droplet, &[Tool::Water, Tool::Flood, Tool::River]),
         (tn!("Underground"), Icon::Pickaxe, &[Tool::Caves, Tool::CaveBiome]),
         (tn!("Levels"), Icon::Layers, &[Tool::StampSlab, Tool::EraseSlab]),
@@ -109,7 +109,7 @@ impl Tool {
 
     /// Tools new in this version: the Tools panel marks them until they
     /// are first tried.
-    pub const NEW: [Tool; 6] = [Tool::Gradient, Tool::Slabs, Tool::Caves, Tool::CaveBiome, Tool::Structure, Tool::Village];
+    pub const NEW: [Tool; 5] = [Tool::Gradient, Tool::Slabs, Tool::Caves, Tool::CaveBiome, Tool::Structure];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -131,7 +131,7 @@ impl Tool {
             Tool::Caves => tr!("Caves"),
             Tool::CaveBiome => tr!("Cave biome"),
             Tool::Combined => tr!("Combined layer"),
-            Tool::Structure => tr!("Structure"),
+            Tool::Structure => tr!("Structures"),
             Tool::Village => tr!("Village brush"),
             Tool::AutoBiome => tr!("Auto biome"),
             Tool::AutoPaint => tr!("Auto paint"),
@@ -241,7 +241,7 @@ impl Tool {
             Tool::Caves => tr!("Paint where a cave layer carves its caves: chambers, tunnels, ravines and lakes of water and lava, as the game's. Right button: no caves there."),
             Tool::CaveBiome => tr!("Paint a cave biome between two heights: lush caves, dripstone caves, the deep dark, each decorated as in the game. Right button: rub it out."),
             Tool::Combined => tr!("Paint several layers at once: a terrain, a biome, a ground cover, trees, pockets, each over its share. Right button: rub out what it paints."),
-            Tool::Structure => tr!("Click: place one of the game's structures — a village, an Ancient City, Trial Chambers. Right button: take away the structure clicked."),
+            Tool::Structure => tr!("Villages and the game's structures: pick one in Tool Settings, click on the map to place it or drag a rectangle for a village. Click one placed to select it: drag it to move it, its corners to resize it. Right button: take it away."),
             Tool::Village => tr!("Click in the selection: fill it with a village of a theme — the game's own, or a builder's pack. Its size follows the selection's."),
             Tool::AutoBiome => {
                 tr!("Sets the biome the land calls for: beach, forest, peaks…")
@@ -1270,6 +1270,13 @@ impl Default for ToolState {
 
 impl ToolState {
     pub fn select(&mut self, tool: Tool) {
+        // The village brush is the Structures tool's now, with a village.
+        let tool = if tool == Tool::Village {
+            self.structure.village = true;
+            Tool::Structure
+        } else {
+            tool
+        };
         if tool == Tool::Eyedropper && self.tool != Tool::Eyedropper {
             self.previous = self.tool;
         }

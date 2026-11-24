@@ -11,6 +11,7 @@ use crate::tools::{Feedback, ToolState};
 use egui::{Color32, FontId, Pos2, Rect, Stroke, StrokeKind, Ui, pos2, vec2};
 use massif_structures::Library;
 use massif_structures::geom::BBox;
+use massif_structures::placed::Recipe;
 use massif_structures::vanilla::{self, Group, Height, KINDS, Kind};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -56,13 +57,19 @@ pub struct StructureSettings {
     pub depths: Vec<(String, i32)>,
     /// Flatten the land under its buildings.
     pub flatten: bool,
+    /// What a click places: a village of the village settings' theme, or
+    /// the game's structure `kind`.
+    pub village: bool,
+    /// The structure placed that is selected on the map (its number).
+    #[serde(skip)]
+    pub selected: Option<u32>,
     #[serde(skip)]
     pub rt: Runtime,
 }
 
 impl Default for StructureSettings {
     fn default() -> Self {
-        Self { kind: "village_plains".into(), seed: 1, turn: None, depths: Vec::new(), flatten: true, rt: Runtime::default() }
+        Self { kind: "stronghold".into(), seed: 1, turn: None, depths: Vec::new(), flatten: true, village: true, selected: None, rt: Runtime::default() }
     }
 }
 
@@ -93,6 +100,31 @@ impl StructureSettings {
         let y = self.depth(kind).unwrap_or(0);
         vanilla::Request { kind, at: [x, y, z], turn: self.turn, seed: self.seed, flatten: self.flatten && kind.flattens, id }
     }
+
+    /// The recipe of the game's structure a click at `(x, z)` places.
+    pub fn recipe(&self, x: i32, z: i32) -> Recipe {
+        let kind = self.kind();
+        Recipe::Game { kind: kind.id.to_owned(), at: [x, self.depth(kind).unwrap_or(0), z], turn: self.turn, seed: self.seed, flatten: self.flatten && kind.flattens }
+    }
+}
+
+/// What a recipe of the game's structure asks for, numbered `id`.
+pub fn request_of(recipe: &Recipe, id: u32) -> Option<vanilla::Request> {
+    let Recipe::Game { kind, at, turn, seed, flatten } = recipe else { return None };
+    let kind = vanilla::kind(kind)?;
+    Some(vanilla::Request { kind, at: *at, turn: *turn, seed: *seed, flatten: *flatten, id })
+}
+
+/// A drag of the tool on the map, under way.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Gesture {
+    /// A new one: from where it was pressed to where the pointer is.
+    Place { from: (f64, f64), to: (f64, f64) },
+    /// The selected one carried along by the pointer.
+    Move { id: u32, recipe: Recipe, from: (f64, f64), to: (f64, f64) },
+    /// The selected village's corner `corner` (0 north-west, 1 north-east,
+    /// 2 south-east, 3 south-west) dragged.
+    Resize { id: u32, recipe: Recipe, corner: usize, to: (f64, f64) },
 }
 
 /// What the tool keeps while it works: the game's files read, the click
@@ -123,7 +155,7 @@ struct Inner {
     error: Option<String>,
     /// A click to build at, and the structure it takes the place of, if
     /// any (Draw again).
-    pending: Option<(i32, i32, Option<u32>)>,
+    pending: Option<(Recipe, Option<u32>)>,
     /// Being built.
     busy: bool,
     layout: Option<(LayoutKey, Arc<Vec<BBox>>)>,
@@ -132,6 +164,11 @@ struct Inner {
     /// number, for Draw again.
     last: Option<(i32, i32, u32)>,
     note: Option<String>,
+    /// A drag on the map under way.
+    gesture: Option<Gesture>,
+    /// A village to draw again with new settings once they stop changing:
+    /// which, with what, since when.
+    regen: Option<(u32, Recipe, std::time::Instant)>,
 }
 
 impl Runtime {
@@ -187,15 +224,46 @@ impl Runtime {
 
     /// The click waiting to be built, once the game's files are read and
     /// nothing else is being built.
-    pub fn take_pending(&self) -> Option<(i32, i32, Option<u32>, Arc<Library>)> {
+    pub fn take_pending(&self) -> Option<(Recipe, Option<u32>, Arc<Library>)> {
         let mut inner = self.lock();
         let lib = inner.library.clone()?;
         if inner.busy {
             return None;
         }
-        let (x, z, replace) = inner.pending.take()?;
+        let (recipe, replace) = inner.pending.take()?;
         inner.busy = true;
-        Some((x, z, replace, lib))
+        Some((recipe, replace, lib))
+    }
+
+    /// The drag under way, if one.
+    pub fn gesture(&self) -> Option<Gesture> {
+        self.lock().gesture.clone()
+    }
+
+    fn set_gesture(&self, g: Option<Gesture>) {
+        self.lock().gesture = g;
+    }
+
+    /// Draw village `id` again as `recipe` once its settings rest.
+    pub fn regenerate(&self, id: u32, recipe: Recipe) {
+        self.lock().regen = Some((id, recipe, std::time::Instant::now()));
+    }
+
+    /// The village whose settings have rested a third of a second, to draw
+    /// again.
+    pub fn due_regen(&self) -> Option<(u32, Recipe)> {
+        let mut inner = self.lock();
+        let due = inner.regen.as_ref().is_some_and(|r| r.2.elapsed() >= std::time::Duration::from_millis(350));
+        if due { inner.regen.take().map(|(id, r, _)| (id, r)) } else { None }
+    }
+
+    /// Whether a village waits to be drawn again.
+    pub fn regen_waiting(&self) -> bool {
+        self.lock().regen.is_some()
+    }
+
+    pub fn say(&self, note: impl Into<String>) {
+        self.lock().note = Some(note.into());
     }
 
     /// The building is over: placed (its number, where it was clicked) or
@@ -212,6 +280,11 @@ impl Runtime {
     pub fn is_busy(&self) -> bool {
         let inner = self.lock();
         inner.busy || inner.pending.is_some()
+    }
+
+    /// Why the game's structures cannot be read, if they cannot.
+    pub fn error(&self) -> Option<String> {
+        self.lock().error.clone()
     }
 
     /// The boxes of the pieces of the structure `settings` would place,
@@ -272,46 +345,229 @@ fn layout_of(lib: &Library, req: &vanilla::Request) -> Vec<BBox> {
     }
 }
 
-/// A click of the tool at column `(x, z)`: build the structure there; with
-/// the right button, take away the structure placed there.
-pub fn click(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, inverse: bool) -> Feedback {
-    let settings = &tools.structure;
-    if inverse {
-        return remove_at(doc, x, z);
+/// The recipe a structure placed by the tool keeps, if it has one.
+pub fn recipe_of(s: &massif_core::structures::Structure) -> Option<Recipe> {
+    s.recipe.as_deref().and_then(Recipe::from_json)
+}
+
+/// The rectangle a structure placed takes on the map: its village's area,
+/// else its blocks' columns.
+pub fn footprint(s: &massif_core::structures::Structure) -> massif_core::BlockRect {
+    recipe_of(s).and_then(|r| r.area()).unwrap_or_else(|| s.columns())
+}
+
+/// The structure placed whose rectangle holds `(x, z)`: the selected one
+/// first, else the last placed.
+pub fn hit(doc: &Document, selected: Option<u32>, x: i32, z: i32) -> Option<u32> {
+    let all = &doc.dimension().structures;
+    if let Some(id) = selected
+        && all.iter().any(|s| s.id == id && footprint(s).contains(x, z))
+    {
+        return Some(id);
     }
+    all.iter().rev().find(|s| footprint(s).contains(x, z)).map(|s| s.id)
+}
+
+/// A click of the tool at column `(x, z)` (in the 3D view, or on the map
+/// without dragging): select the structure there, else place what the
+/// tool holds; with the right button, take away the structure there.
+pub fn click(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, inverse: bool) -> Feedback {
+    if inverse {
+        return remove_at(doc, tools, x, z);
+    }
+    if let Some(id) = hit(doc, tools.structure.selected, x, z) {
+        tools.structure.selected = Some(id);
+        return doc.dimension().structures.iter().find(|s| s.id == id).map(|s| tr!("{name} selected: drag it to move it, its corners to resize it", name = crate::i18n::tr_name(&s.name).to_owned()));
+    }
+    place(doc, tools, x, z, None)
+}
+
+/// Place what the tool holds at `(x, z)`: a village of the size chosen
+/// round it (over `rect` when one was dragged), or the game's structure.
+fn place(doc: &Document, tools: &mut ToolState, x: i32, z: i32, rect: Option<massif_core::BlockRect>) -> Feedback {
+    let _ = doc;
+    tools.structure.selected = None;
+    if tools.structure.village {
+        let side = tools.village.size.side();
+        let rect = rect.unwrap_or_else(|| massif_core::BlockRect::new(x - side / 2, z - side / 2, x - side / 2 + side, z - side / 2 + side));
+        let recipe = tools.village.recipe(rect);
+        tools.village.rt.ask(VillageJob { recipe, mask: None, replace: None });
+        return Some(tr!("Building the village…").to_owned());
+    }
+    let settings = &tools.structure;
     let kind = settings.kind();
     let mut inner = settings.rt.lock();
     if let Some(e) = &inner.error {
         return Some(e.clone());
     }
-    inner.pending = Some((x, z, None));
+    inner.pending = Some((settings.recipe(x, z), None));
     Some(tr!("Assembling {name}…", name = crate::i18n::tr_name(kind.name)))
 }
 
-/// Take away the structure whose columns hold `(x, z)` (the last placed,
-/// where several do), as one step to undo.
-pub fn remove_at(doc: &mut Document, x: i32, z: i32) -> Feedback {
+/// Fill the selection with a village of the settings chosen.
+pub fn fill_selection(doc: &Document, tools: &mut ToolState) -> Feedback {
+    let Some(sel) = doc.selection().cloned() else { return Some(tr!("Nothing is selected").to_owned()) };
+    let Some(rect) = sel.bounds() else { return Some(tr!("Nothing is selected").to_owned()) };
+    let recipe = tools.village.recipe(rect);
+    tools.structure.selected = None;
+    tools.village.rt.ask(VillageJob { recipe, mask: Some(sel), replace: None });
+    Some(tr!("Building the village…").to_owned())
+}
+
+/// Make structure `id` again as `recipe` (moved, resized, of another
+/// draw), in its place.
+pub fn redo(tools: &mut ToolState, id: u32, recipe: Recipe) {
+    match &recipe {
+        Recipe::Village { .. } => tools.village.rt.ask(VillageJob { recipe, mask: None, replace: Some(id) }),
+        Recipe::Game { .. } => tools.structure.rt.lock().pending = Some((recipe, Some(id))),
+    }
+}
+
+/// Take away structure `id`, the land it levelled given back, as one step
+/// to undo.
+pub fn remove(doc: &mut Document, tools: &mut ToolState, id: u32) -> Feedback {
     let dim = doc.dim;
-    let found = doc.world.dims[dim].structures.iter().rposition(|s| s.columns().contains(x, z))?;
-    let name = doc.world.dims[dim].structures[found].name.clone();
-    let shown = crate::i18n::tr_name(&name).to_owned();
+    let found = doc.world.dims[dim].structures.iter().position(|s| s.id == id)?;
+    let s = doc.world.dims[dim].structures[found].clone();
+    let shown = crate::i18n::tr_name(&s.name).to_owned();
     doc.history.begin(tr!("Remove {name}", name = shown.clone()), dim);
-    doc.history.edit(&mut doc.world, 0).structures_mut().remove(found);
+    {
+        let mut edit = doc.history.edit(&mut doc.world, 0);
+        massif_core::structures::restore_ground(&mut edit, &s.ground);
+        edit.structures_mut().remove(found);
+    }
     doc.commit();
+    if tools.structure.selected == Some(id) {
+        tools.structure.selected = None;
+    }
     Some(tr!("{name} taken away", name = shown))
 }
 
-/// Draw the structure again where the tool last placed it, of a new draw:
-/// in its place, as one step to undo.
-fn draw_again(doc: &Document, settings: &mut StructureSettings) {
-    let last = settings.rt.lock().last;
-    let Some((x, z, id)) = last else { return };
-    if !doc.dimension().structures.iter().any(|s| s.id == id) {
-        settings.rt.lock().last = None;
-        return;
+/// Take away the structure at `(x, z)`, as one step to undo.
+pub fn remove_at(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32) -> Feedback {
+    let id = hit(doc, tools.structure.selected, x, z)?;
+    remove(doc, tools, id)
+}
+
+/// The corners of a rectangle, north-west first, clockwise.
+fn corners(r: massif_core::BlockRect) -> [(f32, f32); 4] {
+    [(r.x0 as f32, r.z0 as f32), (r.x1 as f32, r.z0 as f32), (r.x1 as f32, r.z1 as f32), (r.x0 as f32, r.z1 as f32)]
+}
+
+/// The pointer pressed on the map at `at` (blocks; `pointer` on the
+/// screen): a corner of the selected village grabbed, the selected one or
+/// another grabbed to move, or a new one begun.
+pub fn press(doc: &Document, tools: &mut ToolState, at: (f64, f64), pointer: Pos2, screen: &dyn Fn((f32, f32)) -> Pos2) -> Feedback {
+    let (x, z) = (at.0.floor() as i32, at.1.floor() as i32);
+    let rt = tools.structure.rt.clone();
+    if let Some(id) = tools.structure.selected
+        && let Some(s) = doc.dimension().structures.iter().find(|s| s.id == id)
+        && let Some(recipe) = recipe_of(s)
+    {
+        if let Some(area) = recipe.area()
+            && let Some(corner) = corners(area).iter().position(|c| screen(*c).distance(pointer) <= 10.0)
+        {
+            rt.set_gesture(Some(Gesture::Resize { id, recipe, corner, to: at }));
+            return None;
+        }
+        if footprint(s).contains(x, z) {
+            rt.set_gesture(Some(Gesture::Move { id, recipe, from: at, to: at }));
+            return None;
+        }
     }
-    settings.seed = settings.seed.wrapping_add(1);
-    settings.rt.lock().pending = Some((x, z, Some(id)));
+    if let Some(id) = hit(doc, None, x, z) {
+        tools.structure.selected = Some(id);
+        let s = doc.dimension().structures.iter().find(|s| s.id == id)?;
+        if let Some(recipe) = recipe_of(s) {
+            rt.set_gesture(Some(Gesture::Move { id, recipe, from: at, to: at }));
+        }
+        return Some(tr!("{name} selected: drag it to move it, its corners to resize it", name = crate::i18n::tr_name(&s.name).to_owned()));
+    }
+    tools.structure.selected = None;
+    rt.set_gesture(Some(Gesture::Place { from: at, to: at }));
+    None
+}
+
+/// The pointer, held, at `at`.
+pub fn drag(tools: &ToolState, at: (f64, f64)) {
+    let mut inner = tools.structure.rt.lock();
+    match &mut inner.gesture {
+        Some(Gesture::Place { to, .. } | Gesture::Move { to, .. } | Gesture::Resize { to, .. }) => *to = at,
+        None => {}
+    }
+}
+
+/// What a resize leaves: the rectangle with corner `corner` at `to`, the
+/// opposite one where it was, at least 32 blocks a side.
+fn resized(area: massif_core::BlockRect, corner: usize, to: (f64, f64)) -> massif_core::BlockRect {
+    let (x, z) = (to.0.round() as i32, to.1.round() as i32);
+    let (mut x0, mut z0, mut x1, mut z1) = (area.x0, area.z0, area.x1, area.z1);
+    match corner {
+        0 => (x0, z0) = (x.min(x1 - 32), z.min(z1 - 32)),
+        1 => (x1, z0) = (x.max(x0 + 32), z.min(z1 - 32)),
+        2 => (x1, z1) = (x.max(x0 + 32), z.max(z0 + 32)),
+        _ => (x0, z1) = (x.min(x1 - 32), z.max(z0 + 32)),
+    }
+    massif_core::BlockRect::new(x0, z0, x1, z1)
+}
+
+/// A village's recipe over another rectangle.
+fn over(recipe: &Recipe, r: massif_core::BlockRect) -> Recipe {
+    let mut out = recipe.clone();
+    if let Recipe::Village { centre, size, .. } = &mut out {
+        *centre = [(r.x0 + r.x1) / 2, (r.z0 + r.z1) / 2];
+        *size = [r.x1 - r.x0, r.z1 - r.z0];
+    }
+    out
+}
+
+/// The pointer let go: what the drag did.
+pub fn release(doc: &Document, tools: &mut ToolState) -> Feedback {
+    let gesture = tools.structure.rt.lock().gesture.take()?;
+    match gesture {
+        Gesture::Place { from, to } => {
+            let (x0, z0, x1, z1) = (from.0.min(to.0).floor() as i32, from.1.min(to.1).floor() as i32, from.0.max(to.0).ceil() as i32, from.1.max(to.1).ceil() as i32);
+            if tools.structure.village && x1 - x0 >= 32 && z1 - z0 >= 32 {
+                place(doc, tools, (x0 + x1) / 2, (z0 + z1) / 2, Some(massif_core::BlockRect::new(x0, z0, x1, z1)))
+            } else if tools.structure.village && (x1 - x0 >= 8 || z1 - z0 >= 8) {
+                Some(tr!("Drag a larger rectangle for a village: 32 × 32 blocks at least").to_owned())
+            } else {
+                place(doc, tools, from.0.floor() as i32, from.1.floor() as i32, None)
+            }
+        }
+        Gesture::Move { id, recipe, from, to } => {
+            let (dx, dz) = ((to.0 - from.0).round() as i32, (to.1 - from.1).round() as i32);
+            if dx == 0 && dz == 0 {
+                return None;
+            }
+            redo(tools, id, recipe.moved(dx, dz));
+            Some(tr!("Moving it…").to_owned())
+        }
+        Gesture::Resize { id, recipe, corner, to } => {
+            let area = recipe.area()?;
+            let r = resized(area, corner, to);
+            if r == area {
+                return None;
+            }
+            redo(tools, id, over(&recipe, r));
+            Some(tr!("Building the village…").to_owned())
+        }
+    }
+}
+
+/// Place `built` in the map as one edit: the structure it takes the place
+/// of (`replace`) gone with the land it levelled given back, the land
+/// under `built` levelled, its heights before kept with it.
+pub fn apply_placed(edit: &mut massif_core::history::Edit, built: &mut vanilla::Built, replace: Option<u32>) {
+    if let Some(r) = replace
+        && let Some(k) = edit.dim().structures.iter().position(|s| s.id == r)
+    {
+        let old = edit.dim().structures[k].clone();
+        massif_core::structures::restore_ground(edit, &old.ground);
+        edit.structures_mut().remove(k);
+    }
+    built.structure.ground = massif_core::structures::heights_before(edit.dim(), &built.heights);
+    vanilla::apply(edit, built);
 }
 
 /// The colours of a structure's blocks: the game's, where the catalogue
@@ -327,154 +583,340 @@ pub fn colors_of(s: &mut massif_core::structures::Structure, catalogue: Option<&
         .collect();
 }
 
-/// The settings of the tool, in Tool Settings.
-pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
-    use crate::panels::{hint, section};
-    use crate::widgets::{button, checkbox, combo, row, well};
-    let s = &mut tools.structure;
-    let kind = s.kind();
+/// The settings of a village: size, houses, roads, walls, draw. `pack`:
+/// whether its theme is a pack's (which may have roads of its own).
+/// Whether one changed.
+#[allow(clippy::too_many_arguments)]
+fn village_controls(ui: &mut Ui, id: &str, size: &mut VillageSize, houses: &mut u32, road: &mut massif_structures::village::RoadType, walls: &mut bool, seed: &mut u64, pack: bool) -> bool {
+    let has_own_roads = pack;
+    use crate::widgets::{Field, button, row, well};
+    use massif_structures::village::RoadType;
+    let mut changed = false;
+    ui.label(egui::RichText::new(tr!("Size")).small().weak());
+    let on: Vec<bool> = VillageSize::ALL.iter().map(|s| s == size).collect();
+    let labels: Vec<&str> = VillageSize::ALL.iter().map(|s| s.label()).collect();
+    if let Some(k) = crate::widgets::button_group(ui, &format!("{id} size"), &labels, &on) {
+        *size = VillageSize::ALL[k];
+        *houses = size.houses();
+        changed = true;
+    }
+    ui.label(egui::RichText::new(tr!("Roads")).small().weak());
+    let mut kinds = vec![RoadType::Dirt, RoadType::Premium, RoadType::Stone];
+    let mut labels = vec![tr!("Dirt"), tr!("Gravel"), tr!("Stone")];
+    if pack && has_own_roads {
+        kinds.insert(0, RoadType::Theme);
+        labels.insert(0, tr!("Pack's"));
+    }
+    let on: Vec<bool> = kinds.iter().map(|k| k == road).collect();
+    if let Some(k) = crate::widgets::button_group(ui, &format!("{id} roads"), &labels, &on) {
+        *road = kinds[k];
+        changed = true;
+    }
     well(ui, |ui| {
-        row(ui, tr!("Structure"), |ui| {
-            combo("structure kind").selected_text(crate::i18n::tr_name(kind.name)).width((ui.available_width() * 0.62).min(190.0)).truncate().show_ui(ui, |ui| {
-                for (group, title) in [(Group::Villages, tn!("Villages")), (Group::Surface, tn!("On the land")), (Group::Water, tn!("In the water")), (Group::Underground, tn!("Underground")), (Group::Nether, tn!("From the Nether"))] {
-                    ui.label(egui::RichText::new(crate::i18n::tr_name(title)).small().weak());
-                    for k in KINDS.iter().filter(|k| k.group == group) {
-                        if ui.selectable_label(k.id == s.kind, crate::i18n::tr_name(k.name)).clicked() {
-                            s.kind = k.id.to_owned();
-                        }
-                    }
-                }
-            });
-        });
-        if let Some(y) = s.depth(kind) {
-            row(ui, tr!("Height"), |ui| {
-                let mut v = y;
-                if crate::widgets::drag(ui, egui::DragValue::new(&mut v).speed(0.5).range(doc.dimension().min_y..=doc.dimension().max_y - 1).prefix("y ")).changed() {
-                    s.set_depth(kind, v);
-                }
+        // A pack's village holds as many houses as asked; the game's own
+        // grow as the game grows them.
+        if pack {
+            row(ui, tr!("Houses"), |ui| {
+                changed |= ui.add(Field::new(houses, 3..=120).width((ui.available_width() * 0.55).min(120.0))).changed();
             });
         }
-        row(ui, tr!("Turn"), |ui| {
-            let label = |t: Option<u8>| t.map_or_else(|| tr!("Any").to_owned(), |t| format!("{}°", t as u32 * 90));
-            combo("structure turn").selected_text(label(s.turn)).width((ui.available_width() * 0.62).min(190.0)).show_ui(ui, |ui| {
-                for t in [None, Some(0), Some(1), Some(2), Some(3)] {
-                    if ui.selectable_label(s.turn == t, label(t)).clicked() {
-                        s.turn = t;
-                    }
-                }
-            });
+        row(ui, tr!("Walls"), |ui| {
+            changed |= crate::widgets::switch(ui, walls).changed();
         });
         row(ui, tr!("Draw"), |ui| {
-            crate::widgets::drag(ui, egui::DragValue::new(&mut s.seed).speed(1.0));
-            if button(ui, theme::with_icon(Icon::Dices, "")).on_hover_text(tr!("Another draw: other pieces, another layout")).clicked() {
-                s.seed = s.seed.wrapping_mul(0x9e37_79b9_7f4a_7c15).wrapping_add(1) % 1_000_000;
+            changed |= crate::widgets::drag(ui, egui::DragValue::new(seed).speed(1.0)).changed();
+            if button(ui, theme::with_icon(Icon::Dices, "")).on_hover_text(tr!("Another draw: other houses, another layout")).clicked() {
+                *seed = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15).wrapping_add(1) % 1_000_000;
+                changed = true;
             }
         });
     });
-    if kind.flattens {
-        checkbox(ui, &mut s.flatten, tr!("Flatten the land under its buildings"));
+    changed
+}
+
+/// The settings of the tool, in Tool Settings: what a click places (a
+/// village of a theme, or one of the game's structures) and how, then the
+/// structure selected on the map.
+pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
+    use crate::panels::{hint, section};
+    use crate::widgets::{button, checkbox, combo, row, well};
+    // The one selected on the map.
+    let selected = tools.structure.selected.and_then(|id| doc.dimension().structures.iter().find(|s| s.id == id).cloned());
+    if tools.structure.selected.is_some() && selected.is_none() {
+        tools.structure.selected = None;
     }
-    match kind.height {
-        Height::Depth(_) => hint(ui, tr!("Placed at the height set, under the column clicked: its halls are carved out of the rock.")),
-        Height::Floor => hint(ui, tr!("Placed on the bottom of the water clicked.")),
-        Height::Surface => hint(ui, tr!("Placed on the land clicked.")),
-    }
-    hint(ui, tr!("Click on the map or in the 3D view to place it · right-click a structure: take it away."));
-    let (loading, error, busy, note, last) = {
-        let inner = s.rt.lock();
-        (inner.loading, inner.error.clone(), inner.busy || inner.pending.is_some(), inner.note.clone(), inner.last)
-    };
-    if loading {
-        hint(ui, tr!("Reading the game's structures…"));
-    }
-    if let Some(e) = error {
-        ui.colored_label(Palette::of(ui).danger, e);
-    }
-    if busy {
-        ui.horizontal(|ui| {
-            ui.spinner();
-            ui.label(tr!("Assembling…"));
+    if let Some(s) = selected {
+        section(ui, Icon::MousePointer2, tr!("Selected"));
+        hint(ui, &format!("{} · {} × {}", crate::i18n::tr_name(&s.name), s.max[0] - s.min[0] + 1, s.max[2] - s.min[2] + 1));
+        let recipe = recipe_of(&s);
+        ui.horizontal_wrapped(|ui| {
+            if let Some(r) = &recipe
+                && button(ui, theme::with_icon(Icon::Dices, tr!("Draw it again"))).on_hover_text(tr!("Of another draw, in its place")).clicked()
+            {
+                let seed = r.seed().wrapping_mul(0x9e37_79b9_7f4a_7c15).wrapping_add(1) % 1_000_000;
+                match r {
+                    Recipe::Village { .. } => tools.structure.rt.regenerate(s.id, r.with_seed(seed)),
+                    Recipe::Game { .. } => redo(tools, s.id, r.with_seed(seed)),
+                }
+            }
+            if button(ui, theme::with_icon(Icon::Trash2, tr!("Take it away"))).clicked() {
+                let note = remove(doc, tools, s.id);
+                if let Some(n) = note {
+                    tools.structure.rt.say(n);
+                }
+            }
         });
-    } else if let Some(note) = note {
-        hint(ui, &note);
-    }
-    if let Some(lib) = s.rt.library() {
-        hint(ui, &tr!("Read from Minecraft {version}.", version = lib.version.clone()));
-    }
-    if last.is_some() && !busy && button(ui, theme::with_icon(Icon::Dices, tr!("Draw it again"))).on_hover_text(tr!("The last one placed, of another draw, in its place")).clicked() {
-        draw_again(doc, s);
+        match recipe {
+            Some(Recipe::Village { pack, theme, centre, size, params, seed }) => {
+                let side = size[0].max(size[1]);
+                let mut vsize = VillageSize::of(side);
+                let mut houses = params.houses.unwrap_or(vsize.houses());
+                let (mut road, mut walls, mut seed2) = (params.road, params.walls, seed);
+                if village_controls(ui, "selected village", &mut vsize, &mut houses, &mut road, &mut walls, &mut seed2, !pack.is_empty()) {
+                    // A size chosen: its square round the same middle.
+                    let size = if vsize != VillageSize::of(side) { [vsize.side(), vsize.side()] } else { size };
+                    let params = massif_structures::village::Params { houses: Some(houses), road, walls, ..params };
+                    tools.structure.rt.regenerate(s.id, Recipe::Village { pack, theme, centre, size, params, seed: seed2 });
+                }
+                hint(ui, tr!("Drag it to move it, its corners to resize it: it is built again."));
+            }
+            Some(Recipe::Game { .. }) => hint(ui, tr!("Drag it to move it.")),
+            None => hint(ui, tr!("Placed before it could be moved: take it away and place it again to move it.")),
+        }
     }
 
-    // The structures placed on the map.
-    let placed: Vec<(u32, String, [i32; 3], [i32; 3])> = doc.dimension().structures.iter().map(|s| (s.id, s.name.clone(), s.min, s.max)).collect();
-    if !placed.is_empty() {
-        section(ui, Icon::Castle, tr!("Placed"));
-        let mut remove = None;
+    let themes = tools.village.rt.themes(&tools.village.packs);
+    // What a click places: the list.
+    section(ui, Icon::House, tr!("Villages"));
+    well(ui, |ui| {
+        for t in &themes {
+            let name = if t.pack.is_empty() { crate::i18n::tr_name(&t.name).to_owned() } else { format!("{} · {}", t.pack, t.name) };
+            let on = tools.structure.village && tools.village.theme == (t.pack.clone(), t.name.clone());
+            if ui.add(egui::Button::selectable(on, name).frame_when_inactive(false).truncate()).clicked() {
+                tools.structure.village = true;
+                tools.village.theme = (t.pack.clone(), t.name.clone());
+                if !t.pack.is_empty() && tools.village.road == massif_structures::village::RoadType::Dirt {
+                    tools.village.road = massif_structures::village::RoadType::Theme;
+                }
+            }
+        }
+    });
+    if button(ui, theme::with_icon(Icon::FolderPlus, tr!("Add a pack…"))).on_hover_text(tr!("A folder of schematics by theme and type: see Village packs in the guide")).clicked()
+        && let Some(dir) = rfd::FileDialog::new().set_title(tr!("A village pack")).pick_folder()
+        && !tools.village.packs.contains(&dir)
+    {
+        tools.village.packs.push(dir);
+    }
+    section(ui, Icon::Castle, tr!("The game's structures"));
+    well(ui, |ui| {
+        for (group, title) in [(Group::Surface, tn!("On the land")), (Group::Water, tn!("In the water")), (Group::Underground, tn!("Underground")), (Group::Nether, tn!("From the Nether"))] {
+            ui.label(egui::RichText::new(crate::i18n::tr_name(title)).small().weak());
+            for k in KINDS.iter().filter(|k| k.group == group) {
+                let on = !tools.structure.village && k.id == tools.structure.kind;
+                if ui.add(egui::Button::selectable(on, crate::i18n::tr_name(k.name)).frame_when_inactive(false).truncate()).clicked() {
+                    tools.structure.village = false;
+                    tools.structure.kind = k.id.to_owned();
+                }
+            }
+        }
+    });
+
+    // How: the settings of what a click places.
+    if tools.structure.village {
+        let v = &mut tools.village;
+        let pack = !v.theme.0.is_empty();
+        let mut houses = v.houses.unwrap_or_else(|| v.size.houses());
+        let (mut size, mut road, mut walls, mut seed) = (v.size, v.road, v.walls, v.seed);
+        if village_controls(ui, "new village", &mut size, &mut houses, &mut road, &mut walls, &mut seed, pack) {
+            (v.size, v.road, v.walls, v.seed) = (size, road, walls, seed);
+            v.houses = Some(houses);
+        }
+        hint(ui, &tr!("Click on the map: a village {side} blocks across. Drag a rectangle: a village over it.", side = v.size.side()));
+        if doc.selection().is_some() && !v.rt.is_busy() && button(ui, theme::with_icon(Icon::House, tr!("Fill the selection"))).clicked() {
+            let note = fill_selection(doc, tools);
+            if let Some(n) = note {
+                tools.structure.rt.say(n);
+            }
+        }
+    } else {
+        let s = &mut tools.structure;
+        let kind = s.kind();
         well(ui, |ui| {
-            for (id, name, min, max) in placed.iter().rev() {
-                row(ui, crate::i18n::tr_name(name), |ui| {
-                    ui.label(egui::RichText::new(format!("{} {}", (min[0] + max[0]) / 2, (min[2] + max[2]) / 2)).weak().small());
-                    if button(ui, theme::with_icon(Icon::Trash2, "")).on_hover_text(tr!("Take it away")).clicked() {
-                        remove = Some(*id);
+            if let Some(y) = s.depth(kind) {
+                row(ui, tr!("Height"), |ui| {
+                    let mut v = y;
+                    if crate::widgets::drag(ui, egui::DragValue::new(&mut v).speed(0.5).range(doc.dimension().min_y..=doc.dimension().max_y - 1).prefix("y ")).changed() {
+                        s.set_depth(kind, v);
                     }
                 });
             }
+            row(ui, tr!("Turn"), |ui| {
+                let label = |t: Option<u8>| t.map_or_else(|| tr!("Any").to_owned(), |t| format!("{}°", t as u32 * 90));
+                combo("structure turn").selected_text(label(s.turn)).width((ui.available_width() * 0.62).min(190.0)).show_ui(ui, |ui| {
+                    for t in [None, Some(0), Some(1), Some(2), Some(3)] {
+                        if ui.selectable_label(s.turn == t, label(t)).clicked() {
+                            s.turn = t;
+                        }
+                    }
+                });
+            });
+            row(ui, tr!("Draw"), |ui| {
+                crate::widgets::drag(ui, egui::DragValue::new(&mut s.seed).speed(1.0));
+                if button(ui, theme::with_icon(Icon::Dices, "")).on_hover_text(tr!("Another draw: other pieces, another layout")).clicked() {
+                    s.seed = s.seed.wrapping_mul(0x9e37_79b9_7f4a_7c15).wrapping_add(1) % 1_000_000;
+                }
+            });
         });
-        if let Some(id) = remove
-            && let Some(s) = doc.dimension().structures.iter().find(|s| s.id == id)
-        {
-            let (x, z) = ((s.min[0] + s.max[0]) / 2, (s.min[2] + s.max[2]) / 2);
-            let r = s.columns();
-            // The middle may stand in another's columns: take this one.
-            let at = if r.contains(x, z) { (x, z) } else { (r.x0, r.z0) };
-            let dim = doc.dim;
-            if let Some(k) = doc.world.dims[dim].structures.iter().position(|t| t.id == id) {
-                let shown = crate::i18n::tr_name(&doc.world.dims[dim].structures[k].name).to_owned();
-                doc.history.begin(tr!("Remove {name}", name = shown), dim);
-                doc.history.edit(&mut doc.world, 0).structures_mut().remove(k);
-                doc.commit();
-            }
-            let _ = at;
+        if kind.flattens {
+            checkbox(ui, &mut s.flatten, tr!("Flatten the land under its buildings"));
         }
+        match kind.height {
+            Height::Depth(_) => hint(ui, tr!("Placed at the height set, under the column clicked: its halls are carved out of the rock.")),
+            Height::Floor => hint(ui, tr!("Placed on the bottom of the water clicked.")),
+            Height::Surface => hint(ui, tr!("Placed on the land clicked.")),
+        }
+        hint(ui, tr!("Click on the map or in the 3D view to place it."));
+    }
+
+    // Why nothing happens, and what is happening.
+    let (loading, error, busy, note) = {
+        let inner = tools.structure.rt.lock();
+        (inner.loading, inner.error.clone(), inner.busy || inner.pending.is_some(), inner.note.clone())
+    };
+    let village_busy = tools.village.rt.is_busy() || tools.structure.rt.regen_waiting();
+    let needs_game = !tools.structure.village || tools.village.theme.0.is_empty();
+    if loading && needs_game {
+        hint(ui, tr!("Reading the game's structures…"));
+    }
+    if let Some(e) = error.filter(|_| needs_game) {
+        ui.colored_label(Palette::of(ui).danger, e);
+    }
+    for e in tools.village.rt.lock().errors.clone() {
+        ui.colored_label(Palette::of(ui).danger, e);
+    }
+    if busy || village_busy {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(if village_busy { tr!("Building the village…") } else { tr!("Assembling…") });
+        });
+    } else if let Some(note) = tools.village.rt.lock().note.clone().or(note) {
+        hint(ui, &note);
+    }
+    let problems = tools.village.rt.lock().problems.clone();
+    if !problems.is_empty() {
+        egui::CollapsingHeader::new(tr!("{n} notes on the packs", n = problems.len())).id_salt("village pack notes").show(ui, |ui| {
+            for p in problems.iter().take(40) {
+                let text = format!("{} {}", p.file, p.message);
+                if p.serious {
+                    ui.colored_label(Palette::of(ui).danger, text);
+                } else {
+                    hint(ui, &text);
+                }
+            }
+        });
+    }
+
+    // All those placed.
+    let placed: Vec<(u32, String, [i32; 3], [i32; 3])> = doc.dimension().structures.iter().map(|s| (s.id, s.name.clone(), s.min, s.max)).collect();
+    if !placed.is_empty() {
+        section(ui, Icon::Castle, tr!("Placed"));
+        well(ui, |ui| {
+            for (id, name, min, max) in placed.iter().rev() {
+                let on = tools.structure.selected == Some(*id);
+                let text = format!("{}  ·  {} {}", crate::i18n::tr_name(name), (min[0] + max[0]) / 2, (min[2] + max[2]) / 2);
+                if ui.add(egui::Button::selectable(on, text).frame_when_inactive(false).truncate()).clicked() {
+                    tools.structure.selected = Some(*id);
+                }
+            }
+        });
     }
 }
 
-/// Draw over the map: the outline of each structure placed, and of what a
-/// click would place under the pointer (`hover`, in blocks).
+/// Draw over the map: each structure placed (the selected one with its
+/// corners to drag), what a drag would place or where it carries one, and
+/// what a click would place under the pointer (`hover`, in blocks).
 #[allow(clippy::too_many_arguments)]
 pub fn draw(ctx: &egui::Context, painter: &egui::Painter, canvas: Rect, screen: &dyn Fn((f32, f32)) -> Pos2, zoom: f32, hover: Option<(i32, i32)>, doc: &Document, tools: &ToolState) {
+    let pal = {
+        let v = ctx.global_style().visuals.clone();
+        Palette::themed(v.dark_mode, theme::is_high(&v))
+    };
+    let accent = pal.accent;
     let rect_of = |b: &BBox, dx: i32, dz: i32| -> Rect {
         Rect::from_two_pos(screen(((b.min[0] + dx) as f32, (b.min[2] + dz) as f32)), screen(((b.max[0] + 1 + dx) as f32, (b.max[2] + 1 + dz) as f32)))
     };
-    let last = tools.structure.rt.lock().last.map(|l| l.2);
-    // Those placed: their pieces' boxes, faint, their whole outline, named.
+    let area_rect = |r: massif_core::BlockRect| Rect::from_two_pos(screen((r.x0 as f32, r.z0 as f32)), screen((r.x1 as f32, r.z1 as f32)));
+    let selected = tools.structure.selected;
+    let gesture = tools.structure.rt.gesture();
+    // Those placed: their pieces' boxes, faint, their outline, named.
     for s in &doc.dimension().structures {
-        let r = s.columns();
-        let outline = Rect::from_two_pos(screen((r.x0 as f32, r.z0 as f32)), screen((r.x1 as f32, r.z1 as f32)));
+        let outline = area_rect(footprint(s));
         if !outline.intersects(canvas) {
             continue;
         }
-        let color = if Some(s.id) == last { Color32::from_rgb(250, 214, 120) } else { Color32::from_white_alpha(170) };
+        let on = Some(s.id) == selected;
+        let color = if on { accent } else { Color32::from_white_alpha(170) };
         for p in &s.pieces {
             let b = BBox { min: p.min, max: p.max };
             painter.rect_stroke(rect_of(&b, 0, 0), 0.0, Stroke::new(1.0, color.gamma_multiply(0.35)), StrokeKind::Inside);
         }
         painter.rect_stroke(outline, 0.0, Stroke::new(1.5, Color32::from_black_alpha(110)), StrokeKind::Outside);
-        painter.rect_stroke(outline, 0.0, Stroke::new(1.2, color), StrokeKind::Inside);
+        painter.rect_stroke(outline, 0.0, Stroke::new(if on { 2.0 } else { 1.2 }, color), StrokeKind::Inside);
         if outline.width() > 60.0 {
             label(painter, outline.left_top() + vec2(4.0, 4.0), &format!("{} · y {}…{}", crate::i18n::tr_name(&s.name), s.min[1], s.max[1]));
         }
+        // The selected village's corners, to drag.
+        if on && recipe_of(s).and_then(|r| r.area()).is_some() {
+            for c in corners(footprint(s)) {
+                let p = screen(c);
+                let r = Rect::from_center_size(p, vec2(9.0, 9.0));
+                painter.rect_filled(r, theme::TILE_RADIUS / 4, accent);
+                painter.rect_stroke(r, theme::TILE_RADIUS / 4, Stroke::new(1.0, Color32::from_black_alpha(160)), StrokeKind::Outside);
+            }
+        }
     }
-    // What a click would place.
+    // A drag under way: the rectangle it covers.
+    let drawn = match &gesture {
+        Some(Gesture::Place { from, to }) if tools.structure.village => {
+            let r = massif_core::BlockRect::new(from.0.min(to.0).floor() as i32, from.1.min(to.1).floor() as i32, from.0.max(to.0).ceil() as i32, from.1.max(to.1).ceil() as i32);
+            (r.x1 - r.x0 >= 4 || r.z1 - r.z0 >= 4).then_some(r)
+        }
+        Some(Gesture::Move { id, from, to, .. }) => doc.dimension().structures.iter().find(|s| s.id == *id).map(|s| {
+            let r = footprint(s);
+            let (dx, dz) = ((to.0 - from.0).round() as i32, (to.1 - from.1).round() as i32);
+            massif_core::BlockRect::new(r.x0 + dx, r.z0 + dz, r.x1 + dx, r.z1 + dz)
+        }),
+        Some(Gesture::Resize { recipe, corner, to, .. }) => recipe.area().map(|a| resized(a, *corner, *to)),
+        _ => None,
+    };
+    if let Some(r) = drawn {
+        let sr = area_rect(r);
+        painter.rect_filled(sr, 0.0, accent.gamma_multiply(0.15));
+        painter.rect_stroke(sr, 0.0, Stroke::new(1.5, accent), StrokeKind::Inside);
+        label(painter, pos2(sr.left(), sr.bottom() + 4.0), &format!("{} × {}", r.x1 - r.x0, r.z1 - r.z0));
+        return;
+    }
+    // What a click would place, where no structure is under the pointer.
     let Some((x, z)) = hover else { return };
+    if hit(doc, selected, x, z).is_some() {
+        return;
+    }
+    if tools.structure.village {
+        let side = tools.village.size.side();
+        let r = massif_core::BlockRect::new(x - side / 2, z - side / 2, x - side / 2 + side, z - side / 2 + side);
+        let sr = area_rect(r);
+        painter.rect_filled(sr, 0.0, accent.gamma_multiply(0.08));
+        painter.rect_stroke(sr, 0.0, Stroke::new(1.0, accent.gamma_multiply(0.8)), StrokeKind::Inside);
+        return;
+    }
     let Some(boxes) = tools.structure.rt.layout(ctx, &tools.structure) else {
         return;
     };
     if boxes.is_empty() {
         return;
     }
-    let fill = Color32::from_rgba_unmultiplied(250, 214, 120, 38);
-    let line = Stroke::new(1.0, Color32::from_rgb(250, 214, 120));
+    let fill = accent.gamma_multiply(0.15);
+    let line = Stroke::new(1.0, accent);
     let mut all: Option<BBox> = None;
     for b in boxes.iter() {
         let r = rect_of(b, x, z);
@@ -529,13 +971,67 @@ pub struct VillageSettings {
     /// How many houses; none: as many as the selection holds.
     pub houses: Option<u32>,
     pub seed: u64,
+    /// How large a village a click places.
+    pub size: VillageSize,
     #[serde(skip)]
     pub rt: VillageRuntime,
 }
 
+/// How large a village a click places: the side of its square, and the
+/// houses it holds unless told otherwise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum VillageSize {
+    Small,
+    #[default]
+    Medium,
+    Large,
+}
+
+impl VillageSize {
+    pub const ALL: [VillageSize; 3] = [VillageSize::Small, VillageSize::Medium, VillageSize::Large];
+
+    pub fn side(self) -> i32 {
+        match self {
+            VillageSize::Small => 112,
+            VillageSize::Medium => 192,
+            VillageSize::Large => 320,
+        }
+    }
+
+    pub fn houses(self) -> u32 {
+        match self {
+            VillageSize::Small => 8,
+            VillageSize::Medium => 18,
+            VillageSize::Large => 36,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            VillageSize::Small => tr!("Small"),
+            VillageSize::Medium => tr!("Medium"),
+            VillageSize::Large => tr!("Large"),
+        }
+    }
+
+    /// The size nearest a village `side` blocks across.
+    pub fn of(side: i32) -> VillageSize {
+        *VillageSize::ALL.iter().min_by_key(|s| (s.side() - side).abs()).expect("three")
+    }
+}
+
+/// A village to build: what (its recipe), over what (a selection's mask,
+/// when it fills one), in place of which one placed before.
+#[derive(Debug, Clone)]
+pub struct VillageJob {
+    pub recipe: Recipe,
+    pub mask: Option<Arc<massif_core::selection::Selection>>,
+    pub replace: Option<u32>,
+}
+
 impl Default for VillageSettings {
     fn default() -> Self {
-        Self { theme: (String::new(), "Plains".into()), packs: Vec::new(), walls: false, density: 0.7, size_bias: 0.0, road: Default::default(), props: 0.5, houses: None, seed: 1, rt: VillageRuntime::default() }
+        Self { theme: (String::new(), "Plains".into()), packs: Vec::new(), walls: false, density: 0.7, size_bias: 0.0, road: massif_structures::village::RoadType::Dirt, props: 0.5, houses: None, seed: 1, size: VillageSize::Medium, rt: VillageRuntime::default() }
     }
 }
 
@@ -562,7 +1058,7 @@ pub struct VillageInner {
     errors: Vec<String>,
     /// What the packs' check found, file by file.
     problems: Vec<massif_structures::village::Problem>,
-    pending: bool,
+    pending: Option<VillageJob>,
     busy: bool,
     note: Option<String>,
 }
@@ -596,20 +1092,45 @@ impl VillageRuntime {
         inner.themes.as_ref().map(|t| t.1.clone()).unwrap_or_default()
     }
 
-    /// The fill asked for, once nothing else is being built.
-    pub fn take_pending(&self) -> bool {
+    /// The village asked for, once nothing else is being built.
+    pub fn take_pending(&self) -> Option<VillageJob> {
         let mut inner = self.lock();
-        if inner.busy || !inner.pending {
-            return false;
+        if inner.busy {
+            return None;
         }
-        inner.pending = false;
+        let job = inner.pending.take()?;
         inner.busy = true;
-        true
+        Some(job)
     }
 
     pub fn is_busy(&self) -> bool {
         let inner = self.lock();
-        inner.busy || inner.pending
+        inner.busy || inner.pending.is_some()
+    }
+
+    /// The village asked for, not taken yet.
+    pub fn peek_pending(&self) -> Option<VillageJob> {
+        let inner = self.lock();
+        if inner.busy { None } else { inner.pending.clone() }
+    }
+
+    /// The village asked for cannot be built: say why.
+    pub fn drop_pending(&self, note: Option<String>) {
+        let mut inner = self.lock();
+        inner.pending = None;
+        inner.note = note;
+    }
+
+    /// Build `job` (in place of any asked for before and not begun).
+    pub fn ask(&self, job: VillageJob) {
+        self.lock().pending = Some(job);
+    }
+
+    /// The last note and the packs' errors (for tests).
+    #[cfg(test)]
+    pub fn notes(&self) -> Vec<String> {
+        let inner = self.lock();
+        inner.note.iter().cloned().chain(inner.errors.iter().cloned()).collect()
     }
 
     pub fn done(&self, note: Option<String>) {
@@ -618,9 +1139,6 @@ impl VillageRuntime {
         inner.note = note;
     }
 
-    fn ask(&self) {
-        self.lock().pending = true;
-    }
 }
 
 impl VillageSettings {
@@ -629,129 +1147,23 @@ impl VillageSettings {
         massif_structures::village::Params { walls: self.walls, density: self.density, size_bias: self.size_bias, road: self.road, props: self.props, houses: self.houses, ..Default::default() }
     }
 
-    /// The theme chosen, among those offered.
-    pub fn theme(&self) -> Option<massif_structures::village::Theme> {
-        let themes = self.rt.themes(&self.packs);
-        themes.iter().find(|t| t.pack == self.theme.0 && t.name == self.theme.1).or_else(|| themes.first()).cloned()
+    /// The recipe of a village of these settings over `rect`.
+    pub fn recipe(&self, rect: massif_core::BlockRect) -> Recipe {
+        let mut params = self.params();
+        params.houses.get_or_insert(VillageSize::of((rect.x1 - rect.x0).max(rect.z1 - rect.z0)).houses());
+        Recipe::Village { pack: self.theme.0.clone(), theme: self.theme.1.clone(), centre: [(rect.x0 + rect.x1) / 2, (rect.z0 + rect.z1) / 2], size: [rect.x1 - rect.x0, rect.z1 - rect.z0], params, seed: self.seed }
     }
+
+    /// The theme a recipe names, among those offered.
+    pub fn theme_named(&self, pack: &str, name: &str) -> Option<massif_structures::village::Theme> {
+        self.rt.themes(&self.packs).into_iter().find(|t| t.pack == pack && t.name == name)
+    }
+
 }
 
-/// A click of the village brush: fill the selection, if the click is in it.
+/// A click with the old village brush in hand: the Structures tool's,
+/// with a village.
 pub fn village_click(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32) -> Feedback {
-    let Some(sel) = doc.selection() else {
-        return Some(tr!("Select an area first: the village fills the selection.").to_owned());
-    };
-    if sel.get(x, z) < 128 {
-        return Some(tr!("Click inside the selection: the village fills it.").to_owned());
-    }
-    tools.village.rt.ask();
-    Some(tr!("Building the village…").to_owned())
-}
-
-/// The settings of the village brush, in Tool Settings.
-pub fn village_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
-    use crate::panels::hint;
-    use crate::widgets::{Field, button, checkbox, combo, row, well};
-    let v = &mut tools.village;
-    let themes = v.rt.themes(&v.packs);
-    let chosen = v.theme();
-    well(ui, |ui| {
-        row(ui, tr!("Theme"), |ui| {
-            let shown = chosen.as_ref().map_or_else(String::new, |t| if t.pack.is_empty() { crate::i18n::tr_name(&t.name).to_owned() } else { format!("{} · {}", t.pack, t.name) });
-            combo("village theme").selected_text(shown).width((ui.available_width() * 0.62).min(190.0)).truncate().show_ui(ui, |ui| {
-                ui.label(egui::RichText::new(tr!("The game's villages")).small().weak());
-                for t in themes.iter().filter(|t| t.pack.is_empty()) {
-                    if ui.selectable_label(v.theme == (t.pack.clone(), t.name.clone()), crate::i18n::tr_name(&t.name)).clicked() {
-                        v.theme = (t.pack.clone(), t.name.clone());
-                    }
-                }
-                if themes.iter().any(|t| !t.pack.is_empty()) {
-                    ui.label(egui::RichText::new(tr!("Packs")).small().weak());
-                }
-                for t in themes.iter().filter(|t| !t.pack.is_empty()) {
-                    if ui.selectable_label(v.theme == (t.pack.clone(), t.name.clone()), format!("{} · {}", t.pack, t.name)).clicked() {
-                        v.theme = (t.pack.clone(), t.name.clone());
-                    }
-                }
-            });
-        });
-        row(ui, tr!("Density"), |ui| {
-            ui.add(Field::new(&mut v.density, 0.2..=1.0).custom_formatter(|x, _| format!("{:.0}%", x * 100.0)).custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|x| x / 100.0)).width((ui.available_width() * 0.55).min(120.0)));
-        });
-        row(ui, tr!("Houses"), |ui| {
-            ui.add(Field::new(&mut v.size_bias, -1.0..=1.0).custom_formatter(|x, _| if x.abs() < 0.05 { tr!("Mixed").to_owned() } else if x < 0.0 { tr!("Smaller {p}%", p = (x * -100.0).round()) } else { tr!("Larger {p}%", p = (x * 100.0).round()) }).width((ui.available_width() * 0.55).min(120.0)));
-        });
-        row(ui, tr!("Props"), |ui| {
-            ui.add(Field::new(&mut v.props, 0.0..=1.0).custom_formatter(|x, _| format!("{:.0}%", x * 100.0)).custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|x| x / 100.0)).width((ui.available_width() * 0.55).min(120.0)));
-        });
-        row(ui, tr!("Draw"), |ui| {
-            crate::widgets::drag(ui, egui::DragValue::new(&mut v.seed).speed(1.0));
-            if button(ui, theme::with_icon(Icon::Dices, "")).on_hover_text(tr!("Another draw: other pieces, another layout")).clicked() {
-                v.seed = v.seed.wrapping_mul(0x9e37_79b9_7f4a_7c15).wrapping_add(1) % 1_000_000;
-            }
-        });
-    });
-    {
-        use massif_structures::village::RoadType;
-        let kinds = [RoadType::Theme, RoadType::Dirt, RoadType::Premium, RoadType::Stone, RoadType::Planks];
-        ui.label(egui::RichText::new(tr!("Roads")).small().weak());
-        let on: Vec<bool> = kinds.iter().map(|k| *k == v.road).collect();
-        if let Some(k) = crate::widgets::button_group(ui, "village roads", &[tr!("Theme's"), tr!("Dirt"), tr!("Gravel"), tr!("Stone"), tr!("Planks")], &on) {
-            v.road = kinds[k];
-        }
-    }
-    checkbox(ui, &mut v.walls, tr!("Walls, with towers and gates"));
-    if button(ui, theme::with_icon(Icon::FolderPlus, tr!("Add a pack…"))).on_hover_text(tr!("A folder of schematics by theme and type: see Village packs in the guide")).clicked()
-        && let Some(dir) = rfd::FileDialog::new().set_title(tr!("A village pack")).pick_folder()
-        && !v.packs.contains(&dir)
-    {
-        v.packs.push(dir);
-    }
-    for e in v.rt.lock().errors.clone() {
-        ui.colored_label(Palette::of(ui).danger, e);
-    }
-    // The pack check: what is wrong in the packs, file by file.
-    let problems = v.rt.lock().problems.clone();
-    if !problems.is_empty() {
-        egui::CollapsingHeader::new(tr!("{n} notes on the packs", n = problems.len())).id_salt("village pack notes").show(ui, |ui| {
-            for p in problems.iter().take(40) {
-                let text = format!("{} {}", p.file, p.message);
-                if p.serious {
-                    ui.colored_label(Palette::of(ui).danger, text);
-                } else {
-                    hint(ui, &text);
-                }
-            }
-        });
-    }
-    let selection = doc.selection().map(|s| s.area());
-    match selection {
-        Some(area) => {
-            // As large as a square of its area.
-            let side = area.sqrt().round() as i64;
-            let size = match side {
-                ..160 => tr!("a hamlet"),
-                160..480 => tr!("a village"),
-                _ => tr!("a town of several districts"),
-            };
-            hint(ui, &tr!("The selection, as large as {side} × {side} blocks: {size}.", side, size));
-            let busy = v.rt.is_busy();
-            if ui.add_enabled(!busy, egui::Button::new(theme::with_icon(Icon::House, tr!("Fill the selection"))).truncate()).clicked() {
-                v.rt.ask();
-            }
-        }
-        None => hint(ui, tr!("Select an area first (Select group): the village fills it, sized by it.")),
-    }
-    let (busy, note) = {
-        let inner = v.rt.lock();
-        (inner.busy || inner.pending, inner.note.clone())
-    };
-    if busy {
-        ui.horizontal(|ui| {
-            ui.spinner();
-            ui.label(tr!("Building the village…"));
-        });
-    } else if let Some(note) = note {
-        hint(ui, &note);
-    }
+    tools.structure.village = true;
+    click(doc, tools, x, z, false)
 }

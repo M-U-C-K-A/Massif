@@ -177,6 +177,8 @@ impl<'a> Builder<'a> {
             data_version,
             colors: Vec::new(),
             source: massif_core::structures::StructureSource::User,
+            recipe: None,
+            ground: Vec::new(),
         };
         s.finish();
         s

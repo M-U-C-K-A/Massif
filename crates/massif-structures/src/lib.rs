@@ -22,6 +22,7 @@ pub mod ground;
 pub mod jigsaw;
 pub mod library;
 pub mod nbt;
+pub mod placed;
 pub mod pool;
 pub mod processor;
 pub mod rng;

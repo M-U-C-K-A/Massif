@@ -155,12 +155,16 @@ pub enum Outcome {
         replace: Option<u32>,
         /// The dimension it was worked out on.
         dim: usize,
+        /// How to make it again.
+        recipe: massif_structures::placed::Recipe,
     },
-    /// A village built on a copy of the map in its selection, to place in
-    /// one undoable step.
+    /// A village built on a copy of the map, to place in one undoable
+    /// step, in place of `replace` if given.
     Village {
         built: Box<massif_structures::vanilla::Built>,
         dim: usize,
+        replace: Option<u32>,
+        recipe: massif_structures::placed::Recipe,
     },
     Failed(String),
     Cancelled,
@@ -808,12 +812,15 @@ impl Job {
 
     /// The structure `req` asks for, assembled on dimension `dim` of a
     /// snapshot of the document from the game's files `lib`.
-    pub fn structure(ctx: &egui::Context, snapshot: World, dim: usize, lib: Arc<massif_structures::Library>, req: massif_structures::vanilla::Request, replace: Option<u32>) -> Job {
+    #[allow(clippy::too_many_arguments)]
+    pub fn structure(ctx: &egui::Context, snapshot: World, dim: usize, lib: Arc<massif_structures::Library>, req: massif_structures::vanilla::Request, replace: Option<u32>, old_ground: Vec<(i32, i32, f32)>, recipe: massif_structures::placed::Recipe) -> Job {
         let label = tr!("Assembling {name}", name = crate::i18n::tr_name(req.kind.name));
         Job::spawn(JobKind::Structure, label, None, ctx, move || {
-            let ground = massif_structures::ground::MapGround::new(&snapshot, dim);
+            let map = massif_structures::ground::MapGround::new(&snapshot, dim);
+            // The land the one replaced levelled, as it was before.
+            let ground = massif_structures::vanilla::Adapted { inner: &map, heights: old_ground.iter().map(|&(x, z, h)| ((x, z), h.round() as i32)).collect() };
             match massif_structures::vanilla::build(&lib, &ground, &req) {
-                Ok(built) => Outcome::Structure { built: Box::new(built), at: (req.at[0], req.at[2]), replace, dim },
+                Ok(built) => Outcome::Structure { built: Box::new(built), at: (req.at[0], req.at[2]), replace, dim, recipe },
                 Err(e) => Outcome::Failed(tr!("{name} could not be placed: {e}", name = crate::i18n::tr_name(req.kind.name), e)),
             }
         })
@@ -823,14 +830,18 @@ impl Job {
     /// snapshot of the document (`lib`: the game's files, for its own
     /// themes).
     #[allow(clippy::too_many_arguments)]
-    pub fn village(ctx: &egui::Context, snapshot: World, dim: usize, lib: Option<Arc<massif_structures::Library>>, theme: massif_structures::village::Theme, selection: Arc<massif_core::selection::Selection>, seed: u64, params: massif_structures::village::Params, id: u32) -> Job {
+    #[allow(clippy::too_many_arguments)]
+    pub fn village(ctx: &egui::Context, snapshot: World, dim: usize, lib: Option<Arc<massif_structures::Library>>, theme: massif_structures::village::Theme, job: crate::structure_tool::VillageJob, old_ground: Vec<(i32, i32, f32)>, id: u32) -> Job {
         Job::spawn(JobKind::Structure, tr!("Building the village").to_owned(), None, ctx, move || {
-            let Some(rect) = selection.bounds() else { return Outcome::Failed(tr!("Select an area first: the village fills the selection.").to_owned()) };
-            let inside = |x: i32, z: i32| selection.get(x, z) >= 128;
-            let ground = massif_structures::ground::MapGround::new(&snapshot, dim);
+            let massif_structures::placed::Recipe::Village { params, seed, .. } = job.recipe.clone() else { return Outcome::Failed("not a village".into()) };
+            let Some(rect) = job.recipe.area() else { return Outcome::Failed("not a village".into()) };
+            let mask = job.mask.clone();
+            let inside = move |x: i32, z: i32| mask.as_ref().is_none_or(|m| m.get(x, z) >= 128);
+            let map = massif_structures::ground::MapGround::new(&snapshot, dim);
+            let ground = massif_structures::vanilla::Adapted { inner: &map, heights: old_ground.iter().map(|&(x, z, h)| ((x, z), h.round() as i32)).collect() };
             let req = massif_structures::village::Request { theme: &theme, rect, inside: &inside, seed, params, id };
             match massif_structures::village::build(lib.as_deref(), &ground, &req) {
-                Ok(built) => Outcome::Village { built: Box::new(built), dim },
+                Ok(built) => Outcome::Village { built: Box::new(built), dim, replace: job.replace, recipe: job.recipe },
                 Err(e) => Outcome::Failed(tr!("The village could not be built: {e}", e)),
             }
         })

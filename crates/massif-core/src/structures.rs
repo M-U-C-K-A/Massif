@@ -134,6 +134,16 @@ pub struct Structure {
     /// its own as it applies again, never those placed by hand).
     #[serde(default, skip_serializing_if = "StructureSource::is_user")]
     pub source: StructureSource,
+    /// How to make it again (its kind, place, settings and draw), as the
+    /// tool that placed it writes it (JSON): what lets it be moved,
+    /// resized or drawn again. None for those placed before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipe: Option<String>,
+    /// The land it levelled, as it was: each column's height before, so
+    /// that taking it away or making it again leaves the land as it found
+    /// it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ground: Vec<(i32, i32, f32)>,
 }
 
 /// Who placed a structure.
@@ -280,6 +290,38 @@ pub fn set_heights(edit: &mut crate::history::Edit, heights: &std::collections::
     });
 }
 
+/// The heights of the columns of `heights`, as they are before a
+/// structure levels them (for [`Structure::ground`]).
+pub fn heights_before(dim: &crate::world::Dimension, heights: &std::collections::HashMap<(i32, i32), i32>) -> Vec<(i32, i32, f32)> {
+    let mut out: Vec<(i32, i32, f32)> = heights.keys().filter_map(|&(x, z)| crate::ops::height_at(dim, 0, x, z, crate::ops::Surface::Top).map(|h| (x, z, h))).collect();
+    out.sort_by_key(|e| (e.0, e.1));
+    out
+}
+
+/// Give the columns of `ground` back the heights they had.
+pub fn restore_ground(edit: &mut crate::history::Edit, ground: &[(i32, i32, f32)]) {
+    if ground.is_empty() {
+        return;
+    }
+    let (lo, hi) = (edit.dim().min_y as f32, edit.dim().max_y as f32);
+    let map: std::collections::HashMap<(i32, i32), f32> = ground.iter().map(|&(x, z, h)| ((x, z), h)).collect();
+    let (mut x0, mut z0, mut x1, mut z1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+    for &(x, z) in map.keys() {
+        (x0, z0, x1, z1) = (x0.min(x), z0.min(z), x1.max(x + 1), z1.max(z + 1));
+    }
+    let rect = BlockRect::new(x0, z0, x1, z1);
+    edit.par_tiles(rect.tiles(), rect, false, |_, clip, tile| {
+        let top = tile.top.dense_mut();
+        for z in clip.z0..clip.z1 {
+            for x in clip.x0..clip.x1 {
+                if let Some(&h) = map.get(&(x, z)) {
+                    top[crate::coords::local_index(x, z)] = crate::codec::snap_height(h.clamp(lo, hi));
+                }
+            }
+        }
+    });
+}
+
 /// The number the next structure placed in `structures` takes.
 pub fn next_id(structures: &[std::sync::Arc<Structure>]) -> u32 {
     structures.iter().map(|s| s.id).max().map_or(1, |m| m + 1)
@@ -345,6 +387,8 @@ mod tests {
             data_version: 4671,
             colors: Vec::new(),
             source: StructureSource::User,
+            recipe: None,
+            ground: Vec::new(),
         };
         // A floor of planks 3 × 3 at y 64 across a section's edge, air
         // above it, a chest in the middle.

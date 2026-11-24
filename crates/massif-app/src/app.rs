@@ -3985,7 +3985,7 @@ impl MassifApp {
                         self.dialog = Some(Dialog::ImportMask(Box::new(form)));
                     }
                 }
-                Outcome::Structure { built, at, replace, dim } => {
+                Outcome::Structure { built, at, replace, dim, recipe } => {
                     if other_map || dim != self.doc.dim {
                         self.tools.structure.rt.done(None, None);
                         crate::sounds::play(Cue::Warning);
@@ -4000,15 +4000,12 @@ impl MassifApp {
                         built.structure.id = massif_core::structures::next_id(structures);
                         let id = built.structure.id;
                         let replaced = replace.and_then(|r| structures.iter().position(|t| t.id == r));
+                        let _ = replaced;
+                        built.structure.recipe = Some(recipe.to_json());
                         self.doc.history.begin(tr!("Place {name}", name = name.clone()), dim);
-                        {
-                            let mut edit = self.doc.history.edit(&mut self.doc.world, 0);
-                            if let Some(k) = replaced {
-                                edit.structures_mut().remove(k);
-                            }
-                            massif_structures::vanilla::apply(&mut edit, &built);
-                        }
+                        crate::structure_tool::apply_placed(&mut self.doc.history.edit(&mut self.doc.world, 0), &mut built, replace);
                         self.doc.commit();
+                        self.tools.structure.selected = Some(id);
                         let s = &built.structure;
                         let mut msg = tr!("{name} placed: {blocks} blocks, {chests} block entities, {entities} entities, y {y0}…{y1}, in {secs:.1} s", name, blocks = s.block_count(), chests = s.block_entities.len(), entities = s.entities.len(), y0 = s.min[1], y1 = s.max[1], secs);
                         if !built.unknown.is_empty() {
@@ -4022,7 +4019,7 @@ impl MassifApp {
                         self.say(ctx, msg, false, None);
                     }
                 }
-                Outcome::Village { built, dim } => {
+                Outcome::Village { built, dim, replace, recipe } => {
                     if other_map || dim != self.doc.dim {
                         self.tools.village.rt.done(None);
                         crate::sounds::play(Cue::Warning);
@@ -4031,9 +4028,12 @@ impl MassifApp {
                         let mut built = *built;
                         crate::structure_tool::colors_of(&mut built.structure, self.blocks.catalogue.as_deref());
                         built.structure.id = massif_core::structures::next_id(&self.doc.world.dims[dim].structures);
-                        self.doc.history.begin(tr!("Build a village"), dim);
-                        massif_structures::vanilla::apply(&mut self.doc.history.edit(&mut self.doc.world, 0), &built);
+                        built.structure.recipe = Some(recipe.to_json());
+                        let id = built.structure.id;
+                        self.doc.history.begin(if replace.is_some() { tr!("Build the village again") } else { tr!("Build a village") }, dim);
+                        crate::structure_tool::apply_placed(&mut self.doc.history.edit(&mut self.doc.world, 0), &mut built, replace);
                         self.doc.commit();
+                        self.tools.structure.selected = Some(id);
                         let s = &built.structure;
                         let msg = tr!("Village built: {buildings} buildings, {blocks} blocks, {villagers} villagers, in {secs:.1} s", buildings = s.pieces.len(), blocks = s.block_count(), villagers = s.entities.len(), secs);
                         self.tools.village.rt.done(Some(msg.clone()));
@@ -5572,25 +5572,50 @@ impl MassifApp {
         // the interface's thread.
         if self.tools.tool == Tool::Structure || self.tools.structure.rt.is_busy() {
             self.tools.structure.rt.ensure_library(ctx, self.settings.minecraft_jar.clone(), self.settings.mod_jars.clone());
-            if let Some((x, z, replace, lib)) = self.tools.structure.rt.take_pending() {
+            if let Some((recipe, replace, lib)) = self.tools.structure.rt.take_pending() {
                 let snapshot = self.doc.world.snapshot();
                 let id = massif_core::structures::next_id(&self.doc.dimension().structures);
-                let req = self.tools.structure.request(x, z, id);
-                self.jobs.push(Job::structure(ctx, snapshot, self.doc.dim, lib, req, replace).on(self.doc.generation));
+                let old = replace.and_then(|r| self.doc.dimension().structures.iter().find(|s| s.id == r)).map(|s| s.ground.clone()).unwrap_or_default();
+                match crate::structure_tool::request_of(&recipe, id) {
+                    Some(req) => self.jobs.push(Job::structure(ctx, snapshot, self.doc.dim, lib, req, replace, old, recipe).on(self.doc.generation)),
+                    None => self.tools.structure.rt.done(None, Some(tr!("That structure is not known here").to_owned())),
+                }
             }
         }
-        // The village brush: the game's files read (for its own themes),
-        // the selection filled off the interface's thread.
-        if self.tools.tool == Tool::Village || self.tools.village.rt.is_busy() {
+        // Villages: the game's files read (for its own themes), each built
+        // off the interface's thread; one whose settings were changed is
+        // built again once they rest.
+        if self.tools.tool == Tool::Structure && let Some((id, recipe)) = self.tools.structure.rt.due_regen() {
+            crate::structure_tool::redo(&mut self.tools, id, recipe);
+        }
+        if self.tools.tool == Tool::Structure || self.tools.village.rt.is_busy() {
             self.tools.structure.rt.ensure_library(ctx, self.settings.minecraft_jar.clone(), self.settings.mod_jars.clone());
-            let theme = self.tools.village.theme();
             let lib = self.tools.structure.rt.library();
-            let ready = theme.as_ref().is_some_and(|t| t.vanilla.is_none() || lib.is_some());
-            if ready && let Some(selection) = self.doc.selection().cloned() && self.tools.village.rt.take_pending() {
-                let snapshot = self.doc.world.snapshot();
-                let id = massif_core::structures::next_id(&self.doc.dimension().structures);
-                let v = &self.tools.village;
-                self.jobs.push(Job::village(ctx, snapshot, self.doc.dim, lib, theme.expect("ready"), selection, v.seed, v.params(), id).on(self.doc.generation));
+            let lib_failed = self.tools.structure.rt.error();
+            if let Some(job) = self.tools.village.rt.peek_pending() {
+                let massif_structures::placed::Recipe::Village { pack, theme, .. } = &job.recipe else { unreachable!("villages only") };
+                let found = self.tools.village.theme_named(pack, theme);
+                match found {
+                    None => {
+                        let why = tr!("The village's theme is no longer offered: add its pack again").to_owned();
+                        self.tools.village.rt.drop_pending(Some(why.clone()));
+                        self.say(ctx, why, true, None);
+                    }
+                    Some(t) if t.vanilla.is_some() && lib.is_none() => {
+                        if let Some(e) = lib_failed {
+                            self.tools.village.rt.drop_pending(Some(e.clone()));
+                            self.say(ctx, e, true, None);
+                        }
+                    }
+                    Some(t) => {
+                        if let Some(job) = self.tools.village.rt.take_pending() {
+                            let snapshot = self.doc.world.snapshot();
+                            let id = massif_core::structures::next_id(&self.doc.dimension().structures);
+                            let old = job.replace.and_then(|r| self.doc.dimension().structures.iter().find(|s| s.id == r)).map(|s| s.ground.clone()).unwrap_or_default();
+                            self.jobs.push(Job::village(ctx, snapshot, self.doc.dim, lib, t, job, old, id).on(self.doc.generation));
+                        }
+                    }
+                }
             }
         }
         if let Some(biomes) = self.tools.run_auto.take() {
@@ -8460,6 +8485,9 @@ mod diorama_tests;
 #[cfg(test)]
 #[path = "jack_tools_tests.rs"]
 mod jack_tools_tests;
+#[cfg(test)]
+#[path = "structures_tests.rs"]
+mod structures_tests;
 
 #[cfg(test)]
 #[path = "ideas_tests.rs"]
@@ -12952,7 +12980,7 @@ mod tests {
         }
         let note = {
             let s = h.state_mut();
-            crate::structure_tool::village_click(&mut s.doc, &mut s.tools, 0, 0)
+            crate::structure_tool::fill_selection(&s.doc, &mut s.tools)
         };
         assert!(note.is_some());
         let started = std::time::Instant::now();
@@ -13046,7 +13074,7 @@ mod tests {
             h.run_steps(3);
             {
                 let s = h.state_mut();
-                crate::structure_tool::village_click(&mut s.doc, &mut s.tools, spot.0, spot.1);
+                crate::structure_tool::fill_selection(&s.doc, &mut s.tools);
             }
             let started = std::time::Instant::now();
             while !h.state().jobs.is_empty() || h.state().tools.village.rt.is_busy() {

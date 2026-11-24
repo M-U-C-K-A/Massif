@@ -524,7 +524,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
         Tool::CaveBiome => crate::caves::cave_biome_settings(ui, tools, doc),
         Tool::Combined => combined_settings(ui, tools, doc),
         Tool::Structure => crate::structure_tool::settings(ui, tools, doc),
-        Tool::Village => crate::structure_tool::village_settings(ui, tools, doc),
+        Tool::Village => crate::structure_tool::settings(ui, tools, doc),
         Tool::PaintBiome => {
             let reg = &doc.world.registry;
             let def = reg.biome(BiomeId(tools.biome));
