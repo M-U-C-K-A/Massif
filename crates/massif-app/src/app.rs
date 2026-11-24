@@ -385,6 +385,17 @@ fn export_versions() -> Vec<(massif_anvil::Target, bool)> {
     versions
 }
 
+/// A map's revision, generation and dimension: what a cache read of it
+/// holds for.
+type DocKey = (u64, u64, usize);
+/// What the map holds, as the filters' menu shows it first.
+type UsedSet = std::sync::Arc<std::collections::HashSet<massif_core::filter::Match>>;
+/// The Info panel's column, read for that column under the cursor of that
+/// map.
+type Inspected = ((Option<(i32, i32)>, DocKey), Option<crate::inspect::ColumnInfo>);
+/// Layers ▸ Find: what is looked for, its places, the one shown.
+type Finding = (massif_core::filter::Match, Vec<(i32, i32)>, usize);
+
 enum Dialog {
     /// "Coming from WorldPainter?", at the first start.
     Origin,
@@ -515,6 +526,22 @@ pub struct MassifApp {
     /// The 3D Sculpt editor's view: its own camera and tiles.
     sculpt3d: View3d,
     hover: Option<(i32, i32)>,
+    /// What the map's tiles hold, and the map and dimension it is of.
+    presence: (Option<(u64, usize)>, massif_core::presence::Presence),
+    /// What the map holds, for the filters' menu, and the revision,
+    /// generation and dimension it was read at.
+    used: Option<(DocKey, UsedSet)>,
+    /// The export dialog set aside while its Test Export's regions are
+    /// picked on the map.
+    region_form: Option<ExportForm>,
+    /// Where the filters' eyedropper's choices were last shown.
+    pick_shown: Option<((i32, i32), egui::Pos2)>,
+    /// Layers ▸ Find: the layer looked for, its places nearest first, and
+    /// the one shown.
+    finding: Option<Finding>,
+    /// The column the Info panel shows, and what it was read for: the
+    /// column, the map's revision and generation, the dimension.
+    inspected: Option<Inspected>,
     map_center: Option<[f64; 2]>,
     /// The map editor keyboard zooming applies to: the last one used.
     active_map: Option<AreaId>,
@@ -2827,6 +2854,153 @@ impl MassifApp {
         self.dialog = Some(Dialog::Ores(Box::new(crate::ores::OresView::new(ctx, snapshot, self.doc.dim))));
     }
 
+    /// What the map's tiles hold, kept up to date as they change (see
+    /// [`massif_core::presence`]): read again for the map, or the
+    /// dimension, shown when it is another one.
+    fn presence(&mut self) -> &massif_core::presence::Presence {
+        let key = (self.doc.generation, self.doc.dim);
+        if self.presence.0 != Some(key) {
+            self.presence = (Some(key), Default::default());
+        }
+        let started = std::time::Instant::now();
+        let read = self.presence.1.update(self.doc.dimension());
+        if read > 0 {
+            log::info!("presence: read {read} tiles in {:?}", started.elapsed());
+        }
+        &self.presence.1
+    }
+
+    /// Test Export's regions picked on the map: a bar at the foot of the
+    /// window says how many, with Done (back to the dialog, Regions chosen)
+    /// and Cancel (back to it as it was); Esc cancels.
+    fn region_pick_ui(&mut self, ctx: &egui::Context) {
+        let Some(pick) = &self.tools.region_pick else { return };
+        if self.region_form.is_none() {
+            self.tools.region_pick = None;
+            return;
+        }
+        let n = pick.regions.len();
+        let mut done = None;
+        if crate::keymap::peek(ctx, crate::keymap::Action::Cancel) && !ctx.egui_wants_keyboard_input() {
+            done = Some(false);
+        }
+        let screen = ctx.content_rect();
+        egui::Area::new(Id::unique("region pick")).order(egui::Order::Foreground).anchor(egui::Align2::CENTER_BOTTOM, vec2(0.0, -48.0)).show(ctx, |ui| {
+            let pal = Palette::of(ui);
+            egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(14, 8)).show(ui, |ui| {
+                ui.set_max_width(screen.width() - 32.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(theme::glyph(Icon::Grid3x3).to_string()).color(pal.accent));
+                    ui.label(trn!("{n} region picked for the test", "{n} regions picked for the test", n = n));
+                    ui.label(RichText::new(tr!("Click or drag over the regions; again to leave one")).size(11.5).color(pal.weak));
+                    if ui.button(tr!("Cancel")).clicked() {
+                        done = Some(false);
+                    }
+                    if ui.add(theme::primary_button(ui, tr!("Done"))).clicked() {
+                        done = Some(true);
+                    }
+                });
+            });
+        });
+        if let Some(ok) = done {
+            let pick = self.tools.region_pick.take().unwrap_or_default();
+            if let Some(mut form) = self.region_form.take() {
+                if ok {
+                    form.test_regions = pick.regions;
+                    form.test_area = TestArea::Regions;
+                }
+                form.testing = true;
+                self.dialog = Some(Dialog::Export(form));
+            }
+        }
+    }
+
+    /// The filters' eyedropper: once a spot of the map is clicked, what is
+    /// there, by the pointer, to pick what the filter is on; Esc, or a
+    /// click elsewhere, puts it away.
+    fn filter_pick_ui(&mut self, ctx: &egui::Context) {
+        let Some(only) = self.tools.filter_pick else {
+            self.pick_shown = None;
+            return;
+        };
+        if crate::keymap::peek(ctx, crate::keymap::Action::Cancel) && !ctx.egui_wants_keyboard_input() {
+            self.tools.filter_pick = None;
+            self.tools.filter_pick_at = None;
+            self.pick_shown = None;
+            return;
+        }
+        let Some((at, pos)) = self.tools.filter_pick_at else { return };
+        let fresh = self.pick_shown != Some((at, pos));
+        self.pick_shown = Some((at, pos));
+        let Some(info) = crate::inspect::ColumnInfo::read(&self.doc, at.0, at.1) else {
+            self.tools.filter_pick_at = None;
+            self.say(ctx, tr!("Nothing to pick there: off the map"), false, None);
+            return;
+        };
+        let choices = info.choices(&self.doc.world.registry);
+        let area = egui::Area::new(Id::unique("filter pick")).order(egui::Order::Foreground).fixed_pos(pos + vec2(14.0, 10.0)).constrain(true).show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| crate::inspect::pick_popup(ui, &info, &choices, only)).inner
+        });
+        let mut done = false;
+        match area.inner {
+            Some(Some(what)) => {
+                let list = if only { &mut self.tools.filter.only_on } else { &mut self.tools.filter.except_on };
+                let list = list.get_or_insert_with(Vec::new);
+                if !list.contains(&what) {
+                    list.push(what);
+                }
+                self.tools.filter_used_now(what);
+                let name = crate::panels::match_name(&what, &self.doc.world.registry);
+                let text = if only { tr!("The brushes act only on {name}", name) } else { tr!("The brushes act everywhere but on {name}", name) };
+                self.say(ctx, text, false, None);
+                done = true;
+            }
+            Some(None) => done = true,
+            None => {}
+        }
+        // A press anywhere else puts them away, the eyedropper still in
+        // hand: on the map, it shows what is at the new spot.
+        if !done && !fresh && ctx.input(|i| i.pointer.any_pressed()) && !ctx.input(|i| i.pointer.interact_pos()).is_some_and(|p| area.response.rect.contains(p)) {
+            self.tools.filter_pick_at = None;
+            self.pick_shown = None;
+        }
+        if done {
+            self.tools.filter_pick = None;
+            self.tools.filter_pick_at = None;
+            self.pick_shown = None;
+        }
+    }
+
+    /// Layers ▸ Find: the map glides to the nearest place `what` is
+    /// painted, from where it looks; asked again, to the next place, and
+    /// round again past the last.
+    fn find_on_map(&mut self, ctx: &egui::Context, what: massif_core::filter::Match) {
+        let places = self.presence().places(what);
+        let name = crate::panels::match_name(&what, &self.doc.world.registry);
+        if places.is_empty() {
+            self.finding = None;
+            self.say(ctx, tr!("{name} is not painted anywhere on this map", name), false, None);
+            return;
+        }
+        let k = match &mut self.finding {
+            Some((m, list, k)) if *m == what && list.len() == places.len() && places.iter().all(|p| list.contains(p)) => {
+                *k = (*k + 1) % list.len();
+                *k
+            }
+            _ => {
+                let from = self.active_map.and_then(|id| self.maps.get(&id)).or_else(|| self.maps.values().next()).map_or((0.0, 0.0), |m| (m.center[0], m.center[1]));
+                self.finding = Some((what, massif_core::presence::by_distance(places, from), 0));
+                0
+            }
+        };
+        let (list_len, (x, z)) = {
+            let (_, list, _) = self.finding.as_ref().expect("just set");
+            (list.len(), list[k])
+        };
+        self.show_on_map(ctx, x, z);
+        self.say(ctx, tr!("{name}: place {value} of {value2}, at {x}, {z}", name, value = k + 1, value2 = list_len, x, z), false, None);
+    }
+
     /// Show column `(x, z)` on a map view of the World side: it glides
     /// there and points the column out.
     fn show_on_map(&mut self, ctx: &egui::Context, x: i32, z: i32) {
@@ -5000,6 +5174,9 @@ impl MassifApp {
         }
         if std::mem::take(&mut self.tools.open_rules) && self.dialog.is_none() {
             self.dialog = Some(Dialog::AutoRules(self.tools.tool == Tool::AutoPaint));
+        }
+        if let Some(what) = self.layers_ui.find.take() {
+            self.find_on_map(ctx, what);
         }
         if let Some((kind, n)) = self.layers_ui.open.take()
             && self.dialog.is_none()

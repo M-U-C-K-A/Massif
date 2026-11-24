@@ -185,6 +185,16 @@ impl Level {
         Some((lo, hi))
     }
 
+    /// The tile's encoding at `pos` while it holds: kept, the same `Arc`
+    /// says the tile has not changed since. `None` for a tile changed since
+    /// it was last encoded (or none there).
+    pub fn cached_blob(&self, pos: TilePos) -> Option<Blob> {
+        match self.tiles.get(&pos)? {
+            Slot::Hot { blob, .. } => blob.clone(),
+            Slot::Cold(blob) => Some(blob.clone()),
+        }
+    }
+
     /// Read a tile without changing its hot/cold state.
     pub fn view(&self, pos: TilePos) -> Option<TileRef<'_>> {
         match self.tiles.get(&pos)? {

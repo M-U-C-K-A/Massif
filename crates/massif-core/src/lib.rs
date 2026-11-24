@@ -56,6 +56,7 @@ pub mod reference;
 pub mod region_map;
 pub mod packs;
 pub mod plane;
+pub mod presence;
 pub mod pockets;
 pub mod registry;
 pub mod river;

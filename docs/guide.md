@@ -1382,7 +1382,12 @@ Paint in the area's chooser). How they fit together is in
   keeps a ground cover's, a tree layer's or a pocket layer's blocks: no brush paints another
   layer of its slot over them, nor rubs them out, until it is unlocked;
 - its menu (right button) opens its **Settings…** in a dialog, paints with
-  it, renames, **duplicates**, moves it **up** or **down** its section,
+  it, **finds** it — the map goes to the nearest place it is painted, the 3D
+  view with it when it follows the map, and **Find** again goes to the next
+  place, round to the first past the last (each patch of painted tiles is
+  one place; what each tile holds is kept from one Find to the next, a
+  tile read again only once it changed, so it is quick on the largest
+  maps) —, renames, **duplicates**, moves it **up** or **down** its section,
   locks or **removes** it;
 - **New combined**, **New cover**, **Import objects…**, **New pockets**
   and **New mix** add one. A mix is

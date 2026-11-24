@@ -42,6 +42,9 @@ pub struct LayersUi {
     pub imported: Option<Vec<LayerImport>>,
     /// The palette being renamed: its name, and the text typed.
     pub rename_palette: Option<(String, String)>,
+    /// A layer to find on the map (Find in its menu): the window moves the
+    /// map to the next place it is painted.
+    pub find: Option<massif_core::filter::Match>,
 }
 
 /// What one WorldPainter `.layer` file became, in words, for its report.
@@ -202,6 +205,7 @@ enum Action {
     MovePalette(String, bool),
     /// Its layers go back to their sections.
     DeletePalette(String),
+    Find(massif_core::filter::Match),
 }
 
 /// One layer as the list shows it.
@@ -216,6 +220,9 @@ struct Entry {
     shown: Option<bool>,
     /// `None` for one that cannot be locked.
     locked: Option<bool>,
+    /// What finds it on the map; `None` for one that is not painted in a
+    /// plane of its own (a mix, a combined layer).
+    find: Option<massif_core::filter::Match>,
     selected: bool,
     /// Its palette, "" for none.
     palette: String,
@@ -272,6 +279,7 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                     tip: crate::panels::describe_combined(reg, c),
                     shown: None,
                     locked: None,
+                    find: None,
                     selected: tools.tool == Tool::Combined && tools.combined as usize == k + 1,
                     palette: c.palette.clone(),
                 },
@@ -299,6 +307,7 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                 tip: parts.join(", "),
                 shown: None,
                 locked: None,
+                find: None,
                 selected: current.as_deref() == Some(p.name.as_str()),
                 palette: p.palette.clone(),
             }
@@ -322,6 +331,7 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                     tip: crate::panels::describe_cover(c),
                     shown: Some(!c.hidden),
                     locked: Some(c.locked),
+                    find: Some(massif_core::filter::Match::Layer(massif_core::filter::Painted::Cover, (k + 1) as u16)),
                     selected: tools.tool == Tool::Cover && tools.cover as usize == k + 1,
                     palette: c.palette.clone(),
                 },
@@ -352,6 +362,7 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                     tip: tr!("{objects} · one every {spacing} blocks, {share:.0}% of the spots", objects = if names.is_empty() { tr!("No objects yet").to_owned() } else { names.join(", ") }, spacing = l.spacing, share = l.density * 100.0),
                     shown: Some(!l.hidden),
                     locked: Some(l.locked),
+                    find: Some(massif_core::filter::Match::Layer(if l.understory { massif_core::filter::Painted::Understory } else { massif_core::filter::Painted::Objects }, (k + 1) as u16)),
                     selected: tools.tool == Tool::Objects && tools.object_layer as usize == k + 1,
                     palette: l.palette.clone(),
                 },
@@ -379,6 +390,7 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                     tip: tr!("{blocks} · from {low} to {high}", blocks = p.blocks.iter().map(|b| crate::panels::plant_name(&reg.block(b.0).state)).collect::<Vec<_>>().join(", "), low = p.low, high = p.high),
                     shown: None,
                     locked: Some(p.locked),
+                    find: Some(massif_core::filter::Match::Layer(massif_core::filter::Painted::Pockets, (k + 1) as u16)),
                     selected: tools.tool == Tool::Pockets && tools.pocket_layer as usize == k + 1,
                     palette: p.palette.clone(),
                 },
@@ -855,6 +867,12 @@ fn row(ui: &mut Ui, e: &Entry, state: &mut LayersUi, names: &[String], actions: 
             actions.push(Action::Paint(e.kind, e.id));
             ui.close();
         }
+        if let Some(what) = e.find
+            && crate::widgets::button(ui, theme::with_icon(Icon::Search, tr!("Find"))).on_hover_text(tr!("Move the map to the nearest place it is painted; again, to the next")).clicked()
+        {
+            actions.push(Action::Find(what));
+            ui.close();
+        }
         if crate::widgets::button(ui, theme::with_icon(Icon::Pencil, tr!("Rename"))).clicked() {
             actions.push(Action::Rename(e.kind, e.id, e.name.clone()));
             ui.close();
@@ -1004,6 +1022,7 @@ fn apply(action: Action, tools: &mut ToolState, doc: &mut Document, state: &mut 
             reg.palettes = names.into_iter().filter(|n| *n != name).collect();
             rename_palette(reg, &mut tools.pattern.saved, &name, "");
         }
+        Action::Find(what) => state.find = Some(what),
         Action::Settings(kind, n) => {
             apply(Action::Paint(kind, n), tools, doc, state, lists);
             state.open = Some((kind, n));
@@ -1360,7 +1379,7 @@ mod tests {
     }
 
     fn entry(kind: Kind, id: usize, name: &str) -> Entry {
-        Entry { kind, id, name: name.to_owned(), color: [0; 3], detail: String::new(), tip: String::new(), shown: None, locked: None, selected: false, palette: String::new() }
+        Entry { kind, id, name: name.to_owned(), color: [0; 3], detail: String::new(), tip: String::new(), shown: None, locked: None, find: None, selected: false, palette: String::new() }
     }
 
     /// Palettes: made, filled from a layer's menu and by dragging a row
