@@ -39,9 +39,9 @@ fn erosion_timings() {
             "peaks": {{ "type": "noise.fbm", "params": {{ "style": "ridged", "scale": {s1}, "height": 160, "base": 70 }} }},
             "tilt": {{ "type": "pattern.gradient", "params": {{ "height": 40 }} }},
             "land": {{ "type": "combine.blend", "inputs": {{ "a": "peaks", "b": "tilt" }}, "params": {{ "mode": "add" }} }},
-            "er": {{ "type": "{node}", "inputs": {{ "height": "land" }}, "params": {} }} }} }}"#,
+            "er": {{ "type": "{node}", "inputs": {{ "height": "land" }}, "params": {p} }} }} }}"#,
         s1 = size / 5,
-        settings(&node)
+        p = settings(&node)
     );
     let g = Graph::from_json(&text).unwrap_or_else(|e| panic!("{e}"));
     let (c, diags) = compile(&g, Space::new(size), sim);
@@ -57,7 +57,7 @@ fn erosion_timings() {
         };
         e.region(&c, c.source("land", None).unwrap(), lod, whole, &never).unwrap();
         let started = Instant::now();
-        for port in c.node("er").unwrap().spec.outputs.iter().map(|p| p.name) {
+        for port in c.nodes[c.node("er").unwrap()].spec.outputs.iter().map(|p| p.name) {
             e.region(&c, c.source("er", Some(port)).unwrap(), lod, whole, &never).unwrap();
         }
         best = best.min(started.elapsed().as_secs_f64());
