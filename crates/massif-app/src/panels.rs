@@ -2429,7 +2429,7 @@ pub(crate) fn ground_picker(ui: &mut Ui, id: egui::Id, reg: &Registry, blocks: &
 }
 
 /// Patterns to start from, those saved, and saving this one.
-fn pattern_presets(ui: &mut Ui, ps: &mut crate::tools::PatternSettings) {
+pub fn pattern_presets(ui: &mut Ui, ps: &mut crate::tools::PatternSettings) {
     use crate::tools::PatternPreset;
     let current = ps.preset_name();
     let (mut load, mut forget) = (None, None);
@@ -2487,8 +2487,6 @@ fn pattern_presets(ui: &mut Ui, ps: &mut crate::tools::PatternSettings) {
 /// Massif's noise painter: the noise, the blocks it lays out and their
 /// shares, pictures of the result, and painting it over the whole map.
 fn pattern_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary) {
-    use massif_core::noise::Basis;
-    use massif_core::pattern::{MAX_OCTAVES, MAX_STRETCH, PatternKind};
     let pal = Palette::of(ui);
     hint(ui, tr!("Blocks mixed by a noise, each over its share of the ground. Neighbours in the list meet on the ground."));
     ui.add_space(2.0);
@@ -2496,62 +2494,7 @@ fn pattern_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
 
     // ---- the noise -------------------------------------------------------
     section(ui, Icon::Waves, tr!("Noise"));
-    let p = &mut tools.pattern.pattern;
-    ui.horizontal(|ui| {
-        crate::widgets::name_label(ui, tr!("Shape"), vec2(72.0, 18.0)).on_hover_text(tr!("Patches, thin veins, blobs with creases, cells, or wavering stripes"));
-        crate::widgets::combo("pattern kind").selected_text(crate::i18n::tr_name(p.kind.label())).width(120.0).show_ui(ui, |ui| {
-            for k in PatternKind::ALL {
-                ui.selectable_value(&mut p.kind, k, crate::i18n::tr_name(k.label()));
-            }
-        });
-    });
-    let fractal = p.kind.is_fractal();
-    ui.add_enabled_ui(fractal, |ui| {
-        ui.horizontal(|ui| {
-            crate::widgets::name_label(ui, tr!("Noise"), vec2(72.0, 18.0)).on_hover_text(tr!("Simplex: round shapes · Perlin: a little squarer · Value: soft, blocky blobs"));
-            crate::widgets::combo("pattern noise").selected_text(crate::i18n::tr_name(p.noise.label())).width(120.0).show_ui(ui, |ui| {
-                for b in Basis::ALL {
-                    ui.selectable_value(&mut p.noise, b, crate::i18n::tr_name(b.label()));
-                }
-            });
-        });
-    });
-    tip_row(ui, tr!("Size"), tr!("The size of the largest shapes"), |ui| {
-        ui.add(crate::widgets::Field::new(&mut p.scale, 2.0..=600.0).logarithmic(true).suffix(tr!(" blocks")).max_decimals(0))
-    });
-    ui.add_enabled_ui(fractal, |ui| {
-        tip_row(ui, tr!("Octaves"), tr!("Layers of finer and finer detail over the largest shapes"), |ui| {
-            ui.add(crate::widgets::Field::new(&mut p.octaves, 1..=MAX_OCTAVES))
-        });
-        tip_row(ui, tr!("Lacunarity"), tr!("How much finer each layer of detail is than the one before"), |ui| {
-            ui.add(crate::widgets::Field::new(&mut p.lacunarity, 1.0..=4.0).max_decimals(2))
-        });
-        tip_row(ui, tr!("Gain"), tr!("How much each layer of detail counts: low, smooth edges; high, ragged ones"), |ui| {
-            ui.add(crate::widgets::Field::new(&mut p.gain, 0.0..=1.0).max_decimals(2))
-        });
-    });
-    tip_row(ui, tr!("Stretch"), tr!("Draws the shapes out along the direction: streaks, bands"), |ui| {
-        ui.add(crate::widgets::Field::new(&mut p.stretch, 1.0..=MAX_STRETCH).logarithmic(true).suffix("×").max_decimals(1))
-    });
-    ui.add_enabled_ui(p.stretch > 1.01 || p.kind == PatternKind::Stripes, |ui| {
-        tip_row(ui, tr!("Direction"), tr!("The way the shapes run: 0° east–west, 90° north–south"), |ui| {
-            ui.add(crate::widgets::Field::new(&mut p.angle, 0.0..=180.0).suffix("°").max_decimals(0))
-        });
-    });
-    tip_row(ui, tr!("Soft edges"), tr!("Blocks of each side scattered into the other along the edges"), |ui| {
-        ui.add(
-            crate::widgets::Field::new(&mut p.softness, 0.0..=1.0)
-                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
-                .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
-        )
-    });
-    ui.horizontal(|ui| {
-        crate::widgets::name_label(ui, tr!("Seed"), vec2(72.0, 18.0)).on_hover_text(tr!("Another layout of the same pattern"));
-        crate::widgets::drag(ui, egui::DragValue::new(&mut p.seed));
-        if ui.small_button(theme::glyph(Icon::Dices).to_string()).on_hover_text(tr!("Another layout")).clicked() {
-            p.seed = p.seed.wrapping_mul(1_103_515_245).wrapping_add(12_345) % 1_000_000_000;
-        }
-    });
+    pattern_noise_rows(ui, &mut tools.pattern.pattern);
 
     // ---- the blocks, in their order, with their shares -----------------
     section(ui, Icon::Blocks, tr!("Blocks"));
@@ -2682,6 +2625,79 @@ fn pattern_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     if let Some(n) = tools.pattern.done {
         hint(ui, &tr!("{n} columns changed over the whole map.", n));
     }
+}
+
+/// The noise of a pattern: its shape, its basis, its size and detail, its
+/// stretch, its edges, how its neighbours blend, its seed. Shared by the
+/// Paint tool and the graph's Noise paint node. True when one changed.
+pub fn pattern_noise_rows(ui: &mut Ui, p: &mut massif_core::pattern::Pattern) -> bool {
+    use massif_core::noise::Basis;
+    use massif_core::pattern::{MAX_OCTAVES, MAX_STRETCH, PatternKind};
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        crate::widgets::name_label(ui, tr!("Shape"), vec2(72.0, 18.0)).on_hover_text(tr!("Patches, thin veins, blobs with creases, cells, or wavering stripes"));
+        crate::widgets::combo("pattern kind").selected_text(crate::i18n::tr_name(p.kind.label())).width(120.0).show_ui(ui, |ui| {
+            for k in PatternKind::ALL {
+                changed |= ui.selectable_value(&mut p.kind, k, crate::i18n::tr_name(k.label())).changed();
+            }
+        });
+    });
+    let fractal = p.kind.is_fractal();
+    ui.add_enabled_ui(fractal, |ui| {
+        ui.horizontal(|ui| {
+            crate::widgets::name_label(ui, tr!("Noise"), vec2(72.0, 18.0)).on_hover_text(tr!("Simplex: round shapes · Perlin: a little squarer · Value: soft, blocky blobs"));
+            crate::widgets::combo("pattern noise").selected_text(crate::i18n::tr_name(p.noise.label())).width(120.0).show_ui(ui, |ui| {
+                for b in Basis::ALL {
+                    changed |= ui.selectable_value(&mut p.noise, b, crate::i18n::tr_name(b.label())).changed();
+                }
+            });
+        });
+    });
+    changed |= tip_row(ui, tr!("Size"), tr!("The size of the largest shapes"), |ui| {
+        ui.add(crate::widgets::Field::new(&mut p.scale, 2.0..=600.0).logarithmic(true).suffix(tr!(" blocks")).max_decimals(0))
+    });
+    ui.add_enabled_ui(fractal, |ui| {
+        changed |= tip_row(ui, tr!("Octaves"), tr!("Layers of finer and finer detail over the largest shapes"), |ui| {
+            ui.add(crate::widgets::Field::new(&mut p.octaves, 1..=MAX_OCTAVES))
+        });
+        changed |= tip_row(ui, tr!("Lacunarity"), tr!("How much finer each layer of detail is than the one before"), |ui| {
+            ui.add(crate::widgets::Field::new(&mut p.lacunarity, 1.0..=4.0).max_decimals(2))
+        });
+        changed |= tip_row(ui, tr!("Gain"), tr!("How much each layer of detail counts: low, smooth edges; high, ragged ones"), |ui| {
+            ui.add(crate::widgets::Field::new(&mut p.gain, 0.0..=1.0).max_decimals(2))
+        });
+    });
+    changed |= tip_row(ui, tr!("Stretch"), tr!("Draws the shapes out along the direction: streaks, bands"), |ui| {
+        ui.add(crate::widgets::Field::new(&mut p.stretch, 1.0..=MAX_STRETCH).logarithmic(true).suffix("×").max_decimals(1))
+    });
+    ui.add_enabled_ui(p.stretch > 1.01 || p.kind == PatternKind::Stripes, |ui| {
+        changed |= tip_row(ui, tr!("Direction"), tr!("The way the shapes run: 0° east–west, 90° north–south"), |ui| {
+            ui.add(crate::widgets::Field::new(&mut p.angle, 0.0..=180.0).suffix("°").max_decimals(0))
+        });
+    });
+    changed |= tip_row(ui, tr!("Soft edges"), tr!("Blocks of each side scattered into the other along the edges"), |ui| {
+        ui.add(
+            crate::widgets::Field::new(&mut p.softness, 0.0..=1.0)
+                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
+        )
+    });
+    changed |= tip_row(ui, tr!("Blend"), tr!("Neighbours in the list dithered into each other: 0, sharp bands; 100%, a gradient from one to the next"), |ui| {
+        ui.add(
+            crate::widgets::Field::new(&mut p.blend, 0.0..=1.0)
+                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
+        )
+    });
+    ui.horizontal(|ui| {
+        crate::widgets::name_label(ui, tr!("Seed"), vec2(72.0, 18.0)).on_hover_text(tr!("Another layout of the same pattern"));
+        changed |= crate::widgets::drag(ui, egui::DragValue::new(&mut p.seed)).changed();
+        if ui.small_button(theme::glyph(Icon::Dices).to_string()).on_hover_text(tr!("Another layout")).clicked() {
+            p.seed = p.seed.wrapping_mul(1_103_515_245).wrapping_add(12_345) % 1_000_000_000;
+            changed = true;
+        }
+    });
+    changed
 }
 
 /// Pictures of a pattern: the ground it paints and its noise, side by side,

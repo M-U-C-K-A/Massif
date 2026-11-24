@@ -230,7 +230,7 @@ fn source_of(graph: &Graph, pick: impl Fn(&NodeKind) -> bool) -> Option<(NodeId,
 
 /// The relief and colours the viewport shows for `view` (a node's output),
 /// or for the graph's outputs.
-fn pick_view(graph: &Graph, eval: &Evaluation, view: Option<(NodeId, u8)>, terrains: &[[u8; 3]]) -> Option<(Arc<Field>, Paint, (NodeId, u8))> {
+fn pick_view(graph: &Graph, eval: &Evaluation, view: Option<(NodeId, u8)>, terrains: &[[u8; 3]], extent: Option<&Extent>) -> Option<(Arc<Field>, Paint, (NodeId, u8))> {
     let final_height = source_of(graph, |k| matches!(k, NodeKind::HeightOutput));
     let final_color = source_of(graph, |k| matches!(k, NodeKind::ColorOutput { .. }));
     let colors_of = |src: Option<(NodeId, u8)>| src.and_then(|s| eval.values.get(&s)).map(|v| v.as_color());
@@ -247,12 +247,17 @@ fn pick_view(graph: &Graph, eval: &Evaluation, view: Option<(NodeId, u8)>, terra
             let heights = value.as_field();
             // The graph's output: painted as converting would paint it.
             let paint = if Some((id, out)) == final_height {
+                let mask = |n: &massif_core::graph::Node| graph.input_of(n.id, 0).and_then(|(s, o)| eval.field(s, o).cloned());
                 let painted: Vec<(TerrainId, Arc<Field>)> = graph
                     .nodes
                     .iter()
-                    .filter_map(|n| match n.kind {
-                        NodeKind::TerrainOutput { terrain } => Some((TerrainId(terrain), graph.input_of(n.id, 0).and_then(|(s, o)| eval.field(s, o).cloned())?)),
-                        _ => None,
+                    .flat_map(|n| match &n.kind {
+                        NodeKind::TerrainOutput { terrain } => mask(n).map(|m| vec![(TerrainId(*terrain), m)]).unwrap_or_default(),
+                        // A noise paint, block by block over the extent.
+                        NodeKind::NoisePaint { pattern, terrains } => extent
+                            .and_then(|e| massif_core::graph::NoisePaintOut::new(pattern, terrains, 0, mask(n)).map(|p| p.masks(e)))
+                            .unwrap_or_default(),
+                        _ => Vec::new(),
                     })
                     .collect();
                 let base = colors_of(final_color);
@@ -471,7 +476,7 @@ impl Worker {
                     let relief_of = if layer_node.is_some() || layer_output.is_some() { None } else { req.view };
                     // Rivers and lakes show with the graph's output.
                     let water = if relief_of.is_none() { water_shown(&req.graph, &eval) } else { None };
-                    let view = pick_view(&req.graph, &eval, relief_of, &req.terrains).map(|(h, paint, shown)| {
+                    let view = pick_view(&req.graph, &eval, relief_of, &req.terrains, Some(&req.extent)).map(|(h, paint, shown)| {
                         let data = view_data(&h, &paint, &req.extent, req.exaggeration, &layers, water.as_deref());
                         (Arc::new(data), layer_node.or(layer_output).unwrap_or(shown))
                     });
@@ -2913,7 +2918,7 @@ impl GraphEditor {
     // ---------------------------------------------------------- properties --
 
     /// The settings of the selected node.
-    pub fn properties_ui(&mut self, ui: &mut Ui, doc: &mut Document) {
+    pub fn properties_ui(&mut self, ui: &mut Ui, doc: &mut Document, patterns: &mut Vec<crate::tools::PatternPreset>) {
         if std::mem::take(&mut self.want_map) {
             self.start_from_map(doc);
         }
@@ -2994,7 +2999,10 @@ impl GraphEditor {
         ui.add_space(6.0);
         let mut delete = false;
         egui::ScrollArea::vertical().id_salt("node properties").show(ui, |ui| {
-            properties(ui, &mut node.kind, &doc.world.registry);
+            match &mut node.kind {
+                NodeKind::NoisePaint { pattern, terrains } => noise_paint_properties(ui, pattern, terrains, &doc.world.registry, patterns),
+                kind => properties(ui, kind, &doc.world.registry),
+            }
             ui.add_space(10.0);
             let label = if self.picked.len() > 1 { tr!("Delete the {n} nodes selected", n = self.picked.len()) } else { tr!("Delete node").to_owned() };
             delete = ui.button(theme::with_icon(Icon::Trash2, &label)).clicked();
@@ -3438,6 +3446,91 @@ pub(crate) fn node_settings(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry, li
     *kind != before
 }
 
+/// The Noise paint node: the Paint tool's noise, with the presets saved
+/// from either, and its blocks in order with their shares.
+fn noise_paint_properties(ui: &mut Ui, pattern: &mut massif_core::pattern::Pattern, terrains: &mut Vec<(u16, f32)>, reg: &Registry, saved: &mut Vec<crate::tools::PatternPreset>) {
+    let pal = Palette::of(ui);
+    let mut ps = crate::tools::PatternSettings {
+        pattern: pattern.clone(),
+        terrains: terrains.iter().map(|(t, w)| (reg.terrain(TerrainId(*t)).name.clone(), *w)).collect(),
+        saved: std::mem::take(saved),
+        ..Default::default()
+    };
+    crate::panels::pattern_presets(ui, &mut ps);
+    let section = |ui: &mut Ui, name: &str| {
+        ui.add_space(6.0);
+        ui.label(RichText::new(name).size(11.0).color(pal.weak).medium());
+    };
+    section(ui, tr!("Noise"));
+    crate::panels::pattern_noise_rows(ui, &mut ps.pattern);
+    section(ui, tr!("Blocks, in order"));
+    let (mut up, mut remove, mut replace) = (None, None, None);
+    for k in 0..ps.terrains.len() {
+        ui.horizontal(|ui| {
+            let name = ps.terrains[k].0.clone();
+            let known = reg.terrain_by_name(&name).is_some();
+            crate::widgets::combo(format!("noise paint block {k}"))
+                .selected_text(RichText::new(&name).color(if known { pal.text } else { pal.danger }))
+                .width(118.0)
+                .height(320.0)
+                .show_ui(ui, |ui| {
+                    for t in &reg.terrains {
+                        if ui.selectable_label(t.name == name, &t.name).clicked() {
+                            replace = Some((k, t.name.clone()));
+                        }
+                    }
+                });
+            let mut share = ps.share(k);
+            let field = ui.add(
+                crate::widgets::Field::new(&mut share, 0.0..=1.0)
+                    .width(64.0)
+                    .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                    .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
+            );
+            if field.on_hover_text(tr!("Its share of the ground: the others share the rest")).changed() {
+                ps.set_share(k, share);
+            }
+            if k > 0 && ui.add(egui::Button::new(theme::glyph(Icon::ArrowUp).to_string()).frame(false).small()).on_hover_text(tr!("Up the list")).clicked() {
+                up = Some(k);
+            }
+            if ui.add(egui::Button::new(theme::glyph(Icon::X).to_string()).frame(false).small()).on_hover_text(tr!("Take it out")).clicked() {
+                remove = Some(k);
+            }
+        });
+    }
+    if let Some(k) = up {
+        ps.reorder(k, k - 1);
+    }
+    if let Some(k) = remove {
+        ps.remove(k);
+    }
+    if let Some((k, name)) = replace {
+        match ps.terrains.iter().position(|t| t.0 == name) {
+            Some(j) if j != k => ps.terrains.swap(j, k),
+            Some(_) => {}
+            None => ps.terrains[k].0 = name,
+        }
+    }
+    let mut added = None;
+    crate::widgets::combo("noise paint add").selected_text(theme::with_icon(Icon::Plus, tr!("Add a block"))).width(170.0).height(320.0).show_ui(ui, |ui| {
+        for t in reg.terrains.iter().filter(|t| !ps.terrains.iter().any(|p| p.0 == t.name)) {
+            if ui.selectable_label(false, &t.name).clicked() {
+                added = Some(t.name.clone());
+            }
+        }
+    });
+    if let Some(name) = added {
+        ps.add(&name);
+    }
+    if ps.terrains.is_empty() {
+        ui.label(RichText::new(tr!("No block yet: pick a preset or add one.")).size(11.5).color(pal.weak));
+    }
+    ui.label(RichText::new(tr!("Without a mask, it paints everywhere; outputs below it in the graph paint over it.")).size(11.0).color(pal.weak));
+    *pattern = ps.pattern;
+    *terrains = ps.terrains.iter().filter_map(|(n, w)| Some((reg.terrain_by_name(n)?.0, *w))).collect();
+    *saved = ps.saved;
+}
+
 fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
     let pal = Palette::of(ui);
     let tips = tips(kind);
@@ -3842,6 +3935,8 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             height(ui, tr!("Sea level"), sea);
             climate_legend(ui, false);
         }
+        // Its settings have a panel of their own (noise_paint_properties).
+        NodeKind::NoisePaint { .. } => {}
         NodeKind::BiomeOutput { sea, paint } => {
             height(ui, tr!("Sea level"), sea);
             row(ui, tr!("Paint the ground"), |ui| crate::widgets::checkbox(ui, paint, ""));
@@ -4194,20 +4289,20 @@ mod tests {
         let ids: Vec<NodeId> = g.nodes.iter().map(|n| n.id).collect();
         let eval = g.evaluate(&extent, &ids, true, &AtomicBool::new(false)).unwrap();
         // Nothing selected: the output, in its colours.
-        let (h, paint_of, shown) = pick_view(&g, &eval, None, &[]).unwrap();
+        let (h, paint_of, shown) = pick_view(&g, &eval, None, &[], None).unwrap();
         assert_eq!(shown, (hills, 0));
         assert!(matches!(paint_of, Paint::Color(_)));
         assert_eq!(h.n, 32);
         // A mask: shown on the relief before it.
-        let (_, p, shown) = pick_view(&g, &eval, Some((slope, 0)), &[]).unwrap();
+        let (_, p, shown) = pick_view(&g, &eval, Some((slope, 0)), &[], None).unwrap();
         assert!(matches!(p, Paint::Mask(_)) && shown == (slope, 0));
         // A colour node, and the colour output (which shows what it gets).
-        let (_, p, _) = pick_view(&g, &eval, Some((paint, 0)), &[]).unwrap();
+        let (_, p, _) = pick_view(&g, &eval, Some((paint, 0)), &[], None).unwrap();
         assert!(matches!(p, Paint::Color(_)));
-        let (_, _, shown) = pick_view(&g, &eval, Some((color_out, 0)), &[]).unwrap();
+        let (_, _, shown) = pick_view(&g, &eval, Some((color_out, 0)), &[], None).unwrap();
         assert_eq!(shown, (paint, 0));
         // The data for the viewport, with its light.
-        let (h, p, _) = pick_view(&g, &eval, Some((slope, 0)), &[]).unwrap();
+        let (h, p, _) = pick_view(&g, &eval, Some((slope, 0)), &[], None).unwrap();
         let data = view_data(&h, &p, &extent, 2.0, &[], None);
         assert_eq!((data.colors.len(), data.light.len()), (32 * 32, 32 * 32));
         // Thumbnails of each kind.

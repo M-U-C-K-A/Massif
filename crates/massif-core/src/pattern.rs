@@ -88,6 +88,11 @@ pub struct Pattern {
     pub angle: f32,
     /// How soft the edges between terrains are (0: sharp, 1: very ragged).
     pub softness: f32,
+    /// How far neighbours in the list blend into each other, dithered
+    /// block by block: 0, sharp bands; 1, a gradient from one to the next
+    /// across all of their shares (an ordered gradient: dirt, then coarse
+    /// dirt, then grass).
+    pub blend: f32,
     pub seed: u32,
 }
 
@@ -103,6 +108,7 @@ impl Default for Pattern {
             stretch: 1.0,
             angle: 30.0,
             softness: 0.3,
+            blend: 0.0,
             seed: 1,
         }
     }
@@ -235,10 +241,40 @@ impl PatternSampler {
 
     /// The terrain of column `(x, z)`.
     pub fn terrain(&self, x: i32, z: i32) -> Option<TerrainId> {
+        self.terrain_at(x, z, self.rank(x, z))
+    }
+
+    /// The terrain of column `(x, z)` standing at `rank` in the spread.
+    fn terrain_at(&self, x: i32, z: i32, rank: f32) -> Option<TerrainId> {
         let soft = self.pattern.softness.clamp(0.0, 1.0) * 0.12;
         let jitter = (hash2(x, z, self.pattern.seed as u64 ^ 0x5017) as f32 / u32::MAX as f32 - 0.5) * soft;
-        let r = (self.rank(x, z) + jitter).clamp(0.0, 0.9999);
-        self.cumulative.iter().find(|(_, c)| r < *c).or(self.cumulative.last()).map(|t| t.0)
+        let r = (rank + jitter).clamp(0.0, 0.9999);
+        let c = &self.cumulative;
+        if c.is_empty() {
+            return None;
+        }
+        let mut k = c.iter().position(|(_, e)| r < *e).unwrap_or(c.len() - 1);
+        let blend = self.pattern.blend.clamp(0.0, 1.0);
+        if blend > 0.0 && c.len() > 1 {
+            // Across each limit between neighbours, a band as wide as the
+            // blend says (at most half the smaller share each side), where
+            // the chance of the next one rises evenly from 0 to 1.
+            let share = |k: usize| c[k].1 - if k == 0 { 0.0 } else { c[k - 1].1 };
+            let dice = hash2(x, z, self.pattern.seed as u64 ^ 0x00b1_e4d0) as f32 / u32::MAX as f32;
+            let band = |k: usize| blend * 0.5 * share(k).min(share(k + 1));
+            if k + 1 < c.len() && band(k) > 0.0 && r > c[k].1 - band(k) {
+                let h = band(k);
+                if dice < (r - (c[k].1 - h)) / (2.0 * h) {
+                    k += 1;
+                }
+            } else if k > 0 && band(k - 1) > 0.0 && r < c[k - 1].1 + band(k - 1) {
+                let h = band(k - 1);
+                if dice >= (r - (c[k - 1].1 - h)) / (2.0 * h) {
+                    k -= 1;
+                }
+            }
+        }
+        Some(c[k].0)
     }
 
     /// The terrains in their order, each with the share of the ground up to
@@ -380,6 +416,45 @@ pub fn paint_over_the_map(edit: &mut Edit, sampler: &PatternSampler, filter: Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blend_dithers_neighbours_into_each_other_in_order() {
+        // Dirt 30 %, coarse dirt 30 %, grass 40 %: an ordered gradient.
+        let (dirt, coarse, grass) = (TerrainId(1), TerrainId(2), TerrainId(3));
+        let p = Pattern { softness: 0.0, blend: 1.0, ..Pattern::default() };
+        let s = p.sampler(&[(dirt, 0.3), (coarse, 0.3), (grass, 0.4)]);
+        let picks = |rank: f32| {
+            let mut n = [0usize; 4];
+            for k in 0..4000 {
+                n[s.terrain_at(k * 7, k * 13, rank).unwrap().0 as usize] += 1;
+            }
+            n
+        };
+        // On a limit, half and half of the two neighbours, never the third.
+        let at = picks(0.3);
+        assert!(at[3] == 0 && (at[1] as f32 / 4000.0 - 0.5).abs() < 0.05, "{at:?}");
+        let at = picks(0.6);
+        assert!(at[1] == 0 && (at[2] as f32 / 4000.0 - 0.5).abs() < 0.05, "{at:?}");
+        // In the middle of a share, that one alone; part way, mostly it.
+        assert_eq!(picks(0.45), [0, 0, 4000, 0]);
+        let near = picks(0.25);
+        assert!(near[1] > near[2] && near[2] > 0 && near[3] == 0, "{near:?}");
+        // Sharp without it.
+        let sharp = Pattern { softness: 0.0, ..Pattern::default() }.sampler(&[(dirt, 0.3), (coarse, 0.3), (grass, 0.4)]);
+        assert!((0..4000).all(|k| sharp.terrain_at(k, k, 0.29) == Some(dirt)));
+        // Over the ground, each keeps its share, and strokes join: the same
+        // column gives the same block from any sampler.
+        let mut counts = [0usize; 4];
+        for z in 0..256 {
+            for x in 0..256 {
+                counts[s.terrain(x, z).unwrap().0 as usize] += 1;
+            }
+        }
+        let share = |k: usize| counts[k] as f32 / 65536.0;
+        assert!((share(1) - 0.3).abs() < 0.08 && (share(2) - 0.3).abs() < 0.08 && (share(3) - 0.4).abs() < 0.08, "{counts:?}");
+        let again = p.sampler(&[(dirt, 0.3), (coarse, 0.3), (grass, 0.4)]);
+        assert!((0..500).all(|k| s.terrain(k * 31 - 4000, k * 17 + 900) == again.terrain(k * 31 - 4000, k * 17 + 900)));
+    }
 
     #[test]
     fn every_pattern_gives_each_terrain_its_share() {

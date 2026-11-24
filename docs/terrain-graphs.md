@@ -125,7 +125,7 @@ setting computes only that node and what follows it.
 | Masks | Select height, Select slope, Curvature (ridges or hollows), Facing, Occlusion, Flow, Invert |
 | Climate | Temperature, Humidity, Biomes (the colours of the climate) |
 | Colour | Auto colour (eight kinds of land), Gradient (twenty gradients from nature), Solid colour, Mix colours, Tint, Adjust colour |
-| Output | Height output, Terrain output, Colour output, Water output, Layer output (rock between two heights, over the ground), Biome output |
+| Output | Height output, Terrain output, Colour output, Water output, Layer output (rock between two heights, over the ground), Biome output, Noise paint (blocks mixed by a noise in order, the Paint tool's noise with its presets, where a mask says) |
 
 ## Rock over the void
 

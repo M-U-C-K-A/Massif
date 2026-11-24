@@ -735,6 +735,14 @@ pub enum NodeKind {
     /// The game's biomes from the climate, and with `paint` its ground
     /// painted to suit: sand in the deserts, snow in the tundra…
     BiomeOutput { sea: f32, paint: bool },
+    /// Blocks mixed by a noise, each over its share of the ground in the
+    /// order listed — the Paint tool's noise, with its presets —, where the
+    /// mask is high (everywhere without one).
+    NoisePaint {
+        pattern: crate::pattern::Pattern,
+        /// Terrains, by their index, in order, each with its weight.
+        terrains: Vec<(u16, f32)>,
+    },
     /// Relief from tectonic plates: continents and oceans, mountains where
     /// plates collide, rifts where they pull apart. The plates can be moved.
     Tectonic {
@@ -1145,6 +1153,10 @@ impl NodeKind {
                 palette: BlockPalette::Natural,
             },
             NodeKind::BiomeOutput { sea: 63.0, paint: true },
+            NodeKind::NoisePaint {
+                pattern: crate::pattern::Pattern::default(),
+                terrains: Vec::new(),
+            },
         ]
     }
 
@@ -1217,6 +1229,7 @@ impl NodeKind {
             NodeKind::Humidity { .. } => "Humidity",
             NodeKind::Biomes { .. } => "Biomes",
             NodeKind::BiomeOutput { .. } => "Biome output",
+            NodeKind::NoisePaint { .. } => "Noise paint",
             NodeKind::Tectonic { .. } => "Tectonic plates",
         }
     }
@@ -1287,6 +1300,7 @@ impl NodeKind {
             NodeKind::Humidity { .. } => "How wet the land is",
             NodeKind::Biomes { .. } => "Colours of the climate",
             NodeKind::BiomeOutput { .. } => "Biomes and ground from the climate",
+            NodeKind::NoisePaint { .. } => "Blocks mixed by a noise, in order, where the mask says",
             NodeKind::Tectonic { .. } => "Continents and mountains from moving plates",
         }
     }
@@ -1353,7 +1367,8 @@ impl NodeKind {
             | NodeKind::ColorOutput { .. }
             | NodeKind::LayerOutput { .. }
             | NodeKind::WaterOutput
-            | NodeKind::BiomeOutput { .. } => Family::Output,
+            | NodeKind::BiomeOutput { .. }
+            | NodeKind::NoisePaint { .. } => Family::Output,
         }
     }
 
@@ -1370,7 +1385,7 @@ impl NodeKind {
             NodeKind::AdjustColor { .. } => &[("Colour", C)],
             NodeKind::Tint { .. } => &[("Colour", C), ("Mask", M)],
             NodeKind::AutoColor { .. } => &[("Height", H)],
-            NodeKind::TerrainOutput { .. } => &[("Mask", M)],
+            NodeKind::TerrainOutput { .. } | NodeKind::NoisePaint { .. } => &[("Mask", M)],
             NodeKind::ColorOutput { .. } => &[("Colour", C)],
             NodeKind::LayerOutput { .. } => &[("Top", H), ("Bottom", H), ("Colour", C)],
             NodeKind::WaterOutput => &[("Level", H)],
@@ -1408,7 +1423,8 @@ impl NodeKind {
             | NodeKind::ColorOutput { .. }
             | NodeKind::LayerOutput { .. }
             | NodeKind::WaterOutput
-            | NodeKind::BiomeOutput { .. } => &[],
+            | NodeKind::BiomeOutput { .. }
+            | NodeKind::NoisePaint { .. } => &[],
             k if k.family() == Family::Selector => &[("Mask", M)],
             k if k.family() == Family::Color => &[("Colour", C)],
             _ => &[("Out", H)],
@@ -1981,6 +1997,63 @@ pub struct Outputs {
     pub shown: Option<Arc<ColorField>>,
     /// The climate the biome output got.
     pub biomes: Option<BiomeOut>,
+    /// The noise paint outputs, in the graph's order.
+    pub noise_paints: Vec<NoisePaintOut>,
+}
+
+/// What a noise paint output lays: its pattern ready to paint, its mask.
+#[derive(Clone)]
+pub struct NoisePaintOut {
+    pub sampler: Arc<crate::pattern::PatternSampler>,
+    /// Where it paints, dithered in between (everywhere without one).
+    pub mask: Option<Arc<Field>>,
+    /// How many terrain outputs come before it in the graph: it paints
+    /// over them, and those after it over it.
+    pub after: usize,
+}
+
+impl std::fmt::Debug for NoisePaintOut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NoisePaintOut").field("terrains", &self.sampler.cumulative()).field("after", &self.after).finish()
+    }
+}
+
+impl NoisePaintOut {
+    /// None when it has no terrain to paint.
+    pub fn new(pattern: &crate::pattern::Pattern, terrains: &[(u16, f32)], after: usize, mask: Option<Arc<Field>>) -> Option<Self> {
+        let terrains: Vec<(TerrainId, f32)> = terrains.iter().filter(|t| t.1 > 0.0).map(|t| (TerrainId(t.0), t.1)).collect();
+        (!terrains.is_empty()).then(|| Self { sampler: Arc::new(pattern.sampler(&terrains)), mask, after })
+    }
+
+    /// The terrain it gives column `(x, z)` (at `(u, v)` of the build's
+    /// extent), if its mask lets it there; `dither` from 0 to 1.
+    fn at(&self, x: i32, z: i32, u: f32, v: f32, dither: f32) -> Option<TerrainId> {
+        if self.mask.as_ref().is_some_and(|m| m.sample(u, v) <= dither) {
+            return None;
+        }
+        self.sampler.terrain(x, z)
+    }
+
+    /// Its terrains as masks over `extent`, one block a sample, for
+    /// previews painted with [`painted_colors`].
+    pub fn masks(&self, extent: &Extent) -> Vec<(TerrainId, Arc<Field>)> {
+        let n = extent.n;
+        let mut picks = vec![None; n * n];
+        picks.par_chunks_mut(n).enumerate().for_each(|(j, row)| {
+            for (i, p) in row.iter_mut().enumerate() {
+                let (x, z) = extent.world(i, j);
+                let mask = self.mask.as_ref().map_or(1.0, |m| m.at(i.min(m.n - 1), j.min(m.n - 1)));
+                if mask > 0.5 {
+                    *p = self.sampler.terrain(x.floor() as i32, z.floor() as i32);
+                }
+            }
+        });
+        self.sampler
+            .cumulative()
+            .iter()
+            .map(|(t, _)| (*t, Arc::new(Field::new(n, picks.iter().map(|p| if *p == Some(*t) { 1.0 } else { 0.0 }).collect()))))
+            .collect()
+    }
 }
 
 /// The climate a biome output got: what it writes.
@@ -2242,7 +2315,7 @@ impl Graph {
             let mut inputs = Vec::new();
             for k in 0..n.kind.inputs().len() {
                 let src = self.input_of(n.id, k as u8);
-                let optional = matches!(n.kind, NodeKind::LayerOutput { .. }) && k == 2;
+                let optional = (matches!(n.kind, NodeKind::LayerOutput { .. }) && k == 2) || matches!(n.kind, NodeKind::NoisePaint { .. });
                 if src.is_none() && !optional {
                     return Err(GraphError::MissingInput(n.kind.label().to_owned()));
                 }
@@ -2261,6 +2334,11 @@ impl Graph {
             match n.kind {
                 NodeKind::HeightOutput => result.heights = Some(needed(0)?.as_field()),
                 NodeKind::TerrainOutput { terrain } => result.terrains.push((TerrainId(terrain), needed(0)?.as_field())),
+                NodeKind::NoisePaint { ref pattern, ref terrains } => {
+                    if let Some(paint) = NoisePaintOut::new(pattern, terrains, result.terrains.len(), value(0).map(|m| m.as_field())) {
+                        result.noise_paints.push(paint);
+                    }
+                }
                 NodeKind::ColorOutput { blocks, palette } => {
                     let colors = needed(0)?.as_color();
                     if blocks {
@@ -2394,18 +2472,28 @@ fn chosen_terrain(outputs: &Outputs, nearest: Option<&Nearest>, paint: &Painting
             chosen = Some(t.0);
         }
     }
+    let noise = |chosen: &mut Option<u16>, after: usize| {
+        for (k, paint) in outputs.noise_paints.iter().enumerate().filter(|(_, p)| p.after == after) {
+            let dither = hash2(x, z, seed ^ (k as u64 + 1).wrapping_mul(0x9e15)) as f32 / u32::MAX as f32;
+            if let Some(t) = paint.at(x, z, u, v, dither) {
+                *chosen = Some(t.0);
+            }
+        }
+    };
     for (k, (terrain, mask)) in outputs.terrains.iter().enumerate() {
+        noise(&mut chosen, k);
         let dither = hash2(x, z, seed ^ (k as u64 + 1).wrapping_mul(0x51ed)) as f32 / u32::MAX as f32;
         if mask.sample(u, v) > dither {
             chosen = Some(terrain.0);
         }
     }
+    noise(&mut chosen, outputs.terrains.len());
     chosen
 }
 
 /// Whether a build paints the ground at all.
 fn paints(outputs: &Outputs) -> bool {
-    outputs.colors.is_some() || !outputs.terrains.is_empty() || outputs.biomes.as_ref().is_some_and(|b| b.paint)
+    outputs.colors.is_some() || !outputs.terrains.is_empty() || !outputs.noise_paints.is_empty() || outputs.biomes.as_ref().is_some_and(|b| b.paint)
 }
 
 /// How a build's colours and climate become terrains.

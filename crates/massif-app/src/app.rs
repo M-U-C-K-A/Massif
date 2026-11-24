@@ -4379,7 +4379,7 @@ impl MassifApp {
             EditorKind::GraphProps => {
                 egui::Frame::new()
                     .inner_margin(egui::Margin::symmetric(10, 8))
-                    .show(&mut cui, |ui| self.graph.properties_ui(ui, &mut self.doc));
+                    .show(&mut cui, |ui| self.graph.properties_ui(ui, &mut self.doc, &mut self.tools.pattern.saved));
             }
             EditorKind::RenderSettings => scrolled(&mut cui, &mut |ui| self.graph.render_ui(ui, &self.doc)),
             EditorKind::RenderView => {

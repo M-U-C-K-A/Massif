@@ -1506,3 +1506,49 @@ fn giant_lakes_are_capped() {
     let small = |c: usize| ((c % m) as f32 - 185.0).hypot((c / m) as f32 - 15.0) < 12.0;
     assert!((0..m * m).filter(|&c| small(c)).all(|c| capped[c] == full[c]));
 }
+
+#[test]
+fn noise_paint_lays_its_blocks_in_order_under_later_outputs() {
+    let pattern = crate::pattern::Pattern { blend: 0.5, ..crate::pattern::Pattern::default() };
+    let terrains = vec![(1u16, 0.3f32), (2, 0.3), (3, 0.4)];
+    let ext = Extent::covering(crate::coords::BlockRect::new(0, 0, 256, 256), 64);
+    let build = |terrain_after: bool| {
+        let mut g = Graph::default();
+        let flat = g.add(NodeKind::Constant { value: 70.0 }, [0.0, 0.0]);
+        let height = g.add(NodeKind::HeightOutput, [300.0, 0.0]);
+        g.connect(flat, 0, height, 0);
+        let everywhere = g.add(NodeKind::SelectHeight { min: -1000.0, max: 1000.0, falloff: 0.0 }, [150.0, 100.0]);
+        g.connect(flat, 0, everywhere, 0);
+        let noise = NodeKind::NoisePaint { pattern: pattern.clone(), terrains: terrains.clone() };
+        let rock = NodeKind::TerrainOutput { terrain: 9 };
+        let (first, second) = if terrain_after { (noise, rock) } else { (rock, noise) };
+        let a = g.add(first, [300.0, 100.0]);
+        let b = g.add(second, [300.0, 200.0]);
+        // The terrain output needs its mask; the noise paints everywhere
+        // without one.
+        let rock_node = if terrain_after { b } else { a };
+        g.connect(everywhere, 0, rock_node, 0);
+        g.build(&ext, &AtomicBool::new(false)).unwrap()
+    };
+    let painting = Painting::colors(&[]);
+    let under = build(false);
+    assert_eq!(under.noise_paints.len(), 1);
+    let sampler = under.noise_paints[0].sampler.clone();
+    let mut counts = [0usize; 10];
+    for z in 0..128 {
+        for x in 0..128 {
+            let (u, v) = ext.grid(x as f64 + 0.5, z as f64 + 0.5);
+            let t = chosen_terrain(&under, None, &painting, 1, x, z, u, v).unwrap();
+            assert_eq!(Some(TerrainId(t)), sampler.terrain(x, z), "the noise's block at ({x}, {z})");
+            counts[t as usize] += 1;
+        }
+    }
+    assert!(counts[1] > 2000 && counts[2] > 2000 && counts[3] > 3000 && counts[9] == 0, "{counts:?}");
+    // A terrain output after it paints over it.
+    let over = build(true);
+    assert_eq!(chosen_terrain(&over, None, &painting, 1, 5, 5, 0.5, 0.5), Some(9));
+    // Its preview masks: one a terrain, together covering everything.
+    let masks = under.noise_paints[0].masks(&ext);
+    assert_eq!(masks.len(), 3);
+    assert!((0..64 * 64).all(|c| masks.iter().map(|m| m.1.data[c]).sum::<f32>() == 1.0));
+}

@@ -537,7 +537,7 @@ pub(super) fn run(
             let (top, bottom) = layers::overhang(&f, e, reach, thickness, drop, variation, seed);
             Ok(vec![Value::Field(Arc::new(top)), Value::Field(Arc::new(bottom))])
         }
-        NodeKind::HeightOutput | NodeKind::TerrainOutput { .. } | NodeKind::ColorOutput { .. } | NodeKind::LayerOutput { .. } | NodeKind::WaterOutput => {
+        NodeKind::HeightOutput | NodeKind::TerrainOutput { .. } | NodeKind::ColorOutput { .. } | NodeKind::LayerOutput { .. } | NodeKind::WaterOutput | NodeKind::NoisePaint { .. } => {
             Ok(Vec::new())
         }
         // Generators and landforms were made above.
