@@ -5568,7 +5568,7 @@ impl MassifApp {
                 let snapshot = self.doc.world.snapshot();
                 let id = massif_core::structures::next_id(&self.doc.dimension().structures);
                 let v = &self.tools.village;
-                self.jobs.push(Job::village(ctx, snapshot, self.doc.dim, lib, theme.expect("ready"), selection, v.seed, v.walls, v.density, id).on(self.doc.generation));
+                self.jobs.push(Job::village(ctx, snapshot, self.doc.dim, lib, theme.expect("ready"), selection, v.seed, v.params(), id).on(self.doc.generation));
             }
         }
         if let Some(biomes) = self.tools.run_auto.take() {
@@ -12948,6 +12948,119 @@ mod tests {
         }
         h.state_mut().doc.undo();
         assert!(h.state().doc.dimension().structures.is_empty());
+    }
+
+    /// A Plains village of the test pack (boxes at the sizes of the
+    /// Plains list) filling a selection, with walls and stone roads and
+    /// then without walls on dirt roads, in the 3D view and the Diorama
+    /// (village-plains-*.png). Runs with MASSIF_SNAPSHOT_DIR (and
+    /// MASSIF_SNAPSHOT_PPP=2 as on a Retina screen).
+    #[test]
+    fn plains_village_renders() {
+        use massif_structures::village::RoadType;
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else { return };
+        let packs = std::env::temp_dir().join(format!("massif-plains-renders-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&packs);
+        let pack = massif_structures::village::testpack::write_pack(&packs).unwrap();
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        if let Some(Ok(cat)) = massif_assets::load_newest() {
+            h.state_mut().blocks.catalogue = Some(std::sync::Arc::new(cat));
+        }
+        // The driest flattest land: the column whose 100 blocks round are
+        // the most land over the sea.
+        let spot = {
+            let dim = h.state().doc.dimension();
+            let sea = h.state().doc.world.meta.sea_level as f32;
+            let height = |x: i32, z: i32| massif_core::ops::height_at(dim, 0, x, z, massif_core::ops::Surface::Top).unwrap_or(0.0);
+            let mut best = ((0, 0), 0);
+            for z in (-400..400).step_by(16) {
+                for x in (-400..400).step_by(16) {
+                    let dry = (-100..=100).step_by(20).flat_map(|dz| (-100..=100).step_by(20).map(move |dx| (dx, dz))).filter(|&(dx, dz)| height(x + dx, z + dz) > sea + 2.0).count();
+                    if dry > best.1 {
+                        best = ((x, z), dry);
+                    }
+                }
+            }
+            best.0
+        };
+        let ppp = h.ctx.pixels_per_point();
+        let top = massif_core::ops::height_at(h.state().doc.dimension(), 0, spot.0, spot.1, massif_core::ops::Surface::Top).unwrap_or(64.0);
+        for (name, walls, road) in [("walls-stone", true, RoadType::Stone), ("open-dirt", false, RoadType::Dirt)] {
+            {
+                let s = h.state_mut();
+                s.tools.select(Tool::Village);
+                s.tools.village.packs = vec![pack.clone()];
+                s.tools.village.theme = ("Plains (test boxes)".into(), "Plains".into());
+                s.tools.village.walls = walls;
+                s.tools.village.road = road;
+                s.tools.village.props = 0.7;
+                s.tools.village.seed = 5;
+                let rect = massif_core::BlockRect::new(spot.0 - 110, spot.1 - 110, spot.0 + 110, spot.1 + 110);
+                s.doc.select("Select", Some(massif_core::selection::Selection::rasterize(rect, |_, _, row| row.fill(255))));
+            }
+            h.run_steps(3);
+            {
+                let s = h.state_mut();
+                crate::structure_tool::village_click(&mut s.doc, &mut s.tools, spot.0, spot.1);
+            }
+            let started = std::time::Instant::now();
+            while !h.state().jobs.is_empty() || h.state().tools.village.rt.is_busy() {
+                assert!(started.elapsed().as_secs() < 120, "building timed out");
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            h.run_steps(3);
+            assert_eq!(h.state().doc.dimension().structures.len(), 1, "built");
+            h.state_mut().doc.select("Select", None);
+            if name == "walls-stone" {
+                h.render().unwrap().save(dir.join(format!("village-plains-settings-{ppp}x.png"))).unwrap();
+            }
+            // In the 3D view, from the south-east, high.
+            h.state_mut().layout.current_mut().maximized = None;
+            h.state_mut().layout.active = 3;
+            h.state_mut().view3d.camera = crate::view3d::Camera { target: [spot.0 as f64, top as f64, spot.1 as f64], yaw: 0.7, pitch: 0.75, distance: 260.0 };
+            let mut frames = 0;
+            while frames < 30 || h.state().view3d.pending() > 0 {
+                h.step();
+                frames += 1;
+                if frames > 6000 {
+                    break;
+                }
+            }
+            h.run_steps(10);
+            h.render().unwrap().save(dir.join(format!("village-plains-{name}-3d-{ppp}x.png"))).unwrap();
+            // The Diorama, from straight above.
+            h.state_mut().layout.active = 0;
+            h.run_steps(3);
+            let id = *h.state().maps.keys().next().expect("a map area");
+            h.state_mut().layout.current_mut().root.set_editor(id, EditorKind::Diorama);
+            h.run_steps(3);
+            {
+                let d = &mut h.state_mut().diorama;
+                d.center = Some([spot.0 as f64, spot.1 as f64]);
+                d.zoom = 3.2;
+            }
+            let started = std::time::Instant::now();
+            h.run_steps(6);
+            while !h.state().diorama.settled() && started.elapsed().as_secs() < 180 {
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            h.run_steps(4);
+            h.render().unwrap().save(dir.join(format!("village-plains-{name}-diorama-{ppp}x.png"))).unwrap();
+            h.state_mut().layout.current_mut().root.set_editor(id, EditorKind::Map);
+            h.run_steps(3);
+            for _ in 0..4 {
+                if h.state().doc.dimension().structures.is_empty() {
+                    break;
+                }
+                h.state_mut().doc.undo();
+            }
+            assert!(h.state().doc.dimension().structures.is_empty());
+            h.run_steps(3);
+        }
+        let _ = std::fs::remove_dir_all(&packs);
     }
 
     /// Edit ▸ Caves…: the dialog pictures the caves of the layer (a plan

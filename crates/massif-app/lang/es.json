@@ -3747,5 +3747,16 @@
  "a town of several districts": "un pueblo de varios barrios",
  "The selection, as large as {side} × {side} blocks: {size}.": "La selección, tan grande como {side} × {side} bloques: {size}.",
  "Select an area first (Select group): the village fills it, sized by it.": "Selecciona primero una zona (grupo Selección): la aldea la llena, a su medida.",
- "Snowy": "Nevado"
+ "Snowy": "Nevado",
+ "Houses": "Casas",
+ "Mixed": "Mezcladas",
+ "Smaller {p}%": "Más pequeñas {p} %",
+ "Larger {p}%": "Más grandes {p} %",
+ "Props": "Accesorios",
+ "Roads": "Caminos",
+ "Theme's": "Del tema",
+ "Dirt": "Tierra",
+ "Gravel": "Grava",
+ "Planks": "Tablones",
+ "{n} notes on the packs": "{n} notas sobre los packs"
 }

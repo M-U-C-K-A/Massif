@@ -520,6 +520,12 @@ pub struct VillageSettings {
     pub walls: bool,
     /// How built up, 20 % to 100 %.
     pub density: f32,
+    /// From small houses (−1) to large ones and manors (+1).
+    pub size_bias: f32,
+    /// The blocks of the roads.
+    pub road: massif_structures::village::RoadType,
+    /// How many props: none (0) to many (1).
+    pub props: f32,
     pub seed: u64,
     #[serde(skip)]
     pub rt: VillageRuntime,
@@ -527,7 +533,7 @@ pub struct VillageSettings {
 
 impl Default for VillageSettings {
     fn default() -> Self {
-        Self { theme: (String::new(), "Plains".into()), packs: Vec::new(), walls: false, density: 0.7, seed: 1, rt: VillageRuntime::default() }
+        Self { theme: (String::new(), "Plains".into()), packs: Vec::new(), walls: false, density: 0.7, size_bias: 0.0, road: Default::default(), props: 0.5, seed: 1, rt: VillageRuntime::default() }
     }
 }
 
@@ -552,6 +558,8 @@ pub struct VillageInner {
     /// The themes offered, and the packs they were read from.
     themes: Option<(Vec<PathBuf>, Vec<massif_structures::village::Theme>)>,
     errors: Vec<String>,
+    /// What the packs' check found, file by file.
+    problems: Vec<massif_structures::village::Problem>,
     pending: bool,
     busy: bool,
     note: Option<String>,
@@ -569,14 +577,19 @@ impl VillageRuntime {
         if inner.themes.as_ref().is_none_or(|(p, _)| p != packs) {
             let mut all = massif_structures::village::built_in();
             let mut errors = Vec::new();
+            let mut problems = Vec::new();
             for p in packs {
-                match massif_structures::village::read_pack(p) {
-                    Ok(t) => all.extend(t),
+                match massif_structures::village::read_pack_checked(p) {
+                    Ok(r) => {
+                        all.extend(r.themes);
+                        problems.extend(r.problems);
+                    }
                     Err(e) => errors.push(e),
                 }
             }
             inner.themes = Some((packs.to_vec(), all));
             inner.errors = errors;
+            inner.problems = problems;
         }
         inner.themes.as_ref().map(|t| t.1.clone()).unwrap_or_default()
     }
@@ -609,6 +622,11 @@ impl VillageRuntime {
 }
 
 impl VillageSettings {
+    /// What the village is to be like, from these settings.
+    pub fn params(&self) -> massif_structures::village::Params {
+        massif_structures::village::Params { walls: self.walls, density: self.density, size_bias: self.size_bias, road: self.road, props: self.props, ..Default::default() }
+    }
+
     /// The theme chosen, among those offered.
     pub fn theme(&self) -> Option<massif_structures::village::Theme> {
         let themes = self.rt.themes(&self.packs);
@@ -658,6 +676,12 @@ pub fn village_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) 
         row(ui, tr!("Density"), |ui| {
             ui.add(Field::new(&mut v.density, 0.2..=1.0).custom_formatter(|x, _| format!("{:.0}%", x * 100.0)).custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|x| x / 100.0)).width((ui.available_width() * 0.55).min(120.0)));
         });
+        row(ui, tr!("Houses"), |ui| {
+            ui.add(Field::new(&mut v.size_bias, -1.0..=1.0).custom_formatter(|x, _| if x.abs() < 0.05 { tr!("Mixed").to_owned() } else if x < 0.0 { tr!("Smaller {p}%", p = (x * -100.0).round()) } else { tr!("Larger {p}%", p = (x * 100.0).round()) }).width((ui.available_width() * 0.55).min(120.0)));
+        });
+        row(ui, tr!("Props"), |ui| {
+            ui.add(Field::new(&mut v.props, 0.0..=1.0).custom_formatter(|x, _| format!("{:.0}%", x * 100.0)).custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|x| x / 100.0)).width((ui.available_width() * 0.55).min(120.0)));
+        });
         row(ui, tr!("Draw"), |ui| {
             crate::widgets::drag(ui, egui::DragValue::new(&mut v.seed).speed(1.0));
             if button(ui, theme::with_icon(Icon::Dices, "")).on_hover_text(tr!("Another draw: other pieces, another layout")).clicked() {
@@ -665,6 +689,15 @@ pub fn village_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) 
             }
         });
     });
+    {
+        use massif_structures::village::RoadType;
+        let kinds = [RoadType::Theme, RoadType::Dirt, RoadType::Premium, RoadType::Stone, RoadType::Planks];
+        ui.label(egui::RichText::new(tr!("Roads")).small().weak());
+        let on: Vec<bool> = kinds.iter().map(|k| *k == v.road).collect();
+        if let Some(k) = crate::widgets::button_group(ui, "village roads", &[tr!("Theme's"), tr!("Dirt"), tr!("Gravel"), tr!("Stone"), tr!("Planks")], &on) {
+            v.road = kinds[k];
+        }
+    }
     checkbox(ui, &mut v.walls, tr!("Walls, with towers and gates"));
     if button(ui, theme::with_icon(Icon::FolderPlus, tr!("Add a pack…"))).on_hover_text(tr!("A folder of schematics by theme and type: see Village packs in the guide")).clicked()
         && let Some(dir) = rfd::FileDialog::new().set_title(tr!("A village pack")).pick_folder()
@@ -674,6 +707,20 @@ pub fn village_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) 
     }
     for e in v.rt.lock().errors.clone() {
         ui.colored_label(Palette::of(ui).danger, e);
+    }
+    // The pack check: what is wrong in the packs, file by file.
+    let problems = v.rt.lock().problems.clone();
+    if !problems.is_empty() {
+        egui::CollapsingHeader::new(tr!("{n} notes on the packs", n = problems.len())).id_salt("village pack notes").show(ui, |ui| {
+            for p in problems.iter().take(40) {
+                let text = format!("{} {}", p.file, p.message);
+                if p.serious {
+                    ui.colored_label(Palette::of(ui).danger, text);
+                } else {
+                    hint(ui, &text);
+                }
+            }
+        });
     }
     let selection = doc.selection().map(|s| s.area());
     match selection {

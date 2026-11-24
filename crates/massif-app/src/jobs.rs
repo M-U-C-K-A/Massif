@@ -823,12 +823,12 @@ impl Job {
     /// snapshot of the document (`lib`: the game's files, for its own
     /// themes).
     #[allow(clippy::too_many_arguments)]
-    pub fn village(ctx: &egui::Context, snapshot: World, dim: usize, lib: Option<Arc<massif_structures::Library>>, theme: massif_structures::village::Theme, selection: Arc<massif_core::selection::Selection>, seed: u64, walls: bool, density: f32, id: u32) -> Job {
+    pub fn village(ctx: &egui::Context, snapshot: World, dim: usize, lib: Option<Arc<massif_structures::Library>>, theme: massif_structures::village::Theme, selection: Arc<massif_core::selection::Selection>, seed: u64, params: massif_structures::village::Params, id: u32) -> Job {
         Job::spawn(JobKind::Structure, tr!("Building the village").to_owned(), None, ctx, move || {
             let Some(rect) = selection.bounds() else { return Outcome::Failed(tr!("Select an area first: the village fills the selection.").to_owned()) };
             let inside = |x: i32, z: i32| selection.get(x, z) >= 128;
             let ground = massif_structures::ground::MapGround::new(&snapshot, dim);
-            let req = massif_structures::village::Request { theme: &theme, rect, inside: &inside, seed, walls, density, id };
+            let req = massif_structures::village::Request { theme: &theme, rect, inside: &inside, seed, params, id };
             match massif_structures::village::build(lib.as_deref(), &ground, &req) {
                 Ok(built) => Outcome::Village { built: Box::new(built), dim },
                 Err(e) => Outcome::Failed(tr!("The village could not be built: {e}", e)),

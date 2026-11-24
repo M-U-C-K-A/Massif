@@ -3750,5 +3750,16 @@
  "a town of several districts": "eine Stadt mit mehreren Vierteln",
  "The selection, as large as {side} × {side} blocks: {size}.": "Die Auswahl, so groß wie {side} × {side} Blöcke: {size}.",
  "Select an area first (Select group): the village fills it, sized by it.": "Wähle zuerst einen Bereich aus (Gruppe Auswahl): Das Dorf füllt ihn, nach seiner Größe.",
- "Snowy": "Verschneit"
+ "Snowy": "Verschneit",
+ "Houses": "Häuser",
+ "Mixed": "Gemischt",
+ "Smaller {p}%": "Kleiner {p} %",
+ "Larger {p}%": "Größer {p} %",
+ "Props": "Requisiten",
+ "Roads": "Wege",
+ "Theme's": "Des Themas",
+ "Dirt": "Erde",
+ "Gravel": "Kies",
+ "Planks": "Bretter",
+ "{n} notes on the packs": "{n} Hinweise zu den Paketen"
 }

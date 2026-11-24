@@ -38,6 +38,10 @@ USAGE
   massif-cli structure <world.massif> <out.massif> <kind> <x> <z> [--y Y] [--seed N] [--turn T] [--jar PATH] [--keep-land]
   massif-cli structure-checks <world.massif>
   massif-cli village <world.massif> <out.massif> <x0> <z0> <x1> <z1> [--theme NAME | --pack DIR] [--walls] [--seed N] [--jar PATH]
+      [--houses N] [--size-bias -1..1] [--road theme|dirt|premium|stone|planks] [--density 0.2..1] [--spread 0..1]
+      [--props 0..1] [--fields 0..1] [--mill auto|wind|water|none]
+  massif-cli village-test-pack <dir>      write a Plains pack of boxes at the sizes of the Plains list
+  massif-cli village-check <pack>         what Massif reads of a village pack, and what is wrong in it
 
   --size      map size in tiles of 128 blocks (default 8x8 = 1024x1024 blocks)
   --landform  flat | plains | hills | mountains | islands (default hills)
@@ -1009,6 +1013,42 @@ fn cmd_village(mut args: Args) -> Res<()> {
     let seed: u64 = args.option("--seed")?.map(|s| s.parse().map_err(|_| "--seed expects an integer")).transpose()?.unwrap_or(1);
     let jar = args.option("--jar")?;
     let walls = args.flag("--walls");
+    let num = |v: Option<String>, name: &str| -> Res<Option<f32>> { v.map(|s| s.parse::<f32>().map_err(|_| format!("{name} expects a number"))).transpose().map_err(Into::into) };
+    let houses = args.option("--houses")?.map(|s| s.parse::<u32>().map_err(|_| "--houses expects an integer")).transpose()?;
+    let size_bias = num(args.option("--size-bias")?, "--size-bias")?;
+    let density = num(args.option("--density")?, "--density")?;
+    let spread = num(args.option("--spread")?, "--spread")?;
+    let props = num(args.option("--props")?, "--props")?;
+    let fields = num(args.option("--fields")?, "--fields")?;
+    use massif_structures::village::{MillMode, Params, RoadType};
+    let road = match args.option("--road")?.as_deref() {
+        None | Some("theme") => RoadType::Theme,
+        Some("dirt") => RoadType::Dirt,
+        Some("premium") | Some("gravel") => RoadType::Premium,
+        Some("stone") => RoadType::Stone,
+        Some("planks") => RoadType::Planks,
+        Some(o) => return Err(format!("--road: theme, dirt, premium, stone or planks, not {o}").into()),
+    };
+    let mill = match args.option("--mill")?.as_deref() {
+        None | Some("auto") => MillMode::Auto,
+        Some("wind") => MillMode::Wind,
+        Some("water") => MillMode::Water,
+        Some("none") => MillMode::None,
+        Some(o) => return Err(format!("--mill: auto, wind, water or none, not {o}").into()),
+    };
+    let d = Params::default();
+    let params = Params {
+        houses,
+        size_bias: size_bias.unwrap_or(d.size_bias),
+        road,
+        walls,
+        density: density.unwrap_or(0.7),
+        spread: spread.unwrap_or(d.spread),
+        props: props.unwrap_or(d.props),
+        fields: fields.unwrap_or(d.fields),
+        mill,
+        ..d
+    };
     let mut rest = args.0.into_iter();
     let path = PathBuf::from(rest.next().ok_or("village needs <world.massif>")?);
     let out = PathBuf::from(rest.next().ok_or("village needs <out.massif>")?);
@@ -1042,16 +1082,56 @@ fn cmd_village(mut args: Args) -> Res<()> {
     let id = massif_core::structures::next_id(&world.dims[0].structures);
     let built = {
         let ground = massif_structures::ground::MapGround::new(&world, 0);
-        let req = massif_structures::village::Request { theme: &theme, rect, inside: &inside, seed, walls, density: 0.7, id };
+        let req = massif_structures::village::Request { theme: &theme, rect, inside: &inside, seed, params, id };
         massif_structures::village::build(lib.as_ref(), &ground, &req)?
     };
     let s = &built.structure;
+    for u in &built.unknown {
+        eprintln!("note: {u}");
+    }
     eprintln!("{}: {} buildings, {} blocks, {} block entities, {} entities, {} columns levelled, {:.2} s", s.name, s.pieces.len(), s.block_count(), s.block_entities.len(), s.entities.len(), built.heights.len(), started.elapsed().as_secs_f32());
     let mut history = massif_core::history::History::new(1);
     history.begin("Village", 0);
     massif_structures::vanilla::apply(&mut history.edit(&mut world, 0), &built);
     history.commit();
     massif_format::save(&world.snapshot(), &out).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Write the test village pack (boxes at the Plains list's sizes) into a
+/// folder.
+fn cmd_village_test_pack(args: Args) -> Res<()> {
+    let [dir] = args.positional(["<dir>"])?;
+    let root = massif_structures::village::testpack::write_pack(&dir).map_err(|e| e.to_string())?;
+    println!("{}", root.display());
+    Ok(())
+}
+
+/// Check a village pack: what Massif reads of it, and what is wrong in it.
+fn cmd_village_check(args: Args) -> Res<()> {
+    let [dir] = args.positional(["<pack>"])?;
+    let read = massif_structures::village::read_pack_checked(&dir)?;
+    for t in &read.themes {
+        println!("{} · {}", t.pack, t.name);
+        for k in &t.types {
+            let mut by: std::collections::BTreeMap<&str, usize> = Default::default();
+            for v in &k.variants {
+                *by.entry(v.class.name()).or_default() += 1;
+            }
+            let classes: Vec<String> = by.iter().map(|(c, n)| format!("{n} {c}")).collect();
+            println!("  {:<11} {} variant(s): {}{}", k.name, k.variants.len(), classes.join(", "), if k.field.is_some() { ", with fields" } else { "" });
+        }
+        if !t.props.is_empty() {
+            println!("  {:<11} {}", "props", t.props.iter().map(|(n, v)| format!("{n} ×{}", v.len())).collect::<Vec<_>>().join(", "));
+        }
+        println!("  walls:      {}{}", if t.walls.tower.is_some() { "tower " } else { "" }, if t.walls.gate.is_some() { "gate" } else { "" });
+    }
+    if read.problems.is_empty() {
+        println!("No problem found.");
+    }
+    for p in &read.problems {
+        println!("{} {}: {}", if p.serious { "error" } else { "note " }, p.file, p.message);
+    }
     Ok(())
 }
 
@@ -1135,6 +1215,8 @@ fn main() -> ExitCode {
         "structure" => cmd_structure(args),
         "structure-checks" => cmd_structure_checks(args),
         "village" => cmd_village(args),
+        "village-test-pack" => cmd_village_test_pack(args),
+        "village-check" => cmd_village_check(args),
         "analyse" | "analyze" => cmd_analyse(args),
         "terrain" => terrain::cmd(args),
         other => Err(format!("unknown command \"{other}\"\n\n{USAGE}")),
