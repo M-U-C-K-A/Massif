@@ -5795,11 +5795,7 @@ impl MassifApp {
             if !images.is_empty() {
                 let spot = at.and_then(|p| self.maps.values().find_map(|v| v.world_under(p)));
                 self.add_references(&images, spot);
-                self.feedback = Some(trn!(
-                    "Added as a reference image, to trace over (never exported). For its heights: Edit ▸ Import Mask… ▸ Height",
-                    "Added {n} reference images, to trace over (never exported). For heights: Edit ▸ Import Mask… ▸ Height",
-                    n = images.len()
-                ));
+                self.feedback = Some(trn!("Added as a reference image, to trace over (never exported). For its heights: Edit ▸ Import Mask… ▸ Height", "Added {n} reference images, to trace over (never exported). For heights: Edit ▸ Import Mask… ▸ Height", n = images.len()));
             }
             // WorldPainter's custom layers: layers of the map.
             let layers: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("layer"))).collect());
