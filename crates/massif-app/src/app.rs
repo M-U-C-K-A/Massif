@@ -19567,6 +19567,86 @@ mod tests {
         }
     }
 
+    /// The 3D View of a large map at a few places, as a user looks at them:
+    /// the map MASSIF_VIEW_WORLD (a .massif), each place of MASSIF_VIEWS
+    /// ("name:x,z,yaw,pitch,distance;…") looked at once the whole map is up
+    /// and every block near the eyes shown, with the graphics of
+    /// MASSIF_GRAPHICS_PRESET (low, medium or high), saved as `<name>.png`
+    /// in MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn views_of_a_large_map() {
+        let (Some(path), Some(views), Some(dir)) = (
+            std::env::var_os("MASSIF_VIEW_WORLD").map(PathBuf::from),
+            std::env::var("MASSIF_VIEWS").ok(),
+            std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from),
+        ) else {
+            return;
+        };
+        let views: Vec<(String, [f32; 5])> = views
+            .split(';')
+            .filter_map(|v| {
+                let (name, nums) = v.trim().split_once(':')?;
+                let n: Vec<f32> = nums.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                (n.len() == 5).then(|| (name.to_owned(), [n[0], n[1], n[2], n[3], n[4]]))
+            })
+            .collect();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(1440.0, 900.0))
+            .with_step_dt(1.0 / 60.0)
+            .with_accessibility_check(false)
+            .wgpu()
+            .build_eframe(move |cc| {
+                theme::install(&cc.egui_ctx);
+                MassifApp::for_tests(generate(&GenParams { tiles_x: 2, tiles_z: 2, ..GenParams::default() }))
+            });
+        h.run_steps(3);
+        if let Ok(name) = std::env::var("MASSIF_GRAPHICS_PRESET") {
+            use crate::graphics::{Graphics, Preset};
+            let preset = [Preset::Low, Preset::Medium, Preset::High].into_iter().find(|p| format!("{p:?}").eq_ignore_ascii_case(&name)).expect("low, medium or high");
+            crate::graphics::set(Graphics::of(preset));
+        }
+        let ctx = h.ctx.clone();
+        h.state_mut().jobs.push(Job::open(&ctx, path));
+        while !h.state().jobs.is_empty() {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.state_mut().dialog = None;
+        let with_3d = h.state().layout.workspaces.iter().position(|w| w.root.shows(EditorKind::Map) && w.root.shows(EditorKind::View3d)).unwrap();
+        h.state_mut().layout.active = with_3d;
+        h.run_steps(5);
+        let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+        let id = areas.iter().find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::View3d)).map(|(id, _)| *id).unwrap();
+        h.state_mut().layout.toggle_maximize(id);
+        let started = std::time::Instant::now();
+        while (h.state().view3d.building() || h.state().view3d.pending() > 0) && started.elapsed().as_secs() < 300 {
+            h.step();
+        }
+        eprintln!("the whole map up after {:.1} s, a column every {} blocks", started.elapsed().as_secs_f32(), h.state().view3d.stride());
+        h.run_steps(10);
+        let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
+        image::save_buffer(dir.join("start.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+        for (name, v) in &views {
+            let (x, z) = (v[0] as i32, v[1] as i32);
+            {
+                let app = h.state_mut();
+                let p = crate::tools::probe(&app.doc, x, z);
+                let y = p.map_or(80.0, |p| if p.fluid != massif_core::tile::NO_FLUID { (p.fluid as f32).max(p.height) } else { p.height });
+                app.view3d.camera = crate::view3d::Camera { target: [x as f64 + 0.5, y as f64, z as f64 + 0.5], yaw: v[2], pitch: v[3], distance: v[4] };
+            }
+            let from = std::time::Instant::now();
+            h.run_steps(5);
+            let near = |v: &crate::view3d::View3d| v.stride() == 1 || (v.near_settled() && v.near_holds(x, z));
+            while (h.state().view3d.building() || h.state().view3d.pending() > 0 || !near(&h.state().view3d)) && from.elapsed().as_secs() < 60 {
+                h.step();
+            }
+            h.run_steps(10);
+            eprintln!("{name}: every block near the eyes: {} after {:.1} s", near(&h.state().view3d), from.elapsed().as_secs_f32());
+            let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
+            image::save_buffer(dir.join(format!("{name}.png")), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+        }
+    }
+
     /// On a map too large for every block on the graphics card (here, for
     /// 16 pages: a column every 2 blocks), the 3D View draws every block
     /// around the eyes once they come low over the land, the pages it

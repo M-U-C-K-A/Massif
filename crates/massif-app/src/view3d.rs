@@ -415,6 +415,23 @@ fn compose_area(dim: &Dimension, x0: i32, z0: i32, w: usize, d: usize, mode: Map
                     let cell = local_index(x, z);
                     stack.spans(cell, &mut sp);
                     stack.fluids(cell, &sp, &mut fl);
+                    // The water over the land: on its highest span, or on
+                    // the bottom of the world over ground that deep.
+                    if water
+                        && let Some(&(f0, f1)) = fl.last()
+                        && f0 == sp.last().map_or(dim.min_y, |t| t.y1)
+                    {
+                        wet = f1;
+                    }
+                    // Ground at the bottom of the world leaves its column no
+                    // block; a block of its terrain stands for that bottom
+                    // here. With nothing, the column was taken for the end
+                    // of the map: no water over it, and the water around it
+                    // walled down to its floor, a pit in the sea.
+                    if sp.is_empty() {
+                        let ground = stack.ground();
+                        sp.push(Span { y0: dim.min_y, y1: dim.min_y + 1, terrain: TerrainId(ground.terrain.get(cell)), top: ground.top.get(cell) });
+                    }
                     for s in &sp {
                         let contiguous = row.spans.len() > start && row.spans.last().is_some_and(|l: &CellSpan| l.y1 == s.y0);
                         if contiguous {
@@ -432,12 +449,6 @@ fn compose_area(dim: &Dimension, x0: i32, z0: i32, w: usize, d: usize, mode: Map
                                 mat: 0,
                             });
                         }
-                    }
-                    if water
-                        && let (Some(&(f0, f1)), Some(t)) = (fl.last(), sp.last())
-                        && f0 == t.y1
-                    {
-                        wet = f1;
                     }
                     if mode == MapMode::Biome {
                         top = sampler.sample(stack, cell);
@@ -5055,6 +5066,12 @@ impl View3d {
         self.near_next.is_none() && self.near.as_ref().is_some_and(Near::whole)
     }
 
+    /// Whether the pages around the eyes shown hold the column `(x, z)`.
+    #[cfg(test)]
+    pub fn near_holds(&self, x: i32, z: i32) -> bool {
+        self.near.as_ref().is_some_and(|n| n.holds(TilePos::containing(x, z)))
+    }
+
     /// Tiles still to build.
     #[cfg(test)]
     pub fn pending(&self) -> usize {
@@ -6907,6 +6924,46 @@ mod tests {
         // from 65 to its corners, on its east side.
         assert!(!water.iter().any(|f| (f.dir == EAST || f.dir == WEST) && f.x == 64 && f.z == 64), "a wall at the step");
         assert!(water.iter().any(|f| f.dir == EAST && f.x == 65 && f.z == 64 && f.y == 65 && f.h == 1 && f.mat == 0xa2a2));
+    }
+
+    /// Ground at the bottom of the world (the deep sea of a map whose ocean
+    /// floor is down there) leaves its columns no block. They were taken for
+    /// the end of the map: no water over them, and the water around them
+    /// walled down to its floor, a pit in the sea wherever every block was
+    /// drawn. They hold the sea, over a block of their terrain.
+    #[test]
+    fn the_sea_over_ground_at_the_bottom_of_the_world() {
+        use massif_core::coords::local_index;
+        use massif_core::world::{Dimension, DimensionKind, WorldMeta};
+        let mut w = World::new(WorldMeta::default());
+        let mut dim = Dimension::new(DimensionKind::Overworld, -64, 320);
+        // The sea at 63 over ground at 20, at the bottom of the world in the
+        // middle of the tile, and under it beside.
+        let mut tile = massif_core::tile::Tile::ground(20.0, TerrainId::ROCK.0, 63);
+        for z in 32..96 {
+            for x in 32..96 {
+                tile.top.set(local_index(x, z), if x < 64 { -64.0 } else { -80.0 });
+            }
+        }
+        dim.ground_mut().insert(TilePos::new(0, 0), tile);
+        w.dims = vec![dim];
+        let b = build_tile(&w.dims[0], &w.registry, 63.0, w.meta.seed, TilePos::new(0, 0), STYLE);
+        let water = &b.faces.water;
+        // The sea is level: no wall of water but at the end of the map.
+        let at_the_end = |f: &Face| (f.dir == EAST && f.x == 128) || (f.dir == WEST && f.x == 0) || (f.dir == SOUTH && f.z == 128) || (f.dir == NORTH && f.z == 0);
+        let wall = water.iter().find(|f| f.dir != UP && !at_the_end(f));
+        assert!(wall.is_none(), "a wall of water in the sea: {wall:?}");
+        // Its top over every column, the deep ones too.
+        let top_at = |i: u8, j: u8| water.iter().find(|f| f.dir == UP && (f.x..f.x + f.len).contains(&i) && (f.z as i16..f.z as i16 + f.h).contains(&(j as i16))).map(|f| f.y);
+        for (i, j) in [(10, 10), (40, 40), (63, 63), (64, 64), (95, 95), (120, 120)] {
+            assert_eq!(top_at(i, j), Some(63), "the sea's top over {i} {j}");
+        }
+        // Under it, a block of floor at the bottom of the world, 126 blocks
+        // deep, for the tracer.
+        for c in [40 * 128 + 40, 80 * 128 + 80] {
+            assert_eq!((b.heights[c], b.depths[c]), (1, 126));
+        }
+        assert_eq!((b.heights[10 * 128 + 10], b.depths[10 * 128 + 10]), (20 + 64, 43));
     }
 
     #[test]
