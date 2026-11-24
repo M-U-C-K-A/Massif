@@ -505,11 +505,20 @@ mod tests {
     fn english_keys() -> std::collections::BTreeSet<String> {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut keys = std::collections::BTreeSet::new();
-        for entry in std::fs::read_dir(&dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path.extension().is_none_or(|e| e != "rs") {
-                continue;
+        // The sources and those of the modules in folders of their own.
+        let mut files = Vec::new();
+        let mut dirs = vec![dir];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    files.push(path);
+                }
             }
+        }
+        for path in files {
             let source = std::fs::read_to_string(&path).unwrap();
             // This file's own texts are examples, but for one.
             let source = if path.ends_with("i18n.rs") { "tr!(\"System\")".to_owned() } else { source };

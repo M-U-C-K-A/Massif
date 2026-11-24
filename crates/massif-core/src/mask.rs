@@ -788,6 +788,29 @@ pub struct Mapping {
     pub black_is_none: bool,
     /// `Some(t)`: on from `t` up; `None`: the strength, scattered.
     pub threshold: Option<f32>,
+    /// Levels: the strengths taken as black and as white (0 to 1), those
+    /// between stretched over the whole range.
+    pub levels: [f32; 2],
+    /// The midtones: a strength between black and white raised to
+    /// `1 / gamma` (1: as it is; more: lighter).
+    pub gamma: f32,
+    /// Blurred over this many blocks around each column (0: sharp).
+    pub blur: f32,
+}
+
+impl Mapping {
+    /// A strength from 0 to 1 through the levels and the midtones.
+    #[inline]
+    pub fn shape(&self, v: f32) -> f32 {
+        let [a, b] = self.levels;
+        let v = if b > a { ((v - a) / (b - a)).clamp(0.0, 1.0) } else if v >= a { 1.0 } else { 0.0 };
+        if self.gamma > 0.0 && self.gamma != 1.0 && v > 0.0 && v < 1.0 { v.powf(1.0 / self.gamma) } else { v }
+    }
+
+    /// Whether levels, midtones or blur change anything.
+    pub fn adjusted(&self) -> bool {
+        self.levels != [0.0, 1.0] || self.gamma != 1.0 || self.blur > 0.0
+    }
 }
 
 impl Default for Mapping {
@@ -797,6 +820,9 @@ impl Default for Mapping {
             invert: false,
             black_is_none: true,
             threshold: Some(0.5),
+            levels: [0.0, 1.0],
+            gamma: 1.0,
+            blur: 0.0,
         }
     }
 }
@@ -869,6 +895,7 @@ struct Reading {
     span: f32,
     invert: bool,
     black_is_none: bool,
+    mapping: Mapping,
     /// The grey at or under which a pixel is black.
     black: f32,
     /// The grey of white.
@@ -888,6 +915,7 @@ impl Reading {
             span: (high - low).max(f32::MIN_POSITIVE),
             invert: m.invert,
             black_is_none: m.black_is_none,
+            mapping: *m,
             black,
             white: info.white,
         }
@@ -898,7 +926,7 @@ impl Reading {
         if self.black_is_none && grey <= self.black {
             return f32::NAN;
         }
-        let v = ((grey - self.low) / self.span).clamp(0.0, 1.0);
+        let v = self.mapping.shape(((grey - self.low) / self.span).clamp(0.0, 1.0));
         if self.invert { 1.0 - v } else { v }
     }
 }
@@ -1051,6 +1079,7 @@ fn apply_from(edit: &mut Edit, path: &Path, info: &ImageInfo, settings: &MaskSet
     let colours = settings.target.by_colour();
     let locks = settings.target.slot().filter(|_| !edit.locks().is_empty()).map(|s| (s, edit.locks().clone()));
     let (lo, hi) = (edit.dim().min_y as f32, edit.dim().max_y as f32);
+    let blur = if colours { 0 } else { settings.mapping.blur.max(0.0).round() as i32 };
 
     // A thread decodes the rows ahead while the map is painted.
     let (tx, rx) = std::sync::mpsc::sync_channel::<Result<Row, String>>(512);
@@ -1090,8 +1119,10 @@ fn apply_from(edit: &mut Edit, path: &Path, info: &ImageInfo, settings: &MaskSet
             break;
         }
         let band = BlockRect::new(footprint.x0, (tz * TILE_SIZE).max(footprint.z0), footprint.x1, ((tz + 1) * TILE_SIZE).min(footprint.z1));
-        let (need0, _) = rows_under(band.z0, &p, h);
-        let (_, need1) = rows_under(band.z1 - 1, &p, h);
+        // A blur reads the rows around the band too.
+        let (ez0, ez1) = ((band.z0 - blur).max(footprint.z0), (band.z1 + blur).min(footprint.z1));
+        let (need0, _) = rows_under(ez0, &p, h);
+        let (_, need1) = rows_under(ez1 - 1, &p, h);
         let need1 = need1.max(need0 + 1).min(h);
         // Rows the band does not read go; the ones it reads come.
         while win.first < need0 && !win.rows.is_empty() {
@@ -1128,10 +1159,17 @@ fn apply_from(edit: &mut Edit, path: &Path, info: &ImageInfo, settings: &MaskSet
         }
         // What the image gives each column of the band, row by row.
         let width = band.width() as usize;
-        let samples: Vec<Vec<Sample>> = (band.z0..band.z1)
+        let mut samples: Vec<Vec<Sample>> = (ez0..ez1)
             .into_par_iter()
             .map(|z| (band.x0..band.x1).map(|x| sample(&win, x, z, &p, w, h, &reading, colours)).collect())
             .collect();
+        if blur > 0 {
+            let mut v: Vec<f32> = samples.iter().flatten().map(|s| s.v).collect();
+            blur_grid(&mut v, width, blur as usize);
+            for (s, v) in samples.iter_mut().flatten().zip(v) {
+                s.v = v;
+            }
+        }
         let target = settings.target;
         let mode = settings.mode;
         // In from the image's edges, the height fades in.
@@ -1148,7 +1186,7 @@ fn apply_from(edit: &mut Edit, path: &Path, info: &ImageInfo, settings: &MaskSet
             let cells = selection.as_ref().and_then(|s| s.tile(pos));
             let mut n = 0;
             for z in clip.z0..clip.z1 {
-                let line = &samples[(z - band.z0) as usize];
+                let line = &samples[(z - ez0) as usize];
                 for x in clip.x0..clip.x1 {
                     let s = line[(x - band.x0) as usize];
                     let _ = width;
@@ -1190,18 +1228,10 @@ fn apply_from(edit: &mut Edit, path: &Path, info: &ImageInfo, settings: &MaskSet
 /// Paint one column; true if it changed.
 #[allow(clippy::too_many_arguments)]
 #[inline]
-fn put(tile: &mut Tile, i: usize, x: i32, z: i32, s: Sample, target: Target, mode: Mode, m: &Mapping, locks: Option<&(Slot, crate::registry::Locks)>, (lo, hi): (f32, f32), fade: f32) -> bool {
+fn put(tile: &mut Tile, i: usize, x: i32, z: i32, s: Sample, target: Target, mode: Mode, m: &Mapping, locks: Option<&(Slot, crate::registry::Locks)>, heights: (f32, f32), fade: f32) -> bool {
     if let Target::Height { black, white } = target {
-        let new = black + s.v * (white - black);
         let old = tile.top.get(i);
-        let h = match mode {
-            Mode::Replace => new,
-            Mode::Add => old + new,
-            Mode::Max => old.max(new),
-            Mode::Min => old.min(new),
-        };
-        let h = old + (h - old) * fade;
-        let h = crate::codec::snap_height(h.clamp(lo, hi));
+        let h = height_of(old, s.v, black, white, mode, heights, fade);
         if tile.bottom.is_some() || h == old {
             return false;
         }
@@ -1211,17 +1241,7 @@ fn put(tile: &mut Tile, i: usize, x: i32, z: i32, s: Sample, target: Target, mod
     if tile.bottom.is_some() && !tile.present(i) {
         return false;
     }
-    let strength = match m.threshold {
-        Some(t) if !target.by_colour() => {
-            if s.v >= t {
-                1.0
-            } else {
-                0.0
-            }
-        }
-        _ if target.by_colour() => 1.0,
-        _ => s.v,
-    };
+    let strength = strength_of(s.v, target, m);
     let plane = match target {
         Target::Annotations(_) => &mut tile.annotations,
         Target::Terrain(_) => &mut tile.terrain,
@@ -1233,10 +1253,8 @@ fn put(tile: &mut Tile, i: usize, x: i32, z: i32, s: Sample, target: Target, mod
         Target::Pockets(_) => &mut tile.pockets,
         Target::Water(level) => {
             let old = tile.fluid.get(i);
-            let had = old != NO_FLUID;
-            let on = hit(combine(mode, had, strength), x, z);
-            let new = if on { level } else { NO_FLUID };
-            if new == old || (!on && !had) {
+            let new = water_of(old, strength, level, mode, x, z);
+            if new == old {
                 return false;
             }
             tile.fluid.set(i, new);
@@ -1244,38 +1262,277 @@ fn put(tile: &mut Tile, i: usize, x: i32, z: i32, s: Sample, target: Target, mod
         }
         Target::Height { .. } => unreachable!(),
     };
-    let (value, none) = match target {
-        Target::Annotations(None) => (s.c, Some(0)),
-        Target::Annotations(Some(c)) => (c.clamp(1, 15), Some(0)),
-        Target::Terrain(t) => (t, None),
-        Target::Biome(b) => (b, Some(0)),
-        Target::TreeSize(n) => (n.clamp(1, crate::tile::SIZE_LARGE), Some(0)),
-        Target::Cover(n) | Target::Trees(n) | Target::Understory(n) | Target::Pockets(n) => (n, Some(0)),
-        _ => unreachable!(),
-    };
     let old = plane.get(i);
     if let Some((slot, locks)) = locks
         && locks.holds(*slot, old)
     {
         return false;
     }
-    let had = if target.by_colour() { old != 0 } else { old == value };
-    let on = hit(combine(mode, had, strength), x, z);
-    let new = if on {
-        value
-    } else if had {
-        match none {
-            Some(n) => n,
-            None => return false,
-        }
-    } else {
-        return false;
-    };
+    let new = plane_of(old, strength, s.c, target, mode, x, z);
     if new == old {
         return false;
     }
     plane.set(i, new);
     true
+}
+
+/// The height a column of height `old` takes from a strength `v`.
+#[inline]
+fn height_of(old: f32, v: f32, black: f32, white: f32, mode: Mode, (lo, hi): (f32, f32), fade: f32) -> f32 {
+    let new = black + v * (white - black);
+    let h = match mode {
+        Mode::Replace => new,
+        Mode::Add => old + new,
+        Mode::Max => old.max(new),
+        Mode::Min => old.min(new),
+    };
+    let h = old + (h - old) * fade;
+    crate::codec::snap_height(h.clamp(lo, hi))
+}
+
+/// The strength a column is painted with: on or off from the threshold,
+/// whole for the colours, else the image's.
+#[inline]
+fn strength_of(v: f32, target: Target, m: &Mapping) -> f32 {
+    match m.threshold {
+        Some(t) if !target.by_colour() => {
+            if v >= t {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        _ if target.by_colour() => 1.0,
+        _ => v,
+    }
+}
+
+/// The water a column with `old` takes.
+#[inline]
+fn water_of(old: i16, strength: f32, level: i16, mode: Mode, x: i32, z: i32) -> i16 {
+    let had = old != NO_FLUID;
+    let on = hit(combine(mode, had, strength), x, z);
+    if on {
+        level
+    } else if had {
+        NO_FLUID
+    } else {
+        old
+    }
+}
+
+/// The value a column of a plane with `old` takes (`old` when it stays).
+#[inline]
+fn plane_of(old: u16, strength: f32, colour: u16, target: Target, mode: Mode, x: i32, z: i32) -> u16 {
+    let (value, none) = match target {
+        Target::Annotations(None) => (colour, Some(0)),
+        Target::Annotations(Some(c)) => (c.clamp(1, 15), Some(0)),
+        Target::Terrain(t) => (t, None),
+        Target::Biome(b) => (b, Some(0)),
+        Target::TreeSize(n) => (n.clamp(1, crate::tile::SIZE_LARGE), Some(0)),
+        Target::Cover(n) | Target::Trees(n) | Target::Understory(n) | Target::Pockets(n) => (n, Some(0)),
+        _ => return old,
+    };
+    let had = if target.by_colour() { old != 0 } else { old == value };
+    let on = hit(combine(mode, had, strength), x, z);
+    if on {
+        value
+    } else if had {
+        none.unwrap_or(old)
+    } else {
+        old
+    }
+}
+
+/// Blur the strengths of a grid `w` cells wide over `r` cells: twice a box
+/// of half that each way, near a Gaussian. Cells left alone (NaN) stay so
+/// and count for nothing.
+pub fn blur_grid(v: &mut [f32], w: usize, r: usize) {
+    if r == 0 || w == 0 || v.is_empty() {
+        return;
+    }
+    let h = v.len() / w;
+    let half = r.div_ceil(2);
+    let mut tmp = vec![0f32; v.len()];
+    for _ in 0..2 {
+        // Across, row by row.
+        tmp.par_chunks_mut(w).zip(v.par_chunks(w)).for_each(|(out, src)| {
+            let (mut sum, mut n) = (0f64, 0u32);
+            let add = |k: usize, sum: &mut f64, n: &mut u32, sign: i32| {
+                let x = src[k];
+                if !x.is_nan() {
+                    *sum += sign as f64 * x as f64;
+                    *n = n.wrapping_add_signed(sign);
+                }
+            };
+            for k in 0..half.min(w) {
+                add(k, &mut sum, &mut n, 1);
+            }
+            for k in 0..w {
+                if k + half < w {
+                    add(k + half, &mut sum, &mut n, 1);
+                }
+                if k > half {
+                    add(k - half - 1, &mut sum, &mut n, -1);
+                }
+                out[k] = if src[k].is_nan() || n == 0 { src[k] } else { (sum / n as f64) as f32 };
+            }
+        });
+        // Down, all the columns at once.
+        let (mut sum, mut n) = (vec![0f64; w], vec![0u32; w]);
+        let add = |row: &[f32], sum: &mut [f64], n: &mut [u32], sign: i32| {
+            for ((s, c), &x) in sum.iter_mut().zip(n.iter_mut()).zip(row) {
+                if !x.is_nan() {
+                    *s += sign as f64 * x as f64;
+                    *c = c.wrapping_add_signed(sign);
+                }
+            }
+        };
+        for j in 0..half.min(h) {
+            add(&tmp[j * w..(j + 1) * w], &mut sum, &mut n, 1);
+        }
+        for j in 0..h {
+            if j + half < h {
+                add(&tmp[(j + half) * w..(j + half + 1) * w], &mut sum, &mut n, 1);
+            }
+            if j > half {
+                add(&tmp[(j - half - 1) * w..(j - half) * w], &mut sum, &mut n, -1);
+            }
+            for k in 0..w {
+                let src = tmp[j * w + k];
+                v[j * w + k] = if src.is_nan() || n[k] == 0 { src } else { (sum[k] / n[k] as f64) as f32 };
+            }
+        }
+    }
+}
+
+/// A column of the map as the preview of an import reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Column {
+    /// The level has it (an empty column of a slab has not).
+    pub present: bool,
+    pub top: f32,
+    pub fluid: i16,
+    pub terrain: u16,
+    pub biome: u16,
+    pub annotations: u16,
+    pub cover: u16,
+    pub objects: u16,
+    pub understory: u16,
+    pub sizes: u16,
+    pub pockets: u16,
+}
+
+impl Column {
+    /// What it has of the target's kind: an id, a height, a water level.
+    pub fn value(&self, target: Target) -> f32 {
+        match target {
+            Target::Annotations(_) => self.annotations as f32,
+            Target::Terrain(_) => self.terrain as f32,
+            Target::Biome(_) => self.biome as f32,
+            Target::Cover(_) => self.cover as f32,
+            Target::Trees(_) => self.objects as f32,
+            Target::Understory(_) => self.understory as f32,
+            Target::TreeSize(_) => self.sizes as f32,
+            Target::Pockets(_) => self.pockets as f32,
+            Target::Water(_) => self.fluid as f32,
+            Target::Height { .. } => self.top,
+        }
+    }
+}
+
+/// The map's columns, one every `step` blocks from block `(x0, z0)`, `w`
+/// by `h` of them: what the preview of an import is drawn from.
+#[derive(Debug, Clone, Default)]
+pub struct Columns {
+    pub x0: i32,
+    pub z0: i32,
+    pub step: i32,
+    pub w: usize,
+    pub h: usize,
+    /// Row by row; `None` where the level has no tile.
+    pub cells: Vec<Option<Column>>,
+}
+
+/// The columns of `level` over `bounds` (west, north, east, south), the
+/// middle one of every square of blocks of a grid at most `side` across.
+pub fn columns(level: &crate::level::Level, bounds: [i32; 4], side: usize) -> Columns {
+    let [x0, z0, x1, z1] = bounds;
+    let longest = (x1 - x0).max(z1 - z0).max(1);
+    let step = (longest as usize).div_ceil(side.max(1)).max(1) as i32;
+    let (w, h) = (((x1 - x0).max(0) / step) as usize, ((z1 - z0).max(0) / step) as usize);
+    let at = |k: usize, base: i32| base + k as i32 * step + step / 2;
+    // A row of tiles at a time, each tile read once.
+    let mut cells = vec![None; w * h];
+    let rows: Vec<(usize, Vec<Option<Column>>)> = (0..h)
+        .collect::<Vec<_>>()
+        .chunk_by(|&a, &b| at(a, z0).div_euclid(TILE_SIZE) == at(b, z0).div_euclid(TILE_SIZE))
+        .map(|c| c.to_vec())
+        .collect::<Vec<_>>()
+        .into_par_iter()
+        .flat_map_iter(|js| {
+            let tz = at(js[0], z0).div_euclid(TILE_SIZE);
+            let mut out: Vec<(usize, Vec<Option<Column>>)> = js.iter().map(|&j| (j, vec![None; w])).collect();
+            let mut i = 0;
+            while i < w {
+                let tx = at(i, x0).div_euclid(TILE_SIZE);
+                let mut end = i;
+                while end < w && at(end, x0).div_euclid(TILE_SIZE) == tx {
+                    end += 1;
+                }
+                if let Some(tile) = level.view(TilePos::new(tx, tz)) {
+                    for (j, row) in out.iter_mut() {
+                        let z = at(*j, z0);
+                        for (k, cell) in row.iter_mut().enumerate().take(end).skip(i) {
+                            let li = local_index(at(k, x0), z);
+                            *cell = Some(Column {
+                                present: tile.bottom.is_none() || tile.present(li),
+                                top: tile.top.get(li),
+                                fluid: tile.fluid.get(li),
+                                terrain: tile.terrain.get(li),
+                                biome: tile.biome.get(li),
+                                annotations: tile.annotations.get(li),
+                                cover: tile.cover.get(li),
+                                objects: tile.objects.get(li),
+                                understory: tile.understory.get(li),
+                                sizes: tile.sizes.get(li),
+                                pockets: tile.pockets.get(li),
+                            });
+                        }
+                    }
+                }
+                i = end;
+            }
+            out
+        })
+        .collect();
+    for (j, row) in rows {
+        cells[j * w..(j + 1) * w].copy_from_slice(&row);
+    }
+    Columns { x0, z0, step, w, h, cells }
+}
+
+/// What a column of the map becomes when the image gives it strength `v`
+/// (NaN: left alone) and annotation colour `c`, at block `(x, z)`: the
+/// new value of the target's kind (see [`Column::value`]), as an import
+/// would paint it, the locks aside.
+#[allow(clippy::too_many_arguments)]
+pub fn outcome(col: &Column, v: f32, c: u16, target: Target, mode: Mode, m: &Mapping, x: i32, z: i32, heights: (f32, f32)) -> f32 {
+    let old = col.value(target);
+    if v.is_nan() {
+        return old;
+    }
+    if let Target::Height { black, white } = target {
+        return height_of(col.top, v, black, white, mode, heights, 1.0);
+    }
+    if !col.present {
+        return old;
+    }
+    let strength = strength_of(v, target, m);
+    match target {
+        Target::Water(level) => water_of(col.fluid, strength, level, mode, x, z) as f32,
+        _ => plane_of(old as u16, strength, c, target, mode, x, z) as f32,
+    }
 }
 
 /// The strength of a column that had the value (`had`) or not, with the
@@ -1289,6 +1546,18 @@ fn combine(mode: Mode, had: bool, s: f32) -> f32 {
         Mode::Max => e.max(s),
         Mode::Min => e.min(s),
     }
+}
+
+/// The strength of pixel `k` of the image's picture as `mapping` reads it,
+/// before any threshold (NaN: left alone); and the grey it has from black
+/// to white of its range, before the levels (NaN: transparent).
+pub fn preview_value(info: &ImageInfo, mapping: &Mapping, k: usize) -> (f32, f32) {
+    let r = Reading::new(info, mapping);
+    let g = info.preview.grey[k];
+    if g.is_nan() {
+        return (f32::NAN, f32::NAN);
+    }
+    (r.strength(g), ((g - r.low) / r.span).clamp(0.0, 1.0))
 }
 
 /// What a pixel of the image's picture becomes, for showing where it
@@ -1707,6 +1976,79 @@ mod tests {
         let path = dir().join(name);
         image::GrayImage::from_fn(w, h, |x, y| image::Luma([f(x, y)])).save(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn levels_and_midtones_shape_the_strength() {
+        let mut m = Mapping::default();
+        assert_eq!(m.shape(0.3), 0.3, "as it is by default");
+        m.levels = [0.2, 0.6];
+        assert_eq!(m.shape(0.1), 0.0);
+        assert!((m.shape(0.4) - 0.5).abs() < 1e-6);
+        assert_eq!(m.shape(0.9), 1.0);
+        m.gamma = 2.0;
+        assert!((m.shape(0.4) - 0.5f32.sqrt()).abs() < 1e-6, "lighter midtones");
+        // A threshold of 50 % takes in a grey of 43 %.
+        let mut w = world(1);
+        let png = grey_png("levels.png", 128, 128, |_, _| 110);
+        let mut s = settings(Target::Cover(1));
+        s.mapping.levels = [0.2, 0.6];
+        import(&mut w, &png, s);
+        assert_eq!(at(&w, 10, 10, |t| &t.cover), 1);
+    }
+
+    #[test]
+    fn a_blur_spreads_across_the_bands_without_a_seam() {
+        let mut v = vec![f32::NAN; 3];
+        v.extend([0.0, 0.0, 1.0, 1.0, 0.0, 0.0, f32::NAN]);
+        blur_grid(&mut v, 10, 2);
+        assert!(v[0].is_nan() && v[9].is_nan(), "left alone stays left alone");
+        assert!(v[4] > 0.0 && v[4] < v[5] && (v[5] - v[6]).abs() < 1e-6, "{v:?}");
+        // A heightmap of a step, blurred over 16 blocks: the slope crosses
+        // the seam between two rows of tiles (z 128) smoothly.
+        let mut w = world(2);
+        let png = grey_png("step.png", 256, 256, |_, y| if y < 128 { 0 } else { 255 });
+        let mut s = settings(Target::Height { black: 64.0, white: 96.0 });
+        s.mapping.threshold = None;
+        s.mapping.black_is_none = false;
+        s.mapping.blur = 16.0;
+        import(&mut w, &png, s);
+        let column: Vec<f32> = (100..160).map(|z| at(&w, 50, z, |t| &t.top)).collect();
+        assert!(column.windows(2).all(|p| p[1] >= p[0] && p[1] - p[0] < 3.0), "{column:?}");
+        assert!(at(&w, 50, 100, |t| &t.top) < 66.0 && at(&w, 50, 160, |t| &t.top) > 94.0);
+    }
+
+    #[test]
+    fn the_preview_predicts_what_the_import_paints() {
+        let w = world(2);
+        let sand = w.registry.terrain_by_name("Sand").unwrap().0;
+        let png = grey_png("predict.png", 256, 256, |x, y| ((x * 7 + y * 3) % 256) as u8);
+        let info = survey(&png, &Steps::default()).unwrap();
+        for (target, threshold) in [(Target::Terrain(sand), Some(0.5)), (Target::Cover(2), None), (Target::Biome(3), Some(0.3)), (Target::Water(70), Some(0.6)), (Target::Height { black: 40.0, white: 120.0 }, None)] {
+            let mut w = w.clone();
+            let mut s = settings(target);
+            s.mapping.threshold = threshold;
+            s.mapping.black_is_none = false;
+            let before = columns(w.dims[0].ground(), [0, 0, 256, 256], 256);
+            assert_eq!((before.w, before.h, before.step), (256, 256, 1));
+            import(&mut w, &png, s);
+            let after = columns(w.dims[0].ground(), [0, 0, 256, 256], 256);
+            let heights = (w.dims[0].min_y as f32, w.dims[0].max_y as f32);
+            let r = Reading::new(&info, &s.mapping);
+            for k in (0..256 * 256).step_by(37) {
+                let (x, z) = ((k % 256) as i32, (k / 256) as i32);
+                let v = r.strength(((x * 7 + z * 3) % 256) as f32);
+                let col = before.cells[k].unwrap();
+                let want = after.cells[k].unwrap().value(target);
+                assert_eq!(outcome(&col, v, 0, target, s.mode, &s.mapping, x, z, heights), want, "{target:?} at {x}, {z}");
+            }
+        }
+        // Coarser: a column every 4 blocks, in the middle of its square.
+        let c = columns(w.dims[0].ground(), [0, 0, 256, 256], 64);
+        assert_eq!((c.w, c.h, c.step), (64, 64, 4));
+        assert!(c.cells.iter().all(Option::is_some));
+        let c = columns(w.dims[0].ground(), [-128, 0, 256, 256], 96);
+        assert!(c.cells[0].is_none(), "no tile there");
     }
 
     #[test]

@@ -3052,5 +3052,30 @@
  "Water raised by {n} blocks, to {level}: a block higher, it would spread over more than {columns} columns, too much for one flood.": {
   "one": "Água subida {n} bloco, para {level}: um bloco mais alta, espalhar-se-ia por mais de {columns} colunas, demais para uma só inundação.",
   "other": "Água subida {n} blocos, para {level}: um bloco mais alta, espalhar-se-ia por mais de {columns} colunas, demais para uma só inundação."
- }
+ },
+ "This spot is not in a hollow: the water would run away. Made to stay a block over it, it would spread wherever the land lies lower, over more than {columns} columns, up to {level}.": "Este local não está numa depressão: a água escorreria. Mantida um bloco acima, espalhar-se-ia onde quer que o terreno seja mais baixo, sobre mais de {columns} colunas, até {level}.",
+ "The water is at the rim of its hollow: a block higher, it would spill and spread wherever the land lies lower, over more than {columns} columns, up to {level}.": "A água está na borda da sua depressão: um bloco mais alta, transbordaria e espalhar-se-ia por onde o terreno é mais baixo, sobre mais de {columns} colunas, até {level}.",
+ "About {n} columns change, {p} % of the map": "Cerca de {n} colunas mudam, {p} % do mapa",
+ "Annotation {n}, {p} % of the image": "Anotação {n}, {p} % da imagem",
+ "Back to the dialog": "Voltar ao diálogo",
+ "Before | After": "Antes | Depois",
+ "Black point": "Ponto preto",
+ "Black y {b} to white y {w}": "Preto y {b} a branco y {w}",
+ "Black: left as it is": "Preto: fica como está",
+ "Changes": "Mudanças",
+ "From {t} %: {name}": "A partir de {t} %: {name}",
+ "Mask": "Máscara",
+ "Mask window": "Janela da máscara",
+ "Midtones": "Meios-tons",
+ "Reset the levels": "Repor os níveis",
+ "Smaller": "Reduzir",
+ "The map large, the mask over it: before and after, levels, legend": "O mapa em grande, a máscara por cima: antes e depois, níveis, legenda",
+ "The map's columns are not read: add the image again": "As colunas do mapa não foram lidas: adicione a imagem de novo",
+ "Under {t} %: left as it is": "Abaixo de {t} %: fica como está",
+ "Under {t} %: rubbed out": "Abaixo de {t} %: apagado",
+ "Water up to y {y}": "Água até y {y}",
+ "What each value paints": "O que cada valor pinta",
+ "White point": "Ponto branco",
+ "{name}, as dense as the grey is bright": "{name}, tão denso quanto o cinza é claro",
+ "{name}: {w} × {h} pixels": "{name}: {w} × {h} pixels"
 }

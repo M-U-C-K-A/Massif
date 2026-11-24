@@ -1003,6 +1003,51 @@ the map's Reference images button shows, fades, moves or removes it like
 any other. With several images, the one shown when **Import** is pressed
 stays.
 
+### The mask window
+
+Where the window has room (1100 × 640 points or more), Import mask opens as
+the **mask window**: the map large on the left, the settings on the right,
+**Import** and **Cancel** under them. **Smaller** goes back to the dialog,
+and **Mask window** in the dialog comes back to it.
+
+Over the map, what it shows:
+
+- **Over the map**: the image in the colour it paints, over the map.
+- **Mask**: the image alone, in grey as its values are read (levels,
+  midtones, blur and threshold applied), the map dimmed under it.
+- **Before**: what the map has now of what the image paints: its terrains,
+  its biomes, the layer, its water or its heights.
+- **After**: the same, as the import leaves it.
+- **Before | After**: before on the left of a line, after on its right;
+  drag the line.
+- **Changes**: after, the columns that change lit, the rest dimmed.
+
+**Overlay** sets how strongly the image, or what it paints, lies over the
+map, from 0 % (the map alone) to 100 %. The left button drags the image, the
+wheel (or a pinch) zooms about the pointer, the right or middle button pans,
+**Fit** shows the map and the image whole again; the arrow keys move the
+image a block, 16 with Shift. Under the canvas, the window says about how
+many columns the import changes, and what share of the map.
+
+**What each value paints** is the legend: from what grey the target is
+painted and what happens under it (rubbed out or left as it is, as **With
+what is there** says), how dense a scattered layer grows, the heights black
+and white stand for, or, for a colour image, each annotation colour it
+holds and how much of it.
+
+**Levels** shows the image's histogram, its greys from black to white, with
+the curve its values go through: **Black point** and **White point** (also
+dragged on the histogram) stretch the greys between them over the whole
+range, **Midtones** lightens them (above 1) or darkens them, and **Blur**
+softens the image over that many blocks before a threshold cuts it, for
+smooth edges, or smooths a heightmap. **Reset the levels** puts them back.
+They apply to the import itself, as the views show it.
+
+The views are worked out from the map read once with the image (a column
+every few blocks, 512 across at most) and the image's picture, whatever
+their size: moving, scaling or changing a setting redraws them at once.
+The import itself reads every pixel and paints every column.
+
 ### A region out and back
 
 **File ▸ Export Region…** writes a part of the map as images of 1 pixel a

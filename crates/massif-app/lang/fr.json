@@ -3115,5 +3115,30 @@
  "Water raised by {n} blocks, to {level}: a block higher, it would spread over more than {columns} columns, too much for one flood.": {
   "one": "Eau montée de {n} bloc, à {level} : un bloc plus haut, elle s'étendrait sur plus de {columns} colonnes, trop pour une seule inondation.",
   "other": "Eau montée de {n} blocs, à {level} : un bloc plus haut, elle s'étendrait sur plus de {columns} colonnes, trop pour une seule inondation."
- }
+ },
+ "This spot is not in a hollow: the water would run away. Made to stay a block over it, it would spread wherever the land lies lower, over more than {columns} columns, up to {level}.": "Cet endroit n'est pas dans un creux : l'eau s'écoulerait. Maintenue un bloc au-dessus, elle s'étendrait partout où le terrain est plus bas, sur plus de {columns} colonnes, jusqu'à {level}.",
+ "The water is at the rim of its hollow: a block higher, it would spill and spread wherever the land lies lower, over more than {columns} columns, up to {level}.": "L'eau est au bord de son creux : un bloc plus haut, elle déborderait et s'étendrait partout où le terrain est plus bas, sur plus de {columns} colonnes, jusqu'à {level}.",
+ "About {n} columns change, {p} % of the map": "Environ {n} colonnes changent, {p} % de la carte",
+ "Annotation {n}, {p} % of the image": "Annotation {n}, {p} % de l'image",
+ "Back to the dialog": "Revenir à la boîte de dialogue",
+ "Before | After": "Avant | Après",
+ "Black point": "Point noir",
+ "Black y {b} to white y {w}": "Noir y {b} à blanc y {w}",
+ "Black: left as it is": "Noir : laissé tel quel",
+ "Changes": "Changements",
+ "From {t} %: {name}": "Dès {t} % : {name}",
+ "Mask": "Masque",
+ "Mask window": "Fenêtre du masque",
+ "Midtones": "Tons moyens",
+ "Reset the levels": "Réinitialiser les niveaux",
+ "Smaller": "Réduire",
+ "The map large, the mask over it: before and after, levels, legend": "La carte en grand, le masque par-dessus : avant et après, niveaux, légende",
+ "The map's columns are not read: add the image again": "Les colonnes de la carte ne sont pas lues : ajoutez l'image de nouveau",
+ "Under {t} %: left as it is": "Sous {t} % : laissé tel quel",
+ "Under {t} %: rubbed out": "Sous {t} % : effacé",
+ "Water up to y {y}": "Eau jusqu'à y {y}",
+ "What each value paints": "Ce que peint chaque valeur",
+ "White point": "Point blanc",
+ "{name}, as dense as the grey is bright": "{name}, aussi dense que le gris est clair",
+ "{name}: {w} × {h} pixels": "{name} : {w} × {h} pixels"
 }

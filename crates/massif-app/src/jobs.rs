@@ -115,6 +115,8 @@ pub enum Outcome {
     MaskRead {
         images: Vec<(PathBuf, Arc<massif_core::mask::ImageInfo>)>,
         map: Option<(egui::ColorImage, [i32; 4])>,
+        /// The map's columns, for the mask window's preview.
+        columns: Option<Arc<massif_core::mask::Columns>>,
     },
     /// A region of the map written as images: its folder and files.
     RegionExported {
@@ -438,7 +440,7 @@ impl Job {
     /// Read the images at `paths` once through for Import mask, and draw
     /// the picture of the map `snapshot`, when given, to show where they
     /// land.
-    pub fn read_mask(ctx: &egui::Context, paths: Vec<PathBuf>, snapshot: Option<World>) -> Job {
+    pub fn read_mask(ctx: &egui::Context, paths: Vec<PathBuf>, snapshot: Option<World>, dim: usize) -> Job {
         use massif_core::auto::Steps;
         let progress = Arc::new(Steps::default());
         let p = progress.clone();
@@ -447,7 +449,13 @@ impl Job {
             _ => tr!("Reading {n} images", n = paths.len()),
         };
         Job::spawn(JobKind::Auto, label, Some(progress as Arc<dyn JobProgress>), ctx, move || {
-            let (read, map) = std::thread::scope(|s| {
+            let (read, map, columns) = std::thread::scope(|s| {
+                let columns = s.spawn(|| {
+                    let d = snapshot.as_ref()?.dims.get(dim)?;
+                    let (lo, hi) = d.bounds()?;
+                    let t = massif_core::TILE_SIZE;
+                    Some(Arc::new(massif_core::mask::columns(d.ground(), [lo.x * t, lo.z * t, (hi.x + 1) * t, (hi.z + 1) * t], 512)))
+                });
                 let picture = s.spawn(|| {
                     let snapshot = snapshot.as_ref()?;
                     let (lo, hi) = snapshot.dims.first()?.bounds()?;
@@ -461,14 +469,14 @@ impl Job {
                         Ok(info) => images.push((path.clone(), Arc::new(info))),
                         Err(e) => {
                             let name = path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-                            return (Err(format!("{name}: {e}")), None);
+                            return (Err(format!("{name}: {e}")), None, None);
                         }
                     }
                 }
-                (Ok(images), picture.join().ok().flatten())
+                (Ok(images), picture.join().ok().flatten(), columns.join().ok().flatten())
             });
             match read {
-                Ok(images) => Outcome::MaskRead { images, map },
+                Ok(images) => Outcome::MaskRead { images, map, columns },
                 Err(_) if p.cancel.load(std::sync::atomic::Ordering::Relaxed) => Outcome::Cancelled,
                 Err(e) => Outcome::Failed(tr!("That image cannot be read: {e}", e)),
             }

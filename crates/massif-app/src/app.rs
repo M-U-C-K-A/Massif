@@ -2422,7 +2422,7 @@ impl MassifApp {
             && !paths.is_empty()
         {
             let snapshot = (!more).then(|| self.doc.world.snapshot());
-            self.jobs.push(Job::read_mask(ctx, paths, snapshot).on(self.doc.generation));
+            self.jobs.push(Job::read_mask(ctx, paths, snapshot, self.doc.dim).on(self.doc.generation));
         }
     }
 
@@ -3001,14 +3001,14 @@ impl MassifApp {
                     self.task_done(ctx, Cue::Ready, tr!("Region exported"), &msg, secs);
                     self.say(ctx, msg, false, Some(dir));
                 }
-                Outcome::MaskRead { images, map } => {
+                Outcome::MaskRead { images, map, columns } => {
                     if let Some(Dialog::ImportMask(form)) = &mut self.dialog {
                         form.add(images, &self.doc.world.registry);
                     } else if !other_map {
                         let dim = &self.doc.world.dims[self.doc.dim];
                         let t = massif_core::TILE_SIZE;
                         let bounds = dim.bounds().map_or([0, 0, t, t], |(a, b)| [a.x * t, a.z * t, (b.x + 1) * t, (b.z + 1) * t]);
-                        let form = crate::import_mask::MaskForm::new(images, &self.doc.world.registry, bounds, (dim.min_y, dim.max_y), self.doc.world.meta.sea_level, map);
+                        let form = crate::import_mask::MaskForm::new(images, &self.doc.world.registry, bounds, (dim.min_y, dim.max_y), self.doc.world.meta.sea_level, map, columns);
                         self.dialog = Some(Dialog::ImportMask(Box::new(form)));
                     }
                 }
@@ -10821,7 +10821,7 @@ mod tests {
             let ctx = h.ctx.clone();
             let app = h.state_mut();
             let snapshot = app.doc.world.snapshot();
-            app.jobs.push(Job::read_mask(&ctx, vec![plan.clone()], Some(snapshot)).on(app.doc.generation));
+            app.jobs.push(Job::read_mask(&ctx, vec![plan.clone()], Some(snapshot), 0).on(app.doc.generation));
         }
         wait(&mut h);
         let Some(Dialog::ImportMask(form)) = &mut h.state_mut().dialog else {
@@ -10830,6 +10830,8 @@ mod tests {
         assert!(form.info.colour, "a colour image");
         assert_eq!(form.kind, crate::import_mask::Kind::Annotations);
         assert!(form.reference, "the image is kept as a reference image unless told otherwise");
+        // The dialog, rather than the mask window the window has room for.
+        form.big = Some(false);
         h.run_steps(3);
         if let Some(dir) = &dir {
             h.render().unwrap().save(dir.join("dialog-import-mask-colours.png")).unwrap();
@@ -10876,7 +10878,7 @@ mod tests {
             let app = h.state_mut();
             app.doc.world.meta.references.clear();
             let snapshot = app.doc.world.snapshot();
-            app.jobs.push(Job::read_mask(&ctx, vec![ramp.clone()], Some(snapshot)).on(app.doc.generation));
+            app.jobs.push(Job::read_mask(&ctx, vec![ramp.clone()], Some(snapshot), 0).on(app.doc.generation));
         }
         wait(&mut h);
         let Some(Dialog::ImportMask(form)) = &mut h.state_mut().dialog else {
@@ -10886,9 +10888,30 @@ mod tests {
         assert!(matches!(form.target(), massif_core::mask::Target::Cover(1)), "{:?}", form.target());
         form.mapping.threshold = None;
         h.run_steps(3);
+        let Some(Dialog::ImportMask(form)) = &mut h.state_mut().dialog else { unreachable!() };
+        assert_eq!(form.big, Some(true), "the mask window, where the window has room for it");
         if let Some(dir) = &dir {
             h.render().unwrap().save(dir.join("dialog-import-mask-strength.png")).unwrap();
         }
+        // The mask window's views: before and after side by side, what
+        // changes, and the image alone through its levels and blur.
+        use crate::import_mask::window::View;
+        for (view, name) in [(View::Split, "mask-window-split"), (View::Changes, "mask-window-changes"), (View::Mask, "mask-window-mask")] {
+            let Some(Dialog::ImportMask(form)) = &mut h.state_mut().dialog else { unreachable!() };
+            form.set_view(view);
+            if view == View::Mask {
+                form.mapping.levels = [0.2, 0.8];
+                form.mapping.gamma = 1.6;
+                form.mapping.blur = 12.0;
+            }
+            h.run_steps(3);
+            if let Some(dir) = &dir {
+                h.render().unwrap().save(dir.join(format!("{name}.png"))).unwrap();
+            }
+        }
+        let Some(Dialog::ImportMask(form)) = &mut h.state_mut().dialog else { unreachable!() };
+        (form.mapping.levels, form.mapping.gamma, form.mapping.blur) = ([0.0, 1.0], 1.0, 0.0);
+        assert!(form.changed_columns().is_some_and(|n| n > 0), "the window says what changes");
         h.get_by_label("Import").hover();
         h.run_steps(2);
         h.get_by_label("Import").click();
@@ -10962,7 +10985,7 @@ mod tests {
         {
             let app = h.state_mut();
             let snapshot = app.doc.world.snapshot();
-            app.jobs.push(Job::read_mask(&ctx, files.clone(), Some(snapshot)).on(app.doc.generation));
+            app.jobs.push(Job::read_mask(&ctx, files.clone(), Some(snapshot), 0).on(app.doc.generation));
         }
         wait(&mut h);
         let Some(Dialog::ImportMask(form)) = &mut h.state_mut().dialog else {

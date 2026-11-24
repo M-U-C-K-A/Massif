@@ -3052,5 +3052,30 @@
  "Water raised by {n} blocks, to {level}: a block higher, it would spread over more than {columns} columns, too much for one flood.": {
   "one": "Agua subida {n} bloque, a {level}: un bloque más alta, se extendería sobre más de {columns} columnas, demasiado para una sola inundación.",
   "other": "Agua subida {n} bloques, a {level}: un bloque más alta, se extendería sobre más de {columns} columnas, demasiado para una sola inundación."
- }
+ },
+ "This spot is not in a hollow: the water would run away. Made to stay a block over it, it would spread wherever the land lies lower, over more than {columns} columns, up to {level}.": "Este lugar no está en una hondonada: el agua se escurriría. Mantenida un bloque por encima, se extendería allí donde el terreno es más bajo, sobre más de {columns} columnas, hasta {level}.",
+ "The water is at the rim of its hollow: a block higher, it would spill and spread wherever the land lies lower, over more than {columns} columns, up to {level}.": "El agua está en el borde de su hondonada: un bloque más alta, se desbordaría y se extendería por donde el terreno queda más bajo, sobre más de {columns} columnas, hasta {level}.",
+ "About {n} columns change, {p} % of the map": "Cambian unas {n} columnas, el {p} % del mapa",
+ "Annotation {n}, {p} % of the image": "Anotación {n}, {p} % de la imagen",
+ "Back to the dialog": "Volver al diálogo",
+ "Before | After": "Antes | Después",
+ "Black point": "Punto negro",
+ "Black y {b} to white y {w}": "Negro y {b} a blanco y {w}",
+ "Black: left as it is": "Negro: se deja como está",
+ "Changes": "Cambios",
+ "From {t} %: {name}": "Desde {t} %: {name}",
+ "Mask": "Máscara",
+ "Mask window": "Ventana de la máscara",
+ "Midtones": "Tonos medios",
+ "Reset the levels": "Restablecer los niveles",
+ "Smaller": "Reducir",
+ "The map large, the mask over it: before and after, levels, legend": "El mapa en grande, la máscara encima: antes y después, niveles, leyenda",
+ "The map's columns are not read: add the image again": "Las columnas del mapa no se han leído: añada la imagen de nuevo",
+ "Under {t} %: left as it is": "Bajo {t} %: se deja como está",
+ "Under {t} %: rubbed out": "Bajo {t} %: se borra",
+ "Water up to y {y}": "Agua hasta y {y}",
+ "What each value paints": "Lo que pinta cada valor",
+ "White point": "Punto blanco",
+ "{name}, as dense as the grey is bright": "{name}, tan denso como claro es el gris",
+ "{name}: {w} × {h} pixels": "{name}: {w} × {h} píxeles"
 }

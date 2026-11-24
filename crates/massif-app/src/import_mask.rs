@@ -17,11 +17,13 @@
 use crate::theme::{self, Icon, Palette, RichTextExt};
 use crate::widgets::{Field, button_group, combo, row, switch, well};
 use egui::{Color32, Rect, RichText, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
-use massif_core::mask::{ImageInfo, Mapping, MaskSettings, Mode, Named, Placement, Region, Target};
+use massif_core::mask::{Columns, ImageInfo, Mapping, MaskSettings, Mode, Named, Placement, Region, Target};
 use massif_core::registry::Registry;
 use massif_core::tile::ANNOTATION_COLORS;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+pub(crate) mod window;
 
 /// What kind of thing the image paints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,6 +130,13 @@ pub struct MaskForm {
     region: Option<Region>,
     /// Blocks over which a heightmap fades into the land around it.
     pub feather: u32,
+    /// The map's columns, for what the import makes of them.
+    columns: Option<Arc<Columns>>,
+    /// Shown as the mask window (`None`: as the window has room for).
+    pub(crate) big: Option<bool>,
+    studio: window::Studio,
+    /// The image alone, as its values are read.
+    mask_preview: Option<(egui::TextureHandle, u64)>,
 }
 
 /// What the dialog wants done.
@@ -142,7 +151,7 @@ pub enum Choice {
 impl MaskForm {
     /// The dialog for the image at `path`, surveyed as `info`, onto a map of
     /// `bounds` (blocks), its picture `map`.
-    pub fn new(images: Vec<(PathBuf, Arc<ImageInfo>)>, reg: &Registry, bounds: [i32; 4], heights: (i32, i32), sea: i32, map: Option<(egui::ColorImage, [i32; 4])>) -> Self {
+    pub fn new(images: Vec<(PathBuf, Arc<ImageInfo>)>, reg: &Registry, bounds: [i32; 4], heights: (i32, i32), sea: i32, map: Option<(egui::ColorImage, [i32; 4])>, columns: Option<Arc<Columns>>) -> Self {
         let mut images = images.into_iter();
         let (path, info) = images.next().expect("an image at least");
         let mut layers = Vec::new();
@@ -202,6 +211,10 @@ impl MaskForm {
             current: 0,
             region: None,
             feather: 16,
+            columns,
+            big: None,
+            studio: window::Studio::default(),
+            mask_preview: None,
         };
         let first = form.stash();
         let first = form.guessed(first, reg);
@@ -254,6 +267,9 @@ impl MaskForm {
         self.mapping = e.mapping;
         self.mode = e.mode;
         self.preview = None;
+        self.mask_preview = None;
+        self.studio.histogram = None;
+        self.studio.colours = None;
     }
 
     /// `e` with what its name and its `region.txt` say: what it paints,
@@ -298,7 +314,7 @@ impl MaskForm {
         // What a region wrote is read back as it was written: masks white
         // where they are, the heights from black to white.
         if region.is_some() || massif_core::mask::named(&e.path).is_some() {
-            e.mapping = Mapping { full_range: true, invert: false, black_is_none: false, threshold: Some(0.5) };
+            e.mapping = Mapping { full_range: true, invert: false, black_is_none: false, threshold: Some(0.5), ..Mapping::default() };
             if e.kind == Kind::Annotations {
                 e.mapping.black_is_none = true;
             }
@@ -461,12 +477,24 @@ impl MaskForm {
     }
 
     pub fn ui(&mut self, ui: &mut Ui) -> Choice {
-        let pal = Palette::of(ui);
         let mut choice = Choice::Keep;
-        ui.set_width(if ui.ctx().content_rect().width() >= 1000.0 { 896.0 } else { 560.0 });
+        // The mask window where the window has room for it.
+        let room = ui.ctx().content_rect();
+        let big = *self.big.get_or_insert(room.width() >= 1100.0 && room.height() >= 640.0);
+        if big {
+            self.window_ui(ui, &mut choice);
+            return choice;
+        }
+        let pal = Palette::of(ui);
+        ui.set_width(if room.width() >= 1000.0 { 896.0 } else { 560.0 });
         ui.horizontal(|ui| {
             ui.label(RichText::new(theme::glyph(Icon::ImageUp).to_string()).size(17.0).color(pal.accent));
             ui.label(RichText::new(tr!("Import Mask")).size(16.0).bold());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button(theme::with_icon(Icon::Maximize2, tr!("Mask window"))).on_hover_text(tr!("The map large, the mask over it: before and after, levels, legend")).clicked() {
+                    self.big = Some(true);
+                }
+            });
         });
         let h = &self.info.header;
         let name = self.path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
@@ -480,45 +508,12 @@ impl MaskForm {
         let about = tr!("{name}: {w} × {h} pixels, {bits}-bit {what} {format}", name, w = h.width, h = h.height, bits = h.bits, what, format = h.format);
         ui.add(egui::Label::new(RichText::new(about).size(12.0).color(pal.weak)).wrap());
         ui.add_space(8.0);
-        // The images, one shown at a time: all go in, in the same place,
-        // as one step to undo.
-        let mut remove = None;
-        ui.horizontal_wrapped(|ui| {
-            if self.entries.len() > 1 {
-                let names: Vec<String> = self
-                    .entries
-                    .iter()
-                    .enumerate()
-                    .map(|(k, e)| {
-                        let path = if k == self.current { &self.path } else { &e.path };
-                        let name = path.file_stem().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-                        if name.chars().count() > 22 { format!("{}…", name.chars().take(21).collect::<String>()) } else { name }
-                    })
-                    .collect();
-                let labels: Vec<&str> = names.iter().map(String::as_str).collect();
-                let on: Vec<bool> = (0..names.len()).map(|k| k == self.current).collect();
-                if let Some(k) = button_group(ui, "mask images", &labels, &on) {
-                    self.show(k);
-                }
-                if ui.button(theme::glyph(Icon::X).to_string()).on_hover_text(tr!("Leave this image out")).clicked() {
-                    remove = Some(self.current);
-                }
-            }
-            if ui.button(theme::with_icon(Icon::Plus, tr!("Add images…"))).clicked() {
-                choice = Choice::AddImages;
-            }
-        });
-        if let Some(k) = remove {
-            self.entries.remove(k);
-            self.current = k.min(self.entries.len() - 1);
-            self.load(self.entries[self.current].clone());
-        }
-        ui.add_space(10.0);
+        self.images_ui(ui, &mut choice);
 
         // Two columns where the window has room: what and how on the left,
         // where on the right; else one under the other.
-        let wide = ui.ctx().content_rect().width() >= 1000.0;
-        let max_height = ui.ctx().content_rect().height() * if wide { 0.72 } else { 0.62 };
+        let wide = room.width() >= 1000.0;
+        let max_height = room.height() * if wide { 0.72 } else { 0.62 };
         egui::ScrollArea::vertical().max_height(max_height).show(ui, |ui| {
             if wide {
                 ui.horizontal_top(|ui| {
@@ -549,16 +544,58 @@ impl MaskForm {
 
         ui.add_space(14.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let ok = !matches!(self.kind, Kind::Layer) || !self.layers.is_empty();
-            let label = if self.entries.len() > 1 { tr!("Import {n} images", n = self.entries.len()) } else { tr!("Import").to_owned() };
-            if ui.add_enabled(ok, theme::primary_button(ui, label)).clicked() {
-                choice = Choice::Import(self.all());
-            }
-            if ui.button(tr!("Cancel")).clicked() {
-                choice = Choice::Close;
-            }
+            self.buttons(ui, &mut choice);
         });
         choice
+    }
+
+    /// The images, one shown at a time: all go in, in the same place, as
+    /// one step to undo; and Add images….
+    fn images_ui(&mut self, ui: &mut Ui, choice: &mut Choice) {
+        let mut remove = None;
+        ui.horizontal_wrapped(|ui| {
+            if self.entries.len() > 1 {
+                let names: Vec<String> = self
+                    .entries
+                    .iter()
+                    .enumerate()
+                    .map(|(k, e)| {
+                        let path = if k == self.current { &self.path } else { &e.path };
+                        let name = path.file_stem().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                        if name.chars().count() > 22 { format!("{}…", name.chars().take(21).collect::<String>()) } else { name }
+                    })
+                    .collect();
+                let labels: Vec<&str> = names.iter().map(String::as_str).collect();
+                let on: Vec<bool> = (0..names.len()).map(|k| k == self.current).collect();
+                if let Some(k) = button_group(ui, "mask images", &labels, &on) {
+                    self.show(k);
+                }
+                if ui.button(theme::glyph(Icon::X).to_string()).on_hover_text(tr!("Leave this image out")).clicked() {
+                    remove = Some(self.current);
+                }
+            }
+            if ui.button(theme::with_icon(Icon::Plus, tr!("Add images…"))).clicked() {
+                *choice = Choice::AddImages;
+            }
+        });
+        if let Some(k) = remove {
+            self.entries.remove(k);
+            self.current = k.min(self.entries.len() - 1);
+            self.load(self.entries[self.current].clone());
+        }
+        ui.add_space(10.0);
+    }
+
+    /// Import and Cancel, from the right.
+    fn buttons(&mut self, ui: &mut Ui, choice: &mut Choice) {
+        let ok = !matches!(self.kind, Kind::Layer) || !self.layers.is_empty();
+        let label = if self.entries.len() > 1 { tr!("Import {n} images", n = self.entries.len()) } else { tr!("Import").to_owned() };
+        if ui.add_enabled(ok, theme::primary_button(ui, label)).clicked() {
+            *choice = Choice::Import(self.all());
+        }
+        if ui.button(tr!("Cancel")).clicked() {
+            *choice = Choice::Close;
+        }
     }
 
     fn reference_ui(&mut self, ui: &mut Ui) {
@@ -702,6 +739,16 @@ impl MaskForm {
 
     fn placement_ui(&mut self, ui: &mut Ui) {
         let pal = Palette::of(ui);
+        let r = self.placement_fields(ui);
+        ui.add_space(6.0);
+        self.picture(ui, r);
+        ui.add(egui::Label::new(RichText::new(tr!("Drag the image on the map to move it; the arrow keys move it a block, with Shift 16.")).size(11.5).color(pal.weak)).wrap());
+    }
+
+    /// Where it lands: the origins, the scale and the offset, and what it
+    /// covers. The blocks it covers.
+    fn placement_fields(&mut self, ui: &mut Ui) -> massif_core::BlockRect {
+        let pal = Palette::of(ui);
         ui.label(RichText::new(tr!("Where it lands")).size(11.5).color(pal.weak).medium());
         ui.add_space(4.0);
         let mut origins = vec![(Origin::AtZero, tr!("At the world's origin")), (Origin::Fit, tr!("Fit to the map"))];
@@ -749,9 +796,7 @@ impl MaskForm {
         let r = self.placement().rect(self.info.header.width, self.info.header.height);
         let size = tr!("It covers {w} × {d} blocks, from x {x}, z {z}; the map is {mw} × {md}.", w = r.width(), d = r.depth(), x = r.x0, z = r.z0, mw = x1 - x0, md = z1 - z0);
         ui.add(egui::Label::new(RichText::new(size).size(11.5).color(pal.weak)).wrap());
-        ui.add_space(6.0);
-        self.picture(ui, r);
-        ui.add(egui::Label::new(RichText::new(tr!("Drag the image on the map to move it; the arrow keys move it a block, with Shift 16.")).size(11.5).color(pal.weak)).wrap());
+        r
     }
 
     /// The scale at which the image fits the map.
@@ -986,7 +1031,7 @@ mod tests {
         let header = Header { width: w, height: h, bits: 8, colour: false, alpha: false, float: false, format: "PNG", lossy: false };
         let preview = Preview { width: 1, height: 1, grey: vec![255.0], rgb: vec![[255; 3]] };
         let info = ImageInfo { header, colour: false, transparent: false, low: 0.0, high: 255.0, white: 255.0, preview: preview.clone(), guide: preview };
-        MaskForm::new(vec![(PathBuf::from("mask.png"), Arc::new(info))], &Registry::vanilla(), [-512, -512, 512, 512], (-64, 320), 62, None)
+        MaskForm::new(vec![(PathBuf::from("mask.png"), Arc::new(info))], &Registry::vanilla(), [-512, -512, 512, 512], (-64, 320), 62, None, None)
     }
 
     #[test]
