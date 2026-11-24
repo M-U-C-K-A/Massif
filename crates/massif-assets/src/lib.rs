@@ -465,8 +465,14 @@ fn colormap(map: Option<&image::RgbaImage>, temperature: f32, downfall: f32, def
     [p[0], p[1], p[2]]
 }
 
+/// A colour as a biome's file gives it: a number (`6975545`), or since
+/// 26.1 a hex string (`"#6a7039"`).
 fn rgb_of(v: Option<&Value>) -> Option<[u8; 3]> {
-    let n = v?.as_i64()?;
+    let v = v?;
+    let n = match v.as_i64() {
+        Some(n) => n,
+        None => i64::from_str_radix(v.as_str()?.strip_prefix('#')?, 16).ok()?,
+    };
     Some([(n >> 16) as u8, (n >> 8) as u8, n as u8])
 }
 
@@ -2526,5 +2532,42 @@ mod tests {
         assert_eq!(icon.len(), 32 * 32 * 4);
         assert_eq!(icon[3], 0, "transparent corner");
         assert_eq!(icon[(16 * 32 + 16) * 4 + 3], 255, "opaque middle");
+    }
+
+    /// Biome colours as numbers (before 26.1) and as hex strings (26.1 and
+    /// after) read the same.
+    #[test]
+    fn biome_colours_as_numbers_and_hex_strings() {
+        assert_eq!(rgb_of(Some(&serde_json::json!(6975545))), Some([0x6a, 0x70, 0x39]));
+        assert_eq!(rgb_of(Some(&serde_json::json!("#6a7039"))), Some([0x6a, 0x70, 0x39]));
+        assert_eq!(rgb_of(Some(&serde_json::json!("6a7039"))), None, "the game writes its #");
+        assert_eq!(rgb_of(Some(&serde_json::json!("#zz0000"))), None);
+        let swamp = serde_json::json!({"temperature": 0.8, "downfall": 0.9, "effects": {"foliage_color": "#6a7039", "grass_color_modifier": "swamp", "water_color": "#617b64"}});
+        let b = biome_info("minecraft:swamp", MINECRAFT, &swamp, None, [None, None]);
+        assert_eq!((b.grass, b.foliage, b.water), ([0x6a, 0x70, 0x39], [0x6a, 0x70, 0x39], [0x61, 0x7b, 0x64]));
+    }
+
+    /// The colours of the game's own biomes, from the newest jar on this
+    /// computer (skipped without one), against the game's: those a biome
+    /// names (swamp, badlands, warm ocean) and those its colour maps give.
+    #[test]
+    fn biome_colours_match_the_game() {
+        let Some(jar) = find_jars().into_iter().find(|j| release_numbers(&j.version).is_some_and(|n| n >= vec![1, 19])) else {
+            eprintln!("no game jar: skipped");
+            return;
+        };
+        let cat = load(&jar.path, &jar.version).unwrap();
+        let hex = |c: [u8; 3]| (c[0] as u32) << 16 | (c[1] as u32) << 8 | c[2] as u32;
+        let check = |id: &str, grass: u32, foliage: u32, water: u32| {
+            let b = cat.biome(id).unwrap_or_else(|| panic!("{id}"));
+            assert_eq!((hex(b.grass), hex(b.foliage), hex(b.water)), (grass, foliage, water), "{id} in {}", jar.version);
+        };
+        check("minecraft:plains", 0x91bd59, 0x77ab2f, 0x3f76e4);
+        check("minecraft:forest", 0x79c05a, 0x59ae30, 0x3f76e4);
+        check("minecraft:jungle", 0x59c93c, 0x30bb0b, 0x3f76e4);
+        check("minecraft:desert", 0xbfb755, 0xaea42a, 0x3f76e4);
+        check("minecraft:swamp", 0x6a7039, 0x6a7039, 0x617b64);
+        check("minecraft:badlands", 0x90814d, 0x9e814d, 0x3f76e4);
+        assert_eq!(hex(cat.biome("minecraft:warm_ocean").unwrap().water), 0x43d5ee);
     }
 }
