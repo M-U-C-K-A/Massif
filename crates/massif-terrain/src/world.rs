@@ -164,11 +164,20 @@ fn palette_of(c: &Compiled) -> BlockPalette {
 /// water, terrains (one mask each, later ones over earlier ones), colours
 /// with their blocks, layers of rock and climate of the active Map Output.
 pub fn outputs(engine: &Engine, c: &Compiled, lod: u8, cancel: Cancel) -> Result<(Extent, Outputs), EvalError> {
-    let whole = c.space.whole(lod);
+    outputs_in(engine, c, lod, c.space.whole(lod), cancel)
+}
+
+/// [`outputs`] over a square window of the terrain only (`window`: samples
+/// at `lod`, its side `w`): what a map too large to hold whole is written
+/// with, window after window, each holding only its own samples (and the
+/// engine's cache, under its budget).
+pub fn outputs_in(engine: &Engine, c: &Compiled, lod: u8, window: Rect, cancel: Cancel) -> Result<(Extent, Outputs), EvalError> {
+    let whole = window;
+    debug_assert_eq!(whole.w, whole.h, "a square window");
     let n = whole.w as usize;
     let step = Space::spacing(lod);
     // 1.2's samples lie at the middle of their cells; these at the corner.
-    let extent = Extent { x0: c.space.x0 as f64 - step / 2.0, z0: c.space.z0 as f64 - step / 2.0, size: step * n as f64, n };
+    let extent = Extent { x0: c.space.x0 as f64 + whole.x as f64 * step - step / 2.0, z0: c.space.z0 as f64 + whole.z as f64 * step - step / 2.0, size: step * n as f64, n };
     let grid = |name: &str| -> Result<Option<Grid>, EvalError> { c.output(name).map(|src| engine.region(c, src, lod, whole, cancel)).transpose() };
     let mut out = Outputs::default();
     let heights = grid("height")?;

@@ -114,6 +114,48 @@ pub fn cmd(mut args: Args) -> Res<()> {
             let img = image::RgbImage::from_raw(grid.rect.w, grid.rect.h, rgb.into_iter().flatten().collect()).expect("one pixel a sample");
             img.save(&out).map_err(|e| format!("{}: {e}", out.display()))
         }
+        "stream" => {
+            // The whole terrain at one sample a block, window after window,
+            // as Apply writes a map too large to hold: how long, and (under
+            // /usr/bin/time -l) how much memory.
+            let size: Option<u32> = args.option("--size")?.map(|p| p.parse().map_err(|_| "--size: a whole number of blocks")).transpose()?;
+            let cache_mb: usize = args.option("--cache")?.map(|p| p.parse().map_err(|_| "--cache: megabytes")).transpose()?.unwrap_or(Settings::default().cache_mb);
+            let window: u32 = args.option("--window")?.map(|p| p.parse().map_err(|_| "--window: a whole number of blocks")).transpose()?.unwrap_or(1024);
+            let cpu = args.flag("--cpu");
+            let [file] = args.positional(["<graph.json>"])?;
+            let mut g = graph(&file)?;
+            if size.is_some() {
+                g.terrain.size = size;
+            }
+            let (c, diags) = compile(&g, Space::new(g.terrain.size.unwrap_or(8192)), 2048);
+            if report(&diags) > 0 {
+                return Err("the graph has errors".into());
+            }
+            let gpu = if cpu { None } else { massif_terrain::gpu::Gpu::headless() };
+            let engine = match gpu {
+                Some(gpu) => Engine::with_gpu(gpu, Settings { cache_mb }),
+                None => Engine::new(Settings { cache_mb }),
+            };
+            let started = Instant::now();
+            let n = c.space.samples(0);
+            let windows = n.div_ceil(window);
+            let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+            for wz in 0..windows {
+                for wx in 0..windows {
+                    let rect = massif_terrain::space::Rect::new((wx * window) as i32, (wz * window) as i32, window, window);
+                    let (_, out) = massif_terrain::world::outputs_in(&engine, &c, 0, rect, &never).map_err(|e| e.to_string())?;
+                    if let Some(h) = &out.heights {
+                        for v in &h.data {
+                            lo = lo.min(*v);
+                            hi = hi.max(*v);
+                        }
+                    }
+                }
+                eprintln!("row {}/{windows} after {:.1} s, cache {} MB", wz + 1, started.elapsed().as_secs_f64(), engine.cache_bytes() >> 20);
+            }
+            eprintln!("{n}² blocks in {windows}² windows of {window} on {} in {:.1} s; heights {lo:.0} to {hi:.0}", engine.gpu_name().unwrap_or("the CPU"), started.elapsed().as_secs_f64());
+            Ok(())
+        }
         "migrate" => {
             let out = args.option("--out")?;
             let [file] = args.positional(["<world.massif>"])?;

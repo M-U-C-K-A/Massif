@@ -31,6 +31,7 @@ USAGE
   massif-cli terrain validate <graph.json>
   massif-cli terrain patch <graph.json> <edits.json> [--out FILE] [--layout]
   massif-cli terrain render <graph.json> <out.png> [--pixels N] [--size BLOCKS] [--cpu]
+  massif-cli terrain stream <graph.json> [--size BLOCKS] [--window BLOCKS] [--cache MB] [--cpu]
   massif-cli terrain migrate <world.massif> [--out FILE]
   massif-cli terrain build <world.massif> <out.massif> [--graph FILE] [--samples N] [--cpu]
   massif-cli caves <world.massif> <out.massif> [--biomes] [--seed N]
