@@ -10,7 +10,7 @@ use crate::model::Component;
 use std::sync::OnceLock;
 
 /// Each composite shipped: its type, version and JSON.
-const SHIPPED: &[(&str, u16, &str)] = &[("massif:mountain", 1, include_str!("../components/mountain.json"))];
+const SHIPPED: &[(&str, u16, &str)] = &[("massif:mountain", 1, include_str!("../components/mountain.json")), ("massif:village-generator", 1, include_str!("../components/village-generator.json"))];
 
 /// Every composite shipped, parsed once: type, version, definition.
 pub fn all() -> &'static [(&'static str, u16, Component)] {

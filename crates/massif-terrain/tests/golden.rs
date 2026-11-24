@@ -15,16 +15,34 @@ use massif_terrain::space::Space;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+/// The village pack the village nodes are pinned with: Massif's test
+/// boxes, written once.
+fn village_pack() -> String {
+    static PACK: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    PACK.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("massif-golden-pack-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let root = massif_structures::village::testpack::write_pack(&dir).unwrap();
+        serde_json::to_string(&root.to_string_lossy()).unwrap()
+    })
+    .clone()
+}
+
 /// Each output of each node version, summed up.
 fn fingerprints() -> BTreeMap<String, Vec<f64>> {
     let mut out = BTreeMap::new();
     for spec in format::public().filter(|s| !s.is_output()) {
+        let village = spec.id.starts_with("village.");
         let mut inputs = Vec::new();
         for port in spec.inputs.iter().filter(|p| !p.optional) {
             let src = match port.kind {
                 PortKind::Color => "paint",
                 PortKind::Terrain => "lay",
+                PortKind::Points if village => "sq",
                 PortKind::Points => "pts",
+                PortKind::Splines => "rd",
+                PortKind::Footprints => "lt",
+                PortKind::Instances => "bd",
                 _ => "feed",
             };
             inputs.push(format!(r#""{}": "{src}""#, port.name));
@@ -32,13 +50,21 @@ fn fingerprints() -> BTreeMap<String, Vec<f64>> {
         let json = format!(
             r#"{{ "nodes": {{ "feed": {{ "type": "noise.fbm", "params": {{ "scale": 400, "height": 120, "base": 40, "seed": 1 }} }},
             "paint": {{ "type": "color.gradient", "inputs": {{ "in": "feed" }} }}, "lay": {{ "type": "terrain.layers" }}, "pts": {{ "type": "points.scatter", "inputs": {{ "height": "feed" }}, "params": {{ "spacing": 128, "seed": 2 }} }},
+            "sq": {{ "type": "village.site", "inputs": {{ "height": "feed" }}, "params": {{ "houses": 30, "seed": 4 }} }},
+            "rd": {{ "type": "village.roads", "inputs": {{ "height": "feed", "squares": "sq" }}, "params": {{ "pack": {pack}, "seed": 5 }} }},
+            "lt": {{ "type": "village.plots", "inputs": {{ "squares": "sq", "roads": "rd" }}, "params": {{ "pack": {pack}, "seed": 6 }} }},
+            "bd": {{ "type": "village.buildings", "inputs": {{ "height": "feed", "squares": "sq", "roads": "rd", "plots": "lt" }}, "params": {{ "pack": {pack}, "seed": 7 }} }},
             "n": {{ "type": "{}", "inputs": {{ {} }}, "params": {{ "seed": 3 }} }} }} }}"#,
             spec.type_name(),
-            inputs.join(", ")
+            inputs.join(", "),
+            pack = village_pack()
         );
         let mut g = Graph::from_json(&json).unwrap();
         if !spec.has_seed() {
             g.nodes.get_mut("n").unwrap().params.clear();
+        }
+        if spec.param("pack").is_some() {
+            g.nodes.get_mut("n").unwrap().params.insert("pack".into(), serde_json::from_str(&village_pack()).unwrap());
         }
         let (c, _) = compile(&g, Space::new(2048), 256);
         let e = Engine::new(Default::default());

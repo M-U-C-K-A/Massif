@@ -8,6 +8,7 @@ description = "Massif's terrain generator: a node graph evaluated by tiles and l
 
 [dependencies]
 massif-core.workspace = true
+massif-structures.workspace = true
 rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -300,7 +300,7 @@ pub fn stages(lib: Option<&Library>, ground: &dyn Ground, req: &Request) -> Resu
         if let Some(j) = &jigsaw {
             roads.extra.extend(j.streets.iter().copied());
         }
-        let walls = p.walls.then(|| walls::walls(&area, &roads));
+        let walls = p.walls.then(|| walls::walls(&area, &roads, p.houses.is_some().then_some(&site)));
         if let Some(w) = &walls {
             walls::trim(&mut roads, w);
         }

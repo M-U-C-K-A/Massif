@@ -1,0 +1,55 @@
+{
+  "label": "Village Generator",
+  "category": "Structures",
+  "summary": "A village of a builder's pack on the terrain: squares on flat land, roads that follow it, buildings facing them on levelled ground, farms with their fields, props, and walls if you want them.",
+  "inputs": [
+    { "name": "height", "label": "Height", "type": "height", "optional": true, "help": "The relief the village stands on; the sea level when left empty." },
+    { "name": "area", "label": "Area", "type": "mask", "optional": true, "help": "Where the village may go (over a half); the whole terrain when left empty, at most 4096 × 4096 blocks." }
+  ],
+  "outputs": [
+    { "name": "height", "label": "Height", "from": "ground.height" },
+    { "name": "structures", "label": "Structures", "from": "props.all" },
+    { "name": "roads", "label": "Roads", "from": "walls.roads" },
+    { "name": "taken", "label": "Taken", "from": "ground.mask" },
+    { "name": "squares", "label": "Squares", "from": "site.squares" },
+    { "name": "plots", "label": "Plots", "from": "plots.plots" },
+    { "name": "walls", "label": "Walls", "from": "walls.walls" },
+    { "name": "fields", "label": "Fields", "from": "buildings.fields" }
+  ],
+  "exposed": [
+    { "name": "pack", "label": "Pack", "help": "The folder of the village pack: its schematics by type (house/, church/, farm/…) and its village.json.", "targets": ["roads.pack", "walls.pack", "plots.pack", "buildings.pack", "props.pack"] },
+    { "name": "houses", "label": "Houses", "help": "How many houses, 3 to 120: the village reaches as far as it needs to hold them.", "targets": ["site.houses", "buildings.houses"] },
+    { "name": "size_bias", "label": "Small ↔ large", "help": "From small houses (−1) to large houses and manors (+1).", "targets": ["plots.size_bias", "buildings.size_bias"] },
+    { "name": "road", "label": "Road type", "help": "The blocks the roads are laid in: the pack's, dirt path, gravel, stone or planks.", "targets": ["roads.road"] },
+    { "name": "walls", "label": "Walls", "help": "Ramparts round the village, towers at the corners and along them, gates where the main roads leave.", "targets": ["walls.on"], "default": false },
+    { "name": "density", "label": "Density", "help": "From airy (0.2) to tight (1).", "targets": ["site.density", "plots.density"] },
+    { "name": "spread", "label": "Spread", "help": "From a compact hamlet (0) to a village strung out along its roads (1).", "targets": ["site.spread", "roads.spread"] },
+    { "name": "flat", "label": "Flat ground", "help": "How much the squares prefer flat land.", "targets": ["site.flat"] },
+    { "name": "fields", "label": "Fields", "help": "The share of farms that keep a field of crops behind them.", "targets": ["buildings.fields"] },
+    { "name": "props", "label": "Props", "help": "How many lampposts, benches, hay bales and carts: none (0) to many (1).", "targets": ["props.props"] },
+    { "name": "mill", "label": "Mill", "help": "Which mill: auto, a windmill, a watermill by the water, or none.", "targets": ["buildings.mill"] },
+    { "name": "seed", "label": "Seed", "help": "Another seed gives another village of the same kind.", "targets": ["site.seed", "roads.seed", "plots.seed", "buildings.seed", "props.seed"] },
+    { "name": "theme", "label": "Theme", "help": "Which theme of the pack, when it has several.", "targets": ["roads.theme", "walls.theme", "plots.theme", "buildings.theme", "props.theme"], "advanced": true },
+    { "name": "max_slope", "label": "Steepest plot", "help": "The most a plot's land may rise across it, in blocks.", "targets": ["buildings.max_slope"], "advanced": true },
+    { "name": "margin", "label": "Margin", "help": "Blocks kept free round each building, at least.", "targets": ["buildings.margin"], "advanced": true },
+    { "name": "width", "label": "Street width", "help": "The main roads' width in blocks; 0 keeps the pack's.", "targets": ["roads.width"], "advanced": true }
+  ],
+  "nodes": {
+    "site": { "type": "village.site", "inputs": { "height": "in.height", "area": "in.area" } },
+    "roads": { "type": "village.roads", "inputs": { "height": "in.height", "area": "in.area", "squares": "site.squares" } },
+    "walls": { "type": "village.walls", "inputs": { "height": "in.height", "area": "in.area", "roads": "roads.roads", "squares": "site.squares" }, "params": { "on": false } },
+    "plots": { "type": "village.plots", "inputs": { "squares": "site.squares", "roads": "walls.roads" } },
+    "buildings": { "type": "village.buildings", "inputs": { "height": "in.height", "area": "in.area", "squares": "site.squares", "roads": "walls.roads", "walls": "walls.walls", "plots": "plots.plots" } },
+    "props": { "type": "village.props", "inputs": { "height": "in.height", "area": "in.area", "squares": "site.squares", "roads": "walls.roads", "walls": "walls.walls", "buildings": "buildings.buildings", "fields": "buildings.fields" } },
+    "ground": { "type": "village.ground", "inputs": { "height": "in.height", "buildings": "buildings.buildings", "fields": "buildings.fields", "roads": "walls.roads" } }
+  },
+  "ui": {
+    "site": { "pos": [0, 0] },
+    "roads": { "pos": [240, 0] },
+    "walls": { "pos": [480, 0] },
+    "plots": { "pos": [720, -80] },
+    "buildings": { "pos": [960, 0] },
+    "props": { "pos": [1200, -80] },
+    "ground": { "pos": [1200, 120] }
+  }
+}

@@ -2344,6 +2344,7 @@ dependencies = [
  "image",
  "log",
  "massif-core",
+ "massif-structures",
  "png",
  "pollster",
  "rayon",

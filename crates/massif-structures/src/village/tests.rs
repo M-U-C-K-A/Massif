@@ -231,7 +231,7 @@ fn walls_run_round_the_area_with_a_gate_on_each_road() {
     let area = Area::full(BlockRect::new(0, 0, 240, 200));
     let s = site::site(&flat(), &area, &Params::default(), 1).unwrap();
     let r = roads::roads(&flat(), &area, &s, &Default::default(), &th, &Params::default(), 1);
-    let w = walls::walls(&area, &r);
+    let w = walls::walls(&area, &r, None);
     assert!(w.line.iter().all(|p| area.contains(p[0], p[1])));
     // Three blocks in from the edge, closed.
     assert!(w.line.iter().all(|p| p[0] >= 2 && p[1] >= 2 && p[0] <= 237 && p[1] <= 197));

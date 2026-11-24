@@ -3,6 +3,7 @@
 //! where the roads cross it.
 
 use super::roads::{Cells, RoadKind, Roads};
+use super::site::Site;
 use super::{Area, dist2};
 use serde::{Deserialize, Serialize};
 
@@ -94,10 +95,22 @@ pub fn trim(roads: &mut Roads, walls: &Walls) {
     roads.lines.retain(|r| r.kind != RoadKind::Side || r.points.len() >= 6);
 }
 
-/// Stage 3: the walls' line round the area (its hull three blocks in),
-/// and a gate wherever a main road crosses it.
-pub fn walls(area: &Area, roads: &Roads) -> Walls {
-    let samples = area.samples(8);
+/// Stage 3: the walls' line round the village — round the area (its hull
+/// three blocks in), or, when `site` says how far the village reaches,
+/// round that reach of each square within the area — and a gate wherever
+/// a main road crosses it.
+pub fn walls(area: &Area, roads: &Roads, site: Option<&Site>) -> Walls {
+    let samples: Vec<[i32; 2]> = match site {
+        Some(s) => {
+            let r = s.reach as f32;
+            let ring: Vec<[i32; 2]> = s.centres.iter().flat_map(|c| (0..32).map(move |k| {
+                let a = k as f32 / 32.0 * std::f32::consts::TAU;
+                [c[0] + (a.cos() * r) as i32, c[1] + (a.sin() * r) as i32]
+            })).filter(|p| area.contains(p[0], p[1])).collect();
+            if ring.len() >= 3 { ring.into_iter().chain(s.centres.iter().copied()).collect() } else { area.samples(8) }
+        }
+        None => area.samples(8),
+    };
     let mean = samples.iter().fold((0i64, 0i64), |a, p| (a.0 + p[0] as i64, a.1 + p[1] as i64));
     let n = samples.len().max(1) as i64;
     let c = [(mean.0 / n) as i32, (mean.1 / n) as i32];

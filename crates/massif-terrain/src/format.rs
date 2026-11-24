@@ -628,6 +628,20 @@ fn feeder(g: &mut Graph, kind: PortKind) -> String {
         PortKind::Color => ("colours", fed("color.gradient")),
         PortKind::Terrain => ("terrains", Node::new("terrain.layers")),
         PortKind::Points => ("places", fed("points.scatter").input("height", "relief").with("spacing", 256)),
+        // A village's stages feed one another (they need a pack to make
+        // anything, which an example has not: they only show the wiring).
+        PortKind::Splines => {
+            let places = feeder(g, PortKind::Points);
+            ("streets", Node::new("village.roads").input("height", "relief").input("squares", &places))
+        }
+        PortKind::Footprints => {
+            let (places, streets) = (feeder(g, PortKind::Points), feeder(g, PortKind::Splines));
+            ("lots", Node::new("village.plots").input("squares", &places).input("roads", &streets))
+        }
+        PortKind::Instances => {
+            let (places, streets, lots) = (feeder(g, PortKind::Points), feeder(g, PortKind::Splines), feeder(g, PortKind::Footprints));
+            ("houses", Node::new("village.buildings").input("height", "relief").input("squares", &places).input("roads", &streets).input("plots", &lots))
+        }
         _ => return "relief".into(),
     };
     g.nodes.entry(name.into()).or_insert(node);
