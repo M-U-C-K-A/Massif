@@ -699,30 +699,162 @@ fn asset_key(name: &str, kind: &str, ext: &str) -> Option<String> {
 }
 
 /// A mod's name as a player knows it: without the loader its jar is built
-/// for, its words apart (`ConquestReforged Fabric` → `Conquest Reforged`).
+/// for, its words apart when it has none (`ConquestReforged Fabric` →
+/// `Conquest Reforged`), without Minecraft's colour codes (`§6`).
 fn plain_mod_name(name: &str) -> String {
-    let mut name = name.trim();
+    let mut clean = String::with_capacity(name.len());
+    let mut chars = name.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{a7}' {
+            chars.next();
+        } else {
+            clean.push(c);
+        }
+    }
+    let mut name = clean.trim();
     for loader in [" Fabric", " Forge", " NeoForge", " Quilt", " (Fabric)", " (Forge)", " (NeoForge)", " (Quilt)"] {
-        if name.len() > loader.len() && name[name.len() - loader.len()..].eq_ignore_ascii_case(loader) {
+        if name.len() > loader.len() && name.is_char_boundary(name.len() - loader.len()) && name[name.len() - loader.len()..].eq_ignore_ascii_case(loader) {
             name = name[..name.len() - loader.len()].trim_end();
         }
     }
-    let mut out = String::with_capacity(name.len() + 4);
+    if name.contains(' ') { name.to_owned() } else { words_apart(name) }
+}
+
+/// A word written in camel case, its words apart: a capital after a small
+/// letter starts one (`ConquestReforged`), and so does the last capital of
+/// a run of them before a small letter (`BiomesOPlenty` → `Biomes O
+/// Plenty`, `XMLParser` → `XML Parser`).
+fn words_apart(name: &str) -> String {
     let chars: Vec<char> = name.chars().collect();
+    let mut out = String::with_capacity(name.len() + 4);
     for (i, &c) in chars.iter().enumerate() {
-        // A capital after a small letter starts a word: `ConquestReforged`.
-        if i > 0 && c.is_uppercase() && chars[i - 1].is_lowercase() {
-            out.push(' ');
+        if i > 0 && c.is_uppercase() {
+            let prev = chars[i - 1];
+            let next_small = chars.get(i + 1).is_some_and(|n| n.is_lowercase());
+            if prev.is_lowercase() || (prev.is_uppercase() && next_small) {
+                out.push(' ');
+            }
         }
         out.push(c);
     }
     out
 }
 
-/// A mod's name as its jar gives it: `displayName` of `mods.toml` (Forge,
-/// NeoForge) or `name` of `fabric.mod.json` (Fabric, Quilt).
-pub(crate) fn mod_name(archive: &zip::Archive) -> Option<String> {
-    mod_given_name(archive).map(|n| plain_mod_name(&n))
+/// A mod's name from its jar's file name alone, for jars that do not say
+/// it: the words before its first version or loader tag, apart and
+/// capitalised (`ActuallyAdditions-1.12.2-r152.jar` → `Actually
+/// Additions`, `sodium-fabric-0.5.13+mc1.20.1.jar` → `Sodium`,
+/// `Chisel-MC1.12.2-1.0.2.45.jar` → `Chisel`).
+pub fn jar_mod_name(file: &str) -> String {
+    let stem = [".jar", ".zip", ".disabled"].iter().fold(file.trim(), |s, ext| if s.len() > ext.len() && s.is_char_boundary(s.len() - ext.len()) && s[s.len() - ext.len()..].eq_ignore_ascii_case(ext) { &s[..s.len() - ext.len()] } else { s });
+    // Bracketed tags (`[1.12.2]`, `(Forge)`) out.
+    let mut plain = String::with_capacity(stem.len());
+    let mut depth = 0usize;
+    for c in stem.chars() {
+        match c {
+            '[' | '(' | '{' => depth += 1,
+            ']' | ')' | '}' => {
+                depth = depth.saturating_sub(1);
+                plain.push(' ');
+            }
+            _ if depth == 0 => plain.push(c),
+            _ => {}
+        }
+    }
+    let mut words: Vec<String> = Vec::new();
+    for token in plain.split(['-', '_', ' ', '+']).filter(|t| !t.is_empty()) {
+        let lower = token.to_ascii_lowercase();
+        let after = |prefix: &str| lower.strip_prefix(prefix).is_some_and(|r| r.starts_with(|c: char| c.is_ascii_digit()));
+        let version = token.starts_with(|c: char| c.is_ascii_digit()) || ["mc", "v", "r", "b", "build"].iter().any(|p| after(p)) || lower == "mc";
+        let tag = matches!(lower.as_str(), "forge" | "fabric" | "neoforge" | "quilt" | "universal" | "client" | "server" | "release" | "beta" | "alpha" | "snapshot" | "final" | "deobf" | "dev" | "sources");
+        if version || (tag && !words.is_empty()) {
+            break;
+        }
+        let word = if token.chars().all(|c| !c.is_uppercase()) {
+            let mut c = token.chars();
+            c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+        } else {
+            words_apart(token)
+        };
+        words.push(word);
+    }
+    if words.is_empty() { stem.to_owned() } else { words.join(" ") }
+}
+
+/// What a mod's jar says of itself: its name, its id and the loader it is
+/// made for, from `META-INF/neoforge.mods.toml` and `META-INF/mods.toml`
+/// (NeoForge, Forge), `fabric.mod.json` and `quilt.mod.json` (Fabric,
+/// Quilt) or `mcmod.info` (Forge before 1.13).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ModMeta {
+    pub name: Option<String>,
+    pub id: Option<String>,
+    pub loader: Option<&'static str>,
+}
+
+/// A value of a mod's metadata worth showing: neither empty nor a
+/// placeholder of its build (`${file.jarVersion}`).
+fn meta_value(v: &str) -> Option<String> {
+    let v = v.trim();
+    (!v.is_empty() && !v.contains("${") && !v.contains("@")).then(|| v.to_owned())
+}
+
+/// The first string value of `key` in a JSON text, for `mcmod.info` files
+/// that are not valid JSON (line breaks in their descriptions).
+fn loose_json_string(text: &str, key: &str) -> Option<String> {
+    let at = text.find(&format!("\"{key}\""))?;
+    let rest = text[at + key.len() + 2..].trim_start().strip_prefix(':')?.trim_start().strip_prefix('"')?;
+    Some(rest[..rest.find('"')?].to_owned())
+}
+
+/// What a mod's jar says of itself: see [`ModMeta`].
+pub fn mod_meta(archive: &zip::Archive) -> ModMeta {
+    for (toml, loader) in [("META-INF/neoforge.mods.toml", "NeoForge"), ("META-INF/mods.toml", "Forge")] {
+        if let Some(Ok(bytes)) = archive.read(toml) {
+            let text = String::from_utf8_lossy(&bytes);
+            let mut meta = ModMeta { loader: Some(loader), ..Default::default() };
+            for line in text.lines() {
+                if meta.name.is_none() {
+                    meta.name = toml_value(line, "displayName").and_then(|v| meta_value(&v));
+                }
+                if meta.id.is_none() {
+                    meta.id = toml_value(line, "modId").and_then(|v| meta_value(&v));
+                }
+            }
+            return meta;
+        }
+    }
+    for (file, loader) in [("fabric.mod.json", "Fabric"), ("quilt.mod.json", "Quilt")] {
+        if let Some(Ok(bytes)) = archive.read(file) {
+            let v: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+            // Quilt's under `quilt_loader`, its name in `metadata`.
+            let (id, about) = match v.get("quilt_loader") {
+                Some(q) => (q.get("id"), q.get("metadata")),
+                None => (v.get("id"), Some(&v)),
+            };
+            return ModMeta { name: about.and_then(|m| m.get("name")).and_then(Value::as_str).and_then(meta_value), id: id.and_then(Value::as_str).and_then(meta_value), loader: Some(loader) };
+        }
+    }
+    if let Some(Ok(bytes)) = archive.read("mcmod.info") {
+        let text = String::from_utf8_lossy(&bytes);
+        let first = serde_json::from_str::<Value>(&text).ok().and_then(|v| match v {
+            Value::Array(mut a) if !a.is_empty() => Some(a.swap_remove(0)),
+            Value::Object(o) => o.get("modList").and_then(Value::as_array).and_then(|a| a.first().cloned()),
+            _ => None,
+        });
+        let (name, id) = match &first {
+            Some(m) => (m.get("name").and_then(Value::as_str).map(str::to_owned), m.get("modid").and_then(Value::as_str).map(str::to_owned)),
+            None => (loose_json_string(&text, "name"), loose_json_string(&text, "modid")),
+        };
+        return ModMeta { name: name.and_then(|n| meta_value(&n)), id: id.and_then(|n| meta_value(&n)), loader: Some("Forge") };
+    }
+    ModMeta::default()
+}
+
+/// A mod's name as a player knows it, from what its jar says of itself
+/// else from its file's name.
+pub fn display_mod_name(meta: &ModMeta, jar: &std::path::Path) -> String {
+    meta.name.as_deref().map(plain_mod_name).filter(|n| !n.is_empty()).unwrap_or_else(|| jar_mod_name(&jar.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default()))
 }
 
 /// The value of `key` on a line of a TOML file (`displayName="Conquest
@@ -739,25 +871,6 @@ fn toml_value(line: &str, key: &str) -> Option<String> {
         _ => v.split('#').next()?.trim(),
     };
     Some(value.to_owned())
-}
-
-fn mod_given_name(archive: &zip::Archive) -> Option<String> {
-    for toml in ["META-INF/neoforge.mods.toml", "META-INF/mods.toml"] {
-        if let Some(Ok(bytes)) = archive.read(toml) {
-            let text = String::from_utf8_lossy(&bytes);
-            for line in text.lines() {
-                if let Some(v) = toml_value(line, "displayName") {
-                    let v = v.trim();
-                    if !v.is_empty() && !v.contains("${") {
-                        return Some(v.to_owned());
-                    }
-                }
-            }
-        }
-    }
-    let bytes = archive.read("fabric.mod.json")?.ok()?;
-    let v: Value = serde_json::from_slice(&bytes).ok()?;
-    v.get("name").and_then(Value::as_str).filter(|n| !n.is_empty()).map(str::to_owned)
 }
 
 struct Models {
@@ -1101,7 +1214,7 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
             let says_mod = ["fabric.mod.json", "quilt.mod.json", "META-INF/mods.toml", "META-INF/neoforge.mods.toml", "mcmod.info"].iter().any(|f| a.contains(f));
             let jar = p.extension().is_some_and(|e| e.eq_ignore_ascii_case("jar"));
             let kind = if says_mod || jar { SourceKind::Mod } else { SourceKind::Pack };
-            let name = mod_name(a).unwrap_or_else(|| p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());
+            let name = if kind == SourceKind::Pack { p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default() } else { display_mod_name(&mod_meta(a), p) };
             mod_infos.push(ModInfo {
                 name,
                 path: p.clone(),
@@ -1621,6 +1734,74 @@ pub fn flat_icon(cat: &Catalogue, block: &Block, size: usize) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Mods' names from their jars' file names, as modpacks of every era
+    /// write them: Forge 1.12.2's, Fabric's, NeoForge's.
+    #[test]
+    fn jar_names_cleaned() {
+        for (jar, name) in [
+            ("ActuallyAdditions-1.12.2-r152.jar", "Actually Additions"),
+            ("AppliedIntegrations-1.12.2-e2884e6f.jar", "Applied Integrations"),
+            ("Botania r1.10-364.4.jar", "Botania"),
+            ("Ceramics-1.12-1.3.7b.jar", "Ceramics"),
+            ("ChanceCubes-1.12.2-5.0.2.385.jar", "Chance Cubes"),
+            ("ChickenChunks-1.12.2-2.4.2.74-universal.jar", "Chicken Chunks"),
+            ("Chisel-MC1.12.2-1.0.2.45.jar", "Chisel"),
+            ("ColossalChests-1.12.2-1.7.3.jar", "Colossal Chests"),
+            ("CookingForBlockheads_1.12.2-6.5.0.jar", "Cooking For Blockheads"),
+            ("DarkUtils-1.12.2-1.8.230.jar", "Dark Utils"),
+            ("Decocraft-2.6.3.7_1.12.2.jar", "Decocraft"),
+            ("Draconic-Evolution-1.12.2-2.3.28.354-universal.jar", "Draconic Evolution"),
+            ("EnderIO-1.12.2-5.3.70.jar", "Ender IO"),
+            ("EquivalentEnergistics-1.12.2-PE_1.12.2-AE2_RV6-0.8.3.jar", "Equivalent Energistics"),
+            ("ExtraBitManipulation-1.12.2-3.4.1.jar", "Extra Bit Manipulation"),
+            ("ForgeMultipart-1.12.2-2.6.2.83-universal.jar", "Forge Multipart"),
+            ("Growable Cells-1.12.2-3.1.0.jar", "Growable Cells"),
+            ("BiomesOPlenty-1.12.2-7.0.1.2444-universal.jar", "Biomes O Plenty"),
+            ("[1.12.2]bspkrsCore-universal-7.6.jar", "bspkrs Core"),
+            ("ConquestReforged-fabric-1.20.1-1.4.1.4.jar", "Conquest Reforged"),
+            ("sodium-fabric-0.5.13+mc1.20.1.jar", "Sodium"),
+            ("create-1.20.1-0.5.1.f.jar", "Create"),
+            ("jei-1.20.1-forge-15.2.0.27.jar", "Jei"),
+            ("fabric-api-0.92.2+1.20.1.jar", "Fabric Api"),
+            ("geckolib-neoforge-1.21.1-4.7.jar", "Geckolib"),
+            ("mekanism-1.21.1-10.7.0.55.jar", "Mekanism"),
+            ("Xaeros_Minimap_24.0.0_Forge_1.20.jar", "Xaeros Minimap"),
+            ("supplementaries-1.20-2.8.17.jar", "Supplementaries"),
+            ("macawsbridges-3.0.0-1.20.1-forge.jar", "Macawsbridges"),
+            ("1.20.1-something.jar", "1.20.1-something"),
+        ] {
+            assert_eq!(jar_mod_name(jar), name, "{jar}");
+        }
+        assert_eq!(plain_mod_name("\u{a7}6Chisel"), "Chisel", "colour codes out");
+        assert_eq!(plain_mod_name("BiomesOPlenty"), "Biomes O Plenty");
+        assert_eq!(plain_mod_name("Biomes O' Plenty"), "Biomes O' Plenty", "written by hand: kept");
+    }
+
+    /// What a jar says of itself, whatever its loader.
+    #[test]
+    fn mods_metadata_read() {
+        use crate::zip::tests_support::tiny_zip;
+        let meta = |files: &[(&str, &[u8], bool)]| mod_meta(&zip::Archive::from_bytes(tiny_zip(files)).unwrap());
+        let forge = meta(&[("META-INF/mods.toml", b"modLoader=\"javafml\"\n[[mods]]\nmodId=\"supplementaries\"\nversion=\"${file.jarVersion}\"\ndisplayName=\"Supplementaries\"\n", true)]);
+        assert_eq!(forge, ModMeta { name: Some("Supplementaries".into()), id: Some("supplementaries".into()), loader: Some("Forge") });
+        let neo = meta(&[("META-INF/neoforge.mods.toml", b"[[mods]]\nmodId=\"mekanism\"\ndisplayName=\"${mod_name}\"\n", true)]);
+        assert_eq!(neo, ModMeta { name: None, id: Some("mekanism".into()), loader: Some("NeoForge") }, "placeholders left out");
+        let fabric = meta(&[("fabric.mod.json", br#"{"id":"conquest","name":"ConquestReforged Fabric"}"#, true)]);
+        assert_eq!((fabric.name.as_deref(), fabric.id.as_deref(), fabric.loader), (Some("ConquestReforged Fabric"), Some("conquest"), Some("Fabric")));
+        let quilt = meta(&[("quilt.mod.json", br#"{"quilt_loader":{"id":"qbits","metadata":{"name":"Quilted Bits"}}}"#, false)]);
+        assert_eq!((quilt.name.as_deref(), quilt.id.as_deref(), quilt.loader), (Some("Quilted Bits"), Some("qbits"), Some("Quilt")));
+        // Forge 1.12.2's mcmod.info: a list, a modList, or not quite JSON.
+        let old = meta(&[("mcmod.info", br#"[{"modid":"actuallyadditions","name":"Actually Additions","version":"r152"}]"#, true)]);
+        assert_eq!((old.name.as_deref(), old.id.as_deref(), old.loader), (Some("Actually Additions"), Some("actuallyadditions"), Some("Forge")));
+        let v2 = meta(&[("mcmod.info", br#"{"modListVersion":2,"modList":[{"modid":"chisel","name":"Chisel"}]}"#, true)]);
+        assert_eq!((v2.name.as_deref(), v2.id.as_deref()), (Some("Chisel"), Some("chisel")));
+        let loose = meta(&[("mcmod.info", b"[{\n \"modid\": \"botania\",\n \"name\": \"Botania\",\n \"description\": \"two\nlines\"\n}]", true)]);
+        assert_eq!((loose.name.as_deref(), loose.id.as_deref()), (Some("Botania"), Some("botania")));
+        assert_eq!(meta(&[("assets/x/blockstates/a.json", b"{}", false)]), ModMeta::default());
+        assert_eq!(display_mod_name(&old, std::path::Path::new("ActuallyAdditions-1.12.2-r152.jar")), "Actually Additions");
+        assert_eq!(display_mod_name(&ModMeta::default(), std::path::Path::new("mods/ChanceCubes-1.12.2-5.0.2.385.jar")), "Chance Cubes");
+    }
 
 
     /// The games installed here say which data version they write (only

@@ -24,8 +24,11 @@ pub struct Instance {
     pub minecraft: Option<String>,
     /// The jars of its mods that have blocks, by name.
     pub mods: Vec<PathBuf>,
-    /// Those mods' names, as their jars give them, in the same order.
-    pub mod_names: Vec<String>,
+    /// Those mods as a player knows them, by name: see [`InstanceMod`].
+    pub mod_list: Vec<InstanceMod>,
+    /// The loader it plays with (`Forge`, `NeoForge`, `Fabric`, `Quilt`),
+    /// from its launcher's files, else from what its mods are made for.
+    pub loader: Option<String>,
     /// The namespaces of their blocks, sorted.
     pub namespaces: Vec<String>,
     /// The resource packs it has turned on, the lowest first.
@@ -37,6 +40,38 @@ pub struct Instance {
     /// the data packs every world of the instance gets (`datapacks`,
     /// `global_packs`, `openloader`), zips or folders.
     pub datapacks: Vec<PathBuf>,
+}
+
+/// A mod with blocks of an instance.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct InstanceMod {
+    /// Its name, as its jar says it, else as its file's name gives it
+    /// (`Actually Additions`).
+    pub name: String,
+    /// Its id, as its jar says it (`actuallyadditions`).
+    pub id: Option<String>,
+    /// Its jar.
+    pub jar: PathBuf,
+    /// The namespaces of its blocks, sorted.
+    pub namespaces: Vec<String>,
+    /// How many blocks it has: its block states files.
+    pub blocks: usize,
+}
+
+impl InstanceMod {
+    /// Its jar's file name.
+    pub fn file_name(&self) -> String {
+        self.jar.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default()
+    }
+
+    /// Whether `query` (lowercase) is in its name, id, namespaces or file.
+    pub fn matches(&self, query: &str) -> bool {
+        query.is_empty()
+            || self.name.to_lowercase().contains(query)
+            || self.id.as_deref().is_some_and(|i| i.to_lowercase().contains(query))
+            || self.namespaces.iter().any(|n| n.contains(query))
+            || self.file_name().to_lowercase().contains(query)
+    }
 }
 
 impl Instance {
@@ -56,6 +91,7 @@ impl Instance {
             ..Default::default()
         };
         let mut namespaces = Vec::new();
+        let mut loaders: Vec<&'static str> = Vec::new();
         for jar in files_in(&dir.join("mods"), "jar") {
             let Ok(archive) = Archive::open(&jar) else { continue };
             let spaces = namespaces_in(archive.names());
@@ -63,13 +99,17 @@ impl Instance {
                 instance.datapacks.push(jar);
                 continue;
             }
+            let meta = crate::mod_meta(&archive);
+            loaders.extend(meta.loader);
             if !spaces.is_empty() {
-                let name = crate::mod_name(&archive).unwrap_or_else(|| jar.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());
+                let blocks = archive.names().filter(|n| is_blockstate(n)).count();
+                instance.mod_list.push(InstanceMod { name: crate::display_mod_name(&meta, &jar), id: meta.id, jar: jar.clone(), namespaces: spaces.clone(), blocks });
                 namespaces.extend(spaces);
                 instance.mods.push(jar);
-                instance.mod_names.push(name);
             }
         }
+        instance.mod_list.sort_by_cached_key(|m| (m.name.to_lowercase(), m.file_name()));
+        instance.loader = loader_of(&dir).or_else(|| most_common(&loaders).map(str::to_owned));
         namespaces.sort();
         namespaces.dedup();
         instance.namespaces = namespaces.clone();
@@ -138,6 +178,38 @@ fn name_of(dir: &Path) -> String {
     root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
+/// The loader a launcher's id names (`forge-47.2.0`, `net.fabricmc.fabric-loader`).
+fn loader_named(id: &str) -> Option<&'static str> {
+    let id = id.to_ascii_lowercase();
+    [("neoforge", "NeoForge"), ("neoforged", "NeoForge"), ("forge", "Forge"), ("fabric", "Fabric"), ("quilt", "Quilt")].into_iter().find(|(k, _)| id.contains(k)).map(|(_, v)| v)
+}
+
+/// The loader an instance plays with, from its launcher's files.
+fn loader_of(dir: &Path) -> Option<String> {
+    let parent = dir.parent().filter(|_| dir.file_name().is_some_and(|n| n == ".minecraft" || n == "minecraft"));
+    let root = parent.unwrap_or(dir);
+    let found = json(&root.join("manifest.json"))
+        .and_then(|v| v.pointer("/minecraft/modLoaders/0/id").and_then(Value::as_str).and_then(loader_named))
+        .or_else(|| json(&root.join("minecraftinstance.json")).and_then(|v| v.pointer("/baseModLoader/name").and_then(Value::as_str).and_then(loader_named)))
+        .or_else(|| {
+            json(&root.join("mmc-pack.json")).and_then(|v| v.get("components")?.as_array()?.iter().filter_map(|c| c.get("uid").and_then(Value::as_str)).filter(|u| *u != "net.minecraft").find_map(loader_named))
+        })
+        .or_else(|| json(&root.join("profile.json")).and_then(|v| v.get("loader").and_then(Value::as_str).and_then(loader_named)));
+    found.map(str::to_owned)
+}
+
+/// The value most often in `of`, the first of those as often.
+fn most_common<'a>(of: &[&'a str]) -> Option<&'a str> {
+    let mut best: Option<(&str, usize)> = None;
+    for v in of {
+        let n = of.iter().filter(|o| *o == v).count();
+        if best.is_none_or(|(_, b)| n > b) {
+            best = Some((v, n));
+        }
+    }
+    best.map(|(v, _)| v)
+}
+
 /// The version of the game an instance plays, from its launcher's files.
 fn minecraft_of(dir: &Path) -> Option<String> {
     let parent = dir.parent().filter(|_| dir.file_name().is_some_and(|n| n == ".minecraft" || n == "minecraft"));
@@ -180,15 +252,21 @@ pub fn block_namespaces(jar: &Path) -> Vec<String> {
     namespaces_in(names.iter().map(String::as_str))
 }
 
+/// The namespace of a jar's entry when it is a block states file
+/// (`assets/<ns>/blockstates/<block>.json`).
+fn blockstate_namespace(name: &str) -> Option<&str> {
+    let rest = name.strip_prefix("assets/")?;
+    let (ns, rest) = rest.split_once('/')?;
+    (rest.starts_with("blockstates/") && rest.ends_with(".json")).then_some(ns)
+}
+
+fn is_blockstate(name: &str) -> bool {
+    blockstate_namespace(name).is_some()
+}
+
 /// The namespaces of the block states among a jar's entries.
 fn namespaces_in<'a>(names: impl Iterator<Item = &'a str>) -> Vec<String> {
-    let mut out: Vec<String> = names
-        .filter_map(|n| {
-            let rest = n.strip_prefix("assets/")?;
-            let (ns, rest) = rest.split_once('/')?;
-            (rest.starts_with("blockstates/") && rest.ends_with(".json")).then(|| ns.to_owned())
-        })
-        .collect();
+    let mut out: Vec<String> = names.filter_map(|n| blockstate_namespace(n).map(str::to_owned)).collect();
     out.sort();
     out.dedup();
     out
@@ -406,7 +484,9 @@ mod tests {
         assert_eq!(instance.packs, [dir.join("resourcepacks/Conquest.zip")]);
         assert_eq!(instance.lists, [dir.join("conquest_wp.csv")], "only the list of a mod it has");
         assert!(instance.has_mod("conquest") && !instance.has_mod("chipped"));
-        assert_eq!((instance.mod_names.as_slice(), instance.namespaces.as_slice()), (["Conquest Reforged".to_owned()].as_slice(), ["conquest".to_owned()].as_slice()));
+        assert_eq!(instance.mod_list, [InstanceMod { name: "Conquest Reforged".into(), id: None, jar: conquest.clone(), namespaces: vec!["conquest".into()], blocks: 1 }]);
+        assert_eq!(instance.namespaces, ["conquest"]);
+        assert_eq!(instance.loader.as_deref(), Some("Fabric"), "from its manifest");
         assert_eq!(with_blocks_in(&dir).len(), 1);
         assert_eq!(with_blocks_in(dir.parent().unwrap()).iter().filter(|i| i.dir == dir).count(), 1);
         assert_eq!(instance.files(), [conquest.clone(), dir.join("conquest_wp.csv"), dir.join("resourcepacks/Conquest.zip")]);

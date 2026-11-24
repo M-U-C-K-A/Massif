@@ -2937,5 +2937,14 @@
  "Water raised by {n} blocks, to {level}: height limit reached": {
   "one": "Wasser um {n} Block angehoben, auf {level}: Höhengrenze erreicht",
   "other": "Wasser um {n} Blöcke angehoben, auf {level}: Höhengrenze erreicht"
+ },
+ "Search instances and mods": "Instanzen und Mods durchsuchen",
+ "{n} of {total} mods": "{n} von {total} Mods",
+ "Mod id: {id}": "Mod-ID: {id}",
+ "Blocks: {namespaces}": "Blöcke: {namespaces}",
+ "No instance or mod has that name.": "Keine Instanz und kein Mod hat diesen Namen.",
+ "{n} mods": {
+  "one": "{n} Mod",
+  "other": "{n} Mods"
  }
 }

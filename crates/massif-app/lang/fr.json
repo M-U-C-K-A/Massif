@@ -2997,5 +2997,14 @@
  "{n} samples a pixel": {
   "one": "{n} échantillon par pixel",
   "other": "{n} échantillons par pixel"
+ },
+ "Search instances and mods": "Rechercher instances et mods",
+ "{n} of {total} mods": "{n} mods sur {total}",
+ "Mod id: {id}": "Identifiant du mod : {id}",
+ "Blocks: {namespaces}": "Blocs : {namespaces}",
+ "No instance or mod has that name.": "Aucune instance ni aucun mod ne porte ce nom.",
+ "{n} mods": {
+  "one": "{n} mod",
+  "other": "{n} mods"
  }
 }

@@ -1937,8 +1937,14 @@ instances installed here (CurseForge, Prism, MultiMC, Modrinth or the
 official launcher, on any drive) for mods with blocks, whatever the mods.
 Those whose blocks are not read yet are listed in the Blocks panel under
 **Mods with blocks in your Minecraft instances**: each instance on a row,
-with the names of its mods with blocks and the version of the game it
-plays, and **Use** reads it. Instances with lists of blocks for WorldPainter
+with its loader, the version of the game it plays and how many mods with
+blocks it has, and **Use** reads it. Click a row to unfold its mods, one a
+line, by name: the name the mod gives itself (in `mods.toml`,
+`fabric.mod.json` or `mcmod.info`), else its jar's file name without its
+versions and loader, then its id and how many blocks it has; hover a mod
+for its jar's file name. Once there are many, a search above the list finds
+instances and mods by name, id or file name, and unfolds the instances on
+the mods it finds. Instances with lists of blocks for WorldPainter
 come first. **Instance…** reads any other modpack: choose its folder (the one with
 `mods` in it, or the instance's own). Reading an instance:
 

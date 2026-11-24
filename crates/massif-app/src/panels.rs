@@ -3458,6 +3458,131 @@ pub fn terrain_icon(ui: &mut Ui, rect: Rect, reg: &Registry, terrain: u16, block
     cube_icon(ui.painter(), rect, top, side);
 }
 
+/// The instances installed here with mods with blocks, in a well: a row
+/// each (its name, loader, version of the game and number of mods with
+/// blocks, and Use), its mods folded under it, one a line, by name; a
+/// search over instances and mods once there are many. The instance whose
+/// Use was clicked.
+fn instance_list(ui: &mut Ui, blocks: &mut BlockLibrary) -> Option<massif_assets::instance::Instance> {
+    const HEAD_H: f32 = 40.0;
+    const MOD_H: f32 = 22.0;
+    const MODS_SHOWN: usize = 12;
+    let pal = Palette::of(ui);
+    let mut chosen = None;
+    let total: usize = blocks.instances.iter().map(|i| i.mod_list.len()).sum();
+    let searchable = blocks.instances.len() > 3 || total > MODS_SHOWN;
+    if !searchable {
+        blocks.instance_search.clear();
+    }
+    let query = blocks.instance_search.trim().to_lowercase();
+    crate::widgets::well(ui, |ui| {
+        ui.add_space(8.0);
+        ui.add(egui::Label::new(RichText::new(tr!("Mods with blocks in your Minecraft instances")).medium().size(12.5)).wrap());
+        if searchable {
+            ui.add_space(6.0);
+            crate::widgets::search(ui, &mut blocks.instance_search, tr!("Search instances and mods"), f32::INFINITY);
+        }
+        ui.add_space(6.0);
+        let mut shown_any = false;
+        for found in &blocks.instances {
+            let name_hit = query.is_empty() || found.name.to_lowercase().contains(&query);
+            let hits: Vec<usize> = if query.is_empty() { Vec::new() } else { (0..found.mod_list.len()).filter(|&i| found.mod_list[i].matches(&query)).collect() };
+            if !name_hit && hits.is_empty() {
+                continue;
+            }
+            shown_any = true;
+            let id = ui.make_persistent_id(("instance mods open", &found.dir));
+            let mut open = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+            // A search finding its mods shows them, those only.
+            let searched = !hits.is_empty();
+            let showing_open = open || searched;
+            // Its row: chevron, name and what it plays, then Use.
+            let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), HEAD_H), Sense::click());
+            ui.painter().hline(rect.x_range().expand(12.0), rect.top(), Stroke::new(1.0, pal.border));
+            let mut control = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::right_to_left(Align::Center)));
+            if control
+                .add(theme::primary_button(&control, tr!("Use")))
+                .on_hover_text(tr!("Read its mods, lists of blocks and resource packs from this instance, over the version of the game it plays"))
+                .clicked()
+            {
+                chosen = Some(found.clone());
+            }
+            let right = control.min_rect().left() - 8.0;
+            let text_rect = Rect::from_min_max(rect.left_top(), pos2(right.max(rect.left() + 20.0), rect.bottom()));
+            let chevron = theme::glyph(if showing_open { Icon::ChevronDown } else { Icon::ChevronRight });
+            ui.painter().text(pos2(text_rect.left() + 6.0, rect.center().y), egui::Align2::CENTER_CENTER, chevron, egui::FontId::proportional(12.0), pal.weak);
+            let mut text = ui.new_child(egui::UiBuilder::new().max_rect(text_rect.with_min_x(text_rect.left() + 18.0)).layout(egui::Layout::top_down(Align::Min)));
+            text.add_space((HEAD_H - 33.0) * 0.5);
+            text.spacing_mut().item_spacing.y = 1.0;
+            text.add(egui::Label::new(RichText::new(&found.name).medium().size(12.5)).truncate().selectable(false));
+            let mut detail: Vec<String> = Vec::new();
+            if let Some(loader) = &found.loader {
+                detail.push(loader.clone());
+            }
+            if let Some(v) = &found.minecraft {
+                detail.push(v.clone());
+            }
+            detail.push(if searched { tr!("{n} of {total} mods", n = hits.len(), total = found.mod_list.len()).to_owned() } else { trn!("{n} mod", "{n} mods", n = found.mod_list.len()) });
+            text.add(egui::Label::new(RichText::new(detail.join(" · ")).size(11.0).color(pal.weak)).truncate().selectable(false));
+            let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+            response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, showing_open, &found.name));
+            if response.clicked() && !searched {
+                open = !open;
+                ui.data_mut(|d| d.insert_temp(id, open));
+            }
+            if !showing_open {
+                continue;
+            }
+            // Its mods, one a line, by name: a scrolled list of rows drawn
+            // only where seen, for modpacks of hundreds.
+            let rows: Vec<usize> = if searched { hits } else { (0..found.mod_list.len()).collect() };
+            let mod_row = |ui: &mut Ui, m: &massif_assets::instance::InstanceMod| {
+                let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), MOD_H), Sense::hover());
+                let count = trn!("{n} block", "{n} blocks", n = m.blocks);
+                let galley = ui.painter().layout_no_wrap(count, egui::FontId::proportional(11.0), pal.weak);
+                let count_x = rect.right() - galley.size().x;
+                ui.painter().galley(pos2(count_x, rect.center().y - galley.size().y * 0.5), galley, pal.weak);
+                let room = Rect::from_min_max(pos2(rect.left() + 18.0, rect.top()), pos2(count_x - 8.0, rect.bottom()));
+                let mut line = ui.new_child(egui::UiBuilder::new().max_rect(room).layout(egui::Layout::left_to_right(Align::Center)));
+                line.spacing_mut().item_spacing.x = 6.0;
+                let mut job = egui::text::LayoutJob::default();
+                job.append(&m.name, 0.0, egui::TextFormat::simple(egui::FontId::proportional(12.0), pal.text));
+                let id = m.id.clone().or_else(|| m.namespaces.first().cloned()).filter(|i| !i.eq_ignore_ascii_case(&m.name));
+                if let Some(id) = &id {
+                    job.append(id, 6.0, egui::TextFormat::simple(egui::FontId::monospace(10.5), pal.weak));
+                }
+                line.add(egui::Label::new(job).truncate().selectable(false));
+                let mut tip = m.file_name();
+                if let Some(id) = &m.id {
+                    tip.push_str(&format!("\n{}", tr!("Mod id: {id}", id)));
+                }
+                tip.push_str(&format!("\n{}", tr!("Blocks: {namespaces}", namespaces = m.namespaces.join(", "))));
+                response.on_hover_text(tip);
+            };
+            ui.spacing_mut().item_spacing.y = 0.0;
+            if rows.len() > MODS_SHOWN {
+                egui::ScrollArea::vertical().id_salt(("instance mods", &found.dir)).max_height(MOD_H * MODS_SHOWN as f32).auto_shrink([false, true]).show_rows(ui, MOD_H, rows.len(), |ui, range| {
+                    for &i in &rows[range] {
+                        mod_row(ui, &found.mod_list[i]);
+                    }
+                });
+            } else {
+                for &i in &rows {
+                    mod_row(ui, &found.mod_list[i]);
+                }
+            }
+            ui.add_space(6.0);
+        }
+        if !shown_any {
+            ui.add_space(4.0);
+            ui.label(RichText::new(tr!("No instance or mod has that name.")).size(11.5).color(pal.weak));
+        }
+        ui.add_space(6.0);
+    });
+    chosen
+}
+
+
 /// Every block of the game, with its real textures: click one to paint it.
 /// A block id typed by hand, for a block nothing in the panel finds (any
 /// mod's, with its properties): painted as a terrain or grown as a cover.
@@ -3632,39 +3757,12 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
         }
     });
     // The instances installed here with mods with blocks not read yet,
-    // whatever the mods: each one's blocks in one click, on a row.
+    // whatever the mods: each one's blocks in one click.
     if !blocks.instances.is_empty() {
         ui.add_space(4.0);
-        egui::Frame::new()
-            .fill(pal.well())
-            .stroke(Stroke::new(1.0, pal.border))
-            .corner_radius(theme::GROUP_RADIUS)
-            .inner_margin(egui::Margin::symmetric(10, 8))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.add(egui::Label::new(RichText::new(tr!("Mods with blocks in your Minecraft instances")).medium().size(12.5)).wrap());
-                for found in blocks.instances.clone() {
-                    ui.add_space(4.0);
-                    // A row as high as its text: the mods and the instance,
-                    // then its button.
-                    ui.horizontal(|ui| {
-                        let text_width = (ui.available_width() - 64.0).max(80.0);
-                        ui.allocate_ui_with_layout(vec2(text_width, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
-                            ui.add(egui::Label::new(RichText::new(found.mod_names.join(", ")).size(12.0)).wrap());
-                            let detail = match &found.minecraft {
-                                Some(v) => tr!("{name} · Minecraft {v}", name = found.name, v),
-                                None => found.name.clone(),
-                            };
-                            ui.add(egui::Label::new(RichText::new(detail).size(11.5).color(pal.weak)).wrap());
-                        });
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.add(theme::primary_button(ui, tr!("Use"))).on_hover_text(tr!("Read its mods, lists of blocks and resource packs from this instance, over the version of the game it plays")).clicked() {
-                                instance = Some(found.clone());
-                            }
-                        });
-                    });
-                }
-            });
+        if let Some(found) = instance_list(ui, blocks) {
+            instance = Some(found);
+        }
     }
     if let Some(found) = instance {
         blocks.use_instance(&ctx, &found, jar, mods);
@@ -4362,6 +4460,102 @@ mod tests {
             }
         }
     }
+    /// The instances' list with a modpack of 300 mods with blocks (1.12.2's
+    /// file names), at a narrow panel's width: folded, opened, and searched;
+    /// the frame time of the opened list measured (rendered with
+    /// MASSIF_SNAPSHOT_DIR, at 1x and 2x).
+    #[test]
+    fn instance_list_of_a_big_modpack() {
+        use egui_kittest::kittest::Queryable;
+        use massif_assets::instance::{Instance, InstanceMod};
+        let words = ["Actually", "Additions", "Applied", "Chance", "Cubes", "Chicken", "Chunks", "Colossal", "Chests", "Dark", "Utils", "Draconic", "Evolution", "Extra", "Flux", "Networks", "Growable", "Cells", "Forge", "Multipart"];
+        let mut big = Instance { dir: "/instances/FTB Revelation".into(), name: "FTB Revelation".into(), minecraft: Some("1.12.2".into()), loader: Some("Forge".into()), ..Default::default() };
+        for i in 0..300 {
+            let name = format!("{}{}", words[i % words.len()], words[(i / words.len() + i + 1) % words.len()]);
+            let jar = std::path::PathBuf::from(format!("/instances/FTB Revelation/mods/{name}-1.12.2-{}.{}.{}-universal.jar", i % 7, i % 13, i));
+            let file = jar.file_name().unwrap().to_string_lossy().into_owned();
+            big.mod_list.push(InstanceMod { name: massif_assets::jar_mod_name(&file), id: Some(name.to_lowercase()), jar: jar.clone(), namespaces: vec![name.to_lowercase()], blocks: 3 + i * 37 % 400 });
+            big.mods.push(jar);
+        }
+        big.mod_list.push(InstanceMod { name: "Chisel".into(), id: Some("chisel".into()), jar: "/instances/FTB Revelation/mods/Chisel-MC1.12.2-1.0.2.45.jar".into(), namespaces: vec!["chisel".into()], blocks: 512 });
+        big.mod_list.sort_by_cached_key(|m| m.name.to_lowercase());
+        let conquest = Instance {
+            dir: "/instances/Conquest Reforged".into(),
+            name: "Conquest Reforged Modpack (Fabric)".into(),
+            minecraft: Some("1.20.1".into()),
+            loader: Some("Fabric".into()),
+            mod_list: vec![InstanceMod { name: "Conquest Reforged".into(), id: Some("conquest".into()), jar: "/instances/Conquest Reforged/mods/ConquestReforged-fabric-1.20.1-1.4.1.4.jar".into(), namespaces: vec!["conquest".into()], blocks: 13_204 }],
+            ..Default::default()
+        };
+        let litematica = Instance {
+            dir: "/instances/Fabulously Optimized".into(),
+            name: "Fabulously Optimized".into(),
+            minecraft: Some("1.21.11".into()),
+            loader: Some("Fabric".into()),
+            mod_list: vec![InstanceMod { name: "Litematica".into(), id: Some("litematica".into()), jar: "/instances/Fabulously Optimized/mods/litematica-fabric-1.21.11-0.24.jar".into(), namespaces: vec!["litematica".into()], blocks: 1 }],
+            ..Default::default()
+        };
+        let instances = vec![conquest, litematica, big];
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from);
+        let ppps: &[f32] = if dir.is_some() { &[1.0, 2.0] } else { &[1.0] };
+        for &ppp in ppps {
+            let mut blocks = BlockLibrary::default();
+            blocks.instances = instances.clone();
+            let builder = egui_kittest::Harness::builder().with_size(egui::vec2(300.0, 620.0)).with_pixels_per_point(ppp).with_accessibility_check(false);
+            let ui_fn = |ui: &mut Ui, blocks: &mut BlockLibrary| {
+                crate::theme::install(ui.ctx());
+                let pal = crate::theme::Palette::of(ui);
+                egui::Frame::new().fill(pal.panel).inner_margin(12).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        let _ = instance_list(ui, blocks);
+                    });
+                });
+            };
+            let mut h = if dir.is_some() { builder.wgpu().build_ui_state(ui_fn, blocks) } else { builder.build_ui_state(ui_fn, blocks) };
+            h.run_steps(3);
+            let save = |h: &mut egui_kittest::Harness<'_, BlockLibrary>, name: &str| {
+                if let Some(dir) = &dir {
+                    h.render().unwrap().save(dir.join(format!("instances-{name}-{ppp}x.png"))).unwrap();
+                }
+            };
+            // Folded: a row each, its Use within the panel.
+            assert_eq!(h.query_all_by_label("Use").count(), 3);
+            for b in h.query_all_by_label("Use") {
+                assert!(b.rect().right() <= 300.0 + 0.5, "{:?}", b.rect());
+            }
+            assert!(h.query_by_label_contains("Chicken").is_none(), "folded");
+            save(&mut h, "folded");
+            // Opened: its mods one a line, by name, only those in view drawn.
+            h.query_all_by_label("FTB Revelation").next().expect("its row").click();
+            h.run_steps(3);
+            assert!(h.query_all_by_label_contains("Actually ").next().is_some(), "opened, by name");
+            assert!(h.query_all_by_label_contains("blocks").count() < 40, "only the rows in view");
+            save(&mut h, "opened");
+            if ppp == 1.0 {
+                let mut best = std::time::Duration::MAX;
+                for _ in 0..5 {
+                    let started = std::time::Instant::now();
+                    for _ in 0..20 {
+                        h.step();
+                    }
+                    best = best.min(started.elapsed() / 20);
+                }
+                eprintln!("instances, a 300 mods modpack opened: {best:?} a frame");
+                assert!(best < std::time::Duration::from_millis(16), "{best:?}");
+            }
+            // Searched: the instances whose mods match, opened on those.
+            h.state_mut().instance_search = "chis".into();
+            h.run_steps(3);
+            assert_eq!(h.query_all_by_label("Use").count(), 1, "only the modpack with Chisel");
+            assert!(h.query_all_by_label_contains("Chisel").next().is_some());
+            save(&mut h, "search");
+            h.state_mut().instance_search = "zzz".into();
+            h.run_steps(3);
+            assert!(h.query_by_label_contains("No instance or mod").is_some());
+        }
+    }
+
     use massif_core::generate::{GenParams, generate};
 
     /// What a noise settings panel holds while it is drawn.

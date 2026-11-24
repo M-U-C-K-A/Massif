@@ -31,6 +31,8 @@ pub struct BlockLibrary {
     /// The instances installed here with mods with blocks not read yet,
     /// whatever the mods, the best read first: each offered in one click.
     pub instances: Vec<Instance>,
+    /// What the list of instances is searched for.
+    pub instance_search: String,
     /// What reading an instance left to say (the version of the game it
     /// plays is not installed…).
     pub notice: Option<String>,
