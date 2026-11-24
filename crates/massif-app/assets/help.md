@@ -135,7 +135,7 @@ A brush has a shape, a size, an intensity and a rotation. The shapes are the bui
 ## Where the brush acts
 The options under the brush settings limit where a brush acts, as in WorldPainter:
 - **Height limits**: only at or above a height, at or below one, between two or beyond them. The range is the map's own: from its bottom (−64 for a Minecraft map, or the bottom its file says) to its top. The picture shows the map from the side, cut from west to east through its highest point, with the sea in blue; the land at the heights the brush acts on, between the limits' lines, is in the accent. Drag a limit's line up or down (Shift: finely), or type the heights; the line under the settings says how much of the map the brush acts on.
-- **What is on the map**: only on, or except on, some terrains, biomes, water or dry land.
+- **What is on the map**: only on, or except on, some terrains, biomes, water or dry land, or layers (ground covers, trees and objects, under the trees, pockets, annotations). **Add** lists them to search, sorted **On the map** (what the map holds first), **Recent** or **A–Z**. The **eyedropper** picks on the map: click it, then a spot of the 2D map or the 3D view, and pick what is there in the list by the pointer; the brush is back in hand after, `Esc` puts it down.
 - **Slope** and **Facing**: only on slopes steeper or gentler than an angle, or facing one way.
 
 # Selections

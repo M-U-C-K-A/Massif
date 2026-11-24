@@ -1174,8 +1174,11 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
     height_limits(ui, f, heights, min_y, max_y, sea);
 
     section(ui, Icon::Layers, tr!("What is on the map"));
-    match_list(ui, "only on", &mut f.only_on, reg, "only on");
-    match_list(ui, "except on", &mut f.except_on, reg, "except on");
+    tools.filter_list_open = false;
+    let f = &mut tools.filter;
+    let mut lists = FilterList { sort: &mut tools.filter_sort, recent: &mut tools.filter_recent, used: tools.filter_used.as_deref(), pick: &mut tools.filter_pick, open: &mut tools.filter_list_open };
+    match_list(ui, tr!("only on"), &mut f.only_on, reg, "only on", &mut lists, true);
+    match_list(ui, tr!("except on"), &mut f.except_on, reg, "except on", &mut lists, false);
 
     section(ui, Icon::TrendingUp, tr!("Slope"));
     ui.horizontal(|ui| {
@@ -3564,25 +3567,140 @@ fn land_profile(ui: &mut Ui, f: &mut massif_core::filter::Filter, heights: Optio
 
 /// A list of terrains, biomes, water or land the filter matches, as chips,
 /// with a menu to add more.
-fn match_list(ui: &mut Ui, label: &str, list: &mut Option<Vec<massif_core::filter::Match>>, reg: &Registry, id: &str) {
+/// What a filter's test is on, by name.
+pub fn match_name(m: &massif_core::filter::Match, reg: &Registry) -> String {
+    use massif_core::filter::{Match, Painted};
+    match *m {
+        Match::Terrain(t) => reg.terrain(TerrainId(t)).name.clone(),
+        Match::Biome(b) => reg.biome(BiomeId(b)).name.clone(),
+        Match::Water => tr!("Water").to_owned(),
+        Match::Land => tr!("Dry land").to_owned(),
+        Match::Layer(Painted::Cover, n) => reg.cover(n).map_or_else(|| tr!("Removed layer").to_owned(), |c| c.name.clone()),
+        Match::Layer(Painted::Objects | Painted::Understory, n) => reg.object_layer(n).map_or_else(|| tr!("Removed layer").to_owned(), |l| l.name.clone()),
+        Match::Layer(Painted::Pockets, n) => reg.pocket(n).map_or_else(|| tr!("Removed layer").to_owned(), |p| p.name.clone()),
+        Match::Layer(Painted::Annotation, n) => tr!("Annotation: {name}", name = annotation_label(n, &reg.annotations)),
+    }
+}
+
+/// What the filters' lists share: how their menu is sorted, what was
+/// picked lately, what the map holds, the eyedropper.
+pub struct FilterList<'a> {
+    pub sort: &'a mut crate::tools::FilterSort,
+    pub recent: &'a mut Vec<massif_core::filter::Match>,
+    pub used: Option<&'a HashSet<massif_core::filter::Match>>,
+    pub pick: &'a mut Option<bool>,
+    /// Set while a list's menu is open.
+    pub open: &'a mut bool,
+}
+
+/// One thing a filter can be on, as its menu lists it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FilterItem {
+    pub what: massif_core::filter::Match,
+    pub kind: &'static str,
+    pub name: String,
+    pub color: [u8; 3],
+}
+
+/// Everything a filter can be on in the map's registry: water, dry land,
+/// the terrains, biomes and layers (annotations only where the map has
+/// some, or `all`).
+pub fn filter_items(reg: &Registry, used: Option<&HashSet<massif_core::filter::Match>>) -> Vec<FilterItem> {
+    use massif_core::filter::{Match, Painted};
+    let mut out = vec![
+        FilterItem { what: Match::Water, kind: tr!("Water"), name: tr!("Water").to_owned(), color: [60, 110, 200] },
+        FilterItem { what: Match::Land, kind: tr!("Water"), name: tr!("Dry land").to_owned(), color: [150, 130, 90] },
+    ];
+    for (i, t) in reg.terrains.iter().enumerate() {
+        out.push(FilterItem { what: Match::Terrain(i as u16), kind: tr!("Terrain"), name: t.name.clone(), color: t.color });
+    }
+    for (i, b) in reg.biomes.iter().enumerate().skip(1) {
+        out.push(FilterItem { what: Match::Biome(i as u16), kind: tr!("Biome"), name: b.name.clone(), color: b.color });
+    }
+    for (i, c) in reg.covers.iter().enumerate().filter(|(_, c)| !c.removed) {
+        out.push(FilterItem { what: Match::Layer(Painted::Cover, i as u16 + 1), kind: tr!("Cover"), name: c.name.clone(), color: c.color });
+    }
+    for (i, l) in reg.object_layers.iter().enumerate().filter(|(_, l)| !l.removed) {
+        let (p, kind) = if l.understory { (Painted::Understory, tr!("Under the trees")) } else { (Painted::Objects, tr!("Trees")) };
+        out.push(FilterItem { what: Match::Layer(p, i as u16 + 1), kind, name: l.name.clone(), color: l.color });
+    }
+    for (i, p) in reg.pockets.iter().enumerate().filter(|(_, p)| !p.removed) {
+        out.push(FilterItem { what: Match::Layer(Painted::Pockets, i as u16 + 1), kind: tr!("Pockets"), name: p.name.clone(), color: p.color });
+    }
+    // The annotations' colours the map has: the fifteen presets and its
+    // own.
+    for n in 1..=massif_core::annotations::MAX {
+        let what = Match::Layer(Painted::Annotation, n);
+        if used.is_some_and(|u| u.contains(&what))
+            && let Some(color) = reg.annotations.color(n)
+        {
+            out.push(FilterItem { what, kind: tr!("Annotation"), name: annotation_label(n, &reg.annotations), color });
+        }
+    }
+    out
+}
+
+/// A row of a filter's menu: a heading, or an item by its index.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FilterRow {
+    Heading(&'static str),
+    Item(usize),
+}
+
+/// The rows of a filter's menu: `items` searched for `query` (in their
+/// name or kind, in any language), in the order `sort` asks. Water and
+/// dry land, always on a map, count as on it.
+pub fn filter_rows(items: &[FilterItem], query: &str, sort: crate::tools::FilterSort, recent: &[massif_core::filter::Match], used: Option<&HashSet<massif_core::filter::Match>>) -> Vec<FilterRow> {
+    use crate::tools::FilterSort;
     use massif_core::filter::Match;
+    let q = query.trim().to_lowercase();
+    let mut found: Vec<usize> = (0..items.len()).filter(|&i| q.is_empty() || items[i].name.to_lowercase().contains(&q) || items[i].kind.to_lowercase().contains(&q) || crate::i18n::tr_name(&items[i].name).to_lowercase().contains(&q)).collect();
+    found.sort_by_cached_key(|&i| crate::i18n::tr_name(&items[i].name).to_lowercase());
+    let on_map = |m: &Match| matches!(m, Match::Water | Match::Land) || used.is_some_and(|u| u.contains(m));
+    let mut rows = Vec::new();
+    match sort {
+        FilterSort::Name => rows.extend(found.into_iter().map(FilterRow::Item)),
+        FilterSort::Used if used.is_some() => {
+            let (here, rest): (Vec<usize>, Vec<usize>) = found.into_iter().partition(|&i| on_map(&items[i].what));
+            if !here.is_empty() {
+                rows.push(FilterRow::Heading(tr!("On this map")));
+                rows.extend(here.into_iter().map(FilterRow::Item));
+            }
+            if !rest.is_empty() {
+                rows.push(FilterRow::Heading(tr!("Not on this map")));
+                rows.extend(rest.into_iter().map(FilterRow::Item));
+            }
+        }
+        FilterSort::Used => rows.extend(found.into_iter().map(FilterRow::Item)),
+        FilterSort::Recent => {
+            let lately: Vec<usize> = recent.iter().filter_map(|m| found.iter().copied().find(|&i| items[i].what == *m)).collect();
+            if !lately.is_empty() {
+                rows.push(FilterRow::Heading(tr!("Lately")));
+                rows.extend(lately.iter().copied().map(FilterRow::Item));
+                rows.push(FilterRow::Heading(tr!("All")));
+            }
+            rows.extend(found.into_iter().filter(|i| !lately.contains(i)).map(FilterRow::Item));
+        }
+    }
+    rows
+}
+
+/// A list of what the filter matches — terrains, biomes, layers, water or
+/// land — as chips, with a menu to add more (searched, sorted, what the
+/// map holds first) and an eyedropper to pick it on the map.
+fn match_list(ui: &mut Ui, label: &str, list: &mut Option<Vec<massif_core::filter::Match>>, reg: &Registry, id: &str, lists: &mut FilterList, only: bool) {
+    use crate::tools::FilterSort;
     let pal = Palette::of(ui);
     let mut on = list.is_some();
     if crate::widgets::checkbox(ui, &mut on, label).changed() {
         *list = on.then(Vec::new);
     }
     let Some(items) = list else { return };
-    let name = |m: &Match| match *m {
-        Match::Terrain(t) => reg.terrain(TerrainId(t)).name.clone(),
-        Match::Biome(b) => reg.biome(BiomeId(b)).name.clone(),
-        Match::Water => tr!("Water").to_owned(),
-        Match::Land => tr!("Dry land").to_owned(),
-    };
     ui.horizontal_wrapped(|ui| {
         ui.add_space(20.0);
         let mut remove = None;
         for (i, m) in items.iter().enumerate() {
-            let text = format!("{}  {}", name(m), theme::glyph(Icon::X));
+            let text = format!("{}  {}", match_name(m, reg), theme::glyph(Icon::X));
             if ui.add(egui::Button::new(RichText::new(text).size(11.5)).corner_radius(10)).on_hover_text(tr!("Remove")).clicked() {
                 remove = Some(i);
             }
@@ -3590,43 +3708,66 @@ fn match_list(ui: &mut Ui, label: &str, list: &mut Option<Vec<massif_core::filte
         if let Some(i) = remove {
             items.remove(i);
         }
-        crate::widgets::menu_button(ui, theme::with_icon(Icon::Plus, tr!("Add")), |ui| {
-            ui.set_max_height(360.0);
-            let add = |m: Match, items: &mut Vec<Match>| {
-                if !items.contains(&m) {
-                    items.push(m);
+        let response = crate::widgets::menu_button(ui, theme::with_icon(Icon::Plus, tr!("Add")), |ui| {
+            *lists.open = true;
+            ui.set_width(250.0);
+            let key = egui::Id::unique("filter search").with(id);
+            let mut query: String = ui.data(|d| d.get_temp(key)).unwrap_or_default();
+            crate::widgets::search(ui, &mut query, tr!("Search terrains, biomes, layers"), 250.0).request_focus();
+            ui.data_mut(|d| d.insert_temp(key, query.clone()));
+            ui.add_space(4.0);
+            let sorts = [FilterSort::Used, FilterSort::Recent, FilterSort::Name];
+            let on: Vec<bool> = sorts.iter().map(|s| *s == *lists.sort).collect();
+            if let Some(k) = crate::widgets::button_group(ui, &format!("{id} sort"), &[tr!("On the map"), tr!("Recent"), tr!("A–Z")], &on) {
+                *lists.sort = sorts[k];
+            }
+            ui.add_space(4.0);
+            let all = filter_items(reg, lists.used);
+            let rows = filter_rows(&all, &query, *lists.sort, lists.recent, lists.used);
+            if rows.is_empty() {
+                ui.label(RichText::new(tr!("Nothing by that name")).color(pal.weak));
+            }
+            let height = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
+            egui::ScrollArea::vertical().id_salt((id, "filter items")).max_height(300.0).auto_shrink([false, true]).show_rows(ui, height, rows.len(), |ui, range| {
+                for row in &rows[range] {
+                    match *row {
+                        FilterRow::Heading(text) => {
+                            ui.add_sized(vec2(ui.available_width(), height - ui.spacing().item_spacing.y), egui::Label::new(RichText::new(text).size(11.0).color(pal.weak)));
+                        }
+                        FilterRow::Item(i) => {
+                            let item = &all[i];
+                            let taken = items.contains(&item.what);
+                            let clicked = ui
+                                .horizontal(|ui| {
+                                    crate::inspect::swatch(ui, item.color);
+                                    let r = ui.add_enabled(!taken, egui::Button::new(crate::i18n::tr_name(&item.name)).frame(false));
+                                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| ui.label(RichText::new(item.kind).size(11.0).color(pal.weak)));
+                                    r.clicked()
+                                })
+                                .inner;
+                            if clicked {
+                                items.push(item.what);
+                                lists.recent.retain(|r| *r != item.what);
+                                lists.recent.insert(0, item.what);
+                                lists.recent.truncate(24);
+                                ui.close();
+                            }
+                        }
+                    }
                 }
-            };
-            if crate::widgets::button(ui, tr!("Water")).clicked() {
-                add(Match::Water, items);
-            }
-            if crate::widgets::button(ui, tr!("Dry land")).clicked() {
-                add(Match::Land, items);
-            }
-            ui.menu_button(tr!("Terrains"), |ui| {
-                egui::ScrollArea::vertical().id_salt((id, "terrains")).max_height(320.0).show(ui, |ui| {
-                    for (i, t) in reg.terrains.iter().enumerate() {
-                        if crate::widgets::button(ui, &t.name).clicked() {
-                            add(Match::Terrain(i as u16), items);
-                        }
-                    }
-                });
-            });
-            ui.menu_button(tr!("Biomes"), |ui| {
-                egui::ScrollArea::vertical().id_salt((id, "biomes")).max_height(320.0).show(ui, |ui| {
-                    for (i, b) in reg.biomes.iter().enumerate().skip(1) {
-                        if crate::widgets::button(ui, &b.name).clicked() {
-                            add(Match::Biome(i as u16), items);
-                        }
-                    }
-                });
             });
         });
+        let _ = response;
+        let picking = *lists.pick == Some(only);
+        let eyedropper = ui.add(egui::Button::new(theme::glyph(Icon::Pipette).to_string()).selected(picking)).on_hover_text(tr!("Select on the map: click a spot, then pick what is there"));
+        if eyedropper.clicked() {
+            *lists.pick = if picking { None } else { Some(only) };
+        }
     });
     if items.is_empty() {
         ui.horizontal(|ui| {
             ui.add_space(20.0);
-            ui.label(RichText::new(tr!("Add what the brush should act on")).size(11.0).color(pal.weak));
+            ui.label(RichText::new(tr!("Add what the brush should act on, or pick it on the map")).size(11.0).color(pal.weak));
         });
     }
 }

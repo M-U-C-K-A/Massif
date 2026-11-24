@@ -27,6 +27,40 @@ pub enum Match {
     Water,
     /// Dry land.
     Land,
+    /// A layer painted on the column, by its number in its plane.
+    Layer(Painted, u16),
+}
+
+/// A plane of layers painted on the columns, as [`crate::tile::Tile`] keeps
+/// them: what a filter can ask a column to be "on", besides its terrain
+/// and biome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum Painted {
+    /// A ground cover (ferns, tall grass, Frost…).
+    Cover,
+    /// A tree or object layer, the base one.
+    Objects,
+    /// A sub-canopy object layer.
+    Understory,
+    /// A layer of underground pockets.
+    Pockets,
+    /// An annotation colour, 1 to 15.
+    Annotation,
+}
+
+impl Painted {
+    pub const ALL: [Painted; 5] = [Painted::Cover, Painted::Objects, Painted::Understory, Painted::Pockets, Painted::Annotation];
+
+    /// The plane of `tile` it is painted in.
+    pub fn plane(self, tile: &crate::tile::Tile) -> &crate::plane::Plane<u16> {
+        match self {
+            Painted::Cover => &tile.cover,
+            Painted::Objects => &tile.objects,
+            Painted::Understory => &tile.understory,
+            Painted::Pockets => &tile.pockets,
+            Painted::Annotation => &tile.annotations,
+        }
+    }
 }
 
 /// The tests of a filter. The default filter lets everything through.
@@ -148,6 +182,9 @@ pub struct Column {
     /// The way the slope faces, in degrees (0 north, 90 east); `None`
     /// when not worked out.
     pub aspect: Option<f32>,
+    /// The layers painted on the column, by [`Painted`] (0 for none); read
+    /// only when the filter asks for layers.
+    pub painted: [u16; 5],
 }
 
 impl Filter {
@@ -162,6 +199,12 @@ impl Filter {
             || self.hollows
             || self.bumps
             || self.facing_on
+    }
+
+    /// Whether a test asks for the layers painted on the columns.
+    fn needs_layers(&self) -> bool {
+        let has = |l: &Option<Vec<Match>>| l.as_ref().is_some_and(|l| l.iter().any(|m| matches!(m, Match::Layer(..))));
+        has(&self.only_on) || has(&self.except_on)
     }
 
     fn needs_slope(&self) -> bool {
@@ -230,6 +273,7 @@ impl Filter {
             Match::Biome(b) => c.biome == b,
             Match::Water => c.wet,
             Match::Land => !c.wet,
+            Match::Layer(p, n) => c.painted[p as usize] == n,
         }
     }
 
@@ -294,7 +338,7 @@ impl Filter {
         let done: Vec<(BlockRect, Vec<u8>)> = parts
             .into_par_iter()
             .map(|part| {
-                let surface = Surface::gather(dim, part.expand(ring));
+                let surface = Surface::gather(dim, part.expand(ring), self.needs_layers());
                 let relief = self.needs_relief().then(|| surface.local_means(ring));
                 // The slope of every column, from the heights alone.
                 let (sw, sd) = (surface.rect.width() as usize, surface.rect.depth() as usize);
@@ -490,7 +534,7 @@ struct Surface {
 }
 
 impl Surface {
-    fn gather(dim: &Dimension, rect: BlockRect) -> Self {
+    fn gather(dim: &Dimension, rect: BlockRect, layers: bool) -> Self {
         let width = rect.width() as usize;
         let mut columns: Vec<Option<Column>> = vec![None; width * rect.depth() as usize];
         // In bands, one per row of tiles, filled in parallel; the ground
@@ -515,6 +559,24 @@ impl Surface {
                 let ground = stack.ground();
                 let flat = stack.is_ground_only().then(|| (ground.top.dense(), ground.terrain.dense()));
                 let (fluids, biomes) = (ground.fluid.dense(), ground.biome.dense());
+                // The layers, of the level whose surface the top is.
+                let painted = |cell: usize, spans: &[Span]| -> [u16; 5] {
+                    let mut out = [0u16; 5];
+                    if !layers {
+                        return out;
+                    }
+                    let level = match (stack.is_ground_only(), spans.last()) {
+                        (false, Some(top)) => stack.surface_level(cell, top).unwrap_or(0),
+                        _ => 0,
+                    };
+                    let tile = stack.layers().find(|l| l.0 == level).map_or(ground, |l| l.2);
+                    for p in Painted::ALL {
+                        // Pockets and annotations are the ground's.
+                        let from = if matches!(p, Painted::Pockets | Painted::Annotation) { ground } else { tile };
+                        out[p as usize] = p.plane(from).get(cell);
+                    }
+                    out
+                };
                 for z in clip.z0..clip.z1 {
                     let row = &mut band[(z - z0) as usize * width..][..width];
                     for x in clip.x0..clip.x1 {
@@ -535,6 +597,7 @@ impl Surface {
                             slope: 0.0,
                             relief: 0.0,
                             aspect: None,
+                            painted: painted(cell, &spans),
                         });
                     }
                 }
@@ -708,6 +771,7 @@ mod tests {
             slope: 10.0,
             relief: 0.0,
             aspect: None,
+            painted: [0; 5],
         }
     }
 

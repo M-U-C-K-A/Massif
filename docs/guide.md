@@ -728,7 +728,17 @@ what the map shows:
   brush acts on, between the limits' lines, is in the accent. Each limit is
   a line across, dragged up or down (Shift: finely) or typed in. Under it,
   the share of the map the brush acts on.
-- **Only on / except on**: terrains, biomes, water or dry land.
+- **Only on / except on**: terrains, biomes, water or dry land, and layers:
+  ground covers (ferns, tall grass, Frost…), tree and object layers, the
+  layers under the trees, underground pockets and annotations. **Add**
+  opens a list to search, by name or kind, sorted three ways: **On the
+  map** (what the map holds first, then the rest), **Recent** (what the
+  filters were set to lately first) or **A–Z**. The **eyedropper** beside
+  it picks on the map, as WorldPainter's "select on map": click it, then a
+  spot of the 2D map or the 3D view; what is there — its terrain, biome,
+  water or land and each layer — shows by the pointer, and the one clicked
+  becomes the filter. It is one shot: the brush is back in hand after, and
+  Esc puts the eyedropper down.
 - **Slope**: above or below an angle. Slopes are the trend of the hillside
   (a plane fitted over 9 × 9 columns), not the steps between single blocks;
   the map and 3D views' Slope mode use the same measure (in 3D, a column's

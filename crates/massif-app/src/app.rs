@@ -4754,6 +4754,16 @@ impl MassifApp {
                 }
             }
             EditorKind::BrushSettings => {
+                // What the map holds, first in the filters' menu while it
+                // is open.
+                if self.tools.filter_list_open {
+                    let key = (self.doc.revision, self.doc.generation, self.doc.dim);
+                    if self.used.as_ref().is_none_or(|(k, _)| *k != key) {
+                        let used = std::sync::Arc::new(self.presence().used());
+                        self.used = Some((key, used));
+                    }
+                    self.tools.filter_used = self.used.as_ref().map(|(_, u)| u.clone());
+                }
                 let (min_y, max_y) = (self.doc.dimension().min_y, self.doc.dimension().max_y);
                 let heights = self.doc.heights(&cui.ctx().clone());
                 let sea = self.doc.world.meta.sea_level;

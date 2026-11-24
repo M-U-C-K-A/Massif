@@ -6122,7 +6122,8 @@ impl View3d {
         // the map only, the left button turns, the right one moves.
         use crate::tools::Use3d;
         let use3d = tools.tool.in_3d();
-        let sculpting = sculpt && use3d != Use3d::MapOnly;
+        // The filters' eyedropper takes the click rather than the tool.
+        let sculpting = sculpt && use3d != Use3d::MapOnly && tools.filter_pick.is_none();
         // The tools that shape or paint in 3D sculpt this far at most; the
         // map's brushes go as wide as on the map.
         let in_3d = matches!(use3d, Use3d::Sculpt | Use3d::Smooth | Use3d::Paint);
