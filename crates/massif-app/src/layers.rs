@@ -1492,6 +1492,40 @@ mod tests {
 
     /// The panel drawn offscreen in both themes, a cover hidden and one
     /// picked. Needs a GPU: runs with MASSIF_SNAPSHOT_DIR.
+    /// The Layers panel and the terrains of a WorldPainter world just
+    /// imported (`MASSIF_IMPORT_WORLD=<a .world>`): its custom ground covers
+    /// and trees as layers, its terrains as they were. Needs a GPU: runs
+    /// with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn imported_layers_render() {
+        let (Some(dir), Some(world)) = (std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from), std::env::var_os("MASSIF_IMPORT_WORLD")) else {
+            return;
+        };
+        let (world, _) = massif_legacy::import_world(std::path::Path::new(&world), None).expect("import");
+        let mut s = State { tools: ToolState::default(), doc: Document::new(world, None, 1), blocks: BlockLibrary::default(), ui: LayersUi::default() };
+        s.tools.select(Tool::Cover);
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(640.0, 1100.0))
+            .with_pixels_per_point(2.0)
+            .with_accessibility_check(false)
+            .wgpu()
+            .build_ui_state(
+                |ui, s: &mut State| {
+                    ui.ctx().set_theme(egui::Theme::Dark);
+                    ui.columns(2, |cols| {
+                        draw(&mut cols[0], s);
+                        theme::install(cols[1].ctx());
+                        let (mut solo, mut search) = (false, String::new());
+                        let reg = s.doc.world.registry.clone();
+                        crate::panels::terrain_panel(&mut cols[1], &mut s.tools, &reg, &mut solo, &mut search, &mut s.blocks);
+                    });
+                },
+                s,
+            );
+        h.run_steps(4);
+        h.render().unwrap().save(dir.join("imported-layers.png")).unwrap();
+    }
+
     #[test]
     fn layers_panel_render() {
         let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from) else {
