@@ -10,6 +10,12 @@
 //! than [`WALL`] past it. Two blocks side by side, a cell's 1/24 apart at
 //! most, are in zones whose distances differ by under 2/24 at both, so a
 //! wall that thick seals every pair.
+//!
+//! The zones are looked up at a place moved by a slow 3D noise (some
+//! [`WARP`] blocks, over [`WARP_SCALE`]): their borders, and the walls
+//! along them, wave instead of running straight along the grid. The noise
+//! moves two blocks side by side apart by half a block more at most, which
+//! the wall's margin over 2/24 takes.
 
 use super::Aquifers;
 use super::noise::hash3;
@@ -26,6 +32,7 @@ struct Zone {
 
 /// The zones around a box of the world.
 pub struct Zones {
+    seed: u64,
     floor: Option<i32>,
     cell: [i32; 3],
     /// The grid cell of `zones[0]`, and the cells across.
@@ -36,10 +43,15 @@ pub struct Zones {
 
 /// How much farther than its own zone, in cells, another zone may be for
 /// a block to be a wall when their fluids differ: over 2/24 (two blocks
-/// side by side), under 1.32 − √3 × 0.68 (the nearest zone two cells off).
-const WALL: f32 = 0.1;
+/// side by side) with the warp's stretch, under 1.32 − √3 × 0.68 (the
+/// nearest zone two cells off).
+const WALL: f32 = 0.13;
 /// The centres lie in the middle of their cell, this far from its sides.
 const JITTER: f32 = 0.32;
+/// How far the place a zone is looked up at moves, in blocks.
+const WARP: f32 = 10.0;
+/// Over how many blocks the move changes.
+const WARP_SCALE: f32 = 72.0;
 
 impl Zones {
     /// The zones of `aq` (seeded by `seed`) around blocks `x0..x1`,
@@ -49,8 +61,10 @@ impl Zones {
         // No side under 24 blocks, so that two blocks side by side are
         // 1/24 of a cell apart at most (see [`WALL`]).
         let cell = [((48.0 * size) as i32).max(24), ((24.0 * size) as i32).max(24), ((48.0 * size) as i32).max(24)];
-        let g0 = [x0.div_euclid(cell[0]) - 1, y0.div_euclid(cell[1]) - 1, z0.div_euclid(cell[2]) - 1];
-        let g1 = [(x1 - 1).div_euclid(cell[0]) + 1, (y1 - 1).div_euclid(cell[1]) + 1, (z1 - 1).div_euclid(cell[2]) + 1];
+        // A cell more each way: a block moved by the warp may look up the
+        // cells around the next one.
+        let g0 = [x0.div_euclid(cell[0]) - 2, y0.div_euclid(cell[1]) - 2, z0.div_euclid(cell[2]) - 2];
+        let g1 = [(x1 - 1).div_euclid(cell[0]) + 2, (y1 - 1).div_euclid(cell[1]) + 2, (z1 - 1).div_euclid(cell[2]) + 2];
         let n = [g1[0] - g0[0] + 1, g1[1] - g0[1] + 1, g1[2] - g0[2] + 1];
         let mut zones = Vec::with_capacity((n[0] * n[1] * n[2]) as usize);
         for gz in g0[2]..=g1[2] {
@@ -60,7 +74,7 @@ impl Zones {
                 }
             }
         }
-        Self { floor: aq.on.then_some(aq.lava_floor).flatten(), cell, g0, n, zones }
+        Self { seed: seed as u64 ^ 0x0A0F_3A49, floor: aq.on.then_some(aq.lava_floor).flatten(), cell, g0, n, zones }
     }
 
     #[inline]
@@ -81,9 +95,12 @@ impl Zones {
     /// What a cave holds at block `(x, y, z)`: air, water or lava, or
     /// `None` where it must stay rock, a wall between zones.
     pub fn fill(&self, x: i32, y: i32, z: i32) -> Option<Fill> {
-        let (gx, gy, gz) = (x.div_euclid(self.cell[0]), y.div_euclid(self.cell[1]), z.div_euclid(self.cell[2]));
         let c = [self.cell[0] as f32, self.cell[1] as f32, self.cell[2] as f32];
-        let p = [(x as f32 + 0.5) / c[0], (y as f32 + 0.5) / c[1], (z as f32 + 0.5) / c[2]];
+        let b = [x as f32 + 0.5, y as f32 + 0.5, z as f32 + 0.5];
+        let w = |k: u64| WARP * super::noise::gradient(self.seed.wrapping_add(k), b[0] / WARP_SCALE, b[1] / WARP_SCALE, b[2] / WARP_SCALE);
+        let b = [b[0] + w(1), b[1] + 0.5 * w(2), b[2] + w(3)];
+        let p = [b[0] / c[0], b[1] / c[1], b[2] / c[2]];
+        let (gx, gy, gz) = (p[0].floor() as i32, p[1].floor() as i32, p[2].floor() as i32);
         let mut near: [(f32, &Zone); 27] = [(f32::MAX, &self.zones[0]); 27];
         let mut k = 0;
         let mut best = (f32::MAX, 0usize);

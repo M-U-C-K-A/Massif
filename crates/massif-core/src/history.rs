@@ -938,6 +938,15 @@ impl Edit<'_> {
         }
     }
 
+    /// Take a sculpted chunk away (the levels compose its blocks again),
+    /// recorded for undo.
+    pub fn remove_voxels(&mut self, pos: ChunkPos) {
+        if self.dim.voxels.get(pos).is_some() {
+            self.touch_voxel(pos);
+            self.dim.voxels.remove(pos);
+        }
+    }
+
     /// Put sculpted chunks in place, made elsewhere (from what
     /// [`crate::voxel::densities_of`] read here).
     pub fn set_voxels(&mut self, chunks: Vec<(ChunkPos, Arc<VoxelChunk>)>) {

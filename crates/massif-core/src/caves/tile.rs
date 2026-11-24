@@ -430,6 +430,7 @@ fn compute(layers: &CaveLayers, present: &[u16], ground: &Tile, pos: TilePos, mi
                 if let Some((y0, a)) = current {
                     runs.push(Run { y0: y0 as i16, y1: last.max(y0) as i16, fill: a });
                 }
+                tidy(&mut runs, start);
                 if runs[start..].last().is_some_and(|r| r.y1 as i32 >= top) {
                     opens = true;
                 }
@@ -453,6 +454,34 @@ fn compute(layers: &CaveLayers, present: &[u16], ground: &Tile, pos: TilePos, mi
     }
     let fluid = runs.iter().any(|r| r.fill != Fill::Air);
     TileCaves { offsets, runs, opens, fluid }
+}
+
+/// A column's runs from `start` without the crumbs the noise leaves: a
+/// sheet of rock a block thick between two caves of air goes (a flake
+/// floating in a chamber, a floor thinner than a block), and so does a
+/// slit of air a block high with rock over and under it. Rock beside water
+/// or lava stays: it may be what seals a lake.
+fn tidy(runs: &mut Vec<Run>, start: usize) {
+    let mut k = start + 1;
+    while k < runs.len() {
+        let (a, b) = (runs[k - 1], runs[k]);
+        if a.fill == Fill::Air && b.fill == Fill::Air && b.y0 - a.y1 <= 1 {
+            runs[k - 1].y1 = b.y1;
+            runs.remove(k);
+        } else {
+            k += 1;
+        }
+    }
+    let mut k = start;
+    while k < runs.len() {
+        let r = runs[k];
+        let touches = (k > start && runs[k - 1].y1 == r.y0) || (k + 1 < runs.len() && runs[k + 1].y0 == r.y1);
+        if r.fill == Fill::Air && r.y1 - r.y0 <= 1 && !touches {
+            runs.remove(k);
+        } else {
+            k += 1;
+        }
+    }
 }
 
 /// The columns within `r` of one where `on` holds, in the tile.

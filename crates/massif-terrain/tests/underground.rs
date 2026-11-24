@@ -46,17 +46,19 @@ fn apply_ahead(world: &mut World, c: &Compiled, e: &Engine, ahead: bool) -> (App
     history.begin("Terrain graph", 0);
     let done = {
         let mut edit = history.edit(world, 0);
+        // What was edited by hand, before the ground is written.
+        let kept = underground::HandEdits::capture(c, edit.dim());
         let paint = massif_core::graph::Painting { palette: &palette, climate: None };
         let write = massif_core::graph::GroundWrite { tiles: &tiles, create: true, map: None, sea, blank: TerrainId::ROCK };
         massif_core::graph::apply(&mut edit, &extent, &out, seed, &paint, &write);
         if ahead {
             let prepared = underground::prepare(e, c, edit.dim(), &never).unwrap();
             let started = std::time::Instant::now();
-            let done = underground::apply_prepared(e, c, &reg, &mut edit, Some(&prepared), &never).unwrap();
+            let done = underground::apply_full(e, c, &reg, &mut edit, Some(&prepared), Some(kept), &never).unwrap();
             (done, started.elapsed())
         } else {
             let started = std::time::Instant::now();
-            let done = underground::apply(e, c, &reg, &mut edit, &never).unwrap();
+            let done = underground::apply_keeping(e, c, &reg, &mut edit, Some(kept), &never).unwrap();
             (done, started.elapsed())
         }
     };
@@ -164,4 +166,55 @@ fn a_volume_cut_shows_where_it_reaches() {
     assert!(inside > 700 * 8 && inside < 900 * 12, "{inside}");
     let above = underground::slice(&e, &c, src, 60, massif_terrain::space::Rect::new(0, 480, whole.w, 64), &never).unwrap();
     assert!(above.data.iter().all(|&v| v == 0.0));
+}
+
+/// Blocks dug, filled or flooded by hand on a layer stay when the graph is
+/// applied again, changed: the graph's own carving of before fills back.
+#[test]
+fn hand_edits_stay_when_the_graph_changes() {
+    let mut world = world();
+    let tube = |z: f64| {
+        format!(
+            r#"{{ "nodes": {{
+            "relief": {{ "type": "noise.fbm", "params": {{ "scale": 300, "height": 60, "base": 120, "seed": 3 }} }},
+            "tunnel": {{ "type": "volume.tube", "params": {{ "path": [{{ "x": 0.1, "z": {z} }}, {{ "x": 0.9, "z": {z} }}], "y": 30, "radius": 4, "variation": 0 }} }},
+            "out": {{ "type": "output.map", "inputs": {{ "height": "relief", "volume.carve": "tunnel" }} }} }} }}"#
+        )
+    };
+    let e = Engine::new(Default::default());
+    let first = compiled(&world, &tube(0.5));
+    apply(&mut world, &first, &e);
+    let solid = |w: &World, x: i32, y: i32, z: i32| massif_core::voxel::densities_at(&w.dims[0], massif_core::voxel::ChunkPos::containing(x, y, z)).solid(x.rem_euclid(16), y.rem_euclid(16), z.rem_euclid(16));
+    assert!(!solid(&world, -200, 30, 0) && solid(&world, -200, 30, 100));
+    // By hand: a hall dug at y 50 north of the tunnel, a plug of granite in
+    // the tunnel, water poured beside it.
+    let brush = massif_core::Brush { radius: 5.0, ..Default::default() };
+    let granite = world.registry.terrain_by_name("Granite").unwrap_or(TerrainId::ROCK);
+    {
+        let mut h = History::new(1);
+        h.begin("dig", 0);
+        let mut edit = h.edit(&mut world, 0);
+        use massif_core::ops::{SliceFill, paint_slice};
+        assert!(paint_slice(&mut edit, &brush, -100.5, -150.5, 50, (2, 2), true, SliceFill::Air) > 100);
+        assert!(paint_slice(&mut edit, &brush, 100.5, 0.5, 30, (0, 0), false, SliceFill::Rock(Some(granite))) > 20);
+        assert!(paint_slice(&mut edit, &brush, 300.5, -150.5, 50, (0, 0), false, SliceFill::Water) > 20);
+        h.commit();
+    }
+    assert!(!solid(&world, -101, 50, -151) && solid(&world, 100, 30, 0));
+    // The tunnel moves south and the graph is applied again.
+    let second = compiled(&world, &tube(0.7));
+    apply(&mut world, &second, &e);
+    assert!(solid(&world, -200, 30, 0), "the old tunnel is filled back");
+    assert!(!solid(&world, -200, 30, 204), "the new one is dug");
+    assert!(!solid(&world, -101, 50, -151), "the hall dug by hand stays");
+    assert!(solid(&world, 100, 30, 0), "the granite stays");
+    let at = |w: &World, x: i32, y: i32, z: i32| massif_core::voxel::densities_at(&w.dims[0], massif_core::voxel::ChunkPos::containing(x, y, z));
+    assert_eq!(at(&world, 100, 30, 0).terrain(100i32.rem_euclid(16), 30i32.rem_euclid(16), 0), Some(granite));
+    assert_eq!(at(&world, 300, 50, -151).fluid(300i32.rem_euclid(16), 50i32.rem_euclid(16), (-151i32).rem_euclid(16)), Some(massif_core::voxel::Fluid::Water));
+    // Without the tunnel, no chunk of it is left: only those edited by hand.
+    let none = compiled(&world, &tube(0.7).replace(r#", "volume.carve": "tunnel""#, ""));
+    apply(&mut world, &none, &e);
+    assert!(solid(&world, -200, 30, 204));
+    let chunks = world.dims[0].voxels.len();
+    assert!(chunks > 0 && chunks < 20, "{chunks} sculpted chunks left");
 }

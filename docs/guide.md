@@ -1123,6 +1123,36 @@ others. 3D Sculpt digs and builds in them as anywhere: a cube of 16³ blocks
 sculpted starts from the caves there, with their water and lava, and keeps
 them as they were when it was sculpted.
 
+### Layer by layer
+
+The **Layer** tool, first in the Underground group, edits the map block by
+block, one layer at a time — the way to fix a cave by hand, open an
+entrance, wall off a lake or dig a mine.
+
+- **Seeing a layer.** With the tool in hand the 2D map is cut at a height:
+  the **Underground** button in the map's header turns the cut on and off,
+  its slider and field set the height, and **PageUp** / **PageDown** move it
+  a layer (with **Shift**, 8 layers). The map shows that layer: rock in grey
+  (darker under y 0), the soil's colour within four blocks of the ground's
+  top and a block's own colour where one was filled, caves dark (darker the
+  deeper their floor lies), water blue, lava orange, cave biomes tinted, the
+  land above the cut faded. Each tile is composed once at every height and
+  kept while the map stays cut, so moving through the layers redraws only
+  the picture.
+- **Editing it.** **Dig** makes air, **Fill** fills with the column's rock
+  or with the terrain chosen in the Terrain panel, **Water** and **Lava**
+  pour still water or lava, **Biome** paints a cave biome. **Layers under**
+  and **Layers over** reach that many layers around the cut; with **Round**
+  each dab is a ball (an ellipsoid over a brush that is not round), so a
+  round brush digs a ball, otherwise a cylinder. The brush's edge is hard,
+  block by block, and the selection limits it as any brush. The right
+  button fills back with the column's rock. Each stroke is one step to
+  undo.
+- **With the terrain graph.** Caves made by a graph's Cave System and
+  volumes show on the layer like painted ones. What is edited here is kept
+  when the graph is applied again: the blocks the graph carved before
+  follow its new settings, the blocks edited by hand stay as they are.
+
 ### Cave biomes
 
 The **Cave biome** tool (Underground group) paints **Lush caves**,

@@ -251,6 +251,58 @@ pub fn cave_biome_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Documen
     crate::panels::hint(ui, tr!("The game keeps a biome every 4 blocks each way: so does the painting. The export decorates the caves of each: moss and vines, dripstone, sculk."));
 }
 
+/// Tool Settings of the Layer tool: what it puts in the blocks of the
+/// layer the map is cut at, and how many layers around it.
+pub fn layer_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
+    use crate::tools::LayerFill;
+    const FILLS: [LayerFill; 5] = [LayerFill::Dig, LayerFill::Fill, LayerFill::Water, LayerFill::Lava, LayerFill::Biome];
+    let labels = [tr!("Dig"), tr!("Fill"), tr!("Water"), tr!("Lava"), tr!("Biome")];
+    let on: Vec<bool> = FILLS.iter().map(|&f| f == tools.layer_fill).collect();
+    if let Some(k) = button_group(ui, "layer fill", &labels, &on) {
+        tools.layer_fill = FILLS[k];
+    }
+    let (lo, hi) = (doc.dimension().min_y, doc.dimension().max_y - 1);
+    ui.add_space(6.0);
+    well(ui, |ui| {
+        row(ui, tr!("Layer"), |ui| {
+            ui.add(Field::new(&mut tools.layer_y, lo..=hi).suffix(" y"));
+        });
+        row(ui, tr!("Layers under"), |ui| {
+            ui.add(Field::new(&mut tools.layer_below, 0..=64));
+        });
+        row(ui, tr!("Layers over"), |ui| {
+            ui.add(Field::new(&mut tools.layer_above, 0..=64));
+        });
+        row(ui, tr!("Round"), |ui| {
+            crate::widgets::switch(ui, &mut tools.layer_round);
+        });
+        if tools.layer_fill == LayerFill::Fill {
+            row(ui, tr!("Block"), |ui| {
+                let name = doc.world.registry.terrain(massif_core::TerrainId(tools.terrain)).name.clone();
+                if let Some(k) = button_group(ui, "layer block", &[tr!("The column's"), &name], &[!tools.layer_block, tools.layer_block]) {
+                    tools.layer_block = k == 1;
+                }
+            });
+        }
+    });
+    if tools.layer_fill == LayerFill::Biome {
+        ui.add_space(6.0);
+        let reg = &doc.world.registry;
+        let ids: Vec<Option<u16>> = CAVE_BIOMES.iter().map(|(id, _)| reg.biome_by_id(id).map(|b| b.0)).collect();
+        if tools.cave_biome == 0 || !ids.contains(&Some(tools.cave_biome)) {
+            tools.cave_biome = ids[0].unwrap_or(0);
+        }
+        let labels: Vec<&str> = CAVE_BIOMES.iter().map(|(_, name)| crate::i18n::tr_name(name)).collect();
+        let on: Vec<bool> = ids.iter().map(|&id| id == Some(tools.cave_biome)).collect();
+        if let Some(k) = button_group(ui, "layer cave biome", &labels, &on)
+            && let Some(id) = ids[k]
+        {
+            tools.cave_biome = id;
+        }
+    }
+    crate::panels::hint(ui, tr!("The map shows the blocks at the layer's height: PageUp and PageDown move it a layer (Shift: 8). Round makes a dab a ball over the layers under and over. Each stroke is one step to undo; a terrain graph applied again keeps what is edited here."));
+}
+
 // ------------------------------------------------------------ the dialog --
 
 /// What the dialog wants done.

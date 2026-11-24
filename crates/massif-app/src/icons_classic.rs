@@ -222,6 +222,14 @@ pub fn paint(painter: &Painter, rect: Rect, tool: Tool, color: Color32) {
             pen.ring(12.0, 15.0, 6.0);
             pen.line(&[(9.0, 18.0), (15.0, 12.0)]);
         }
+        // Layers stacked, one cut through.
+        Tool::Layer => {
+            pen.line(&[(3.0, 7.0), (21.0, 7.0)]);
+            pen.line(&[(3.0, 12.0), (9.0, 12.0)]);
+            pen.line(&[(15.0, 12.0), (21.0, 12.0)]);
+            pen.ring(12.0, 12.0, 2.5);
+            pen.line(&[(3.0, 17.0), (21.0, 17.0)]);
+        }
         // Two houses by a road.
         Tool::Village => {
             pen.line(&[(2.0, 21.0), (22.0, 21.0)]);

@@ -248,6 +248,9 @@ pub struct MapView {
     pub cut: Option<i32>,
     /// The height of the last cut, to come back to.
     pub cut_y: i32,
+    /// The Layer tool's height as last given to it: which of the two moved
+    /// since, the tool's or the map's, the other follows.
+    layer_synced: i32,
     /// The map framed by itself (see [`MapView::should_fit`]): for which
     /// document, and the view it gave, with the size of the canvas then.
     fitted: Option<u64>,
@@ -339,6 +342,7 @@ impl Default for MapView {
             grid: false,
             cut: None,
             cut_y: 0,
+            layer_synced: 0,
             fitted: None,
             fit_view: None,
             stroke: None,
@@ -529,6 +533,20 @@ impl MapView {
         ui.toggle_value(&mut tools.show_annotations, theme::glyph(Icon::PenLine).to_string())
             .on_hover_text(tr!("Annotations, on the map and in 3D: the marks painted with the Annotations tool. They are never exported"));
         ui.separator();
+        // The Layer tool edits the layer the map is cut at: in hand, the
+        // map is cut.
+        if tools.tool == Tool::Layer {
+            if self.cut.is_none() {
+                self.cut = Some(self.cut_y);
+            }
+            if let Some(y) = &mut self.cut {
+                if tools.layer_y != self.layer_synced {
+                    *y = tools.layer_y;
+                }
+                tools.layer_y = *y;
+                self.layer_synced = *y;
+            }
+        }
         let mut under = self.cut.is_some();
         if ui
             .toggle_value(&mut under, theme::glyph(Icon::SquareSplitVertical).to_string())
@@ -538,9 +556,24 @@ impl MapView {
             self.cut = under.then_some(self.cut_y);
         }
         if let Some(y) = &mut self.cut {
+            // The slider where the header has room; the field always.
+            if ui.available_width() > 150.0 {
+                let slider = egui::Slider::new(y, -64..=319).show_value(false).clamping(egui::SliderClamping::Never);
+                ui.add_sized([72.0, 16.0], slider).on_hover_text(tr!("The height of the cut: PageUp and PageDown move it a layer, Shift 8"));
+            }
             ui.add(crate::widgets::Field::new(y, -2032..=2031).suffix(" y")).on_hover_text(tr!("The height of the cut"));
             self.cut_y = *y;
         }
+    }
+
+    /// The map cut `by` layers higher (lower when negative); cut at the
+    /// last height first when it shows the surface.
+    pub fn step_layer(&mut self, by: i32) {
+        self.cut = Some(match self.cut {
+            Some(y) => (y + by).clamp(-2032, 2031),
+            None => self.cut_y,
+        });
+        self.cut_y = self.cut.unwrap_or(self.cut_y);
     }
 
     /// What the pointer at `p` is over, on the river being laid out.

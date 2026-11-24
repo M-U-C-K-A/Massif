@@ -108,6 +108,7 @@ fn art(tool: Tool) -> Art {
         Tool::Slabs => Art::Paths(SLABS),
         Tool::Caves => Art::Glyph(Icon::Shovel),
         Tool::CaveBiome => Art::Glyph(Icon::Leaf),
+        Tool::Layer => Art::Glyph(Icon::SquareSplitVertical),
         Tool::Combined => Art::Glyph(Icon::Combine),
         Tool::Structure => Art::Glyph(Icon::Castle),
         Tool::Village => Art::Glyph(Icon::House),
@@ -438,7 +439,7 @@ mod tests {
     use super::*;
 
     /// Every tool, in the order of the Tools panel.
-    pub(super) const ALL: [Tool; 36] = [
+    pub(super) const ALL: [Tool; 37] = [
         Tool::Raise,
         Tool::Smooth,
         Tool::Flatten,
@@ -458,6 +459,7 @@ mod tests {
         Tool::Slabs,
         Tool::Caves,
         Tool::CaveBiome,
+        Tool::Layer,
         Tool::Combined,
         Tool::Structure,
         Tool::Village,

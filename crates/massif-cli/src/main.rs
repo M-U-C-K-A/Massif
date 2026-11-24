@@ -35,6 +35,7 @@ USAGE
   massif-cli terrain migrate <world.massif> [--out FILE]
   massif-cli terrain build <world.massif> <out.massif> [--graph FILE] [--samples N] [--cpu]
   massif-cli caves <world.massif> <out.massif> [--biomes] [--seed N] [--keep]
+  massif-cli cut <world.massif> <y> <out.png> [--rect X0,Z0,X1,Z1]
   massif-cli structure <world.massif> <out.massif> <kind> <x> <z> [--y Y] [--seed N] [--turn T] [--jar PATH] [--keep-land]
   massif-cli structure-checks <world.massif>
   massif-cli village <world.massif> <out.massif> <x0> <z0> <x1> <z1> [--theme NAME | --pack DIR] [--walls] [--seed N] [--jar PATH]
@@ -730,6 +731,80 @@ fn cmd_caves(mut args: Args) -> Res<()> {
     Ok(())
 }
 
+/// The map cut at height `y` as a picture, a pixel a block: rock grey
+/// (darker under y 0), air in caves dark, water blue, lava orange, the sky
+/// over the land white; with counts of each.
+fn cmd_cut(mut args: Args) -> Res<()> {
+    let rect = args.option("--rect")?;
+    let [path, y, out] = args.positional(["<world.massif>", "<y>", "<out.png>"])?;
+    let y: i32 = y.to_string_lossy().parse().map_err(|_| "<y>: a whole number")?;
+    let world = massif_format::load(&path).map_err(|e| e.to_string())?;
+    let dim = &world.dims[0];
+    let rect = match rect {
+        Some(r) => {
+            let v: Vec<i32> = r.split(',').map(|v| v.trim().parse().map_err(|_| format!("--rect: {r}"))).collect::<Res<_>>()?;
+            let [x0, z0, x1, z1] = v[..] else { return Err("--rect X0,Z0,X1,Z1".into()) };
+            massif_core::BlockRect::new(x0, z0, x1, z1)
+        }
+        None => {
+            let (a, b) = dim.bounds().ok_or("an empty map")?;
+            let t = massif_core::TILE_SIZE;
+            massif_core::BlockRect::new(a.x * t, a.z * t, (b.x + 1) * t, (b.z + 1) * t)
+        }
+    };
+    let (w, h) = (rect.width() as u32, rect.depth() as u32);
+    let mut img = image::RgbImage::new(w, h);
+    let mut counts = [0usize; 5];
+    let tiles: Vec<massif_core::TilePos> = rect.tiles().collect();
+    use rayon::prelude::*;
+    let made: Vec<Vec<(i32, i32, u8)>> = tiles
+        .par_iter()
+        .map(|&t| {
+            let mut out = Vec::new();
+            let Some(stack) = massif_core::TileStack::new(dim, t, false) else { return out };
+            let clip = rect.intersect(&t.rect());
+            let (mut spans, mut fluids, mut ground) = (Vec::new(), Vec::new(), Vec::new());
+            for z in clip.z0..clip.z1 {
+                for x in clip.x0..clip.x1 {
+                    let cell = massif_core::coords::local_index(x, z);
+                    stack.spans(cell, &mut spans);
+                    let kind = if spans.last().is_none_or(|s| y >= s.y1) {
+                        4
+                    } else if spans.iter().any(|s| s.y0 <= y && y < s.y1) {
+                        0
+                    } else {
+                        stack.cave_fluids(cell, &mut fluids);
+                        stack.fluids(cell, &spans, &mut ground);
+                        match fluids.iter().find(|f| f.0 <= y && y < f.1) {
+                            Some((_, _, massif_core::voxel::Fluid::Lava)) => 3,
+                            Some(_) => 2,
+                            None if ground.iter().any(|f| f.0 <= y && y < f.1) => 2,
+                            None => 1,
+                        }
+                    };
+                    out.push((x, z, kind));
+                }
+            }
+            out
+        })
+        .collect();
+    for (x, z, k) in made.into_iter().flatten() {
+        counts[k as usize] += 1;
+        let c = match k {
+            0 if y < 0 => [74, 74, 82],
+            0 => [128, 128, 126],
+            1 => [36, 32, 44],
+            2 => [52, 98, 200],
+            3 => [226, 104, 36],
+            _ => [236, 238, 242],
+        };
+        img.put_pixel((x - rect.x0) as u32, (z - rect.z0) as u32, image::Rgb(c));
+    }
+    img.save(&out).map_err(|e| e.to_string())?;
+    println!("{{\"y\":{y},\"rock\":{},\"air\":{},\"water\":{},\"lava\":{},\"sky\":{}}}", counts[0], counts[1], counts[2], counts[3], counts[4]);
+    Ok(())
+}
+
 /// The tiles of a map over a rectangle of blocks, as a map of their own.
 fn cmd_crop(args: Args) -> Res<()> {
     let mut rest = args.0.into_iter();
@@ -1276,6 +1351,7 @@ fn main() -> ExitCode {
         "spring" => cmd_spring(args),
         "crop" => cmd_crop(args),
         "caves" => cmd_caves(args),
+        "cut" => cmd_cut(args),
         "structure" => cmd_structure(args),
         "structure-checks" => cmd_structure_checks(args),
         "village" => cmd_village(args),

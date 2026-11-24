@@ -238,38 +238,74 @@ impl ColumnSampler {
     }
 }
 
-impl ColumnSampler {
-    /// Column `cell` of a stack cut through at height `y` (see
-    /// [`MapStyle::cut`]).
-    pub fn cut(&mut self, stack: &TileStack, cell: usize, y: i32) -> Sample {
-        stack.spans(cell, &mut self.spans);
-        let Some(last) = self.spans.last().copied() else { return Sample::EMPTY };
-        let ground = stack.ground();
-        let mut sample = Sample { annotation: ground.annotations.get(cell) as u8, ..Sample::EMPTY };
+/// Every column of a tile composed once, at every height: its runs of
+/// matter and of water and lava. The map cut at one height and then
+/// another reads them again rather than composing the tile again.
+pub struct Columns {
+    min_y: i32,
+    /// The spans of cell `i`: `spans[start[i]..start[i + 1]]`.
+    start: Vec<u32>,
+    spans: Vec<Span>,
+    /// The fluids of cell `i` likewise: from, to, and whether lava.
+    fstart: Vec<u32>,
+    fluids: Vec<(i32, i32, bool)>,
+    annotations: Vec<u8>,
+    cave_biomes: massif_core::caves::CaveBiomes,
+}
+
+/// The blocks under the top of a span that show its own terrain on the
+/// cut; deeper, its rock.
+const CUT_SKIN: i32 = 4;
+
+impl Columns {
+    pub fn of(dim: &Dimension, pos: TilePos) -> Option<Columns> {
+        let stack = TileStack::new(dim, pos, false)?;
+        let mut c = Columns { min_y: stack.min_y, start: Vec::with_capacity(TILE_AREA + 1), spans: Vec::new(), fstart: Vec::with_capacity(TILE_AREA + 1), fluids: Vec::new(), annotations: Vec::with_capacity(TILE_AREA), cave_biomes: stack.ground().cave_biomes.clone() };
+        let (mut spans, mut ground, mut caves) = (Vec::new(), Vec::new(), Vec::new());
+        for cell in 0..TILE_AREA {
+            c.start.push(c.spans.len() as u32);
+            c.fstart.push(c.fluids.len() as u32);
+            stack.spans(cell, &mut spans);
+            c.spans.extend_from_slice(&spans);
+            stack.cave_fluids(cell, &mut caves);
+            c.fluids.extend(caves.iter().map(|&(a, b, f)| (a, b, f == massif_core::voxel::Fluid::Lava)));
+            stack.fluids(cell, &spans, &mut ground);
+            c.fluids.extend(ground.iter().map(|&(a, b)| (a, b, false)));
+            c.annotations.push(stack.ground().annotations.get(cell) as u8);
+        }
+        c.start.push(c.spans.len() as u32);
+        c.fstart.push(c.fluids.len() as u32);
+        Some(c)
+    }
+
+    /// Column `cell` cut at height `y`, as [`ColumnSampler::cut`] samples
+    /// it; the rock within [`CUT_SKIN`] blocks of a span's top shows that
+    /// span's terrain (the ground's soil, a block filled by hand), deeper
+    /// the rock (`biome` 1 says which).
+    pub fn cut(&self, cell: usize, y: i32) -> Sample {
+        let spans = &self.spans[self.start[cell] as usize..self.start[cell + 1] as usize];
+        let Some(last) = spans.last().copied() else { return Sample::EMPTY };
+        let sample = Sample { annotation: self.annotations[cell], ..Sample::EMPTY };
         if y >= last.y1 {
-            // Over the land: the land, seen from the cut.
             return Sample { height: last.top, terrain: last.terrain.0, flags: FLAG_CUT_SKY, ..sample };
         }
-        if let Some(s) = self.spans.iter().find(|s| s.y0 <= y && y < s.y1) {
-            return Sample { height: y as f32 + 1.0, terrain: s.terrain.0, flags: FLAG_CUT_ROCK, ..sample };
+        if let Some(s) = spans.iter().find(|s| s.y0 <= y && y < s.y1) {
+            let skin = (s.y1 - y <= CUT_SKIN) as u16;
+            return Sample { height: y as f32 + 1.0, terrain: s.terrain.0, flags: FLAG_CUT_ROCK, biome: skin, ..sample };
         }
-        // In a cave: its floor, what fills it, its cave biome.
-        let floor = self.spans.iter().filter(|s| s.y1 <= y).map(|s| s.y1).max().unwrap_or(stack.min_y);
-        sample.height = floor as f32;
-        sample.terrain = self.spans.iter().find(|s| s.y1 == floor).map_or(0, |s| s.terrain.0);
+        let floor = spans.iter().filter(|s| s.y1 <= y).map(|s| s.y1).max().unwrap_or(self.min_y);
         let (lx, lz) = ((cell % 128) as i32, (cell / 128) as i32);
-        sample.biome = ground.cave_biomes.get(lx, y, lz);
-        let mut fluids = Vec::new();
-        stack.cave_fluids(cell, &mut fluids);
-        sample.flags = match fluids.iter().find(|f| f.0 <= y && y < f.1) {
-            Some((_, _, massif_core::voxel::Fluid::Lava)) => FLAG_CUT_LAVA,
+        let fluids = &self.fluids[self.fstart[cell] as usize..self.fstart[cell + 1] as usize];
+        let flags = match fluids.iter().find(|f| f.0 <= y && y < f.1) {
+            Some(&(_, _, true)) => FLAG_CUT_LAVA,
             Some(_) => FLAG_CUT_WATER,
-            None => {
-                stack.fluids(cell, &self.spans, &mut self.fluids);
-                if self.fluids.iter().any(|f| f.0 <= y && y < f.1) { FLAG_CUT_WATER } else { FLAG_CUT_CAVE }
-            }
+            None => FLAG_CUT_CAVE,
         };
-        sample
+        Sample { height: floor as f32, terrain: spans.iter().find(|s| s.y1 == floor).map_or(0, |s| s.terrain.0), biome: self.cave_biomes.get(lx, y, lz), flags, ..sample }
+    }
+
+    fn bytes(&self) -> usize {
+        self.spans.len() * std::mem::size_of::<Span>() + self.fluids.len() * 12 + TILE_AREA * 9 + self.cave_biomes.heap_bytes()
     }
 }
 
@@ -281,9 +317,12 @@ impl SurfaceGrid {
     /// through at height `cut` (see [`MapStyle::cut`]).
     pub fn build_at(dim: &Dimension, pos: TilePos, cut: Option<i32>) -> Option<SurfaceGrid> {
         let Some(y) = cut else { return Self::build(dim, pos) };
-        let stack = TileStack::new(dim, pos, false)?;
-        let mut sampler = ColumnSampler::default();
-        Some(SurfaceGrid((0..TILE_AREA).map(|i| sampler.cut(&stack, i, y)).collect()))
+        Some(Self::cut(&Columns::of(dim, pos)?, y))
+    }
+
+    /// The columns cut at height `y`.
+    pub fn cut(columns: &Columns, y: i32) -> SurfaceGrid {
+        SurfaceGrid((0..TILE_AREA).map(|i| columns.cut(i, y)).collect())
     }
 
     pub fn build(dim: &Dimension, pos: TilePos) -> Option<SurfaceGrid> {
@@ -321,12 +360,15 @@ impl Summary {
     /// [`Summary::build`], or cut through at height `cut`.
     pub fn build_at(dim: &Dimension, pos: TilePos, size: usize, cut: Option<i32>) -> Option<Summary> {
         let Some(y) = cut else { return Self::build(dim, pos, size) };
-        let stack = TileStack::new(dim, pos, false)?;
-        let mut sampler = ColumnSampler::default();
+        Some(Self::cut(&Columns::of(dim, pos)?, size, y))
+    }
+
+    /// `size × size` of the columns cut at height `y`.
+    pub fn cut(columns: &Columns, size: usize, y: i32) -> Summary {
         let step = 128 / size;
         let at = |i: usize| i * step + SUMMARY_OFFSET as usize;
-        let samples = (0..size * size).map(|k| sampler.cut(&stack, cell_index(at(k % size), at(k / size)), y)).collect();
-        Some(Summary { size, samples })
+        let samples = (0..size * size).map(|k| columns.cut(cell_index(at(k % size), at(k / size)), y)).collect();
+        Summary { size, samples }
     }
 
     pub fn build(dim: &Dimension, pos: TilePos, size: usize) -> Option<Summary> {
@@ -852,7 +894,9 @@ impl<'a> Colorizer<'a> {
     /// over the cut faded.
     fn cut_pixel(&self, c: &Sample, y: i32, shade: f32) -> Color32 {
         let rgb = if c.flags & FLAG_CUT_ROCK != 0 {
-            let base = if y < 0 { [74.0, 74.0, 82.0] } else { [128.0, 128.0, 126.0] };
+            // Near the top of its matter, the block's own colour (the
+            // ground's soil, a block filled by hand); deeper, the rock.
+            let base = if c.biome == 1 { self.terrain_rgb(c.terrain) } else if y < 0 { [74.0, 74.0, 82.0] } else { [128.0, 128.0, 126.0] };
             scale(base, 0.88 + 0.12 * shade)
         } else if c.flags & FLAG_CUT_WATER != 0 {
             [52.0, 98.0, 200.0]
@@ -1582,7 +1626,15 @@ pub struct MapCache {
     busy: bool,
     /// The height the grids and summaries were cut through at.
     cut: Option<i32>,
+    /// The tiles' columns at every height, while the map is cut: another
+    /// height reads them rather than composing the tiles again. With when
+    /// each was last used.
+    columns: HashMap<TilePos, (Option<Arc<Columns>>, u64)>,
+    columns_bytes: usize,
 }
+
+/// Bytes of tiles' columns kept for the cut map.
+const COLUMNS_BYTES: usize = 384 << 20;
 
 impl MapCache {
     /// The summaries of the tiles the map has read, for the map of
@@ -1610,6 +1662,8 @@ impl Default for MapCache {
             max_chunks: 1400,
             busy: false,
             cut: None,
+            columns: HashMap::new(),
+            columns_bytes: 0,
         }
     }
 }
@@ -1632,6 +1686,8 @@ impl MapCache {
             self.summaries.clear();
             self.summary_bytes = 0;
             self.chunks.clear();
+            self.columns.clear();
+            self.columns_bytes = 0;
             self.generation = generation;
         }
     }
@@ -1651,6 +1707,9 @@ impl MapCache {
         let mut affected = HashSet::new();
         for &t in tiles {
             self.grids.remove(&t);
+            if let Some((c, _)) = self.columns.remove(&t) {
+                self.columns_bytes -= c.map_or(0, |c| c.bytes());
+            }
             if let Some(e) = self.summaries.remove(&t) {
                 self.summary_bytes -= e.bytes();
             }
@@ -1675,6 +1734,14 @@ impl MapCache {
 
     /// Everything is out of date (level visibility or order changed).
     pub fn invalidate_all(&mut self) {
+        self.columns.clear();
+        self.columns_bytes = 0;
+        self.restale();
+    }
+
+    /// Every chunk drawn again from its tiles' columns read again, the
+    /// columns at every height kept (the map cut at another height).
+    fn restale(&mut self) {
         self.grids.clear();
         self.summaries.clear();
         self.summary_bytes = 0;
@@ -1684,6 +1751,23 @@ impl MapCache {
             if !entry.stale {
                 entry.stale = true;
                 entry.stale_since = clock;
+            }
+        }
+    }
+
+    /// The columns not used lately go, beyond [`COLUMNS_BYTES`].
+    fn trim_columns(&mut self) {
+        if self.columns_bytes <= COLUMNS_BYTES {
+            return;
+        }
+        let mut by_age: Vec<(u64, TilePos)> = self.columns.iter().map(|(t, e)| (e.1, *t)).collect();
+        by_age.sort_unstable();
+        for (_, t) in by_age {
+            if self.columns_bytes <= COLUMNS_BYTES * 3 / 4 {
+                break;
+            }
+            if let Some((c, _)) = self.columns.remove(&t) {
+                self.columns_bytes -= c.map_or(0, |c| c.bytes());
             }
         }
     }
@@ -1719,7 +1803,11 @@ impl MapCache {
         // Cut through at another height: every column read again.
         if style.cut != self.cut {
             self.cut = style.cut;
-            self.invalidate_all();
+            if style.cut.is_none() {
+                self.columns.clear();
+                self.columns_bytes = 0;
+            }
+            self.restale();
         }
         // What was used before this update may shrink.
         let first = self.clock + 1;
@@ -1842,6 +1930,37 @@ impl MapCache {
                 current = None;
             }
             // Column data first, read in parallel.
+            // Cut: the tiles' columns at every height first, those not kept.
+            if let Some(y) = style.cut {
+                let missing: Vec<TilePos> = fine_reads.keys().chain(coarse_reads.keys()).copied().filter(|t| !self.columns.contains_key(t)).collect();
+                let made: Vec<(TilePos, Option<Arc<Columns>>)> = missing.par_iter().map(|&t| (t, Columns::of(dim, t).map(Arc::new))).collect();
+                for (t, c) in made {
+                    self.columns_bytes += c.as_ref().map_or(0, |c| c.bytes());
+                    self.columns.insert(t, (c, clock));
+                }
+                let columns = &self.columns;
+                let get = |t: &TilePos| columns.get(t).and_then(|c| c.0.clone());
+                let grids: Vec<(TilePos, Option<Arc<SurfaceGrid>>)> = fine_reads.par_iter().map(|(&t, _)| (t, get(&t).map(|c| Arc::new(SurfaceGrid::cut(&c, y))))).collect();
+                for (t, grid) in grids {
+                    self.grids.insert(t, GridEntry { grid, used: clock });
+                }
+                let summaries: Vec<(TilePos, Option<Arc<Summary>>)> = coarse_reads.par_iter().map(|(&t, &size)| (t, get(&t).map(|c| Arc::new(Summary::cut(&c, size, y))))).collect();
+                for (t, summary) in summaries {
+                    let entry = SummaryEntry { summary, used: clock };
+                    self.summary_bytes += entry.bytes();
+                    if let Some(old) = self.summaries.insert(t, entry) {
+                        self.summary_bytes -= old.bytes();
+                    }
+                }
+                for t in fine_reads.keys().chain(coarse_reads.keys()) {
+                    if let Some(e) = self.columns.get_mut(t) {
+                        e.1 = clock;
+                    }
+                }
+                self.trim_columns();
+                fine_reads.clear();
+                coarse_reads.clear();
+            }
             if !fine_reads.is_empty() {
                 let built: Vec<(TilePos, Option<Arc<SurfaceGrid>>)> = fine_reads
                     .par_iter()

@@ -265,6 +265,12 @@ pub fn tool_card(tool: Tool) -> Card<'static> {
             Some(tr!("The game keeps a biome every 4 blocks in each direction: so does the painting.")),
             Some(Demo::CaveBiome),
         ),
+        Tool::Layer => card(
+            tr!("Shows the map cut at a height, block by block, and edits that layer: dig, fill with a block, pour water or lava, paint a cave biome, on the layer alone or on the layers around it."),
+            vec![(tr!("Drag"), tr!("Edit the layer")), (tr!("Right-drag"), tr!("Fill back with rock")), (tr!("PageUp, PageDown"), tr!("A layer up or down"))],
+            Some(tr!("Caves made by a terrain graph show on the layer too: what you change here stays when the graph is applied again.")),
+            Some(Demo::CaveBiome),
+        ),
         Tool::Village => card(
             tr!("Fills the selection with a village: a square in each district, roads that follow the land, buildings along them with their doors to the road, walls if you want them."),
             vec![(tr!("Click"), tr!("Fill the selection"))],

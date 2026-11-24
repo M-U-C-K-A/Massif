@@ -71,6 +71,9 @@ pub struct Applying {
     /// The caves, cave biomes and volumes being worked out on a thread of
     /// their own, over the map as the ground now is.
     prepared: Option<Receiver<Result<massif_terrain::underground::Prepared, String>>>,
+    /// The blocks edited by hand before anything was written, kept through
+    /// the Apply (see [`massif_terrain::underground::HandEdits`]).
+    kept: Option<massif_terrain::underground::HandEdits>,
 }
 
 /// What Apply did, to say.
@@ -132,13 +135,14 @@ impl Applying {
         let windows = (per_row * per_row) as usize;
         // Two windows waiting at most: memory stays at a few windows.
         let (tx, rx) = sync_channel::<Msg>(2);
+        let kept = Some(massif_terrain::underground::HandEdits::capture(&compiled, doc.dimension()));
         doc.history.begin(t!("Apply the terrain graph"), doc.dim);
         let (e, c, stop, count) = (engine.clone(), compiled.clone(), cancel.clone(), made.clone());
         std::thread::Builder::new()
             .name("terrain apply".into())
             .spawn(move || work(e, c, side, per_row, tx, stop, count))
             .map_err(|e| e.to_string())?;
-        Ok(Applying { rx, cancel, made, windows, written: 0, phase: Phase::Terrain, started: Instant::now(), engine, compiled, folder, revision, geometry: None, notes: Vec::new(), heights, levels: None, under: None, prepared: None })
+        Ok(Applying { rx, cancel, made, windows, written: 0, phase: Phase::Terrain, started: Instant::now(), engine, compiled, folder, revision, geometry: None, notes: Vec::new(), heights, levels: None, under: None, prepared: None, kept })
     }
 
     /// Stops it: what was written is taken back.
@@ -213,7 +217,8 @@ impl Applying {
                     _ => None,
                 };
                 self.prepared = None;
-                let under = massif_terrain::underground::apply_prepared(&self.engine, &self.compiled, &reg, &mut doc.history.edit(&mut doc.world, 0), prepared.as_ref(), &stop);
+                let kept = self.kept.take();
+                let under = massif_terrain::underground::apply_full(&self.engine, &self.compiled, &reg, &mut doc.history.edit(&mut doc.world, 0), prepared.as_ref(), kept, &stop);
                 match under {
                     Ok(u) => {
                         if u != Default::default() {

@@ -115,6 +115,23 @@ impl Fetch<'_> {
 
 /// [`apply`] with what [`prepare`] worked out (`None`: made now).
 pub fn apply_prepared(engine: &Engine, c: &Compiled, reg: &Registry, edit: &mut Edit, prepared: Option<&Prepared>, cancel: Cancel) -> Result<Applied, EvalError> {
+    apply_full(engine, c, reg, edit, prepared, None, cancel)
+}
+
+/// [`apply`], keeping the blocks edited by hand that `kept` found before
+/// the graph wrote anything (the ground included).
+pub fn apply_keeping(engine: &Engine, c: &Compiled, reg: &Registry, edit: &mut Edit, kept: Option<HandEdits>, cancel: Cancel) -> Result<Applied, EvalError> {
+    apply_full(engine, c, reg, edit, None, kept, cancel)
+}
+
+/// [`apply`] with what [`prepare`] worked out (`None`: made now), keeping
+/// the blocks edited by hand that `kept` found before the graph wrote
+/// anything: Apply captures them ([`HandEdits::capture`]) before it writes
+/// the ground, so that what was dug, filled or flooded by hand stays where
+/// it is whatever the graph changes around it. Without it (`None`), they
+/// are captured here, after the ground.
+pub fn apply_full(engine: &Engine, c: &Compiled, reg: &Registry, edit: &mut Edit, prepared: Option<&Prepared>, kept: Option<HandEdits>, cancel: Cancel) -> Result<Applied, EvalError> {
+    let kept = kept.unwrap_or_else(|| HandEdits::capture(c, edit.dim()));
     let f = Fetch { engine, prepared };
     let engine = &f;
     let mut done = Applied::default();
@@ -133,11 +150,81 @@ pub fn apply_prepared(engine: &Engine, c: &Compiled, reg: &Registry, edit: &mut 
     if let Some(src) = c.output("cave_biomes") {
         done.biome_cells = biomes(engine, c, src, reg, edit, &tiles, cancel)?;
     }
+    // The sculpted chunks over what the map composes now: the graph's
+    // carving of before and what followed the columns gone, hand edits
+    // kept.
+    let hand = kept.restore(edit);
     let (carve, add) = (c.output("volume.carve"), c.output("volume.add"));
     if carve.is_some() || add.is_some() {
-        done.chunks = volumes(engine, c, carve, add, edit, &tiles, cancel)?;
+        done.chunks = volumes(engine, c, carve, add, edit, &tiles, &hand, cancel)?;
     }
     Ok(done)
+}
+
+/// The map's sculpted chunks before a graph is applied, each with what the
+/// map composed there without them: a block that differs from that, and
+/// was not carved by a graph, was edited by hand.
+pub struct HandEdits {
+    chunks: Vec<(ChunkPos, Arc<VoxelChunk>, VoxelChunk)>,
+}
+
+/// Of each sculpted chunk left after [`HandEdits::restore`], its blocks
+/// edited by hand.
+pub type Hand = HashMap<ChunkPos, Vec<bool>>;
+
+impl HandEdits {
+    /// The sculpted chunks over the tiles the graph covers, as they are.
+    pub fn capture(c: &Compiled, dim: &Dimension) -> Self {
+        let tiles: HashSet<TilePos> = tiles_of(c, dim).into_iter().collect();
+        let positions: Vec<ChunkPos> = dim.voxels.iter().map(|(p, _)| p).filter(|p| tiles.contains(&p.tile())).collect();
+        let bare = massif_core::voxel::bare_densities(dim, &positions);
+        let chunks = bare.into_iter().filter_map(|(p, b)| dim.voxels.get_shared(p).map(|c| (p, c, b))).collect();
+        Self { chunks }
+    }
+
+    /// Each chunk made again over what the map composes now: its blocks
+    /// edited by hand as they were, the others as the map composes them; a
+    /// chunk with nothing edited by hand goes. Returns which blocks are
+    /// hand edits.
+    pub fn restore(self, edit: &mut Edit) -> Hand {
+        let positions: Vec<ChunkPos> = self.chunks.iter().map(|c| c.0).collect();
+        let now: HashMap<ChunkPos, VoxelChunk> = massif_core::voxel::bare_densities(edit.dim(), &positions).into_iter().collect();
+        let mut hand = Hand::new();
+        let mut put = Vec::new();
+        for (pos, chunk, before) in self.chunks {
+            let Some(now) = now.get(&pos) else { continue };
+            let mut made = now.clone();
+            let mut mine = vec![false; massif_core::voxel::VOLUME];
+            let mut any = false;
+            for ly in 0..BRICK {
+                for lz in 0..BRICK {
+                    for lx in 0..BRICK {
+                        let same = |a: &VoxelChunk, b: &VoxelChunk| a.get(lx, ly, lz) == b.get(lx, ly, lz) && a.fluid(lx, ly, lz) == b.fluid(lx, ly, lz) && (a.get(lx, ly, lz) < SOLID || a.terrain(lx, ly, lz) == b.terrain(lx, ly, lz));
+                        if chunk.carved(lx, ly, lz) || same(&chunk, &before) {
+                            continue;
+                        }
+                        made.set(lx, ly, lz, chunk.get(lx, ly, lz));
+                        made.set_fluid(lx, ly, lz, chunk.fluid(lx, ly, lz));
+                        if chunk.get(lx, ly, lz) >= SOLID {
+                            made.set_terrain(lx, ly, lz, chunk.terrain(lx, ly, lz));
+                        }
+                        mine[massif_core::voxel::voxel_index(lx, ly, lz)] = true;
+                        any = true;
+                    }
+                }
+            }
+            if any {
+                hand.insert(pos, mine);
+                if made != *chunk {
+                    put.push((pos, Arc::new(made)));
+                }
+            } else {
+                edit.remove_voxels(pos);
+            }
+        }
+        edit.set_voxels(put);
+        hand
+    }
 }
 
 /// The map's tiles under the graph's terrain.
@@ -307,7 +394,8 @@ fn reaches(b: &Brick) -> bool {
     b.data.iter().any(|&v| fill(v) > 0)
 }
 
-fn volumes(engine: &Fetch, c: &Compiled, carve: Option<(usize, u8)>, add: Option<(usize, u8)>, edit: &mut Edit, tiles: &[TilePos], cancel: Cancel) -> Result<usize, EvalError> {
+#[allow(clippy::too_many_arguments)]
+fn volumes(engine: &Fetch, c: &Compiled, carve: Option<(usize, u8)>, add: Option<(usize, u8)>, edit: &mut Edit, tiles: &[TilePos], hand: &Hand, cancel: Cancel) -> Result<usize, EvalError> {
     let (carve_box, add_box) = boxes(engine.engine, c, carve, add, cancel)?;
     let mut written = 0;
     for batch in tiles.chunks(BATCH) {
@@ -334,7 +422,7 @@ fn volumes(engine: &Fetch, c: &Compiled, carve: Option<(usize, u8)>, add: Option
         positions.sort_by_key(|p| (p.x, p.z, p.y));
         edit.par_voxels(&positions, |pos, chunk| {
             let (carved, added) = &bricks[&pos];
-            shape(chunk, carved.as_deref(), added.as_deref());
+            shape(chunk, carved.as_deref(), added.as_deref(), hand.get(&pos));
         });
         written += positions.iter().filter(|p| edit.dim().voxels.get(**p).is_some()).count();
     }
@@ -507,12 +595,17 @@ fn highest(dim: &Dimension, t: TilePos) -> Option<f32> {
 }
 
 /// A chunk cut by `carve` and filled by `add`.
-fn shape(chunk: &mut VoxelChunk, carve: Option<&Brick>, add: Option<&Brick>) {
+fn shape(chunk: &mut VoxelChunk, carve: Option<&Brick>, add: Option<&Brick>, hand: Option<&Vec<bool>>) {
     for ly in 0..BRICK {
         for lz in 0..BRICK {
             for lx in 0..BRICK {
                 let n = ((ly * BRICK + lz) * BRICK + lx) as usize;
-                let mut d = chunk.get(lx, ly, lz);
+                // What was edited by hand stays as it is.
+                if hand.is_some_and(|h| h[n]) {
+                    continue;
+                }
+                let was = chunk.get(lx, ly, lz);
+                let mut d = was;
                 if let Some(c) = carve {
                     d = d.min(255 - fill(c.data[n]));
                 }
@@ -524,6 +617,11 @@ fn shape(chunk: &mut VoxelChunk, carve: Option<&Brick>, add: Option<&Brick>) {
                             chunk.set_fluid(lx, ly, lz, None);
                         }
                     }
+                }
+                if d != was {
+                    // Known as the graph's, so that the next Apply may
+                    // change it back.
+                    chunk.set_carved(lx, ly, lz);
                 }
                 chunk.set(lx, ly, lz, d);
             }

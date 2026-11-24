@@ -310,6 +310,8 @@ pub enum Action {
     MapZoomOut,
     MapZoomReset,
     MapFit,
+    LayerUp,
+    LayerDown,
     FlyForward,
     FlyBack,
     FlyLeft,
@@ -348,7 +350,7 @@ impl Action {
         list.extend(tools().into_iter().map(Tool));
         list.extend((1..=10).map(Intensity));
         list.extend([BrushSmaller, BrushLarger, TurnLeft, TurnRight, TurnReset, Turn30, Turn45, Turn90]);
-        list.extend([Pan, MapZoomIn, MapZoomOut, MapZoomReset, MapFit, LightRight, LightLeft, SelectAll, Deselect, InvertSelection, SelectAdd, SelectSubtract]);
+        list.extend([Pan, MapZoomIn, MapZoomOut, MapZoomReset, MapFit, LayerUp, LayerDown, LightRight, LightLeft, SelectAll, Deselect, InvertSelection, SelectAdd, SelectSubtract]);
         list.extend([FlyForward, FlyBack, FlyLeft, FlyRight, FlyUp, FlyDown, FlyFaster]);
         list.extend([WalkForward, WalkBack, WalkLeft, WalkRight, Jump, Sneak, Sprint, LookLeft, LookRight, LookUp, LookDown, ReleaseMouse, Ghost]);
         list
@@ -397,6 +399,8 @@ impl Action {
             MapZoomOut => "map.zoom_out",
             MapZoomReset => "map.zoom_reset",
             MapFit => "map.fit",
+            LayerUp => "map.layer_up",
+            LayerDown => "map.layer_down",
             FlyForward => "fly.forward",
             FlyBack => "fly.back",
             FlyLeft => "fly.left",
@@ -427,7 +431,7 @@ impl Action {
             NewWorld | Open | Save | SaveAs | Export | Undo | Redo | Settings | Help | Quit | FullScreen | UiZoomIn | UiZoomOut | UiZoomReset | MaximizeArea | Delete | Cancel => Area::General,
             Tool(_) => Area::Tools,
             Intensity(_) | BrushSmaller | BrushLarger | TurnLeft | TurnRight | TurnReset | Turn30 | Turn45 | Turn90 => Area::Brushes,
-            LightRight | LightLeft | Pan | SelectAll | Deselect | InvertSelection | SelectAdd | SelectSubtract | MapZoomIn | MapZoomOut | MapZoomReset | MapFit => Area::Map,
+            LightRight | LightLeft | Pan | SelectAll | Deselect | InvertSelection | SelectAdd | SelectSubtract | MapZoomIn | MapZoomOut | MapZoomReset | MapFit | LayerUp | LayerDown => Area::Map,
             FlyForward | FlyBack | FlyLeft | FlyRight | FlyDown | FlyUp | FlyFaster => Area::View3d,
             WalkForward | WalkBack | WalkLeft | WalkRight | Jump | Sneak | Sprint | LookLeft | LookRight | LookUp | LookDown | ReleaseMouse | Ghost => Area::Player,
         }
@@ -436,7 +440,7 @@ impl Action {
     pub fn scope(self) -> Scope {
         use Action::*;
         match self {
-            Pan | SelectAdd | SelectSubtract | Cancel => Scope::Map,
+            Pan | SelectAdd | SelectSubtract | Cancel | LayerUp | LayerDown => Scope::Map,
             _ => match self.area() {
                 Area::View3d => Scope::Fly,
                 Area::Player => Scope::Player,
@@ -504,6 +508,8 @@ impl Action {
             MapZoomOut => tr!("Zoom out"),
             MapZoomReset => tr!("Zoom to 100 %"),
             MapFit => tr!("Fit the whole map"),
+            LayerUp => tr!("Underground: a layer up (Shift: 8)"),
+            LayerDown => tr!("Underground: a layer down (Shift: 8)"),
             FlyForward => tr!("Forward"),
             FlyBack => tr!("Back"),
             FlyLeft => tr!("Left"),
@@ -563,6 +569,8 @@ impl Action {
             MapZoomReset if wp => vec![c(Key::Num0)],
             UiZoomIn | UiZoomOut | UiZoomReset | MapZoomIn | MapZoomOut | MapZoomReset => vec![],
             MapFit => vec![k(Key::Home)],
+            LayerUp => vec![k(Key::PageUp)],
+            LayerDown => vec![k(Key::PageDown)],
             MaximizeArea => vec![Chord::with(Mods::CTRL, Key::Space)],
             Delete => vec![k(Key::Delete), k(Key::Backspace)],
             Cancel => vec![k(Key::Escape)],

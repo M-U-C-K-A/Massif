@@ -960,6 +960,118 @@ pub fn paint_cave_biome_box(edit: &mut Edit, min: [i32; 3], max: [i32; 3], biome
     changed.into_inner()
 }
 
+/// What a stroke on a layer of the map (the map cut at a height) puts in
+/// the blocks it reaches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SliceFill {
+    /// Air: dig.
+    Air,
+    /// Rock of a terrain (`None`: the column's own, as the levels compose
+    /// it).
+    Rock(Option<TerrainId>),
+    Water,
+    Lava,
+}
+
+/// One dab on the layer of blocks at height `y` (the map cut there): the
+/// blocks under the brush from `y - below` to `y + above` take `fill`, as
+/// the map's sculpted blocks. `round` makes the dab a ball (an ellipsoid
+/// over a brush that is not round): fewer layers away from its middle, so a
+/// round brush digs a ball; otherwise a cylinder. Blocks are reached where
+/// the brush weighs at least a half (its edge is hard, block by block) and
+/// the selection lets it. Returns the blocks changed.
+#[allow(clippy::too_many_arguments)]
+pub fn paint_slice(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, y: i32, (below, above): (i32, i32), round: bool, fill: SliceFill) -> usize {
+    use crate::voxel::{ChunkPos, SIZE};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let dab = Dab::new(edit, brush, cx, cz);
+    if dab.idle {
+        return 0;
+    }
+    let (min_y, max_y) = (edit.dim().min_y, edit.dim().max_y);
+    let rect = BlockRect::around(cx, cz, brush.reach());
+    let (w, d) = (rect.width().max(0) as usize, rect.depth().max(0) as usize);
+    // Each column's reach up and down from `y`, or none.
+    let r = brush.radius.max(0.5);
+    let mut reach: Vec<Option<(i32, i32)>> = vec![None; w * d];
+    for j in 0..d {
+        for i in 0..w {
+            let (x, z) = (rect.x0 + i as i32, rect.z0 + j as i32);
+            if dab.weight(x, z) < 0.5 {
+                continue;
+            }
+            let (lo, hi) = if round {
+                let t = ((x as f32 + 0.5 - cx).hypot(z as f32 + 0.5 - cz) / r).min(1.0);
+                let k = (1.0 - t * t).max(0.0).sqrt();
+                ((below as f32 * k).round() as i32, (above as f32 * k).round() as i32)
+            } else {
+                (below, above)
+            };
+            let (a, b) = ((y - lo).max(min_y), (y + hi).min(max_y - 1));
+            if a <= b {
+                reach[j * w + i] = Some((a, b));
+            }
+        }
+    }
+    let (ya, yb) = ((y - below).max(min_y), (y + above).min(max_y - 1));
+    if ya > yb || reach.iter().all(Option::is_none) {
+        return 0;
+    }
+    let mut chunks = Vec::new();
+    for cz in rect.z0.div_euclid(SIZE)..=(rect.z1 - 1).div_euclid(SIZE) {
+        for cx in rect.x0.div_euclid(SIZE)..=(rect.x1 - 1).div_euclid(SIZE) {
+            for cy in ya.div_euclid(SIZE)..=yb.div_euclid(SIZE) {
+                chunks.push(ChunkPos::new(cx, cy, cz));
+            }
+        }
+    }
+    // Chunks of columns the brush leaves alone are not made.
+    chunks.retain(|p| {
+        let (x0, _, z0) = p.origin();
+        (0..SIZE).any(|lz| (0..SIZE).any(|lx| {
+            let (x, z) = (x0 + lx, z0 + lz);
+            x >= rect.x0 && x < rect.x1 && z >= rect.z0 && z < rect.z1 && reach[(z - rect.z0) as usize * w + (x - rect.x0) as usize].is_some()
+        }))
+    });
+    let changed = AtomicUsize::new(0);
+    edit.par_voxels(&chunks, |pos, chunk| {
+        let (x0, y0, z0) = pos.origin();
+        let mut n = 0;
+        for lz in 0..SIZE {
+            for lx in 0..SIZE {
+                let (x, z) = (x0 + lx, z0 + lz);
+                if x < rect.x0 || x >= rect.x1 || z < rect.z0 || z >= rect.z1 {
+                    continue;
+                }
+                let Some((a, b)) = reach[(z - rect.z0) as usize * w + (x - rect.x0) as usize] else { continue };
+                for ly in (a - y0).max(0)..=(b - y0).min(SIZE - 1) {
+                    let before = (chunk.get(lx, ly, lz), chunk.fluid(lx, ly, lz), chunk.terrain(lx, ly, lz));
+                    match fill {
+                        SliceFill::Air => {
+                            chunk.set(lx, ly, lz, 0);
+                            chunk.set_fluid(lx, ly, lz, None);
+                        }
+                        SliceFill::Rock(t) => {
+                            chunk.set_fluid(lx, ly, lz, None);
+                            chunk.set(lx, ly, lz, 255);
+                            chunk.set_terrain(lx, ly, lz, t);
+                        }
+                        SliceFill::Water | SliceFill::Lava => {
+                            chunk.set(lx, ly, lz, 0);
+                            chunk.set_fluid(lx, ly, lz, Some(if fill == SliceFill::Water { crate::voxel::Fluid::Water } else { crate::voxel::Fluid::Lava }));
+                        }
+                    }
+                    if (chunk.get(lx, ly, lz), chunk.fluid(lx, ly, lz), chunk.terrain(lx, ly, lz)) != before {
+                        n += 1;
+                    }
+                }
+            }
+        }
+        changed.fetch_add(n, Ordering::Relaxed);
+    });
+    changed.into_inner()
+}
+
 /// Paint a layer of underground pockets by its number (0 removes it), on
 /// the ground level. `salt` should change from dab to dab.
 pub fn paint_pockets(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, layer: u16, salt: u64) {

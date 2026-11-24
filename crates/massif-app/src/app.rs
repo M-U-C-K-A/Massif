@@ -4138,6 +4138,16 @@ impl MassifApp {
         if pressed(Action::MapFit) {
             self.fit_map();
         }
+        // The map cut a layer higher or lower (PageUp, PageDown; Shift: 8),
+        // turned underground first when it shows the surface.
+        for (action, dir) in [(Action::LayerUp, 1), (Action::LayerDown, -1)] {
+            if let Some(press) = take(action) {
+                let id = self.active_map.or_else(|| self.maps.keys().next().copied());
+                if let Some(view) = id.and_then(|id| self.maps.get_mut(&id)) {
+                    view.step_layer(if press.shift { 8 * dir } else { dir });
+                }
+            }
+        }
         // The map's zoom (WorldPainter's ⌘ with +, − and 0).
         for (action, factor) in [(Action::MapZoomIn, 2.0), (Action::MapZoomOut, 0.5), (Action::MapZoomReset, 0.0)] {
             if pressed(action) {
@@ -13334,6 +13344,117 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The Layer tool cuts the map at a height, PageDown takes it a layer
+    /// lower, and a stroke digs the blocks of that layer (a ball over the
+    /// layers around), one step to undo; water poured shows as water.
+    #[test]
+    fn editing_the_map_layer_by_layer() {
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let ppp = std::env::var("MASSIF_SNAPSHOT_PPP").unwrap_or_else(|_| "1".into());
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        // A column of land well over the sea, to dig under.
+        let (x, z, top) = {
+            let dim = h.state().doc.dimension();
+            let mut best = (0, 0, f32::MIN);
+            for t in dim.ground().positions() {
+                let tile = dim.ground().view(t).unwrap();
+                let (ox, oz) = t.origin();
+                for i in (0..massif_core::TILE_AREA).step_by(37) {
+                    let h = tile.top.get(i);
+                    if h > best.2 {
+                        best = (ox + (i % 128) as i32, oz + (i / 128) as i32, h);
+                    }
+                }
+            }
+            best
+        };
+        let y = top as i32 - 12;
+        h.state_mut().tools.select(Tool::Layer);
+        h.state_mut().tools.layer_y = y + 1;
+        h.state_mut().tools.layer_below = 3;
+        h.state_mut().tools.layer_above = 3;
+        h.state_mut().tools.brush.radius = 8.0;
+        let id = h.state().active_map.or_else(|| h.state().maps.keys().next().copied()).expect("a map view");
+        {
+            let view = h.state_mut().maps.get_mut(&id).unwrap();
+            view.center = [x as f64, z as f64];
+            view.zoom = 6.0;
+        }
+        h.run_steps(3);
+        assert_eq!(h.state().maps[&id].cut, Some(y + 1), "the Layer tool cuts the map");
+        // A layer lower.
+        h.event(egui::Event::Key { key: egui::Key::PageDown, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+        h.event(egui::Event::Key { key: egui::Key::PageDown, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+        assert_eq!((h.state().maps[&id].cut, h.state().tools.layer_y), (Some(y), y));
+        let wait_map = |h: &mut egui_kittest::Harness<'static, MassifApp>| {
+            let mut frames = 0;
+            while frames < 8 || h.state().map_cache.busy() {
+                h.step();
+                frames += 1;
+                assert!(frames < 3000, "the map never finished");
+            }
+            h.run_steps(4);
+        };
+        wait_map(&mut h);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join(format!("layer-view-{ppp}x.png"))).unwrap();
+        }
+        // What a layer costs: a tile's columns composed once, then each
+        // height a cut of them.
+        {
+            let dim = h.state().doc.dimension();
+            let pos = massif_core::TilePos::containing(x, z);
+            let t0 = std::time::Instant::now();
+            let columns = crate::map_render::Columns::of(dim, pos).unwrap();
+            let composed = t0.elapsed();
+            let t1 = std::time::Instant::now();
+            for k in 0..16 {
+                std::hint::black_box(crate::map_render::SurfaceGrid::cut(&columns, y - k));
+            }
+            eprintln!("layer view: a tile's columns in {:.2} ms, a cut of them in {:.3} ms (the old cut composed the tile each time)", composed.as_secs_f64() * 1e3, t1.elapsed().as_secs_f64() * 1e3 / 16.0);
+        }
+        let solid = |h: &egui_kittest::Harness<'static, MassifApp>, x: i32, y: i32, z: i32| massif_core::voxel::densities_at(h.state().doc.dimension(), massif_core::voxel::ChunkPos::containing(x, y, z)).solid(x.rem_euclid(16), y.rem_euclid(16), z.rem_euclid(16));
+        assert!(solid(&h, x, y, z), "rock under the land before");
+        // A stroke across the column.
+        let drag = |h: &mut egui_kittest::Harness<'static, MassifApp>, from: (f32, f32), to: (f32, f32)| {
+            let (a, b) = (h.state().maps[&id].screen_of(from.0 as f64, from.1 as f64), h.state().maps[&id].screen_of(to.0 as f64, to.1 as f64));
+            h.event(egui::Event::PointerMoved(a));
+            h.run_steps(1);
+            h.event(egui::Event::PointerButton { pos: a, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+            h.run_steps(1);
+            for k in 1..=8 {
+                h.event(egui::Event::PointerMoved(a + (b - a) * (k as f32 / 8.0)));
+                h.run_steps(1);
+            }
+            h.event(egui::Event::PointerButton { pos: b, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+            h.run_steps(2);
+        };
+        let (fx, fz) = (x as f32 - 20.0, z as f32 + 0.5);
+        drag(&mut h, (fx, fz), (x as f32 + 20.0, fz));
+        assert_eq!(h.state().doc.history.undo_label(), Some(Tool::Layer.label()));
+        assert!(!solid(&h, x, y, z) && !solid(&h, x, y + 3, z) && !solid(&h, x, y - 3, z), "dug, three layers up and down");
+        assert!(solid(&h, x, y + 6, z), "the rock over the ball stays");
+        // Water poured south of it.
+        h.state_mut().tools.layer_fill = crate::tools::LayerFill::Water;
+        h.state_mut().tools.layer_below = 0;
+        h.state_mut().tools.layer_above = 0;
+        drag(&mut h, (fx, fz + 14.0), (x as f32 + 20.0, fz + 14.0));
+        wait_map(&mut h);
+        let grid = crate::map_render::SurfaceGrid::build_at(h.state().doc.dimension(), massif_core::TilePos::containing(x, z + 14), Some(y)).unwrap();
+        let cell = massif_core::coords::local_index(x, z + 14);
+        assert_ne!(grid.0[cell].flags & crate::map_render::FLAG_CUT_WATER, 0, "water on the layer");
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join(format!("layer-stroke-{ppp}x.png"))).unwrap();
+        }
+        // One step to undo each.
+        let ctx = h.ctx.clone();
+        h.state_mut().undo(&ctx);
+        h.state_mut().undo(&ctx);
+        assert!(solid(&h, x, y, z), "undone");
     }
 
     /// Caves made by a terrain graph (the Cave System, a tunnel and a hall

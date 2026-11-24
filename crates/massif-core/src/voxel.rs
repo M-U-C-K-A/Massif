@@ -107,6 +107,11 @@ pub(crate) const FOLLOW: u16 = u16::MAX;
 /// as air.
 const WATER_MARK: u16 = u16::MAX - 1;
 const LAVA_MARK: u16 = u16::MAX - 2;
+/// A block a terrain graph's volumes carved or filled (see
+/// [`VoxelChunk::set_carved`]): as any other, its matter its column's, but
+/// a graph applied again may change it back, where it never touches what
+/// was edited by hand.
+const CARVED_MARK: u16 = u16::MAX - 3;
 
 /// What fills an air voxel of a sculpted chunk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -136,7 +141,7 @@ impl VoxelChunk {
     #[inline]
     pub fn terrain(&self, lx: i32, ly: i32, lz: i32) -> Option<crate::registry::TerrainId> {
         let t = self.terrain.as_ref()?[voxel_index(lx, ly, lz)];
-        (t < LAVA_MARK).then_some(crate::registry::TerrainId(t))
+        (t < CARVED_MARK).then_some(crate::registry::TerrainId(t))
     }
 
     /// The fluid an air voxel holds (none in a solid one).
@@ -166,6 +171,18 @@ impl VoxelChunk {
             Some(Fluid::Lava) => LAVA_MARK,
             None => FOLLOW,
         };
+    }
+
+    /// Mark a voxel as shaped by a terrain graph (carved or filled by its
+    /// volumes): a graph applied again may change it back, where it never
+    /// touches what was edited by hand. Its matter follows its column.
+    pub fn set_carved(&mut self, lx: i32, ly: i32, lz: i32) {
+        self.terrain.get_or_insert_with(|| Box::new([FOLLOW; VOLUME]))[voxel_index(lx, ly, lz)] = CARVED_MARK;
+    }
+
+    /// Whether a terrain graph shaped a voxel (see [`VoxelChunk::set_carved`]).
+    pub fn carved(&self, lx: i32, ly: i32, lz: i32) -> bool {
+        self.terrain.as_ref().is_some_and(|p| p[voxel_index(lx, ly, lz)] == CARVED_MARK)
     }
 
     /// Whether some voxel holds a fluid.
@@ -202,7 +219,7 @@ impl VoxelChunk {
     pub fn remap_terrains(&mut self, f: impl Fn(u16) -> u16) {
         if let Some(t) = &mut self.terrain {
             for v in t.iter_mut() {
-                if *v < LAVA_MARK {
+                if *v < CARVED_MARK {
                     *v = f(*v);
                 }
             }
@@ -242,7 +259,7 @@ impl VoxelChunk {
         let mark = |c: &VoxelChunk, i: usize| c.terrain.as_ref().map_or(FOLLOW, |p| p[i]);
         (0..VOLUME).all(|i| {
             let own = mark(self, i);
-            own == FOLLOW && mark(bare, i) == FOLLOW || (own == WATER_MARK || own == LAVA_MARK) && own == mark(bare, i)
+            (own == FOLLOW || own == CARVED_MARK) && mark(bare, i) == FOLLOW || (own == WATER_MARK || own == LAVA_MARK) && own == mark(bare, i)
         })
     }
 

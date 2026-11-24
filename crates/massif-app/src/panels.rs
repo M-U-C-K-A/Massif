@@ -522,6 +522,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
         }
         Tool::Caves => crate::caves::cave_settings(ui, tools, doc),
         Tool::CaveBiome => crate::caves::cave_biome_settings(ui, tools, doc),
+        Tool::Layer => crate::caves::layer_settings(ui, tools, doc),
         Tool::Combined => combined_settings(ui, tools, doc),
         Tool::Structure => crate::structure_tool::settings(ui, tools, doc),
         Tool::Village => crate::structure_tool::settings(ui, tools, doc),
