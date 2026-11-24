@@ -8,7 +8,8 @@ use crate::theme::{self, Icon, Palette};
 use crate::widgets;
 use egui::{Align2, FontId, Rect, Sense, Ui, vec2};
 use massif_terrain::model::Graph;
-use massif_terrain::registry::{self, Family, NodeSpec};
+use super::canvas::Entry;
+use massif_terrain::registry::Family;
 
 /// Example graphs to start from: their name, and the graph.
 pub fn quick_starts() -> Vec<(&'static str, &'static str)> {
@@ -36,21 +37,24 @@ pub fn ui(p: &mut TerrainPanel, ui: &mut Ui, graph_rect: Rect) {
         ui.set_width(body.width() - 2.0);
         let query = p.library_query.trim().to_owned();
         if !query.is_empty() {
-            let hits = super::canvas::find(&query, None);
-            for spec in hits.iter().take(40) {
-                entry(p, ui, spec, graph_rect, &pal);
+            let hits = super::canvas::find_in(&p.graph, &query, None);
+            for e in hits.iter().take(40) {
+                entry(p, ui, e, graph_rect, &pal);
             }
             if hits.is_empty() {
                 ui.label(egui::RichText::new(t!("No node matches.")).size(12.0).color(pal.weak));
             }
             return;
         }
-        for family in Family::ALL {
-            let specs: Vec<&'static NodeSpec> = registry::all().iter().copied().filter(|s| s.family == family && super::canvas::offered(s)).collect();
+        let all = super::canvas::entries(&p.graph);
+        let composites: Vec<Entry> = all.iter().filter(|e| e.is_composite()).cloned().collect();
+        let mut sections: Vec<(&'static str, Family, Vec<Entry>)> = Family::ALL.into_iter().map(|f| (f.label(), f, all.iter().filter(|e| !e.is_composite() && e.family == f).cloned().collect())).collect();
+        // Composites, Massif's and the document's, in a section of their own.
+        sections.insert(0, ("Composites", Family::Shape, composites));
+        for (label, family, specs) in sections {
             if specs.is_empty() {
                 continue;
             }
-            let label = family.label();
             let open = p.library_open.contains(label);
             let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
             if resp.hovered() {
@@ -58,7 +62,8 @@ pub fn ui(p: &mut TerrainPanel, ui: &mut Ui, graph_rect: Rect) {
             }
             let chevron = if open { Icon::ChevronDown } else { Icon::ChevronRight };
             ui.painter().text(r.left_center() + vec2(6.0, 0.0), Align2::LEFT_CENTER, theme::glyph(chevron).to_string(), FontId::proportional(10.5), pal.weak);
-            ui.painter().text(r.left_center() + vec2(22.0, 0.0), Align2::LEFT_CENTER, theme::glyph(sockets::family_icon(family)).to_string(), FontId::proportional(12.0), sockets::family(family));
+            let icon = if label == "Composites" { Icon::Boxes } else { sockets::family_icon(family) };
+            ui.painter().text(r.left_center() + vec2(22.0, 0.0), Align2::LEFT_CENTER, theme::glyph(icon).to_string(), FontId::proportional(12.0), sockets::family(family));
             ui.painter().text(r.left_center() + vec2(40.0, 0.0), Align2::LEFT_CENTER, super::text::name(label), FontId::proportional(12.5), pal.text);
             ui.painter().text(r.right_center() - vec2(8.0, 0.0), Align2::RIGHT_CENTER, specs.len().to_string(), FontId::proportional(11.0), pal.weak);
             if resp.clicked() {
@@ -69,8 +74,8 @@ pub fn ui(p: &mut TerrainPanel, ui: &mut Ui, graph_rect: Rect) {
                 }
             }
             if open {
-                for spec in specs {
-                    entry(p, ui, spec, graph_rect, &pal);
+                for e in &specs {
+                    entry(p, ui, e, graph_rect, &pal);
                 }
                 ui.add_space(4.0);
             }
@@ -104,7 +109,9 @@ pub fn ui(p: &mut TerrainPanel, ui: &mut Ui, graph_rect: Rect) {
 /// Replaces the graph with an example, as one step that can be undone.
 pub fn load_example(p: &mut TerrainPanel, g: Graph) {
     let keep_size = p.space.size;
+    p.close_to(0);
     *p.edit() = g;
+    p.end_edit();
     if let Some(size) = p.graph.terrain.size {
         p.space.size = size;
     } else {
@@ -112,6 +119,7 @@ pub fn load_example(p: &mut TerrainPanel, g: Graph) {
     }
     p.space.seed = p.graph.terrain.seed;
     p.layout = Default::default();
+    p.outer.clear();
     p.auto_place();
     p.selected.clear();
     p.viewed = None;
@@ -119,20 +127,24 @@ pub fn load_example(p: &mut TerrainPanel, g: Graph) {
     p.fit_pending = true;
 }
 
-fn entry(p: &mut TerrainPanel, ui: &mut Ui, spec: &'static NodeSpec, graph_rect: Rect, pal: &Palette) {
+fn entry(p: &mut TerrainPanel, ui: &mut Ui, e: &Entry, graph_rect: Rect, pal: &Palette) {
     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click_and_drag());
     if resp.hovered() || resp.dragged() {
         ui.painter().rect_filled(r, theme::TILE_RADIUS, pal.accent_soft);
     }
-    ui.painter().circle_filled(r.left_center() + vec2(26.0, 0.0), 3.0, sockets::family(spec.family));
-    ui.painter().with_clip_rect(r).text(r.left_center() + vec2(38.0, 0.0), Align2::LEFT_CENTER, super::text::name(spec.label), FontId::proportional(12.0), pal.text);
-    let resp = resp.on_hover_text(super::text::name(spec.summary));
+    if e.is_composite() {
+        ui.painter().text(r.left_center() + vec2(26.0, 0.0), Align2::CENTER_CENTER, theme::glyph(Icon::Boxes).to_string(), FontId::proportional(10.5), sockets::family(e.family));
+    } else {
+        ui.painter().circle_filled(r.left_center() + vec2(26.0, 0.0), 3.0, sockets::family(e.family));
+    }
+    ui.painter().with_clip_rect(r).text(r.left_center() + vec2(38.0, 0.0), Align2::LEFT_CENTER, &e.label, FontId::proportional(12.0), pal.text);
+    let resp = if e.summary.is_empty() { resp } else { resp.on_hover_text(&e.summary) };
     // A click adds it in the middle of the graph's view; a drag, where it
     // is let go.
     if resp.dragged() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         if let Some(q) = ui.input(|i| i.pointer.hover_pos()) {
-            ui.painter().text(q + vec2(12.0, 0.0), Align2::LEFT_CENTER, super::text::name(spec.label), FontId::proportional(12.0), pal.accent);
+            ui.painter().text(q + vec2(12.0, 0.0), Align2::LEFT_CENTER, &e.label, FontId::proportional(12.0), pal.accent);
         }
     }
     let at_screen = if resp.drag_stopped() {
@@ -142,10 +154,11 @@ fn entry(p: &mut TerrainPanel, ui: &mut Ui, spec: &'static NodeSpec, graph_rect:
     } else {
         None
     };
-    if let Some(q) = at_screen {
+    if let Some(q) = at_screen
+        && !p.read_only()
+    {
         let origin = graph_rect.min + vec2(1.0, 36.0);
         let g = (q - origin - p.view.offset) / p.view.zoom;
-        let n = p.selected.len() as f32;
-        p.add_node(spec.id, [g.x - 80.0 + n * 0.0, g.y - 40.0]);
+        p.add_node(&e.id, [g.x - 80.0, g.y - 40.0]);
     }
 }

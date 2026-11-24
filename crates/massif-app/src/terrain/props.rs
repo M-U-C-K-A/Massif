@@ -1,14 +1,21 @@
 //! The selected node's settings, drawn from the registry: a well for each
 //! section (the main settings, Shape, Detail, Advanced on demand), an
 //! editor for every kind of setting, the ◇ that lets a field drive a
-//! number over the map, and the help of the setting under the pointer.
+//! number over the map, and the help of the setting under the pointer. A
+//! composite shows the settings it exposes, grouped as it says; inside an
+//! opened composite, a setting can be exposed on it, and with nothing
+//! selected its inputs, outputs and exposed settings show. A frame shows
+//! its title, colour and note.
 
-use super::panel::TerrainPanel;
+use super::panel::{TerrainPanel, base_kind};
+use super::shape::NodeShape;
 use super::sockets;
 use crate::theme::{self, Icon, Palette};
 use crate::widgets;
 use egui::{Align2, Color32, FontId, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use massif_terrain::compile::Diagnostic;
+use massif_terrain::format::Op;
+use massif_terrain::model::{Component, Exposed, OutputDecl, PortDecl};
 use massif_terrain::params::{Params, Point, Value, color_hex, eval_gradient, eval_profile};
 use massif_terrain::registry::{NodeSpec, ParamKind, ParamSpec, PortKind, Section, Unit};
 
@@ -50,6 +57,21 @@ pub fn decoded(p: &TerrainPanel, id: &str) -> Option<Params> {
     Some(Params::decode(spec, id, &node.params, "", &mut diags))
 }
 
+/// A setting of a composite being exposed: what the dialog fills in.
+#[derive(Debug, Clone, Default)]
+pub struct Exposing {
+    /// `node.setting` inside.
+    pub target: String,
+    pub name: String,
+    pub label: String,
+    pub help: String,
+    pub category: String,
+    pub advanced: bool,
+    /// The range, for a number: `None` keeps the setting's own.
+    pub range: Option<[f64; 2]>,
+    pub error: Option<String>,
+}
+
 fn section_label(s: Section) -> &'static str {
     match s {
         Section::Main => "",
@@ -67,9 +89,12 @@ pub fn ui(p: &mut TerrainPanel, ui: &mut Ui) {
     let mut inner = ui.new_child(egui::UiBuilder::new().max_rect(body).layout(egui::Layout::top_down(egui::Align::Min)));
     egui::ScrollArea::vertical().id_salt("terrain props").auto_shrink([false, false]).show(&mut inner, |ui| {
         ui.set_width(body.width() - 4.0);
-        match p.selected.last().cloned().filter(|id| p.graph.nodes.contains_key(id)) {
-            Some(id) => node_ui(p, ui, &id),
-            None => graph_ui(p, ui),
+        let frame = p.selected_frame.clone().filter(|f| p.graph.frames.contains_key(f));
+        match (p.selected.last().cloned().filter(|id| p.graph.nodes.contains_key(id)), frame) {
+            (Some(id), _) => node_ui(p, ui, &id),
+            (None, Some(f)) => frame_ui(p, ui, &f),
+            (None, None) if !p.outer.is_empty() => composite_ui(p, ui),
+            (None, None) => graph_ui(p, ui),
         }
         ui.add_space(12.0);
     });
@@ -77,7 +102,7 @@ pub fn ui(p: &mut TerrainPanel, ui: &mut Ui) {
     let foot = Rect::from_min_max(pos2(full.left() + theme::PAD, full.bottom() - foot_h + 6.0), pos2(full.right() - theme::PAD, full.bottom() - 8.0));
     ui.painter().hline(full.x_range().shrink(1.0), foot.top() - 4.0, Stroke::new(1.0, pal.border));
     if let Some(help) = p.hovered_help {
-        let g = ui.painter().layout(super::text::name(help).to_owned(), FontId::proportional(11.5), pal.weak, foot.width());
+        let g = ui.painter().layout(super::text::name_owned(help), FontId::proportional(11.5), pal.weak, foot.width());
         ui.painter().with_clip_rect(foot).galley(foot.min, g, pal.weak);
     }
 }
@@ -164,61 +189,105 @@ fn hover_help(p: &mut TerrainPanel, ui: &Ui, top: f32, help: &'static str) {
     }
 }
 
+/// A help of a composite (written in the document, not known when
+/// building), kept for the panel's foot.
+fn leak_help(s: &str) -> &'static str {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static KEPT: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+    let mut kept = KEPT.get_or_init(Default::default).lock().expect("lock");
+    if let Some(k) = kept.get(s) {
+        return k;
+    }
+    let k: &'static str = Box::leak(s.to_owned().into_boxed_str());
+    kept.insert(k);
+    k
+}
+
+fn icon_button(ui: &mut Ui, icon: Icon, tip: &str) -> bool {
+    ui.add(egui::Button::new(egui::RichText::new(theme::glyph(icon).to_string()).size(13.0)).frame(false)).on_hover_text(tip).clicked()
+}
+
 fn node_ui(p: &mut TerrainPanel, ui: &mut Ui, id: &str) {
     let pal = Palette::of(ui);
-    let Some(spec) = p.spec(id) else { return };
+    let Some(shape) = p.shape(id) else { return };
+    let read_only = p.read_only();
     // Title, family and what the node makes.
     ui.horizontal(|ui| {
         let (r, _) = ui.allocate_exact_size(vec2(10.0, 18.0), Sense::hover());
-        ui.painter().circle_filled(r.center(), 4.0, sockets::family(spec.family));
-        ui.label(egui::RichText::new(super::text::name(spec.label)).size(14.0).strong());
+        ui.painter().circle_filled(r.center(), 4.0, sockets::family(shape.family));
+        ui.add(egui::Label::new(egui::RichText::new(p.display_name(id)).size(14.0).strong()).truncate());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let b = |ui: &mut Ui, icon: Icon, tip: &str| ui.add(egui::Button::new(egui::RichText::new(theme::glyph(icon).to_string()).size(13.0)).frame(false)).on_hover_text(tip).clicked();
-            if b(ui, Icon::Trash2, t!("Remove the node")) {
+            if !read_only && icon_button(ui, Icon::Trash2, t!("Remove the node")) {
                 p.remove_nodes(&[id.to_owned()]);
             }
-            if b(ui, Icon::Copy, t!("Duplicate (⌘D)")) {
+            if !read_only && icon_button(ui, Icon::Copy, t!("Duplicate (⌘D)")) {
                 p.duplicate(&[id.to_owned()]);
             }
-            if b(ui, Icon::Eye, t!("View in the viewer (V)")) {
-                p.viewed = Some(super::eval::Shown { node: id.to_owned(), port: None });
+            if icon_button(ui, Icon::Eye, t!("View in the viewer (V)")) {
+                p.viewed = Some((p.crumbs(), super::eval::Shown { node: id.to_owned(), port: None }));
             }
         });
     });
     if !p.graph.nodes.contains_key(id) {
         return;
     }
-    let summary = super::text::name(spec.summary);
-    ui.label(egui::RichText::new(summary).size(11.5).color(pal.weak));
+    ui.label(egui::RichText::new(&shape.summary).size(11.5).color(pal.weak));
     ui.add_space(6.0);
-    // Its name in the graph, which wires and scripts use.
-    let mut name = p.renaming_node.clone().filter(|_| ui.memory(|m| m.has_focus(ui.scope_id().with("node name")))).unwrap_or_else(|| id.to_owned());
-    widgets::well(ui, |ui| {
-        widgets::row(ui, t!("Name"), |ui| {
-            let r = ui.add(egui::TextEdit::singleline(&mut name).id(ui.scope_id().with("node name")).desired_width(150.0).font(FontId::proportional(12.0)));
-            if r.changed() {
-                p.renaming_node = Some(name.clone());
-            }
-            if r.lost_focus() {
-                let to = name.trim().to_owned();
-                if !p.rename(id, &to) && to != id {
+    // The name it shows (its id, by which wires and scripts name it, never
+    // changes), and whether it is left out.
+    let current = p.graph.nodes[id].name.clone().unwrap_or_default();
+    let mut name = p.renaming_node.clone().filter(|_| ui.memory(|m| m.has_focus(ui.scope_id().with("node name")))).unwrap_or_else(|| current.clone());
+    let is_output = shape.is_output();
+    ui.add_enabled_ui(!read_only, |ui| {
+        widgets::well(ui, |ui| {
+            let top = ui.cursor().top();
+            widgets::row(ui, t!("Name"), |ui| {
+                let r = ui.add(egui::TextEdit::singleline(&mut name).id(ui.scope_id().with("node name")).hint_text(&shape.label).desired_width(150.0).font(FontId::proportional(12.0)));
+                if r.changed() {
+                    p.renaming_node = Some(name.clone());
+                }
+                if r.lost_focus() {
+                    p.set_name(id, Some(name.clone()));
                     p.renaming_node = None;
                 }
-                p.renaming_node = None;
+            });
+            hover_help(p, ui, top, "The name the node shows. Wires and scripts name it by its id, which never changes.");
+            widgets::row(ui, t!("Id"), |ui| {
+                ui.label(egui::RichText::new(id).size(11.5).color(pal.weak).monospace());
+            });
+            if !is_output {
+                let top = ui.cursor().top();
+                let mut on = p.graph.nodes[id].bypass;
+                widgets::row(ui, t!("Bypass"), |ui| {
+                    if widgets::switch(ui, &mut on).changed() {
+                        p.set_bypass(&[id.to_owned()], on);
+                    }
+                });
+                hover_help(p, ui, top, "Leaves the node out: what it feeds takes its first input instead (B).");
             }
         });
     });
-    if p.status().broken.contains_key(id) {
+    let crumbs = p.crumbs();
+    let broken = p.status().broken.get(&super::shape::unfolded_id(&crumbs, id)).cloned();
+    if let Some(why) = broken {
         ui.add_space(6.0);
-        let why = p.status().broken.get(id).cloned().unwrap_or_default();
         ui.label(egui::RichText::new(why).size(11.5).color(pal.danger));
     }
     let id = id.to_owned();
+    if let Some((kind, comp, editable)) = shape.composite() {
+        let (kind, comp) = (kind.to_owned(), comp.clone());
+        composite_node_ui(p, ui, &id, &kind, &comp, editable);
+        inputs_ui(p, ui, &id, &shape);
+        return;
+    }
+    let Some(spec) = shape.spec() else { return };
     if spec.is_output() {
         output_ui(p, ui, &id, spec);
         return;
     }
     let Some(params) = decoded(p, &id) else { return };
+    let expose_on = p.scope_kind().filter(|k| p.graph.components.contains_key(base_kind(k))).is_some() && !read_only;
     for section in [Section::Main, Section::Shape, Section::Detail, Section::Advanced] {
         let list: Vec<(usize, &'static ParamSpec)> = spec.params.iter().enumerate().filter(|(_, q)| q.section == section).collect();
         if list.is_empty() {
@@ -240,36 +309,405 @@ fn node_ui(p: &mut TerrainPanel, ui: &mut Ui, id: &str) {
             ui.add_space(4.0);
         }
         let mut blocks: Vec<(usize, &'static ParamSpec)> = Vec::new();
-        widgets::well(ui, |ui| {
-            for (k, q) in &list {
+        ui.add_enabled_ui(!read_only, |ui| {
+            widgets::well(ui, |ui| {
+                for (k, q) in &list {
+                    let top = ui.cursor().top();
+                    param_row(p, ui, &id, q, &params.values()[*k], expose_on);
+                    hover_help(p, ui, top, q.help);
+                    if matches!(q.kind, ParamKind::Profile { .. } | ParamKind::Gradient { .. } | ParamKind::Points { .. } | ParamKind::Curve { .. }) {
+                        blocks.push((*k, q));
+                    }
+                }
+            });
+            // Editors too tall for a row, under the well.
+            for (k, q) in blocks {
+                ui.add_space(6.0);
                 let top = ui.cursor().top();
-                param_row(p, ui, &id, spec, q, &params.values()[*k]);
+                block_editor(p, ui, &id, q, &params.values()[k]);
                 hover_help(p, ui, top, q.help);
-                if matches!(q.kind, ParamKind::Profile { .. } | ParamKind::Gradient { .. } | ParamKind::Points { .. } | ParamKind::Curve { .. }) {
-                    blocks.push((*k, q));
+            }
+        });
+    }
+    inputs_ui(p, ui, &id, &shape);
+}
+
+/// A composite node's settings: the exposed ones, grouped by their
+/// categories (the advanced ones folded), as a node's own; and the way in.
+fn composite_node_ui(p: &mut TerrainPanel, ui: &mut Ui, id: &str, kind: &str, comp: &Component, editable: bool) {
+    let pal = Palette::of(ui);
+    let read_only = p.read_only();
+    ui.add_space(10.0);
+    ui.horizontal(|ui| {
+        if widgets::button(ui, format!("{}  {}", theme::glyph(Icon::Boxes), t!("Open"))).on_hover_text(t!("Edit what it holds (double-click the node)")).clicked() {
+            p.open(id);
+        }
+        if !editable && !read_only && widgets::button(ui, t!("Edit a copy")).on_hover_text(t!("Make this composite the document's own, under a new name, to change it")).clicked() {
+            match p.edit_copy(id) {
+                Ok(_) => p.say(t!("A copy of the composite is the document's own now."), 0.0),
+                Err(e) => p.say(e, 0.0),
+            }
+        }
+        if !read_only && widgets::button(ui, t!("Ungroup")).on_hover_text(t!("Put its nodes back in its place (⌘⇧G)")).clicked() {
+            let _ = p.ungroup(id);
+        }
+    });
+    if !p.graph.nodes.contains_key(id) {
+        return;
+    }
+    ui.add_space(4.0);
+    let origin = if editable { t!("A composite of this document") } else { t!("A composite of Massif") };
+    ui.label(egui::RichText::new(format!("{origin}  ·  {kind}")).size(11.0).color(pal.weak));
+    if comp.exposed.is_empty() {
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new(t!("It exposes no setting: open it to change what it holds, or expose some of its settings.")).size(11.5).color(pal.weak));
+        return;
+    }
+    // Groups in their first appearance's order, advanced ones last.
+    let mut groups: Vec<(String, bool)> = Vec::new();
+    for e in &comp.exposed {
+        let g = (e.category.clone(), e.advanced);
+        if !groups.contains(&g) {
+            groups.push(g);
+        }
+    }
+    groups.sort_by_key(|g| g.1);
+    let doc = p.graph.clone();
+    let mut shown_adv_header = false;
+    for (cat, adv) in groups {
+        if adv && !shown_adv_header {
+            shown_adv_header = true;
+            ui.add_space(12.0);
+            let r = ui.add(egui::Button::new(egui::RichText::new(format!("{}  {}", theme::glyph(if p.show_advanced { Icon::ChevronDown } else { Icon::ChevronRight }), t!("Advanced").to_uppercase())).size(10.5).color(pal.weak)).frame(false));
+            if r.clicked() {
+                p.show_advanced = !p.show_advanced;
+            }
+        }
+        if adv && !p.show_advanced {
+            continue;
+        }
+        ui.add_space(if adv { 4.0 } else { 12.0 });
+        if !cat.is_empty() {
+            ui.label(egui::RichText::new(super::text::name_owned(&cat).to_uppercase()).size(10.5).color(pal.weak));
+            ui.add_space(4.0);
+        }
+        ui.add_enabled_ui(!read_only, |ui| {
+            widgets::well(ui, |ui| {
+                for e in comp.exposed.iter().filter(|e| e.category == cat && e.advanced == adv) {
+                    let Some((base_spec, base_q)) = super::shape::exposed_base(&doc, comp, e) else {
+                        widgets::row(ui, &e.label, |ui| {
+                            ui.label(egui::RichText::new(t!("stands for nothing inside")).size(11.5).color(pal.danger));
+                        });
+                        continue;
+                    };
+                    let q = super::shape::exposed_spec(base_q, e);
+                    let v = exposed_value(&doc, comp, e, &p.graph.nodes[id].params, base_spec, base_q);
+                    let top = ui.cursor().top();
+                    param_row(p, ui, id, q, &v, false);
+                    hover_help(p, ui, top, if e.help.is_empty() { base_q.help } else { leak_help(&e.help) });
+                }
+            });
+        });
+    }
+}
+
+/// The value an exposed setting has on an instance: its own, or the
+/// composite's default, or what the setting it stands for has inside.
+fn exposed_value(doc: &massif_terrain::model::Graph, comp: &Component, e: &Exposed, given: &std::collections::BTreeMap<String, serde_json::Value>, base_spec: &'static NodeSpec, base_q: &'static ParamSpec) -> Value {
+    let mut inner = std::collections::BTreeMap::new();
+    if let Some((n, _)) = e.targets.first().and_then(|t| t.split_once('.'))
+        && let Some(node) = comp.nodes.get(n)
+        && node.kind == base_spec.type_name()
+    {
+        inner = node.params.clone();
+    }
+    let _ = doc;
+    if let Some(v) = given.get(&e.name).or(e.default.as_ref()) {
+        inner.insert(base_q.name.to_owned(), v.clone());
+    }
+    let mut diags = Vec::new();
+    let params = Params::decode(base_spec, "n", &inner, "", &mut diags);
+    let k = base_spec.params.iter().position(|x| std::ptr::eq(x, base_q)).unwrap_or(0);
+    params.values()[k].clone()
+}
+
+/// The composite open, nothing selected: its name, its inputs and outputs,
+/// and the settings it exposes.
+fn composite_ui(p: &mut TerrainPanel, ui: &mut Ui) {
+    let pal = Palette::of(ui);
+    let Some(kind) = p.scope_kind().map(str::to_owned) else { return };
+    let Some(comp) = massif_terrain::lower::component(&p.graph, &kind).map(|c| c.into_owned()) else { return };
+    let base = base_kind(&kind).to_owned();
+    let read_only = p.read_only();
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(theme::glyph(Icon::Boxes).to_string()).size(13.0).color(pal.weak));
+        ui.label(egui::RichText::new(super::text::name_owned(&comp.label)).size(14.0).strong());
+    });
+    ui.add_space(2.0);
+    let what = if read_only { t!("One of Massif's composites: read only. Edit a copy to change it.") } else { t!("What this composite holds. Its inputs and outputs are the columns at the canvas's edges; its exposed settings show on every node of it.") };
+    ui.add(egui::Label::new(egui::RichText::new(what).size(11.5).color(pal.weak)).wrap());
+    ui.add_space(10.0);
+    // Its words: changed in place (one step each) until the graph has steps
+    // for a composite's interface.
+    let mut label = comp.label.clone();
+    let mut summary = comp.summary.clone();
+    let mut category = comp.category.clone();
+    let mut changed = false;
+    ui.add_enabled_ui(!read_only, |ui| {
+        widgets::well(ui, |ui| {
+            widgets::row(ui, t!("Name"), |ui| {
+                changed |= ui.add(egui::TextEdit::singleline(&mut label).desired_width(160.0)).changed();
+            });
+            widgets::row(ui, t!("Library group"), |ui| {
+                widgets::combo("terrain composite category").width(160.0).selected_text(super::text::name_owned(&category)).show_ui(ui, |ui| {
+                    for f in massif_terrain::registry::Family::ALL {
+                        if f == massif_terrain::registry::Family::Internal {
+                            continue;
+                        }
+                        if ui.selectable_label(category == f.label(), super::text::name(f.label())).clicked() {
+                            category = f.label().to_owned();
+                            changed = true;
+                        }
+                    }
+                });
+            });
+            widgets::row(ui, t!("Summary"), |ui| {
+                changed |= ui.add(egui::TextEdit::singleline(&mut summary).desired_width(160.0)).changed();
+            });
+        });
+    });
+    if changed
+        && let Some(c) = p.edit().components.get_mut(&base)
+    {
+        c.label = label;
+        c.summary = summary;
+        c.category = category;
+    }
+    // Inputs.
+    ui.add_space(12.0);
+    ui.label(egui::RichText::new(t!("Inputs").to_uppercase()).size(10.5).color(pal.weak));
+    ui.add_space(4.0);
+    let mut remove_in = None;
+    let mut add_in = None;
+    ui.add_enabled_ui(!read_only, |ui| {
+        widgets::well(ui, |ui| {
+            for d in &comp.inputs {
+                let kind = PortKind::from_id(&d.kind).unwrap_or(PortKind::Height);
+                widgets::row(ui, if d.label.is_empty() { &d.name } else { &d.label }, |ui| {
+                    if icon_button(ui, Icon::X, t!("Remove the input")) {
+                        remove_in = Some(d.name.clone());
+                    }
+                    ui.label(egui::RichText::new(sockets::kind_label(kind)).size(11.5).color(pal.weak));
+                    let (r, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
+                    sockets::draw(ui.painter(), r.center(), 4.0, kind, sockets::shape(kind), true, &pal);
+                });
+            }
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.menu_button(format!("{}  {}", theme::glyph(Icon::Plus), t!("Add an input")), |ui| {
+                    for k in PortKind::ALL {
+                        if ui.button(sockets::kind_label(k)).clicked() {
+                            add_in = Some(k);
+                            ui.close();
+                        }
+                    }
+                });
+            });
+            ui.add_space(4.0);
+        });
+    });
+    if let Some(name) = remove_in {
+        if let Err(e) = p.doc_op(Op::Unport { component: base.clone(), name }) {
+            p.say(e, 0.0);
+        }
+        p.end_edit();
+    }
+    if let Some(k) = add_in {
+        let taken: Vec<String> = comp.inputs.iter().map(|d| d.name.clone()).collect();
+        let mut name = k.id().to_owned();
+        let mut n = 2;
+        while taken.contains(&name) {
+            name = format!("{}_{n}", k.id());
+            n += 1;
+        }
+        let decl = PortDecl { label: super::text::name_owned(&capital(&name)), name, kind: k.id().to_owned(), optional: true, help: String::new() };
+        if let Err(e) = p.doc_op(Op::Port { component: base.clone(), decl }) {
+            p.say(e, 0.0);
+        }
+        p.end_edit();
+    }
+    // Outputs.
+    ui.add_space(12.0);
+    ui.label(egui::RichText::new(t!("Outputs").to_uppercase()).size(10.5).color(pal.weak));
+    ui.add_space(4.0);
+    let mut remove_out = None;
+    let mut add_out = false;
+    ui.add_enabled_ui(!read_only, |ui| {
+        widgets::well(ui, |ui| {
+            for o in &comp.outputs {
+                widgets::row(ui, if o.label.is_empty() { &o.name } else { &o.label }, |ui| {
+                    if comp.outputs.len() > 1 && icon_button(ui, Icon::X, t!("Remove the output")) {
+                        remove_out = Some(o.name.clone());
+                    }
+                    let from = if o.from.is_empty() { t!("nothing yet").to_owned() } else { o.from.clone() };
+                    weak_text(ui, &from, if o.from.is_empty() { pal.danger } else { pal.weak });
+                });
+            }
+            ui.add_space(4.0);
+            if ui.button(format!("{}  {}", theme::glyph(Icon::Plus), t!("Add an output"))).clicked() {
+                add_out = true;
+            }
+            ui.add_space(4.0);
+        });
+    });
+    if let Some(name) = remove_out {
+        if let Err(e) = p.doc_op(Op::Unoutput { component: base.clone(), name }) {
+            p.say(e, 0.0);
+        }
+        p.end_edit();
+    }
+    if add_out {
+        let taken: Vec<String> = comp.outputs.iter().map(|o| o.name.clone()).collect();
+        let mut name = "out".to_owned();
+        let mut n = 2;
+        while taken.contains(&name) {
+            name = format!("out_{n}");
+            n += 1;
+        }
+        if let Some(c) = p.edit().components.get_mut(&base) {
+            c.outputs.push(OutputDecl { label: capital(&name), name, from: String::new() });
+        }
+        p.end_edit();
+    }
+    // Exposed settings.
+    ui.add_space(12.0);
+    ui.label(egui::RichText::new(t!("Exposed settings").to_uppercase()).size(10.5).color(pal.weak));
+    ui.add_space(4.0);
+    if comp.exposed.is_empty() {
+        ui.add(egui::Label::new(egui::RichText::new(t!("None yet: select a node inside and click ⤴ beside one of its settings.")).size(11.5).color(pal.weak)).wrap());
+        return;
+    }
+    let mut unexpose = None;
+    let mut adv_toggle = None;
+    ui.add_enabled_ui(!read_only, |ui| {
+        widgets::well(ui, |ui| {
+            for e in &comp.exposed {
+                let top = ui.cursor().top();
+                widgets::row(ui, if e.label.is_empty() { &e.name } else { &e.label }, |ui| {
+                    if icon_button(ui, Icon::X, t!("Take it off the composite")) {
+                        unexpose = Some(e.name.clone());
+                    }
+                    let mut adv = e.advanced;
+                    if widgets::checkbox(ui, &mut adv, t!("Advanced")).changed() {
+                        adv_toggle = Some((e.clone(), adv));
+                    }
+                });
+                // What it stands for inside, under the pointer.
+                let r = Rect::from_min_max(pos2(ui.max_rect().left(), top), pos2(ui.max_rect().right(), ui.cursor().top()));
+                if ui.rect_contains_pointer(r) {
+                    p.hovered_help = Some(leak_help(&t!("Stands for {targets} inside.", targets = e.targets.join(", "))));
                 }
             }
         });
-        // Editors too tall for a row, under the well.
-        for (k, q) in blocks {
-            ui.add_space(6.0);
-            let top = ui.cursor().top();
-            block_editor(p, ui, &id, q, &params.values()[k]);
-            hover_help(p, ui, top, q.help);
+    });
+    if let Some(name) = unexpose
+        && let Err(e) = p.doc_op(Op::Unexpose { component: base.clone(), name })
+    {
+        p.say(e, 0.0);
+    }
+    if let Some((mut e, adv)) = adv_toggle {
+        e.advanced = adv;
+        // The same setting again, advanced or not (Expose replaces the one
+        // of that name).
+        if let Err(err) = p.doc_op(Op::Expose { component: base.clone(), exposed: e }) {
+            p.say(err, 0.0);
         }
     }
-    inputs_ui(p, ui, &id, spec);
+}
+
+fn capital(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_uppercase().chain(c).collect::<String>().replace(['_', '-'], " ")).unwrap_or_default()
+}
+
+/// A frame's settings: its title, colour and note, what it holds.
+fn frame_ui(p: &mut TerrainPanel, ui: &mut Ui, id: &str) {
+    let pal = Palette::of(ui);
+    let Some(f) = p.graph.frames.get(id).cloned() else { return };
+    let read_only = p.read_only();
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(theme::glyph(Icon::Frame).to_string()).size(13.0).color(pal.weak));
+        ui.add(egui::Label::new(egui::RichText::new(&f.title).size(14.0).strong()).truncate());
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if !read_only && icon_button(ui, Icon::Trash2, t!("Remove the frame (its nodes stay)")) {
+                p.unframe(id);
+            }
+        });
+    });
+    if !p.graph.frames.contains_key(id) {
+        return;
+    }
+    let n = p.frame_nodes(id).len();
+    let inner = p.frame_tree(id).len() - 1;
+    let what = if inner > 0 { t!("{n} nodes, {k} frames inside", n = n, k = inner) } else { t!("{n} nodes", n = n) };
+    ui.label(egui::RichText::new(what).size(11.5).color(pal.weak));
+    ui.add_space(10.0);
+    let mut title = f.title.clone();
+    let mut note = f.description.clone();
+    let mut colour: Option<Option<String>> = None;
+    let mut folded = f.collapsed;
+    ui.add_enabled_ui(!read_only, |ui| {
+        widgets::well(ui, |ui| {
+            widgets::row(ui, t!("Title"), |ui| {
+                if ui.add(egui::TextEdit::singleline(&mut title).desired_width(160.0)).changed() {
+                    p.set_frame(id, Some(title.clone()), None, None);
+                    p.keep_editing();
+                }
+            });
+            widgets::row(ui, t!("Colour"), |ui| {
+                for (hex, name) in super::canvas::FRAME_COLOURS.iter().rev() {
+                    let c = massif_terrain::params::parse_color(hex).unwrap_or([0.5; 3]);
+                    let swatch = Color32::from_rgb((c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8);
+                    let (r, resp) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::click());
+                    let on = f.color.as_deref() == Some(*hex);
+                    ui.painter().circle(r.center(), if on { 6.5 } else { 5.5 }, swatch, Stroke::new(if on { 2.0 } else { 0.0 }, pal.text));
+                    if resp.on_hover_text(super::text::name(name)).clicked() {
+                        colour = Some(Some((*hex).to_owned()));
+                    }
+                }
+                let (r, resp) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::click());
+                ui.painter().circle(r.center(), 5.5, pal.weak.gamma_multiply(0.4), Stroke::new(if f.color.is_none() { 2.0 } else { 1.0 }, pal.weak));
+                if resp.on_hover_text(t!("Grey")).clicked() {
+                    colour = Some(None);
+                }
+            });
+            widgets::row(ui, t!("Folded"), |ui| {
+                if widgets::switch(ui, &mut folded).changed() {
+                    p.toggle_frame(id);
+                }
+            });
+        });
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new(t!("Note").to_uppercase()).size(10.5).color(pal.weak));
+        ui.add_space(4.0);
+        if ui.add(egui::TextEdit::multiline(&mut note).desired_width(ui.available_width()).desired_rows(3).hint_text(t!("What these nodes do, for whoever reads the graph"))).changed() {
+            p.set_frame(id, None, None, Some(note.clone()));
+            p.keep_editing();
+        }
+    });
+    if let Some(c) = colour {
+        p.set_frame(id, None, Some(c), None);
+        p.end_edit();
+    }
 }
 
 /// The node's inputs: what feeds each, or what an empty one stands for.
-fn inputs_ui(p: &mut TerrainPanel, ui: &mut Ui, id: &str, spec: &'static NodeSpec) {
+fn inputs_ui(p: &mut TerrainPanel, ui: &mut Ui, id: &str, shape: &NodeShape) {
     let pal = Palette::of(ui);
-    let names: Vec<(String, String, PortKind, &'static str, &'static str)> = spec
-        .inputs
-        .iter()
-        .map(|i| (i.name.to_owned(), super::text::name(i.label).to_owned(), i.kind, i.default, i.help))
-        .chain(spec.params.iter().filter(|q| q.drivable && p.graph.nodes[id].inputs.contains_key(&format!("@{}", q.name))).map(|q| (format!("@{}", q.name), format!("◇ {}", super::text::name(q.label)), PortKind::Mask, "", q.help)))
-        .collect();
+    let mut names: Vec<(String, String, PortKind, String, String)> = shape.inputs.iter().map(|i| (i.name.clone(), i.label.clone(), i.kind, i.default.clone(), i.help.clone())).collect();
+    if let Some(spec) = shape.spec() {
+        names.extend(spec.params.iter().filter(|q| q.drivable && p.graph.nodes[id].inputs.contains_key(&format!("@{}", q.name))).map(|q| (format!("@{}", q.name), format!("◇ {}", super::text::name(q.label)), PortKind::Mask, String::new(), q.help.to_owned())));
+    }
     if names.is_empty() {
         return;
     }
@@ -277,6 +715,7 @@ fn inputs_ui(p: &mut TerrainPanel, ui: &mut Ui, id: &str, spec: &'static NodeSpe
     ui.label(egui::RichText::new(t!("Inputs").to_uppercase()).size(10.5).color(pal.weak));
     ui.add_space(4.0);
     let mut cut = None;
+    let read_only = p.read_only();
     widgets::well(ui, |ui| {
         for (name, label, kind, default, help) in &names {
             let top = ui.cursor().top();
@@ -284,20 +723,23 @@ fn inputs_ui(p: &mut TerrainPanel, ui: &mut Ui, id: &str, spec: &'static NodeSpe
             widgets::row(ui, label, |ui| {
                 match &src {
                     Some(s) => {
-                        if ui.add(egui::Button::new(egui::RichText::new(theme::glyph(Icon::X).to_string()).size(11.0)).frame(false)).on_hover_text(t!("Disconnect")).clicked() {
+                        if !read_only && ui.add(egui::Button::new(egui::RichText::new(theme::glyph(Icon::X).to_string()).size(11.0)).frame(false)).on_hover_text(t!("Disconnect")).clicked() {
                             cut = Some(name.clone());
                         }
-                        ui.label(egui::RichText::new(s).size(12.0));
+                        let from = massif_terrain::model::Source::parse(s);
+                        ui.label(egui::RichText::new(p.display_name(from.node)).size(12.0));
                     }
                     None => {
-                        let text = if default.is_empty() { t!("required") } else { super::text::name(default) };
-                        weak_text(ui, text, if default.is_empty() { pal.danger } else { pal.weak });
+                        let text = if default.is_empty() { t!("required").to_owned() } else { super::text::name_owned(default) };
+                        weak_text(ui, &text, if default.is_empty() { pal.danger } else { pal.weak });
                     }
                 }
                 let (r, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
                 sockets::draw(ui.painter(), r.center(), 4.0, *kind, if name.starts_with('@') { sockets::Shape_::Diamond } else { sockets::shape(*kind) }, src.is_some(), &pal);
             });
-            hover_help(p, ui, top, help);
+            if !help.is_empty() {
+                hover_help(p, ui, top, leak_help(help));
+            }
         }
     });
     if let Some(name) = cut {
@@ -323,7 +765,7 @@ fn output_ui(p: &mut TerrainPanel, ui: &mut Ui, id: &str, spec: &'static NodeSpe
         if let Some(params) = decoded(p, id) {
             for (k, q) in spec.params.iter().enumerate().filter(|(_, q)| q.name != "active") {
                 let top = ui.cursor().top();
-                param_row(p, ui, id, spec, q, &params.values()[k]);
+                param_row(p, ui, id, q, &params.values()[k], false);
                 hover_help(p, ui, top, q.help);
             }
         }
@@ -354,7 +796,8 @@ fn output_ui(p: &mut TerrainPanel, ui: &mut Ui, id: &str, spec: &'static NodeSpe
                             if ui.add(egui::Button::new(egui::RichText::new(theme::glyph(Icon::X).to_string()).size(11.0)).frame(false)).on_hover_text(t!("Disconnect")).clicked() {
                                 cut = Some(name.clone());
                             }
-                            ui.label(egui::RichText::new(s).size(12.0));
+                            let from = massif_terrain::model::Source::parse(s);
+                            ui.label(egui::RichText::new(p.display_name(from.node)).size(12.0));
                         }
                         None => {
                             weak_text(ui, super::text::name(default), pal.weak);
@@ -375,7 +818,9 @@ fn output_ui(p: &mut TerrainPanel, ui: &mut Ui, id: &str, spec: &'static NodeSpe
         let valid = massif_terrain::model::valid_id(new_name.trim());
         if (ui.add_enabled(valid, egui::Button::new(format!("{} {}", theme::glyph(Icon::Plus), t!("Mask")))).clicked() || (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && valid)) && valid {
             let name = format!("mask.{}", new_name.trim());
-            p.edit_layout().exposed.insert(format!("{id}.{name}"));
+            let key = p.lkey(&format!("{id}.{name}"));
+            p.edit_layout().exposed.insert(key);
+            p.end_edit();
             new_name.clear();
         }
     });
@@ -385,11 +830,12 @@ fn output_ui(p: &mut TerrainPanel, ui: &mut Ui, id: &str, spec: &'static NodeSpe
     }
 }
 
-/// Writes a setting.
+/// Writes a setting, as one of the graph's steps.
 fn set(p: &mut TerrainPanel, id: &str, q: &ParamSpec, v: &Value) {
-    let j = encode(q, v);
-    let g = p.edit();
-    g.set(id, q.name, j);
+    let value = encode(q, v);
+    if let Err(e) = p.op(Op::Set { node: id.to_owned(), param: q.name.to_owned(), value }) {
+        p.say(e, 0.0);
+    }
 }
 
 /// The value a setting takes when left out.
@@ -404,13 +850,29 @@ fn default_of(q: &ParamSpec) -> Option<Value> {
     })
 }
 
-fn param_row(p: &mut TerrainPanel, ui: &mut Ui, id: &str, spec: &'static NodeSpec, q: &'static ParamSpec, v: &Value) {
+fn param_row(p: &mut TerrainPanel, ui: &mut Ui, id: &str, q: &'static ParamSpec, v: &Value, expose_on: bool) {
     let pal = Palette::of(ui);
-    let label = super::text::name(q.label);
+    let label = super::text::name_owned(q.label);
     let driven = p.graph.nodes[id].inputs.get(&format!("@{}", q.name)).cloned();
-    let exposed = p.layout.exposed.contains(&format!("{id}.{}", q.name));
-    let _ = spec;
-    widgets::row(ui, label, |ui| {
+    let key = p.lkey(&format!("{id}.{}", q.name));
+    let exposed = p.layout.exposed.contains(&key);
+    widgets::row(ui, &label, |ui| {
+        // ⤴: shown on the composite open, standing for this setting.
+        if expose_on && ui.add(egui::Button::new(egui::RichText::new(theme::glyph(Icon::ArrowUpRight).to_string()).size(12.0).color(pal.weak)).frame(false)).on_hover_text(t!("Expose on the composite: its nodes show this setting")).clicked() {
+            let mut name: String = q.name.to_owned();
+            if let Some(c) = p.scope_kind().and_then(|k| p.graph.components.get(base_kind(k))) {
+                let mut k = 2;
+                while c.exposed.iter().any(|e| e.name == name) {
+                    name = format!("{}_{k}", q.name);
+                    k += 1;
+                }
+            }
+            let range = match q.kind {
+                ParamKind::Float { soft, .. } => Some(soft),
+                _ => None,
+            };
+            p.exposing = Some(Exposing { target: format!("{id}.{}", q.name), name, label: label.clone(), help: String::new(), category: section_label(q.section).to_owned(), advanced: q.section == Section::Advanced, range, error: None });
+        }
         // ◇: driven by a field over the map.
         if q.drivable {
             let on = driven.is_some() || exposed;
@@ -422,19 +884,19 @@ fn param_row(p: &mut TerrainPanel, ui: &mut Ui, id: &str, spec: &'static NodeSpe
             ui.painter().add(egui::Shape::convex_polygon(pts, if driven.is_some() { ink } else { Color32::TRANSPARENT }, Stroke::new(1.3, ink)));
             let tip = if driven.is_some() { t!("Driven by a field: click to stop") } else if exposed { t!("Shown as a socket on the node: connect a mask to drive it, or click to hide") } else { t!("Drive this setting by a field over the map: adds a socket on the node") };
             if resp.on_hover_text(tip).clicked() {
-                let key = format!("{id}.{}", q.name);
                 if driven.is_some() {
                     p.disconnect(id, &format!("@{}", q.name));
                     p.edit_layout().exposed.remove(&key);
                 } else if exposed {
                     p.edit_layout().exposed.remove(&key);
                 } else {
-                    p.edit_layout().exposed.insert(key);
+                    p.edit_layout().exposed.insert(key.clone());
                 }
+                p.end_edit();
             }
         }
         if let Some(src) = &driven {
-            ui.label(egui::RichText::new(t!("from {node}", node = src)).size(12.0).color(pal.accent));
+            ui.label(egui::RichText::new(t!("from {node}", node = p.display_name(massif_terrain::model::Source::parse(src).node))).size(12.0).color(pal.accent));
             return;
         }
         // The reset dot, when changed from the default.
@@ -444,7 +906,7 @@ fn param_row(p: &mut TerrainPanel, ui: &mut Ui, id: &str, spec: &'static NodeSpe
             let (r, resp) = ui.allocate_exact_size(vec2(12.0, 18.0), Sense::click());
             ui.painter().circle_filled(r.center(), 2.6, if resp.hovered() { pal.text } else { pal.accent });
             if resp.on_hover_text(t!("Back to the default")).clicked() {
-                p.edit().nodes.get_mut(id).map(|n| n.params.remove(q.name));
+                let _ = p.op(Op::Set { node: id.to_owned(), param: q.name.to_owned(), value: serde_json::Value::Null });
                 return;
             }
         }
@@ -544,6 +1006,87 @@ fn param_row(p: &mut TerrainPanel, ui: &mut Ui, id: &str, spec: &'static NodeSpe
             _ => {}
         }
     });
+}
+
+/// The dialog that exposes a setting of the composite open: its name, its
+/// words, its group, its range.
+pub fn expose_dialog(p: &mut TerrainPanel, ui: &mut Ui) {
+    let Some(mut x) = p.exposing.take() else { return };
+    let ctx = ui.ctx().clone();
+    let pal = Palette::of(ui);
+    let mut done = None;
+    let response = crate::app::modal(&ctx, "terrain expose").show(&ctx, |ui| {
+        ui.set_width(420.0);
+        ui.label(egui::RichText::new(t!("Expose a setting")).size(15.0).strong());
+        ui.add_space(2.0);
+        ui.label(egui::RichText::new(t!("Every node of this composite shows it, standing for {target} inside.", target = x.target)).size(11.5).color(pal.weak));
+        ui.add_space(10.0);
+        widgets::well(ui, |ui| {
+            widgets::row(ui, t!("Label"), |ui| {
+                ui.add(egui::TextEdit::singleline(&mut x.label).desired_width(200.0));
+            });
+            widgets::row(ui, t!("Name"), |ui| {
+                ui.add(egui::TextEdit::singleline(&mut x.name).desired_width(200.0).font(egui::TextStyle::Monospace));
+            });
+            widgets::row(ui, t!("Group"), |ui| {
+                ui.add(egui::TextEdit::singleline(&mut x.category).desired_width(200.0).hint_text(t!("Shape, Erosion…")));
+            });
+            widgets::row(ui, t!("Advanced"), |ui| {
+                widgets::switch(ui, &mut x.advanced);
+            });
+            if let Some(r) = &mut x.range {
+                widgets::row(ui, t!("Range"), |ui| {
+                    ui.add(widgets::Field::new(&mut r[1], -1e6..=1e6).text(t!("to")).width(96.0));
+                    ui.add(widgets::Field::new(&mut r[0], -1e6..=1e6).text(t!("from")).width(96.0));
+                });
+            }
+        });
+        ui.add_space(8.0);
+        ui.add(egui::TextEdit::multiline(&mut x.help).desired_width(ui.available_width()).desired_rows(2).hint_text(t!("What it changes, for whoever uses the composite")));
+        if let Some(e) = &x.error {
+            ui.add_space(6.0);
+            ui.label(egui::RichText::new(e).size(11.5).color(pal.danger));
+        }
+        ui.add_space(12.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.add(theme::primary_button(ui, t!("Expose"))).clicked() {
+                done = Some(true);
+            }
+            if widgets::button(ui, t!("Cancel")).clicked() {
+                done = Some(false);
+            }
+        });
+    });
+    if response.should_close() && done.is_none() {
+        done = Some(false);
+    }
+    match done {
+        Some(true) => {
+            let Some(kind) = p.scope_kind().map(|k| base_kind(k).to_owned()) else { return };
+            let exposed = Exposed {
+                name: x.name.trim().to_owned(),
+                label: x.label.trim().to_owned(),
+                help: x.help.trim().to_owned(),
+                targets: vec![x.target.clone()],
+                default: None,
+                min: None,
+                max: None,
+                soft: x.range.map(|r| [r[0].min(r[1]), r[0].max(r[1])]),
+                unit: None,
+                control: None,
+                category: x.category.trim().to_owned(),
+                advanced: x.advanced,
+            };
+            if let Err(e) = p.doc_op(Op::Expose { component: kind, exposed }) {
+                x.error = Some(e);
+                p.exposing = Some(x);
+            } else {
+                p.say(t!("Exposed: every node of this composite shows it."), 0.0);
+            }
+        }
+        Some(false) => {}
+        None => p.exposing = Some(x),
+    }
 }
 
 fn trn_points(n: usize) -> String {

@@ -128,54 +128,69 @@ fn settings_written_read_back() {
     }
 }
 
-/// Frames, reroute points and the view go with the graph, under its
-/// `editor`, and come back when it is read.
+/// Frames go with the graph (its own, nested), reroute points and the
+/// view under its `editor`, and come back when it is read.
 #[test]
 fn the_layout_lives_in_the_graph() {
     let mut p = cpu_panel();
     p.set_graph(example("m4-alpine-colors"));
     p.selected = vec!["alps".into(), "worn".into()];
     super::canvas::frame_selection(&mut p);
+    p.selected = vec!["worn".into()];
+    let inner = p.frame_selection().unwrap();
     p.edit_layout().reroutes.insert("worn.height".into(), vec![[10.0, 20.0]]);
     p.edit_layout().exposed.insert("out.mask.moss".into());
     let saved = p.saved();
     assert!(!saved.editor.is_null());
     let again = Graph::from_json(&saved.to_json()).unwrap();
+    assert_eq!(again.frames.len(), 2);
+    let outer = again.frames[&inner].parent.clone().expect("nested");
+    assert_eq!(again.frames[&outer].members, vec!["alps".to_owned()]);
+    assert_eq!(again.frames[&inner].members, vec!["worn".to_owned()]);
     let l = super::panel::Layout::of(&again);
-    assert_eq!(l.frames.len(), 1);
     assert_eq!(l.reroutes["worn.height"], vec![[10.0, 20.0]]);
     assert!(l.exposed.contains("out.mask.moss") && l.view.is_some());
     // The engine ignores it: same terrain.
     assert!(again.same_terrain(&example("m4-alpine-colors")));
 }
 
-/// A node renamed keeps its wires, outputs named after the dot included.
+/// A node gets a name to show; its id, which the wires name, stays.
 #[test]
-fn renaming_follows_the_wires() {
+fn names_leave_the_wires_alone() {
     let mut p = cpu_panel();
     p.set_graph(example("m4-alpine-colors"));
-    assert!(p.rename("worn", "eroded"));
+    p.set_name("worn", Some("Eroded".into()));
     let g = &p.graph;
-    assert!(!g.nodes.contains_key("worn") && g.nodes.contains_key("eroded"));
-    assert_eq!(g.nodes["slope"].inputs["height"], "eroded");
-    assert_eq!(g.nodes["terrains"].inputs["mask_2"], "eroded.talus");
-    assert!(!p.rename("eroded", "slope"), "a name taken");
-    assert!(!p.rename("eroded", "a.b"), "a name with a dot");
+    assert_eq!(g.nodes["worn"].name.as_deref(), Some("Eroded"));
+    assert_eq!(g.nodes["slope"].inputs["height"], "worn");
+    assert_eq!(p.display_name("worn"), "Eroded");
+    p.set_name("worn", Some("  ".into()));
+    assert!(p.graph.nodes["worn"].name.is_none(), "an empty name gives back the type's");
 }
 
-/// Changes undo and redo, a drag or a slider being one step.
+/// Changes undo and redo, what one gesture does (a node added and wired,
+/// a slider dragged) being one step.
 #[test]
 fn undo_and_redo() {
     let mut p = cpu_panel();
     p.set_graph(super::TerrainPanel::starter());
     let id = p.add_node("noise.fbm", [0.0, 0.0]);
     p.connect(&id, 0, "out", "height");
-    assert_eq!(p.graph.nodes["out"].inputs["height"], id, "one edit so far: the same step");
+    p.end_edit();
+    assert_eq!(p.graph.nodes["out"].inputs["height"], id);
+    for k in 0..5 {
+        p.op(massif_terrain::format::Op::Set { node: id.clone(), param: "scale".into(), value: (500 + k * 10).into() }).unwrap();
+    }
+    p.end_edit();
+    assert_eq!(p.graph.nodes[&id].params["scale"], 540);
+    assert!(p.undo());
+    assert!(!p.graph.nodes[&id].params.contains_key("scale"), "the slider's drag, as one step");
     assert!(p.undo());
     assert!(!p.graph.nodes.contains_key(&id) && !p.graph.nodes["out"].inputs.contains_key("height"));
     assert!(p.redo());
     assert!(p.graph.nodes.contains_key(&id));
-    assert!(!p.redo());
+    assert!(p.redo() && !p.redo());
+    assert_eq!(p.graph.nodes[&id].params["scale"], 540);
 }
 
 /// The search finds nodes by the start of their words, by their letters
@@ -237,4 +252,378 @@ fn a_world_of_1_2_opens_migrated() {
     doc.mark_changed();
     p.sync(&mut doc);
     assert_eq!(p.map_revision, before + 1, "a change of the map is seen");
+}
+
+/// A graph with one of Massif's mountains feeding the Map Output.
+fn mountain_graph() -> Graph {
+    Graph::from_json(
+        r#"{ "nodes": {
+            "m": { "type": "massif:mountain", "params": { "height": 220 } },
+            "worn": { "type": "erosion.thermal", "inputs": { "height": "m.height" } },
+            "out": { "type": "output.map", "inputs": { "height": "worn", "mask.snow": "m.snow" } }
+        } }"#,
+    )
+    .unwrap()
+}
+
+/// A composite opens: Massif's read only, edited as a copy that the
+/// document then holds; its inside edited goes back into the document; the
+/// breadcrumb leads out; undo comes back through the scopes.
+#[test]
+fn composites_open_and_are_edited_as_a_copy() {
+    let mut p = cpu_panel();
+    p.set_graph(mountain_graph());
+    let shape = p.shape("m").unwrap();
+    assert!(shape.is_composite());
+    assert_eq!(shape.outputs.iter().map(|o| o.name.as_str()).collect::<Vec<_>>(), ["height", "snow", "flow", "wear"]);
+    assert_eq!(shape.outputs[1].kind, massif_terrain::registry::PortKind::Mask);
+    assert!(p.open("m"));
+    assert!(p.read_only() && p.graph.nodes.contains_key("settle"));
+    assert!(p.op(massif_terrain::format::Op::Remove { node: "snow".into() }).is_err(), "Massif's composites are read only");
+    // Its columns stand for its inputs and outputs.
+    assert!(p.ids().contains(&super::shape::IN_COLUMN.to_owned()));
+    assert_eq!(p.source_of(super::shape::OUT_COLUMN, "height"), Some(("settle".to_owned(), 0)));
+    let kind = p.edit_open_copy().unwrap();
+    assert!(kind.starts_with("project:mountain"));
+    assert!(!p.read_only() && p.scope_kind() == Some(kind.as_str()));
+    let id = p.add_node("adjust.levels", [0.0, 400.0]);
+    p.connect("settle", 0, &id, "in");
+    p.connect(&id, 0, super::shape::OUT_COLUMN, "height");
+    p.end_edit();
+    p.close();
+    assert!(p.outer.is_empty());
+    let doc = p.document();
+    assert_eq!(doc.nodes["m"].kind, kind);
+    assert_eq!(doc.nodes["m"].params["height"], 220, "its settings kept");
+    let c = &doc.components[&kind];
+    assert_eq!(c.nodes[&id].inputs["in"], "settle");
+    assert_eq!(c.outputs[0].from, id);
+    // It compiles, the new node in the instance.
+    let (compiled, diags) = massif_terrain::compile::compile(&doc, massif_terrain::space::Space::new(1024), 256);
+    assert!(diags.iter().all(|d| d.severity != massif_terrain::compile::Severity::Error), "{diags:?}");
+    assert!(compiled.node(&format!("m__{id}")).is_some());
+    // The thumbnail of the instance is of what makes its first output.
+    let key = super::panel::lowered(&doc, &[], &super::eval::Shown { node: "m".into(), port: None }).unwrap();
+    assert_eq!(key.node, format!("m__{id}"));
+    // Undo goes back through the copy to Massif's own.
+    while p.undo() {}
+    assert_eq!(p.document().nodes["m"].kind, "massif:mountain");
+    assert!(p.document().components.is_empty());
+}
+
+/// Nodes gathered into a composite of the document and unfolded again:
+/// the wires through it kept, the terrain the same.
+#[test]
+fn grouping_and_ungrouping() {
+    let mut p = cpu_panel();
+    p.set_graph(example("m4-alpine-colors"));
+    let before = massif_terrain::lower::lower(&p.document()).0;
+    p.selected = vec!["alps".into(), "worn".into()];
+    let id = p.group_selected("Relief").unwrap();
+    p.end_edit();
+    assert!(!p.graph.nodes.contains_key("alps") && p.shape(&id).unwrap().is_composite());
+    assert_eq!(massif_terrain::model::Source::parse(&p.graph.nodes["slope"].inputs["height"]).node, id);
+    let (_, diags) = massif_terrain::compile::compile(&p.document(), massif_terrain::space::Space::new(1024), 256);
+    assert!(diags.iter().all(|d| d.severity != massif_terrain::compile::Severity::Error), "{diags:?}");
+    // Inside, the nodes keep their places.
+    assert!(p.open(&id));
+    assert!(p.graph.ui.contains_key("alps") && p.graph.ui.contains_key("worn"));
+    p.close();
+    p.ungroup(&id).unwrap();
+    p.end_edit();
+    assert!(!p.graph.nodes.contains_key(&id) && p.graph.nodes.len() == example("m4-alpine-colors").nodes.len());
+    let after = massif_terrain::lower::lower(&p.document()).0;
+    assert_eq!(before.nodes.len(), after.nodes.len());
+}
+
+/// Nodes copied go through the clipboard as JSON, into another document
+/// too, with the wires among them and the composites they are made of;
+/// wires from outside are left.
+#[test]
+fn copy_and_paste_between_documents() {
+    let mut a = cpu_panel();
+    a.set_graph(example("m4-alpine-colors"));
+    a.selected = vec!["alps".into()];
+    a.group_selected("Relief").unwrap();
+    a.end_edit();
+    let relief = a.selected[0].clone();
+    a.selected = vec![relief.clone(), "slope".into(), "snow".into(), "rocky".into()];
+    let text = a.copy_text().unwrap();
+    let mut b = cpu_panel();
+    b.set_graph(super::TerrainPanel::starter());
+    assert!(b.paste(&text, Some([0.0, 0.0])));
+    assert_eq!(b.selected.len(), 4);
+    let kind = &a.graph.nodes[&relief].kind;
+    assert!(b.graph.components.contains_key(kind), "the composite comes with its node");
+    let slope = b.selected.iter().find(|id| b.graph.nodes[*id].kind.starts_with("mask.slope")).unwrap().clone();
+    assert!(b.graph.nodes[&slope].inputs.is_empty(), "its input came from outside the copy");
+    let rocky = b.selected.iter().find(|id| b.graph.nodes[*id].kind.starts_with("color.mix")).unwrap();
+    assert_eq!(b.graph.nodes[rocky].inputs["mask"], slope, "wires among the copies follow them");
+    assert!(!b.paste("not nodes", None));
+    // Pasted again: fresh ids.
+    b.end_edit();
+    assert!(b.paste(&text, None));
+    assert_eq!(b.graph.nodes.len(), 1 + 8);
+}
+
+/// A node bypassed gives way to its input, in the previews too; B toggles.
+#[test]
+fn bypass_passes_the_input_on() {
+    let mut p = cpu_panel();
+    p.set_graph(example("m4-alpine-colors"));
+    p.selected = vec!["worn".into()];
+    p.toggle_bypass();
+    p.end_edit();
+    assert!(p.graph.nodes["worn"].bypass);
+    let doc = p.document();
+    let key = super::panel::lowered(&doc, &[], &super::eval::Shown { node: "worn".into(), port: None }).unwrap();
+    assert_eq!(key.node, "alps", "its thumbnail shows what passes through");
+    p.toggle_bypass();
+    assert!(!p.graph.nodes["worn"].bypass);
+    p.selected = vec!["out".into()];
+    p.toggle_bypass();
+    assert!(!p.graph.nodes["out"].bypass, "a Map Output is never left out");
+}
+
+/// Frames nest, move with what they hold, fold their nodes away, and take
+/// a node dropped in them.
+#[test]
+fn frames_nest_move_and_fold() {
+    let mut p = cpu_panel();
+    p.set_graph(example("m4-alpine-colors"));
+    p.selected = vec!["alps".into(), "worn".into(), "slope".into()];
+    let outer = p.frame_selection().unwrap();
+    p.selected = vec!["worn".into()];
+    let inner = p.frame_selection().unwrap();
+    p.end_edit();
+    assert_eq!(p.graph.frames[&inner].parent.as_deref(), Some(outer.as_str()));
+    assert_eq!(p.frame_of("worn").as_deref(), Some(inner.as_str()));
+    assert_eq!(p.frame_nodes(&outer).len(), 3);
+    let at = p.pos("worn");
+    p.move_frame(&outer, [100.0, 50.0]);
+    p.end_edit();
+    assert_eq!(p.pos("worn"), [at[0] + 100.0, at[1] + 50.0], "the inner frame's node moves with the outer frame");
+    p.toggle_frame(&outer);
+    assert_eq!(p.hidden_in("worn").as_deref(), Some(outer.as_str()));
+    assert!(p.frame_rect(&outer)[3] <= 30.0);
+    p.toggle_frame(&outer);
+    // A node dropped inside the inner frame joins it; dragged far away, it
+    // leaves every frame.
+    let r = p.frame_rect(&inner);
+    p.graph.ui.get_mut("rock").unwrap().pos = [r[0] + 10.0, r[1] + 10.0];
+    p.refile(&["rock".to_owned()]);
+    assert_eq!(p.frame_of("rock").as_deref(), Some(inner.as_str()));
+    p.graph.ui.get_mut("rock").unwrap().pos = [-5000.0, -5000.0];
+    p.refile(&["rock".to_owned()]);
+    assert!(p.frame_of("rock").is_none());
+    // Removed, its nodes go to the frame around it.
+    p.unframe(&inner);
+    assert_eq!(p.frame_of("worn").as_deref(), Some(outer.as_str()));
+}
+
+/// A link between sockets of types nothing converts is refused, saying
+/// why and which node to put between them.
+#[test]
+fn refused_links_are_explained() {
+    use massif_terrain::registry::PortKind;
+    let why = super::canvas::refusal(PortKind::Points, PortKind::Mask);
+    assert!(why.contains("Points to mask"), "{why}");
+    let why = super::canvas::refusal(PortKind::Density, PortKind::Height);
+    assert!(why.contains("volume"), "{why}");
+    assert!(PortKind::Height.conversion(PortKind::Mask).is_some());
+    // On the canvas, the graph refuses it too.
+    let mut p = cpu_panel();
+    p.set_graph(super::TerrainPanel::starter());
+    let pts = p.add_node("points.scatter", [0.0, 0.0]);
+    p.connect(&pts, 0, "out", "height");
+    p.end_edit();
+    assert!(!p.graph.nodes["out"].inputs.contains_key("height"));
+    assert!(p.notice.as_ref().is_some_and(|n| n.0.contains("Points to mask")));
+}
+
+/// A setting inside a composite of the document, exposed: every node of
+/// it shows it, and what it is set to reaches the node inside.
+#[test]
+fn settings_exposed_reach_inside() {
+    let mut p = cpu_panel();
+    p.set_graph(example("m4-alpine-colors"));
+    p.selected = vec!["alps".into(), "worn".into()];
+    let id = p.group_selected("Relief").unwrap();
+    p.end_edit();
+    p.open(&id);
+    p.sync_scope();
+    let kind = p.scope_kind().map(|k| super::panel::base_kind(k).to_owned()).unwrap();
+    let exposed = massif_terrain::model::Exposed { name: "tall".into(), label: "Height".into(), help: String::new(), targets: vec!["alps.height".into()], default: None, min: None, max: None, soft: Some([100.0, 900.0]), unit: None, control: None, category: "Shape".into(), advanced: false };
+    p.op(massif_terrain::format::Op::Expose { component: kind, exposed }).unwrap();
+    p.end_edit();
+    p.close();
+    let shape = p.shape(&id).unwrap();
+    let (_, comp, editable) = shape.composite().unwrap();
+    assert!(editable && comp.exposed.len() == 1);
+    let (_, base) = super::shape::exposed_base(&p.graph, comp, &comp.exposed[0]).unwrap();
+    let q = super::shape::exposed_spec(base, &comp.exposed[0]);
+    assert_eq!(q.name, "tall");
+    assert!(matches!(q.kind, massif_terrain::registry::ParamKind::Float { soft: [100.0, 900.0], .. }));
+    p.op(massif_terrain::format::Op::Set { node: id.clone(), param: "tall".into(), value: 640.into() }).unwrap();
+    let (flat, _) = massif_terrain::lower::lower(&p.document());
+    assert_eq!(flat.nodes[&format!("{id}__alps")].params["height"], 640);
+}
+
+/// The search offers composites beside the registry's nodes.
+#[test]
+fn the_search_offers_composites() {
+    let g = mountain_graph();
+    let hits = super::canvas::find_in(&g, "mount", None);
+    assert!(hits.iter().any(|e| e.id == "massif:mountain" && e.is_composite()));
+    let masks = super::canvas::find_in(&g, "", Some(massif_terrain::registry::PortKind::Mask));
+    assert!(masks.iter().any(|e| e.id == "massif:mountain"), "it takes an area mask");
+}
+
+/// A graph showing what the editor does: one of Massif's composites, a
+/// node bypassed, points scattered and drawn, frames in frames.
+fn showcase() -> Graph {
+    Graph::from_json(
+        r##"{ "nodes": {
+            "m": { "type": "massif:mountain", "params": { "height": 220 } },
+            "worn": { "type": "erosion.thermal", "inputs": { "height": "m.height" } },
+            "lv": { "type": "adjust.levels", "inputs": { "in": "worn" }, "bypass": true, "name": "Flatten the foot" },
+            "pts": { "type": "points.scatter", "inputs": { "density": "m.snow", "height": "worn" } },
+            "dots": { "type": "points.mask", "inputs": { "points": "pts" } },
+            "out": { "type": "output.map", "inputs": { "height": "lv", "mask.snow": "m.snow", "mask.trees": "dots" } }
+        },
+        "ui": {
+            "m": { "pos": [0, 0] }, "worn": { "pos": [228, 0] }, "lv": { "pos": [456, 0] },
+            "pts": { "pos": [228, 300] }, "dots": { "pos": [456, 300] }, "out": { "pos": [720, 0] }
+        },
+        "frames": {
+            "base": { "title": "Mountain Generation", "color": "#56c478", "members": ["m"], "rect": [-16, -40, 120, 60] },
+            "wear": { "title": "Hydraulic Erosion", "color": "#5c92ff", "parent": "base", "members": ["worn", "lv"], "rect": [212, -40, 120, 60], "description": "Wears the mountain down." },
+            "veg": { "title": "Vegetation Distribution", "color": "#34bab0", "members": ["pts", "dots"], "rect": [212, 260, 120, 60] }
+        },
+        "terrain": { "size": 2048 } }"##,
+    )
+    .unwrap()
+}
+
+/// Renders the editor as the app shows it, after `prepare`.
+fn render_editor(dir: &std::path::Path, name: &str, theme: egui::Theme, ppp: f32, engine: Arc<Engine>, graph: Graph, prepare: impl FnOnce(&mut super::TerrainPanel)) {
+    render_editor_then(dir, name, theme, ppp, engine, graph, prepare, |_| {});
+}
+
+/// [`render_editor`], `last` done once the previews are made.
+#[allow(clippy::too_many_arguments)]
+fn render_editor_then(dir: &std::path::Path, name: &str, theme: egui::Theme, ppp: f32, engine: Arc<Engine>, graph: Graph, prepare: impl FnOnce(&mut super::TerrainPanel), last: impl FnOnce(&mut super::TerrainPanel)) {
+    let mut panel = super::TerrainPanel::with_graph(engine, graph);
+    prepare(&mut panel);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).with_pixels_per_point(ppp).with_accessibility_check(false).wgpu().build_ui_state(
+        move |ui, p: &mut super::TerrainPanel| {
+            if ui.ctx().cumulative_pass_nr() == 0 {
+                crate::theme::install(ui.ctx());
+            }
+            ui.ctx().set_theme(theme);
+            p.ui(ui);
+        },
+        panel,
+    );
+    h.run_steps(3);
+    let t0 = std::time::Instant::now();
+    loop {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        if (h.state().previews_idle() && t0.elapsed().as_millis() > 400) || t0.elapsed().as_secs() > 60 {
+            break;
+        }
+    }
+    last(h.state_mut());
+    h.run_steps(3);
+    eprintln!("{name}: previews in {:.0} ms", t0.elapsed().as_secs_f64() * 1000.0);
+    h.render().unwrap().save(dir.join(format!("{name}.png"))).unwrap();
+}
+
+/// The editor of 1.2: composites, their inside, frames, refusals.
+#[test]
+fn the_editor_renders() {
+    let Some(dir) = snapshot_dir() else { return };
+    let Some(gpu) = Gpu::headless() else { return };
+    let engine = Arc::new(Engine::with_gpu(gpu, Default::default()));
+    use egui::Theme::{Dark, Light};
+    for (theme, tag) in [(Dark, "dark"), (Light, "light")] {
+        render_editor(&dir, &format!("editor-graph-{tag}"), theme, 1.0, engine.clone(), showcase(), |p| {
+            p.selected = vec!["m".into()];
+        });
+    }
+    render_editor(&dir, "editor-graph-dark-2x", Dark, 2.0, engine.clone(), showcase(), |p| {
+        p.selected = vec!["lv".into()];
+    });
+    // Inside Massif's mountain: read only, its columns at the edges.
+    render_editor(&dir, "editor-inside-massif-dark", Dark, 1.0, engine.clone(), showcase(), |p| {
+        p.open("m");
+        p.selected = vec!["erode".into()];
+    });
+    // Inside a copy: editable, nothing selected: its interface.
+    render_editor(&dir, "editor-inside-copy-light", Light, 1.0, engine.clone(), showcase(), |p| {
+        p.open("m");
+        p.edit_open_copy().unwrap();
+        p.end_edit();
+        p.selected.clear();
+    });
+    // A setting exposed from inside: the dialog.
+    render_editor(&dir, "editor-expose-dark", Dark, 1.0, engine.clone(), showcase(), |p| {
+        p.open("m");
+        p.edit_open_copy().unwrap();
+        p.end_edit();
+        p.selected = vec!["shape".into()];
+        p.exposing = Some(super::props::Exposing { target: "shape.roughness".into(), name: "rough".into(), label: "Roughness".into(), category: "Shape".into(), range: Some([0.0, 1.0]), ..Default::default() });
+    });
+    // A frame folded and selected; a refused link explained.
+    render_editor_then(
+        &dir,
+        "editor-frames-light",
+        Light,
+        1.0,
+        engine.clone(),
+        showcase(),
+        |p| {
+            p.toggle_frame("veg");
+            p.end_edit();
+            p.selected_frame = Some("wear".into());
+        },
+        |p| p.connect("pts", 0, "worn", "height"),
+    );
+}
+
+/// Inside a composite of the document, its inputs' column feeds nodes
+/// (`in.<name>`), its outputs' column takes what they make, and an input
+/// taken off is unlinked inside.
+#[test]
+fn a_composites_columns_wire_its_inside() {
+    let mut p = cpu_panel();
+    p.set_graph(example("m4-alpine-colors"));
+    p.selected = vec!["worn".into()];
+    let id = p.group_selected("Wear").unwrap();
+    p.end_edit();
+    p.open(&id);
+    let kind = p.scope_kind().unwrap().to_owned();
+    let input = massif_terrain::lower::component(&p.graph, &kind).unwrap().inputs[0].name.clone();
+    p.disconnect("worn", "height");
+    p.end_edit();
+    assert!(!p.graph.nodes["worn"].inputs.contains_key("height"));
+    p.connect(super::shape::IN_COLUMN, 0, "worn", "height");
+    p.end_edit();
+    assert_eq!(p.graph.nodes["worn"].inputs["height"], format!("in.{input}"));
+    let first = massif_terrain::lower::component(&p.graph, &kind).unwrap().outputs[0].name.clone();
+    p.disconnect(super::shape::OUT_COLUMN, &first);
+    assert!(p.source_of(super::shape::OUT_COLUMN, &first).is_none());
+    p.connect("worn", 1, super::shape::OUT_COLUMN, &first);
+    p.end_edit();
+    let c = massif_terrain::lower::component(&p.graph, &kind).unwrap().into_owned();
+    assert_eq!(c.outputs[0].from, "worn.talus");
+    // Taken off: unlinked inside.
+    p.doc_op(massif_terrain::format::Op::Unport { component: kind.clone(), name: input }).unwrap();
+    p.end_edit();
+    assert!(p.scope_kind() == Some(kind.as_str()), "still open");
+    assert!(!p.graph.nodes["worn"].inputs.contains_key("height"));
+    p.close();
+    let (_, diags) = massif_terrain::lower::lower(&p.document());
+    assert!(diags.iter().all(|d| d.severity != massif_terrain::compile::Severity::Error), "{diags:?}");
 }

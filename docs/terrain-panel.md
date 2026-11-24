@@ -10,6 +10,8 @@ graphics card, the cache). Choose it from any area's header, in the
 Terrain section. The graph is saved with the world.
 
 - [The graph](#the-graph)
+- [Composites](#composites)
+- [Frames](#frames)
 - [Sockets and wires](#sockets-and-wires)
 - [The Map Output](#the-map-output)
 - [Settings](#settings)
@@ -25,25 +27,79 @@ Terrain section. The graph is saved with the world.
   node can also be clicked or dragged from the Library.
 - **Select** a node by clicking it (Shift or ⌘ adds to the selection), or
   drag a box around nodes on the empty graph. Drag a node to move it with
-  the rest of the selection.
-- **View** a node in the viewer: double-click it, or press **V**. The eye on
-  a node says it is the one viewed. With none viewed, the viewer shows the
-  active Map Output.
+  the rest of the selection; let go, it snaps to the grid (the magnet at
+  the graph's top right places nodes freely instead).
+- **View** a node in the viewer: press **V**, or double-click it (a
+  composite opens instead). The eye on a node says it is the one viewed.
+  With none viewed, the viewer shows the active Map Output.
+- **Name** a node: its settings' **Name** gives it a name to show. Its id,
+  by which wires and scripts name it, never changes.
+- **Bypass** a node (**B**, or its menu): it is left out, and what it feeds
+  takes its first input instead. It shows dimmed, struck through, its
+  thumbnail that of what passes through.
 - **Fold** a node to its title with the chevron at its left, or **H**.
-- **Frames** gather nodes under a title: select them and press **⌘J** (or
-  the frame button). Drag a frame by its title to move it with its nodes,
-  by its corner to size it; double-click the title to rename it,
-  right-click it to remove the frame (the nodes stay).
+- **Copy and paste** nodes (⌘C, ⌘X, ⌘V): they go through the clipboard as
+  JSON, with the wires among them, their frames and the composites they are
+  made of, so that they paste into another world too. **⌘D** duplicates
+  beside them.
+- **Arrange**: the grid button lays the selected nodes (or all) out in
+  columns, from their sources to their output; a node's menu also aligns
+  the selected nodes' left edges or tops, and spaces them evenly.
 - **Move around**: scroll to pan (or drag with the middle button, or with
   Space held), pinch or ⌘-scroll to zoom. **F** shows the whole graph. A
   minimap shows at the bottom right when part of the graph is out of
   view: click or drag in it to go there.
 - **Undo** and **Redo** (⌘Z, ⌘⇧Z) take back the graph's changes while the
-  pointer is over the area; a drag or a slider moved is one step.
+  pointer is over the area, inside composites too; a drag or a slider
+  moved is one step.
+
+Every change to what the graph makes goes through the graph's own editing
+steps (add, set, link, rename, bypass, frame, group, expose…), the same a
+script or a model uses: see [Terrain graphs](terrain-graphs.md).
 
 Each node shows its result as a thumbnail, lit as the viewer lights it,
 with the range of its values (in blocks for a height, from 0 to 1 for a
 mask) when the graph is zoomed in.
+
+## Composites
+
+A composite is a node that holds a graph of its own, with inputs, outputs
+and settings it exposes. **Mountain** ships with Massif; any nodes can be
+made into one of the world's own.
+
+- **Make a composite**: select nodes and press **⌘G** (or the composite
+  button). They go inside a new composite, one node of it in their place;
+  the wires that crossed into them become its inputs, those that left them
+  its outputs. **⌘⇧G** (or **Ungroup**) puts a composite's nodes back.
+- **Open** a composite: double-click it, click the stack at its top right,
+  or **Open** in its settings. The graph shows what it holds, a breadcrumb
+  at the top (`Graph › Mountain`) leads back, as **Esc** does. Its inputs
+  and outputs are two columns at the graph's edges: wire from the inputs'
+  column, and into the outputs' column to say what each output gives.
+- **Massif's composites** open read only. **Edit a copy** makes the world's
+  own copy, under a new name, which the node then is; its settings are
+  kept.
+- **Expose a setting**: inside a composite of the world, the **⤴** beside a
+  node's setting shows it on the composite, under a label, in a group,
+  with its range, folded away as advanced if you like. Every node of the
+  composite then shows it in its settings, as a node's own.
+- With nothing selected inside, the settings show the composite itself:
+  its name, its group in the library, its inputs and outputs (add or
+  remove them) and its exposed settings.
+
+Composites are listed in the library under **Composites** and found by the
+search like any node. They are saved with the world.
+
+## Frames
+
+Frames gather nodes under a title, a colour and a note; frames sit in
+frames. Select nodes and press **⌘J** (or the frame button) to frame them,
+in the frame they all sit in. Drag a frame by its title to move it with
+everything it holds; a node dropped inside a frame joins it, dragged out it
+leaves it; a frame dropped in another sits in it. The chevron folds a frame
+to its title bar, its wires ending on it. Click its title to show its
+settings (title, colour, note, folded); double-click to rename it;
+right-click it for its colour, or to remove it (the nodes stay).
 
 ## Sockets and wires
 
@@ -57,10 +113,17 @@ What a socket carries shows in its colour and shape:
 | ● | a vector (wind, the way water flows) | indigo |
 | ■ | a terrain (the block material), one per column | green |
 | ■ | a biome of the game, one per column | teal |
+| ■ | a painted layer (its number and strength) | olive |
+| ▶ | points (where things stand) | cyan |
+| ▶ | lines (roads, rivers, walls) | orange |
+| ▶ | footprints (the ground things take) | tan |
+| ▶ | instances (what stands there) | sky blue |
+| ⬢ | a volume (caves, arches, overhangs) | violet |
 | ◆ | a setting driven by a field (see [Settings](#settings)) | amber |
 
-Circles carry values that vary smoothly, squares categories, diamonds
-settings that vary over the map. A filled socket is connected; an empty
+Circles carry values that vary smoothly, squares categories, triangles
+geometry made whole, hexagons volumes, diamonds settings that vary over the
+map. A filled socket is connected; an empty
 ring is an input left empty, which takes the default its node says.
 
 Drag from an output to an input to connect them; let go on an empty part
@@ -68,7 +131,9 @@ of the graph to add a node that takes what the wire carries, connected.
 Drag from a connected input to take its wire elsewhere. A wire between
 two different types (a height into a colour, a colour into a mask) is
 converted on its way, and a dot on the wire says so; categories are never
-made from numbers on a wire: a node says how. Right-click (or Alt-click) a
+made from numbers on a wire: a node says how. An input that cannot take
+what the wire carries turns red under it, and says why and which node to
+put between them (points into a mask: **Points to mask**). Right-click (or Alt-click) a
 wire to cut it; double-click it to add a reroute point, which drags, and
 which a right-click removes.
 
@@ -148,9 +213,14 @@ A picture comes coarse first, then sharp.
 | Key | Over the graph |
 |---|---|
 | Tab, Shift A, right-click | add a node |
-| V, double-click | view the node |
+| V | view the node |
+| double-click | open a composite, view another node |
+| Esc | leave the composite open |
+| B | bypass the selected nodes, or stop |
 | H | fold or unfold the selected nodes |
+| ⌘G, ⌘⇧G | make a composite, ungroup |
 | ⌘J | frame the selected nodes |
+| ⌘C, ⌘X, ⌘V | copy, cut, paste |
 | ⌘D | duplicate the selected nodes |
 | ⌘A | select every node |
 | Delete, Backspace, X | remove the selected nodes |

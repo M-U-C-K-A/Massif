@@ -1,6 +1,8 @@
 //! How sockets and nodes look: the colour and shape of what a socket
 //! carries (today's colours for heights, masks and colours, Blender's for
-//! the new types), and the colour of each family of nodes.
+//! the new types; circles for fields over the terrain, squares for
+//! categories, triangles for geometry made whole, hexagons for volumes),
+//! and the colour of each family of nodes.
 
 use crate::theme::{self, Palette};
 use egui::{Color32, Painter, Pos2, Shape, Stroke, pos2, vec2};
@@ -16,7 +18,10 @@ pub fn color(kind: PortKind) -> Color32 {
         PortKind::Terrain => Color32::from_rgb(99, 199, 99),
         PortKind::Biome => Color32::from_rgb(0, 214, 163),
         PortKind::Layer => Color32::from_rgb(140, 170, 90),
-        PortKind::Points | PortKind::Splines | PortKind::Footprints | PortKind::Instances => Color32::from_rgb(0, 214, 214),
+        PortKind::Points => Color32::from_rgb(0, 214, 214),
+        PortKind::Splines => Color32::from_rgb(240, 120, 70),
+        PortKind::Footprints => Color32::from_rgb(186, 150, 110),
+        PortKind::Instances => Color32::from_rgb(120, 186, 255),
         PortKind::Density => Color32::from_rgb(180, 120, 220),
     }
 }
@@ -29,16 +34,27 @@ pub fn color_on(kind: PortKind, pal: &Palette) -> Color32 {
 }
 
 /// The shape of a socket: circles carry continuous fields, squares
-/// categories, diamonds settings driven by a field.
+/// categories, diamonds settings driven by a field, triangles geometry
+/// (points, lines, footprints, instances), hexagons volumes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shape_ {
     Circle,
     Square,
     Diamond,
+    Triangle,
+    Hexagon,
 }
 
 pub fn shape(kind: PortKind) -> Shape_ {
-    if kind.categorical() { Shape_::Square } else { Shape_::Circle }
+    if kind.is_geometry() {
+        Shape_::Triangle
+    } else if kind.is_volume() {
+        Shape_::Hexagon
+    } else if kind.categorical() {
+        Shape_::Square
+    } else {
+        Shape_::Circle
+    }
 }
 
 /// A socket at `c`, `r` points across its half; `filled` when connected
@@ -58,6 +74,17 @@ pub fn draw(painter: &Painter, c: Pos2, r: f32, kind: PortKind, form: Shape_, fi
         }
         Shape_::Diamond => {
             let pts = vec![pos2(c.x, c.y - r * 1.25), pos2(c.x + r * 1.25, c.y), pos2(c.x, c.y + r * 1.25), pos2(c.x - r * 1.25, c.y)];
+            painter.add(Shape::convex_polygon(pts, inside, ring));
+        }
+        Shape_::Triangle => {
+            let pts = vec![pos2(c.x - r * 0.95, c.y - r * 1.2), pos2(c.x + r * 1.35, c.y), pos2(c.x - r * 0.95, c.y + r * 1.2)];
+            painter.add(Shape::convex_polygon(pts, inside, ring));
+        }
+        Shape_::Hexagon => {
+            let pts = (0..6).map(|k| {
+                let a = std::f32::consts::FRAC_PI_3 * k as f32;
+                pos2(c.x + r * 1.2 * a.cos(), c.y + r * 1.2 * a.sin())
+            }).collect();
             painter.add(Shape::convex_polygon(pts, inside, ring));
         }
     }

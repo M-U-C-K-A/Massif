@@ -65,6 +65,19 @@ pub fn name(english: &'static str) -> &'static str {
     t(english)
 }
 
+/// A name a document or a composite gives (not known when building):
+/// its translation when a catalogue has one, else as it is.
+pub fn name_owned(english: &str) -> String {
+    let language = i18n::current();
+    if language == Language::English {
+        return english.to_owned();
+    }
+    match catalog(language).and_then(|c| c.get(english)) {
+        Some(s) => (*s).to_owned(),
+        None => english.to_owned(),
+    }
+}
+
 /// Every key of every catalogue, for the tests.
 #[cfg(test)]
 pub fn keys(language: Language) -> Vec<String> {

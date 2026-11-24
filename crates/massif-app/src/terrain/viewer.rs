@@ -165,24 +165,27 @@ fn controls(p: &mut TerrainPanel, ui: &mut Ui) {
     }
     ui.add_space(8.0);
     // What is viewed: a node, and which of its outputs.
-    if let Some(shown) = p.shown() {
-        let spec = p.spec(&shown.node);
+    let crumbs = p.crumbs();
+    let viewed_here = p.viewed.clone().filter(|v| v.0 == crumbs).map(|v| v.1);
+    let shown = viewed_here.clone().or_else(|| if p.viewed.is_none() && crumbs.is_empty() { p.active_output().map(|node| Shown { node, port: None }) } else { None });
+    if let Some(shown) = shown.filter(|s| p.graph.nodes.contains_key(&s.node)) {
+        let shape = p.shape(&shown.node);
         let mut options: Vec<(Option<String>, String)> = Vec::new();
-        if let Some(spec) = spec {
-            if spec.is_output() {
+        if let Some(shape) = &shape {
+            if shape.is_output() {
                 options.push((None, t!("Map").to_owned()));
                 for name in p.graph.nodes[&shown.node].inputs.keys() {
-                    let label = spec.inputs.iter().find(|i| i.name == name).map_or_else(|| name.trim_start_matches("mask.").to_owned(), |i| super::text::name(i.label).to_owned());
+                    let label = shape.inputs.iter().find(|i| i.name == *name).map_or_else(|| name.trim_start_matches("mask.").to_owned(), |i| i.label.clone());
                     options.push((Some(name.clone()), label));
                 }
             } else {
-                for (k, o) in spec.outputs.iter().enumerate() {
-                    options.push((if k == 0 { None } else { Some(o.name.to_owned()) }, super::text::name(o.label).to_owned()));
+                for (k, o) in shape.outputs.iter().enumerate() {
+                    options.push((if k == 0 { None } else { Some(o.name.clone()) }, o.label.clone()));
                 }
             }
         }
         let current = options.iter().find(|o| o.0 == shown.port).map_or(String::new(), |o| o.1.clone());
-        let title = spec.map_or(shown.node.clone(), |s| super::canvas::node_title(p, &shown.node, s));
+        let title = shape.map_or(shown.node.clone(), |s| super::canvas::node_title(p, &shown.node, &s));
         ui.label(egui::RichText::new(t!("Viewing")).size(12.0).color(pal.weak));
         ui.add(egui::Label::new(egui::RichText::new(&title).size(12.0)).truncate());
         if options.len() > 1 {
@@ -193,12 +196,15 @@ fn controls(p: &mut TerrainPanel, ui: &mut Ui) {
                 }
             });
             if port != shown.port {
-                p.viewed = Some(Shown { node: shown.node.clone(), port });
+                p.viewed = Some((crumbs.clone(), Shown { node: shown.node.clone(), port }));
             }
         }
-        if p.viewed.is_some() && ui.add(egui::Button::new(theme::glyph(Icon::X).to_string()).frame(false)).on_hover_text(t!("Back to the map output")).clicked() {
-            p.viewed = None;
-        }
+    } else if let Some((_, v)) = &p.viewed {
+        ui.label(egui::RichText::new(t!("Viewing")).size(12.0).color(pal.weak));
+        ui.add(egui::Label::new(egui::RichText::new(&v.node).size(12.0)).truncate());
+    }
+    if p.viewed.is_some() && ui.add(egui::Button::new(theme::glyph(Icon::X).to_string()).frame(false)).on_hover_text(t!("Back to the map output")).clicked() {
+        p.viewed = None;
     }
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         if ui.add(theme::primary_button(ui, t!("Apply to map"))).on_hover_text(t!("Write the graph's result into the map, in one step you can undo")).clicked() {
@@ -210,7 +216,7 @@ fn controls(p: &mut TerrainPanel, ui: &mut Ui) {
             p.live_on = live;
             if let Some(l) = &p.live {
                 if live {
-                    l.set_graph(&p.graph, p.space, p.env.clone(), p.revision);
+                    l.set_graph(&p.document(), p.space, p.env.clone(), p.revision);
                 } else {
                     l.clear();
                 }

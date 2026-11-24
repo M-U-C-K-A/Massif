@@ -9,10 +9,12 @@
 #[macro_use]
 pub mod text;
 pub mod canvas;
+pub mod edit;
 pub mod eval;
 pub mod library;
 pub mod panel;
 pub mod props;
+pub mod shape;
 pub mod shade;
 pub mod sockets;
 pub mod viewer;
