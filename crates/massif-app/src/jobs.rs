@@ -127,6 +127,14 @@ pub enum Outcome {
         point: Option<massif_core::versions::SavePoint>,
         zone: bool,
     },
+    /// A region of the map written as a `.massif` of its own: where, its
+    /// tiles (wide, deep), and the version made of the map for it to come
+    /// back to (when one was needed).
+    RegionMapWritten {
+        path: PathBuf,
+        tiles: (i32, i32),
+        point: Option<massif_core::versions::SavePoint>,
+    },
     /// A contribution read and classified against the map, to review.
     Review(Box<crate::collab::ReviewReady>),
     /// The map published into its shared folder: the version, and the file.
@@ -685,6 +693,53 @@ impl Job {
                 }
                 Err(e) => Outcome::Failed(tr!("The contribution could not be put in the shared folder: {e}", e)),
             }
+        })
+    }
+
+    /// A region of the map (`snapshot`, cold, with its identifier) written
+    /// as a `.massif` of its own at `path`: the tiles around `rect` and
+    /// `border` more, with the map's versions cut to them. The version it
+    /// comes back to is the one the map stands on (`head`) if the map is as
+    /// it was then, a new one named `name` otherwise.
+    #[allow(clippy::too_many_arguments)]
+    pub fn export_region_map(ctx: &egui::Context, mut snapshot: World, dim: usize, rect: massif_core::BlockRect, border: i32, path: PathBuf, head: Option<massif_core::versions::SavePoint>, name: String) -> Job {
+        let label = tr!("Writing {file}", file = display_name(&path));
+        Job::spawn(JobKind::Export, label, None, ctx, move || {
+            let point = match head {
+                Some(h) if massif_core::versions::unchanged_since(&snapshot, &h) => None,
+                _ => {
+                    let copy = massif_core::versions::SavePoint::copy_of(&mut snapshot);
+                    let point = massif_core::versions::SavePoint::of(copy, name, massif_core::versions::now());
+                    snapshot.meta.head = Some(point.id);
+                    snapshot.points.push(point.clone());
+                    Some(point)
+                }
+            };
+            let region = massif_core::region_map::RegionOf::around(dim, rect, border);
+            let mut part = massif_core::region_map::crop(&snapshot, region);
+            part.meta.name = format!("{} ({}, {})", snapshot.meta.name, rect.x0, rect.z0);
+            match massif_format::save(&part, &path) {
+                Ok(_) => Outcome::RegionMapWritten { path, tiles: region.size(), point },
+                Err(e) => Outcome::Failed(tr!("Could not save {file}. {why}", file = display_name(&path), why = massif_format::describe(&e, &path))),
+            }
+        })
+    }
+
+    /// Another `.massif` (a region of the map, a copy of it, or another
+    /// map) read and what it changes classified against the map as it is
+    /// (`map`, a snapshot at `revision`, with its identifier).
+    pub fn merge_map(ctx: &egui::Context, path: PathBuf, map: World, revision: u64) -> Job {
+        let label = tr!("Reading “{name}”", name = display_name(&path));
+        Job::spawn(JobKind::Auto, label, None, ctx, move || {
+            let theirs = match massif_format::load(&path) {
+                Ok(w) => w,
+                Err(e) => return Outcome::Failed(tr!("{file} cannot be read: {e}", file = display_name(&path), e)),
+            };
+            let from = match massif_core::region_map::patch_from_map(&map, &theirs, massif_core::versions::now()) {
+                Ok(f) => f,
+                Err(e) => return Outcome::Failed(e.to_string()),
+            };
+            Outcome::Review(Box::new(crate::collab::ReviewReady::of(from.patch, &map, display_name(&path), from.common, revision)))
         })
     }
 

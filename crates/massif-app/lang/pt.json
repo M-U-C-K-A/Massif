@@ -3309,5 +3309,19 @@
  },
  "A contribution is under review in the Versions panel": "Uma contribuição está em revisão no painel Versões",
  "The map's versions, branches and contributions": "As versões, ramos e contribuições do mapa",
- "my-changes": "minhas-alteracoes"
+ "my-changes": "minhas-alteracoes",
+ "A map to merge into this one": "Um mapa para mesclar neste",
+ "A part of the map as a map of its own, at its place, for someone to work on in Massif: File ▸ Merge Massif Map… brings their work back, reviewed on the map before anything changes.": "Uma parte do mapa como um mapa próprio, no seu lugar, para alguém trabalhar no Massif: Arquivo ▸ Mesclar mapa Massif… traz o trabalho de volta, revisto no mapa antes que algo mude.",
+ "As": "Como",
+ "Before the region {x}, {z} went out": "Antes de a região {x}, {z} sair",
+ "Border": "Borda",
+ "Bring in the work done on a copy or a region of this map, reviewed on the map before anything changes": "Trazer o trabalho feito numa cópia ou região deste mapa, revisto no mapa antes que algo mude",
+ "Exported the region as a map of {w} × {d} tiles in {secs:.1} s. Bring the work done on it back with File ▸ Merge Massif Map…": "Região exportada como um mapa de {w} × {d} ladrilhos em {secs:.1} s. Traga o trabalho feito nela com Arquivo ▸ Mesclar mapa Massif…",
+ "Keeps a version of the map as it is, the one the work is compared with when it comes back.": "Guarda uma versão do mapa como está, com a qual o trabalho é comparado quando volta.",
+ "Merge Massif Map…": "Mesclar mapa Massif…",
+ "Save the region as a map": "Salvar a região como um mapa",
+ "That is this map's own file: pick the copy or the region to merge": "Este é o arquivo deste mapa: escolha a cópia ou a região a mesclar",
+ "The map shows": "O mapa mostra",
+ "tiles ": "ladrilhos ",
+ "{w} × {d} blocks from x {x}, z {z}, in {tw} × {td} tiles of 128 blocks with the border: only these tiles come back when it is merged.": "{w} × {d} blocos a partir de x {x}, z {z}, em {tw} × {td} ladrilhos de 128 blocos com a borda: só estes ladrilhos voltam ao mesclar."
 }

@@ -3372,5 +3372,19 @@
  },
  "A contribution is under review in the Versions panel": "Une contribution est en cours d'examen dans le panneau Versions",
  "The map's versions, branches and contributions": "Les versions, branches et contributions de la carte",
- "my-changes": "mes-changements"
+ "my-changes": "mes-changements",
+ "A map to merge into this one": "Une carte à fusionner dans celle-ci",
+ "A part of the map as a map of its own, at its place, for someone to work on in Massif: File ▸ Merge Massif Map… brings their work back, reviewed on the map before anything changes.": "Une partie de la carte comme une carte à part, à sa place, pour que quelqu’un y travaille dans Massif : Fichier ▸ Fusionner une carte Massif… ramène son travail, examiné sur la carte avant que rien ne change.",
+ "As": "Comme",
+ "Before the region {x}, {z} went out": "Avant l’envoi de la région {x}, {z}",
+ "Border": "Bordure",
+ "Bring in the work done on a copy or a region of this map, reviewed on the map before anything changes": "Ramener le travail fait sur une copie ou une région de cette carte, examiné sur la carte avant que rien ne change",
+ "Exported the region as a map of {w} × {d} tiles in {secs:.1} s. Bring the work done on it back with File ▸ Merge Massif Map…": "Région exportée comme une carte de {w} × {d} tuiles en {secs:.1} s. Ramenez le travail fait dessus avec Fichier ▸ Fusionner une carte Massif…",
+ "Keeps a version of the map as it is, the one the work is compared with when it comes back.": "Garde une version de la carte telle qu’elle est, celle à laquelle le travail est comparé à son retour.",
+ "Merge Massif Map…": "Fusionner une carte Massif…",
+ "Save the region as a map": "Enregistrer la région comme une carte",
+ "That is this map's own file: pick the copy or the region to merge": "C’est le fichier de cette carte : choisissez la copie ou la région à fusionner",
+ "The map shows": "La carte montre",
+ "tiles ": "tuiles ",
+ "{w} × {d} blocks from x {x}, z {z}, in {tw} × {td} tiles of 128 blocks with the border: only these tiles come back when it is merged.": "{w} × {d} blocs depuis x {x}, z {z}, en {tw} × {td} tuiles de 128 blocs avec la bordure : seules ces tuiles reviennent à la fusion."
 }

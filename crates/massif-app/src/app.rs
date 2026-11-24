@@ -2606,6 +2606,28 @@ impl MassifApp {
         if name.is_empty() { tr!("my-changes").to_owned() } else { name }
     }
 
+    /// Pick another `.massif` to merge into the map: a region of it sent
+    /// to someone (File ▸ Export Region… as a Massif map), a copy of it, or
+    /// another map. What it changes is reviewed in the Versions panel.
+    fn merge_map(&mut self, ctx: &egui::Context) {
+        if self.doc.read_only.is_some() {
+            return;
+        }
+        let Some(path) = rfd::FileDialog::new().set_title(tr!("A map to merge into this one")).add_filter("Massif", &["massif"]).pick_file() else {
+            return;
+        };
+        if self.doc.path.as_ref().is_some_and(|p| *p == path) {
+            self.say(ctx, tr!("That is this map's own file: pick the copy or the region to merge").to_owned(), true, None);
+            return;
+        }
+        if self.doc.world.meta.map_id.is_none() {
+            self.doc.world.map_id();
+            self.doc.mark_changed();
+        }
+        let snapshot = self.doc.world.snapshot();
+        self.jobs.push(Job::merge_map(ctx, path, snapshot, self.doc.revision).on(self.doc.generation));
+    }
+
     /// Pick a contribution to review: a `.massifpatch`, or the zone.json
     /// (or any file) of a zone brought back from another tool, whose
     /// images are read for Import Mask's dialog to review them.
@@ -2691,7 +2713,7 @@ impl MassifApp {
                 *v == crate::collab::Verdict::Accepted && a.tiles.iter().any(|&(p, _)| fresh.items.iter().any(|it| it.dim == a.dim && it.pos == p && it.status == massif_core::merge::Status::Conflict))
             });
             if worse {
-                let ready = crate::collab::ReviewReady { patch: r.patch.clone(), review: fresh, registry: r.registry.clone(), added: r.added.clone(), source: r.source.clone(), base_known: r.base_known, revision: self.doc.revision };
+                let ready = crate::collab::ReviewReady { patch: r.patch.clone(), review: fresh, registry: r.registry.clone(), added: r.added.clone(), source: r.source.clone(), base_known: r.base_known, revision: self.doc.revision, pictures: r.take_pictures() };
                 self.versions.reviewing = Some(crate::collab::Reviewing::new(ready));
                 self.say(ctx, tr!("The map changed during the review and some accepted tiles are in conflict now: look at them again"), true, None);
                 return;
@@ -2704,7 +2726,7 @@ impl MassifApp {
         let from = if m.kind == massif_core::patch::Kind::External {
             tr!("the zone").to_owned()
         } else if m.author.is_empty() {
-            m.base.name.clone()
+            r.source.clone()
         } else {
             m.author.clone()
         };
@@ -3353,6 +3375,18 @@ impl MassifApp {
                     self.task_done(ctx, Cue::Ready, tr!("Region exported"), &msg, secs);
                     self.say(ctx, msg, false, Some(dir));
                 }
+                Outcome::RegionMapWritten { path, tiles, point } => {
+                    if let Some(point) = point
+                        && !other_map
+                    {
+                        self.doc.world.meta.head = Some(point.id);
+                        self.doc.world.points.push(point);
+                        self.doc.mark_changed();
+                    }
+                    let msg = tr!("Exported the region as a map of {w} × {d} tiles in {secs:.1} s. Bring the work done on it back with File ▸ Merge Massif Map…", w = tiles.0, d = tiles.1, secs);
+                    self.task_done(ctx, Cue::Ready, tr!("Region exported"), &msg, secs);
+                    self.say(ctx, msg, false, path.parent().map(|p| p.to_path_buf()));
+                }
                 Outcome::Review(ready) => {
                     if !other_map {
                         let r = crate::collab::Reviewing::new(*ready);
@@ -3751,6 +3785,7 @@ impl MassifApp {
             Command::Open => self.request(ctx, Pending::Open(None)),
             Command::ImportWorld => self.home_action(ctx, HomeAction::Import),
             Command::ImportPack => self.pick_pack(),
+            Command::MergeMap => self.merge_map(ctx),
             Command::ExportPack => {
                 let name = self.doc.world.meta.name.clone();
                 self.pack_dialog = Some(crate::pack_share::PackDialog::Export(Box::new(crate::pack_share::ExportForm::new(&self.doc.world.registry, &self.settings.pack_author, &name).with_gradients(&self.doc.world.meta.gradients))));
@@ -5667,6 +5702,20 @@ impl MassifApp {
                             });
                             let snapshot = self.doc.world.snapshot();
                             self.jobs.push(Job::export_region(ctx, snapshot, self.doc.dim, rect, folder.join(name), parts, review).on(self.doc.generation));
+                        }
+                    }
+                    Choice::ExportMap(rect, border) => {
+                        let name = massif_core::mask::file_safe(&format!("{} region {} {}", self.doc.world.meta.name, rect.x0, rect.z0));
+                        if let Some(path) = rfd::FileDialog::new().set_title(tr!("Save the region as a map")).set_file_name(format!("{name}.massif")).add_filter("Massif", &["massif"]).save_file() {
+                            keep = false;
+                            if self.doc.world.meta.map_id.is_none() {
+                                self.doc.world.map_id();
+                                self.doc.mark_changed();
+                            }
+                            let head = self.doc.world.meta.head.and_then(|h| self.doc.world.points.iter().find(|p| p.id == h)).cloned();
+                            let point = tr!("Before the region {x}, {z} went out", x = rect.x0, z = rect.z0);
+                            let snapshot = self.doc.world.snapshot();
+                            self.jobs.push(Job::export_region_map(ctx, snapshot, self.doc.dim, rect, border, path, head, point).on(self.doc.generation));
                         }
                     }
                 }
@@ -18718,6 +18767,149 @@ mod tests {
         assert_eq!(h.state().doc.history.undo_count(), undo_before + 1);
         h.state_mut().undo(&ctx);
         assert!((height_at(&h, hill_x, hill_z) - before).abs() < 0.01);
+        std::fs::remove_dir_all(&out).unwrap();
+    }
+
+    /// A region goes to a collaborator as a map of its own and is merged
+    /// back with File ▸ Merge Massif Map…: Export Region as a Massif map
+    /// keeps a version and writes the tiles around the blocks with a border;
+    /// the collaborator raises land and paints it with a terrain of their
+    /// own, and changes a tile the owner changed too. The review shows the
+    /// changed tiles, the conflict, Before and After; the conflict is
+    /// rejected, the rest applied as one step to undo and a version, the
+    /// new terrain added to the map (renders with MASSIF_SNAPSHOT_DIR).
+    #[test]
+    fn a_region_goes_out_as_a_map_and_merges_back() {
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let out = std::env::temp_dir().join(format!("massif-region-map-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        std::fs::create_dir_all(&out).unwrap();
+        let path = out.join("Jack.massif");
+        let wait = |h: &mut egui_kittest::Harness<'static, MassifApp>| {
+            let started = std::time::Instant::now();
+            while !h.state().jobs.is_empty() {
+                assert!(started.elapsed().as_secs() < 60, "the job timed out");
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            h.run_steps(3);
+        };
+        let set = |world: &mut World, rect: massif_core::BlockRect, height: f32, terrain: Option<u16>| {
+            let mut history = massif_core::history::History::new(4);
+            history.begin("set", 0);
+            history.edit(world, 0).par_tiles(rect.tiles(), rect, false, |_, clip, tile| {
+                for z in clip.z0..clip.z1 {
+                    for x in clip.x0..clip.x1 {
+                        let i = massif_core::coords::local_index(x, z);
+                        tile.top.set(i, height);
+                        if let Some(t) = terrain {
+                            tile.terrain.set(i, t);
+                        }
+                    }
+                }
+            });
+            history.commit();
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let ctx = h.ctx.clone();
+        let mut areas = Vec::new();
+        h.state().layout.current().root.areas(&mut areas);
+        let panel = areas.iter().find(|a| a.1 != EditorKind::Map).expect("an area beside the map").0;
+        h.state_mut().layout.current_mut().root.set_editor(panel, EditorKind::Versions);
+        let rect = massif_core::BlockRect::new(-200, -150, 100, 110);
+        {
+            let app = h.state_mut();
+            app.doc.world.map_id();
+            let snapshot = app.doc.world.snapshot();
+            app.jobs.push(Job::export_region_map(&ctx, snapshot, app.doc.dim, rect, 1, path.clone(), None, "Before the region went out".into()));
+        }
+        wait(&mut h);
+        assert_eq!(h.state().doc.world.points.len(), 1, "a version to come back to");
+        let sent = h.state().doc.world.points[0].id;
+        // The collaborator's side: the region as a map of its own.
+        let mut theirs = massif_format::load(&path).unwrap();
+        let region = theirs.meta.region.expect("a region of the map");
+        assert_eq!(region.tiles, [-3, -3, 1, 1]);
+        assert_eq!(theirs.meta.map_id, h.state().doc.world.meta.map_id);
+        assert_eq!(theirs.meta.head, Some(sent));
+        assert!(theirs.dims[0].ground().positions().all(|p| region.contains(0, p)));
+        let moss = theirs.registry.terrains.len() as u16;
+        theirs.registry.terrains.push(massif_core::registry::TerrainDef { name: "Jack's moss".into(), ..theirs.registry.terrains[1].clone() });
+        let hill = massif_core::BlockRect::new(20, 20, 60, 60);
+        set(&mut theirs, hill, 150.0, Some(moss));
+        let both = massif_core::BlockRect::new(-180, -100, -160, -80);
+        set(&mut theirs, both, 120.0, None);
+        massif_format::save(&theirs.snapshot(), &path).unwrap();
+        // The owner changed one of its tiles meanwhile.
+        {
+            let app = h.state_mut();
+            app.doc.history.begin("flatten", app.doc.dim);
+            let mut edit = app.doc.history.edit(&mut app.doc.world, 0);
+            edit.par_tiles(both.tiles(), both, false, |_, clip, tile| {
+                for z in clip.z0..clip.z1 {
+                    for x in clip.x0..clip.x1 {
+                        tile.top.set(massif_core::coords::local_index(x, z), 10.0);
+                    }
+                }
+            });
+            app.doc.commit();
+        }
+        let height_at = |h: &egui_kittest::Harness<'static, MassifApp>, x: i32, z: i32| massif_core::ops::height_at(h.state().doc.dimension(), 0, x, z, massif_core::ops::Surface::Top).unwrap();
+        let before = height_at(&h, 40, 40);
+        let undo_before = h.state().doc.history.undo_count();
+        {
+            let app = h.state_mut();
+            let snapshot = app.doc.world.snapshot();
+            app.jobs.push(Job::merge_map(&ctx, path.clone(), snapshot, app.doc.revision).on(app.doc.generation));
+        }
+        wait(&mut h);
+        assert_eq!(h.state().doc.history.undo_count(), undo_before, "nothing changed yet");
+        let r = h.state_mut().versions.reviewing.as_mut().expect("the review opens");
+        assert!(r.base_known, "the version the region went out at");
+        assert_eq!(r.added, ["Jack's moss"]);
+        let (_, changed, conflicts) = r.review.counts();
+        assert_eq!((changed, conflicts), (1, 1), "the hill's tile, and the tile both changed");
+        assert_eq!(r.review.areas.len(), 2);
+        let conflict = r.review.areas.iter().position(|a| a.status() == massif_core::merge::Status::Conflict).unwrap();
+        let first = r.review.areas[1 - conflict].rect();
+        h.state_mut().versions.reviewing.as_mut().unwrap().selected = Some(1 - conflict);
+        h.state_mut().maps.values_mut().for_each(|v| v.glide_to([first[0] - 300, first[1] - 300, first[2] + 300, first[3] + 300]));
+        h.run_steps(40);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("merge-map-before.png")).unwrap();
+        }
+        h.state_mut().versions.reviewing.as_mut().unwrap().after = true;
+        h.run_steps(4);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("merge-map-after.png")).unwrap();
+            h.state_mut().layout.toggle_maximize(panel);
+            h.run_steps(3);
+            h.render().unwrap().save(dir.join("merge-map-panel.png")).unwrap();
+            h.state_mut().layout.toggle_maximize(panel);
+            h.run_steps(2);
+        }
+        {
+            let r = h.state_mut().versions.reviewing.as_mut().unwrap();
+            r.verdicts[conflict] = crate::collab::Verdict::Rejected;
+            r.accept_clean();
+        }
+        h.state_mut().review_action(&ctx, crate::collab::ReviewAction::Apply);
+        wait(&mut h);
+        assert!(h.state().versions.reviewing.is_none());
+        assert!((height_at(&h, 40, 40) - 150.0).abs() < 0.01, "the hill came in");
+        assert!((height_at(&h, -170, -90) - 10.0).abs() < 0.01, "the owner's tile kept");
+        let world = &h.state().doc.world;
+        let moss = world.registry.terrain_by_name("Jack's moss").expect("the new terrain came in");
+        let tile = h.state().doc.dimension().ground().view(TilePos::containing(40, 40)).unwrap();
+        assert_eq!(tile.terrain.get(massif_core::coords::local_index(40, 40)), moss.0);
+        assert_eq!(world.points.len(), 2);
+        assert_eq!(world.points[1].name, "Merged from Jack.massif");
+        assert_eq!(world.points[1].parents, vec![sent], "the region stood on the version it went out at");
+        // One step to undo.
+        assert_eq!(h.state().doc.history.undo_count(), undo_before + 1);
+        h.state_mut().undo(&ctx);
+        assert!((height_at(&h, 40, 40) - before).abs() < 0.01);
         std::fs::remove_dir_all(&out).unwrap();
     }
 

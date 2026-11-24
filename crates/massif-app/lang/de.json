@@ -3312,5 +3312,19 @@
  },
  "A contribution is under review in the Versions panel": "Ein Beitrag wird im Versionen-Bereich geprüft",
  "The map's versions, branches and contributions": "Versionen, Zweige und Beiträge der Karte",
- "my-changes": "meine-aenderungen"
+ "my-changes": "meine-aenderungen",
+ "A map to merge into this one": "Eine Karte, die in diese zusammengeführt wird",
+ "A part of the map as a map of its own, at its place, for someone to work on in Massif: File ▸ Merge Massif Map… brings their work back, reviewed on the map before anything changes.": "Ein Teil der Karte als eigene Karte, an seinem Platz, damit jemand in Massif daran arbeitet: Datei ▸ Massif-Karte zusammenführen… holt die Arbeit zurück, auf der Karte geprüft, bevor sich etwas ändert.",
+ "As": "Als",
+ "Before the region {x}, {z} went out": "Bevor die Region {x}, {z} hinausging",
+ "Border": "Rand",
+ "Bring in the work done on a copy or a region of this map, reviewed on the map before anything changes": "Die Arbeit an einer Kopie oder Region dieser Karte hereinholen, auf der Karte geprüft, bevor sich etwas ändert",
+ "Exported the region as a map of {w} × {d} tiles in {secs:.1} s. Bring the work done on it back with File ▸ Merge Massif Map…": "Region als Karte von {w} × {d} Kacheln in {secs:.1} s exportiert. Die Arbeit daran mit Datei ▸ Massif-Karte zusammenführen… zurückholen",
+ "Keeps a version of the map as it is, the one the work is compared with when it comes back.": "Behält eine Version der Karte, wie sie ist: Mit ihr wird die Arbeit bei der Rückkehr verglichen.",
+ "Merge Massif Map…": "Massif-Karte zusammenführen…",
+ "Save the region as a map": "Die Region als Karte speichern",
+ "That is this map's own file: pick the copy or the region to merge": "Das ist die Datei dieser Karte: Wähle die Kopie oder Region zum Zusammenführen",
+ "The map shows": "Die Karte zeigt",
+ "tiles ": "Kacheln ",
+ "{w} × {d} blocks from x {x}, z {z}, in {tw} × {td} tiles of 128 blocks with the border: only these tiles come back when it is merged.": "{w} × {d} Blöcke ab x {x}, z {z}, in {tw} × {td} Kacheln zu 128 Blöcken mit dem Rand: Nur diese Kacheln kommen beim Zusammenführen zurück."
 }

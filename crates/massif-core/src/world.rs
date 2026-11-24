@@ -58,6 +58,10 @@ pub struct WorldMeta {
     /// last, the parent of the next one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub head: Option<crate::versions::Id>,
+    /// The part of another map this map was cut from (File ▸ Export
+    /// Region… as a Massif map): merged back, only these tiles are its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<crate::region_map::RegionOf>,
 }
 
 impl Default for WorldMeta {
@@ -78,6 +82,7 @@ impl Default for WorldMeta {
             references: Vec::new(),
             map_id: None,
             head: None,
+            region: None,
         }
     }
 }

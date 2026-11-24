@@ -16,6 +16,9 @@ pub enum Command {
     NewWorld,
     Open,
     ImportWorld,
+    /// Another `.massif` (a part of the map sent to someone, or a copy of
+    /// it) merged into the map, reviewed first (see `collab`).
+    MergeMap,
     ImportPack,
     ExportPack,
     FromHeightMap,
@@ -240,6 +243,7 @@ pub fn menus(state: &State) -> Vec<Menu> {
         item(Command::NewWorld, Icon::FilePlus2, tr!("New World…"), free),
         item(Command::Open, Icon::FolderOpen, tr!("Open…"), free),
         item(Command::ImportWorld, Icon::Import, tr!("Import WorldPainter World…"), free),
+        tipped(Command::MergeMap, Icon::GitMerge, tr!("Merge Massif Map…"), map, tr!("Bring in the work done on a copy or a region of this map, reviewed on the map before anything changes")),
         item(Command::FromHeightMap, Icon::ImageUp, tr!("New World from Height Map…"), free),
         item(Command::FromRealPlace, Icon::Earth, tr!("New World from a Real Place…"), free),
         Entry::Submenu {
@@ -531,6 +535,7 @@ mod tests {
                 "New World…",
                 "Open…",
                 "Import WorldPainter World…",
+                "Merge Massif Map…",
                 "New World from Height Map…",
                 "New World from a Real Place…",
                 "Alps.massif",
@@ -563,7 +568,7 @@ mod tests {
     fn what_can_be_used_when() {
         let recent = [PathBuf::from("/maps/Alps.massif")];
         let home = menus(&State { editor: false, ..state(&recent) });
-        for command in [Command::Save, Command::SaveAs, Command::Export, Command::ExportPack, Command::ExportHeightMap, Command::ExportRegion, Command::Undo, Command::Ores, Command::Analyse, Command::HomeScreen, Command::WholeMap(WholeOp::Rivers), Command::Caves, Command::ImportMask, Command::RealTerrain, Command::SavePoint] {
+        for command in [Command::Save, Command::SaveAs, Command::Export, Command::ExportPack, Command::ExportHeightMap, Command::ExportRegion, Command::Undo, Command::Ores, Command::Analyse, Command::HomeScreen, Command::WholeMap(WholeOp::Rivers), Command::Caves, Command::ImportMask, Command::RealTerrain, Command::SavePoint, Command::MergeMap] {
             assert!(!enabled(&home, &command), "{command:?} needs a map");
         }
         for command in [Command::NewWorld, Command::Open, Command::ImportWorld, Command::ImportPack, Command::FromRealPlace, Command::OpenRecent(recent[0].clone()), Command::Settings, Command::Help, Command::About, Command::Quit, Command::Theme(ThemeChoice::Light)] {

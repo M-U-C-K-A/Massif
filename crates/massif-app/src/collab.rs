@@ -306,6 +306,73 @@ pub struct ReviewReady {
     pub source: String,
     pub base_known: bool,
     pub revision: u64,
+    /// The changed tiles as they are in the contribution, seen from above:
+    /// by dimension, the picture of the tiles (west, north, east, south,
+    /// inclusive) around them, for the 2D map's After.
+    pub pictures: Vec<AfterPicture>,
+}
+
+/// The tiles of one dimension as a contribution makes them, seen from
+/// above (see [`after_pictures`]).
+pub struct AfterPicture {
+    pub dim: usize,
+    pub image: image::RgbImage,
+    /// The tiles it covers: west, north, east, south, inclusive.
+    pub tiles: [i32; 4],
+}
+
+/// The longest side of an After picture: two blocks a pixel on a region of
+/// 64 tiles across, one past that.
+const AFTER_MAX: u32 = 4096;
+
+/// The tiles of each dimension `review` has areas in, as `patch` makes them
+/// over `map` (cold), seen from above.
+pub fn after_pictures(map: &massif_core::World, patch: &Patch, registry: &Registry, review: &Review) -> Vec<AfterPicture> {
+    let mut dims: Vec<usize> = review.areas.iter().map(|a| a.dim).collect();
+    dims.sort_unstable();
+    dims.dedup();
+    if dims.is_empty() {
+        return Vec::new();
+    }
+    let take = review.areas.iter().flat_map(|a| a.tiles.iter().map(move |t| (a.dim, t.0))).collect();
+    let (meta, _, all) = massif_core::merge::apply(map, patch, &Decision { take, settings: HashSet::new() });
+    let world = massif_core::World { meta, registry: registry.clone(), dims: all, points: Vec::new() };
+    let mut out = Vec::new();
+    for dim in dims {
+        let (mut x0, mut z0, mut x1, mut z1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+        for p in review.areas.iter().filter(|a| a.dim == dim).flat_map(|a| a.tiles.iter().map(|t| t.0)) {
+            (x0, z0, x1, z1) = (x0.min(p.x), z0.min(p.z), x1.max(p.x), z1.max(p.z));
+        }
+        let Some(d) = world.dims.get(dim) else { continue };
+        let inside = |p: &TilePos| p.x >= x0 && p.x <= x1 && p.z >= z0 && p.z <= z1;
+        let mut levels = Vec::new();
+        for level in &d.levels {
+            let mut l = massif_core::level::Level::new(level.id, level.name.clone(), level.kind);
+            l.visible = level.visible;
+            for (pos, blob) in level.blobs().unwrap_or_default().into_iter().filter(|(p, _)| inside(p)) {
+                l.insert_blob(pos, blob);
+            }
+            levels.push(l);
+        }
+        // The corners of the box, so that the picture covers it whole even
+        // where the contribution took tiles away.
+        let mut part = massif_core::world::Dimension::from_levels(d.kind, d.min_y, d.max_y, levels);
+        for (x, z) in [(x0, z0), (x1, z1)] {
+            let ground = part.ground_mut();
+            if !ground.contains(TilePos::new(x, z)) {
+                ground.insert(TilePos::new(x, z), massif_core::tile::Tile::ground(world.meta.sea_level as f32 - 40.0, 0, -1));
+            }
+        }
+        for (pos, chunk) in d.voxels.iter().filter(|(p, _)| inside(&p.tile())) {
+            part.voxels.insert(pos, chunk.clone());
+        }
+        let blocks = ((x1 - x0 + 1).max(z1 - z0 + 1) * TILE_SIZE) as u32;
+        let cropped = massif_core::World { meta: world.meta.clone(), registry: world.registry.clone(), dims: vec![part.snapshot()], points: Vec::new() };
+        if let Some(image) = massif_core::thumbnail::render(&cropped, blocks.min(AFTER_MAX)) {
+            out.push(AfterPicture { dim, image, tiles: [x0, z0, x1, z1] });
+        }
+    }
+    out
 }
 
 impl ReviewReady {
@@ -315,7 +382,9 @@ impl ReviewReady {
         let mut registry = map.registry.clone();
         let (patch, remap) = patch.remapped(&mut registry);
         let review = massif_core::merge::classify(map, &patch);
+        let pictures = after_pictures(map, &patch, &registry, &review);
         Self {
+            pictures,
             patch: Arc::new(patch),
             review,
             registry,
@@ -347,6 +416,10 @@ pub struct Reviewing {
     pub revision: u64,
     /// The area last picked in the list.
     pub selected: Option<usize>,
+    /// The 2D map shows the land as the merge would make it (the areas
+    /// not rejected), rather than as it is.
+    pub after: bool,
+    pictures: Vec<AfterPicture>,
     overlay: Option<(egui::TextureHandle, [i32; 4], u64)>,
 }
 
@@ -363,7 +436,7 @@ pub enum ReviewAction {
 
 impl Reviewing {
     pub fn new(ready: ReviewReady) -> Self {
-        let ReviewReady { patch, review, registry, added, source, base_known, revision } = ready;
+        let ReviewReady { patch, review, registry, added, source, base_known, revision, pictures } = ready;
         Self {
             verdicts: vec![Verdict::Pending; review.areas.len()],
             settings: vec![false; review.settings.len()],
@@ -375,6 +448,8 @@ impl Reviewing {
             base_known,
             revision,
             selected: None,
+            after: false,
+            pictures,
             overlay: None,
         }
     }
@@ -430,6 +505,7 @@ impl Reviewing {
             let mut h = std::collections::hash_map::DefaultHasher::new();
             dim.hash(&mut h);
             self.selected.hash(&mut h);
+            self.after.hash(&mut h);
             pal.accent.to_array().hash(&mut h);
             pal.dark.hash(&mut h);
             for v in &self.verdicts {
@@ -493,8 +569,71 @@ impl Reviewing {
                 }
             }
         }
+        if self.after && self.pictures.iter().any(|p| p.dim == dim) {
+            return self.after_overlay(ctx, dim, key, &pal);
+        }
         let image = egui::ColorImage::new([w, h], pixels);
         let texture = ctx.load_texture("contribution review", image, egui::TextureOptions::NEAREST);
+        let rect = [x0 * TILE_SIZE, z0 * TILE_SIZE, (x1 + 1) * TILE_SIZE, (z1 + 1) * TILE_SIZE];
+        self.overlay = Some((texture.clone(), rect, key));
+        Some((texture, rect))
+    }
+
+    /// Its After pictures, handed to a review classified again.
+    pub fn take_pictures(&mut self) -> Vec<AfterPicture> {
+        std::mem::take(&mut self.pictures)
+    }
+
+    /// Whether tile `pos` of dimension `dim` comes from the contribution
+    /// as decided so far: an area not rejected (pending ones shown as they
+    /// would come), or a tile chosen from theirs in a settled conflict.
+    fn shows_theirs(&self, dim: usize, pos: TilePos) -> Option<Status> {
+        let i = self.review.areas.iter().position(|a| a.dim == dim && a.tiles.iter().any(|t| t.0 == pos))?;
+        let status = self.review.areas[i].tiles.iter().find(|t| t.0 == pos)?.1;
+        match &self.verdicts[i] {
+            Verdict::Rejected => None,
+            Verdict::Resolved(theirs) => theirs.contains(&pos).then_some(status),
+            Verdict::Pending | Verdict::Accepted => Some(status),
+        }
+    }
+
+    /// The After of dimension `dim`: the contribution's land over the tiles
+    /// it would bring, outlined in the colour of what they are; the map
+    /// shows through elsewhere.
+    fn after_overlay(&mut self, ctx: &egui::Context, dim: usize, key: u64, pal: &Palette) -> Option<(egui::TextureHandle, [i32; 4])> {
+        let picture = self.pictures.iter().find(|p| p.dim == dim)?;
+        let [x0, z0, x1, z1] = picture.tiles;
+        let (w, h) = (picture.image.width() as usize, picture.image.height() as usize);
+        let (tw, th) = ((x1 - x0 + 1) as f32, (z1 - z0 + 1) as f32);
+        // Each pixel's tile, and whether it lies on that tile's edge.
+        let tile_of = |px: usize, size: usize, tiles: f32| -> (i32, bool) {
+            let f = (px as f32 + 0.5) * tiles / size as f32;
+            let per = size as f32 / tiles;
+            let within = (f.fract() * per).min((1.0 - f.fract()) * per);
+            (f.floor() as i32, within < 1.0)
+        };
+        let mut pixels = vec![Color32::TRANSPARENT; w * h];
+        for py in 0..h {
+            let (tz, edge_z) = tile_of(py, h, th);
+            for px in 0..w {
+                let (tx, edge_x) = tile_of(px, w, tw);
+                let pos = TilePos::new(x0 + tx, z0 + tz);
+                let Some(status) = self.shows_theirs(dim, pos) else { continue };
+                let c = match status {
+                    Status::New => pal.success,
+                    Status::Changed | Status::Same => pal.accent,
+                    Status::Conflict => pal.danger,
+                };
+                pixels[py * w + px] = if edge_x || edge_z {
+                    c
+                } else {
+                    let p = picture.image.get_pixel(px as u32, py as u32).0;
+                    Color32::from_rgb(p[0], p[1], p[2])
+                };
+            }
+        }
+        let image = egui::ColorImage::new([w, h], pixels);
+        let texture = ctx.load_texture("contribution after", image, egui::TextureOptions::LINEAR);
         let rect = [x0 * TILE_SIZE, z0 * TILE_SIZE, (x1 + 1) * TILE_SIZE, (z1 + 1) * TILE_SIZE];
         self.overlay = Some((texture.clone(), rect, key));
         Some((texture, rect))
@@ -560,6 +699,16 @@ impl Reviewing {
             }
         });
         ui.add_space(4.0);
+        if !self.pictures.is_empty() {
+            well(ui, |ui| {
+                row(ui, tr!("The map shows"), |ui| {
+                    if let Some(i) = button_group(ui, "review before after", &[tr!("Before"), tr!("After")], &[!self.after, self.after]) {
+                        self.after = i == 1;
+                    }
+                });
+            });
+            ui.add_space(4.0);
+        }
         if self.review.areas.is_empty() {
             crate::panels::hint(ui, tr!("Nothing in it differs from the map: it has every change already."));
         } else {

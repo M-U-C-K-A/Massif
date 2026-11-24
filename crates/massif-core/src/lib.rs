@@ -51,6 +51,7 @@ pub mod pattern;
 pub mod pack_file;
 pub mod real;
 pub mod reference;
+pub mod region_map;
 pub mod packs;
 pub mod plane;
 pub mod pockets;

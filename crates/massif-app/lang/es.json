@@ -3309,5 +3309,19 @@
  },
  "A contribution is under review in the Versions panel": "Una contribución está en revisión en el panel Versiones",
  "The map's versions, branches and contributions": "Las versiones, ramas y contribuciones del mapa",
- "my-changes": "mis-cambios"
+ "my-changes": "mis-cambios",
+ "A map to merge into this one": "Un mapa para fusionar en este",
+ "A part of the map as a map of its own, at its place, for someone to work on in Massif: File ▸ Merge Massif Map… brings their work back, reviewed on the map before anything changes.": "Una parte del mapa como un mapa propio, en su lugar, para que alguien trabaje en Massif: Archivo ▸ Fusionar mapa Massif… trae su trabajo de vuelta, revisado en el mapa antes de que nada cambie.",
+ "As": "Como",
+ "Before the region {x}, {z} went out": "Antes de enviar la región {x}, {z}",
+ "Border": "Borde",
+ "Bring in the work done on a copy or a region of this map, reviewed on the map before anything changes": "Traer el trabajo hecho en una copia o una región de este mapa, revisado en el mapa antes de que nada cambie",
+ "Exported the region as a map of {w} × {d} tiles in {secs:.1} s. Bring the work done on it back with File ▸ Merge Massif Map…": "Región exportada como un mapa de {w} × {d} teselas en {secs:.1} s. Trae el trabajo hecho en ella con Archivo ▸ Fusionar mapa Massif…",
+ "Keeps a version of the map as it is, the one the work is compared with when it comes back.": "Guarda una versión del mapa tal como está, con la que se compara el trabajo a su vuelta.",
+ "Merge Massif Map…": "Fusionar mapa Massif…",
+ "Save the region as a map": "Guardar la región como un mapa",
+ "That is this map's own file: pick the copy or the region to merge": "Es el archivo de este mapa: elige la copia o la región que fusionar",
+ "The map shows": "El mapa muestra",
+ "tiles ": "teselas ",
+ "{w} × {d} blocks from x {x}, z {z}, in {tw} × {td} tiles of 128 blocks with the border: only these tiles come back when it is merged.": "{w} × {d} bloques desde x {x}, z {z}, en {tw} × {td} teselas de 128 bloques con el borde: solo estas teselas vuelven al fusionar."
 }

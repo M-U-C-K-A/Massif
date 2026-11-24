@@ -33,12 +33,19 @@ pub struct RegionForm {
     /// Keep a version of the map and write `zone.json` beside the images,
     /// for the region to come back as a contribution to review.
     pub review: bool,
+    /// Written as a `.massif` of its own rather than as images.
+    pub as_map: bool,
+    /// The tiles of 128 blocks added around the blocks on every side, when
+    /// written as a map.
+    pub border: i32,
 }
 
 pub enum Choice {
     Keep,
     Close,
     Export(BlockRect, RegionParts),
+    /// As a `.massif`: the blocks, and the tiles of border.
+    ExportMap(BlockRect, i32),
 }
 
 impl RegionForm {
@@ -54,6 +61,8 @@ impl RegionForm {
             depth: start.depth(),
             parts: RegionParts::default(),
             review: true,
+            as_map: false,
+            border: 1,
         }
     }
 
@@ -74,15 +83,19 @@ impl RegionForm {
             ui.label(RichText::new(theme::glyph(Icon::ImageDown).to_string()).size(17.0).color(pal.accent));
             ui.label(RichText::new(tr!("Export Region")).size(16.0).bold());
         });
-        ui.add(
-            egui::Label::new(
-                RichText::new(tr!("A part of the map as images of 1 pixel a block, to work on in another tool: Edit ▸ Import Mask… puts them back in their place, with the region.txt written beside them."))
-                    .size(12.0)
-                    .color(pal.weak),
-            )
-            .wrap(),
-        );
+        let about = if self.as_map {
+            tr!("A part of the map as a map of its own, at its place, for someone to work on in Massif: File ▸ Merge Massif Map… brings their work back, reviewed on the map before anything changes.")
+        } else {
+            tr!("A part of the map as images of 1 pixel a block, to work on in another tool: Edit ▸ Import Mask… puts them back in their place, with the region.txt written beside them.")
+        };
+        ui.add(egui::Label::new(RichText::new(about).size(12.0).color(pal.weak)).wrap());
         ui.add_space(12.0);
+        ui.label(RichText::new(tr!("As")).size(11.5).color(pal.weak).medium());
+        ui.add_space(4.0);
+        if let Some(i) = button_group(ui, "region as", &[tr!("Images"), tr!("Massif map")], &[!self.as_map, self.as_map]) {
+            self.as_map = i == 1;
+        }
+        ui.add_space(10.0);
         ui.label(RichText::new(tr!("Where")).size(11.5).color(pal.weak).medium());
         ui.add_space(4.0);
         let mut areas = Vec::new();
@@ -114,6 +127,36 @@ impl RegionForm {
             });
         }
         let r = self.rect();
+        if self.as_map {
+            ui.add_space(10.0);
+            well(ui, |ui| {
+                row(ui, tr!("Border"), |ui| {
+                    ui.add(Field::new(&mut self.border, 0..=16).text(tr!("tiles ")));
+                });
+            });
+            let region = massif_core::region_map::RegionOf::around(0, r, self.border);
+            let (tw, td) = region.size();
+            ui.add(
+                egui::Label::new(
+                    RichText::new(tr!("{w} × {d} blocks from x {x}, z {z}, in {tw} × {td} tiles of 128 blocks with the border: only these tiles come back when it is merged.", w = r.width(), d = r.depth(), x = r.x0, z = r.z0, tw, td))
+                        .size(11.5)
+                        .color(pal.weak),
+                )
+                .wrap(),
+            );
+            ui.add(egui::Label::new(RichText::new(tr!("Keeps a version of the map as it is, the one the work is compared with when it comes back.")).size(11.5).color(pal.weak)).wrap());
+            ui.add_space(12.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let ok = r.width() > 0 && r.depth() > 0;
+                if ui.add_enabled(ok, theme::primary_button(ui, tr!("Export…"))).clicked() {
+                    choice = Choice::ExportMap(r, self.border);
+                }
+                if ui.button(tr!("Cancel")).clicked() {
+                    choice = Choice::Close;
+                }
+            });
+            return choice;
+        }
         ui.add(egui::Label::new(RichText::new(tr!("{w} × {d} blocks from x {x}, z {z}: images of {w} × {d} pixels.", w = r.width(), d = r.depth(), x = r.x0, z = r.z0)).size(11.5).color(pal.weak)).wrap());
         ui.add_space(10.0);
         ui.label(RichText::new(tr!("What")).size(11.5).color(pal.weak).medium());

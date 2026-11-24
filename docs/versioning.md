@@ -67,6 +67,49 @@ A map without a version yet shows what working together is about, with
 Without `zone.json`, or with the review turned off, Import Mask paints the
 images onto the map at once, as one step to undo.
 
+## A region of the map for someone else
+
+The simplest way to work on a large map with others needs no shared
+version list and no extra file format: send each person the part they work
+on, as a map of its own.
+
+1. **File ▸ Export Region…**, **As: Massif map**: the selection (or the
+   whole map, or blocks typed in) and a **Border** of tiles of 128 blocks
+   around it (1 by default) are written as a `.massif` of their own, at
+   their coordinates, with the map's terrains, layers, objects, settings and
+   versions, cut to those tiles. Massif keeps a version of the map as it is
+   (when it changed since its last one): the work is compared with it when
+   it comes back. A region of 1,000 × 1,000 blocks with its border is 81
+   tiles, a few megabytes.
+2. The collaborator opens it as any map (File ▸ Open…), works on it, adds
+   terrains, layers or objects of their own, saves it, and sends the file
+   back. Their work is never exported to Minecraft for this: the file holds
+   every change the map can keep.
+3. The owner chooses **File ▸ Merge Massif Map…** and the file. The review
+   opens in the Versions panel (see below), with **The map shows: Before /
+   After**: After draws the collaborator's land over the tiles it would
+   bring, each outlined in the colour of what it is (green new, the accent
+   changed, red in conflict where the owner changed the same tile since
+   the region went out). **Apply** merges what was accepted as one step to
+   undo and a version, **Merged from** the file.
+
+Only the region's own tiles come back: the tiles outside it are left as
+they are, though the region's file has none of them. The border is there to
+see what lies around the work and to join the land to it; tiles of the
+border left as they were are not changes.
+
+**Merge Massif Map…** takes any `.massif`:
+
+- a region of the map, as above;
+- a whole copy of the map someone worked on: its changes since the newest
+  version both maps have, every tile, as a contribution;
+- another map, made apart: the tiles where it differs from the map as it
+  is, none of them in conflict, and none taken away.
+
+New terrains, biomes, ground covers, layers and objects of the merged map
+come into the map with the tiles that use them (one of the same name is the
+map's); its palette and settings are listed apart, each with a switch.
+
 ## Contributions from other copies
 
 A contributor opens the map (a copy of the owner's file, with its versions),
