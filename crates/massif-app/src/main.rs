@@ -48,6 +48,7 @@ mod report;
 mod report_view;
 mod render_side;
 mod references;
+mod diorama;
 mod reshape;
 mod reticle;
 mod run_script;

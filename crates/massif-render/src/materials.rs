@@ -228,6 +228,19 @@ impl Materials {
         self.len() <= 1
     }
 
+    /// How material `id` looks from straight above (see [`TopView`]).
+    pub fn top_view(&self, id: u16) -> TopView {
+        let inner = self.inner.lock().unwrap();
+        let Some(m) = inner.list.get(id as usize).copied() else { return TopView::AIR };
+        top_view(&m, &inner.quads, &inner.layers)
+    }
+
+    /// How every material so far looks from above, by number.
+    pub fn top_views(&self) -> Vec<TopView> {
+        let inner = self.inner.lock().unwrap();
+        inner.list.iter().map(|m| top_view(m, &inner.quads, &inner.layers)).collect()
+    }
+
     fn resolve(&self, inner: &mut Inner, name: &str, properties: &[(&str, &str)]) -> Material {
         let mut m = self.resolve_shape(inner, name, properties);
         if !matches!(m.class, Class::Water | Class::Lava) {
@@ -711,4 +724,133 @@ mod tests {
         assert_eq!(&layer[..4], &[200, 10, 10, 255]);
         assert_eq!(layer[(SIDE - 1) * 4 + 3], 0);
     }
+}
+
+/// What a block is to a map seen from above.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TopKind {
+    /// Nothing to see: what is under it shows.
+    Air,
+    /// A ground the eye stops at: a whole block, or a shaped one covering
+    /// its square (a slab, stairs, a carpet).
+    Block,
+    /// Something standing on the ground that leaves it showing around:
+    /// a plant, a torch, a fence.
+    Overlay,
+    Water,
+    Lava,
+}
+
+/// How a block looks from straight above: what the Diorama draws of it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TopView {
+    pub kind: TopKind,
+    /// The texture layer of its top.
+    pub layer: u16,
+    /// What that texture is multiplied by, sRGB.
+    pub tint: [u8; 3],
+    /// The part of the texture shown, 0 to 1: u0, v0, u1, v1.
+    pub uv: [f32; 4],
+    /// The part of the block's square it covers, 0 to 1: x0, z0, x1, z1.
+    pub area: [f32; 4],
+    /// The mean colour of its top, sRGB, and how much of the square it
+    /// covers (alpha).
+    pub mean: [u8; 4],
+    /// The light it gives, the game's levels.
+    pub light: u8,
+}
+
+impl TopView {
+    pub const AIR: TopView = TopView { kind: TopKind::Air, layer: 0, tint: [255; 3], uv: [0.0, 0.0, 1.0, 1.0], area: [0.0, 0.0, 1.0, 1.0], mean: [0; 4], light: 0 };
+}
+
+fn top_view(m: &Material, quads: &[GpuQuad], layers: &[Layer]) -> TopView {
+    let mean = |layer: u16, tint: [u8; 3], uv: [f32; 4], cover: f32| -> [u8; 4] {
+        let Some(px) = layers.get(layer as usize).filter(|_| layer != 0) else {
+            return [tint[0], tint[1], tint[2], (cover * 255.0) as u8];
+        };
+        let (x0, x1) = ((uv[0].min(uv[2]) * 16.0) as usize, ((uv[0].max(uv[2]) * 16.0).ceil() as usize).clamp(1, 16));
+        let (y0, y1) = ((uv[1].min(uv[3]) * 16.0) as usize, ((uv[1].max(uv[3]) * 16.0).ceil() as usize).clamp(1, 16));
+        let (mut sum, mut alpha, mut n) = ([0u64; 3], 0u64, 0u64);
+        for y in y0.min(15)..y1.max(y0 + 1) {
+            for x in x0.min(15)..x1.max(x0 + 1) {
+                let p = &px[(y * SIDE + x) * 4..][..4];
+                for k in 0..3 {
+                    sum[k] += p[k] as u64 * p[3] as u64;
+                }
+                alpha += p[3] as u64;
+                n += 1;
+            }
+        }
+        let c = |k: usize| (sum[k].checked_div(alpha).unwrap_or(0) * tint[k] as u64 / 255) as u8;
+        let a = alpha as f32 / (n.max(1) * 255) as f32;
+        [c(0), c(1), c(2), (a * cover * 255.0).round() as u8]
+    };
+    let whole = [0.0, 0.0, 1.0, 1.0];
+    let kind = match m.class {
+        Class::Air => return TopView::AIR,
+        Class::Water => TopKind::Water,
+        Class::Lava => TopKind::Lava,
+        Class::Opaque | Class::Cutout => TopKind::Block,
+        Class::Shaped => TopKind::Overlay,
+    };
+    if kind != TopKind::Overlay {
+        let mut v = TopView { kind, layer: m.top, tint: m.top_tint, uv: whole, area: whole, mean: [0; 4], light: m.light };
+        v.mean = mean(m.top, m.top_tint, whole, 1.0);
+        if m.class == Class::Cutout {
+            v.mean[3] = 255;
+        }
+        return v;
+    }
+    // A shaped block: the faces looking up, the highest first.
+    let f = |w: u32| f32::from_bits(w);
+    let faces: Vec<&GpuQuad> = quads.iter().skip(m.first_quad as usize).take(m.quads as usize).collect();
+    let normal_y = |q: &GpuQuad| {
+        let (u, v) = ([f(q[4]), f(q[5]), f(q[6])], [f(q[8]), f(q[9]), f(q[10])]);
+        let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+        let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt().max(1e-6);
+        n[1] / len
+    };
+    let rect = |q: &GpuQuad| {
+        let (o, u, v) = ([f(q[0]), f(q[2])], [f(q[4]), f(q[6])], [f(q[8]), f(q[10])]);
+        let xs = [o[0], o[0] + u[0], o[0] + v[0], o[0] + u[0] + v[0]];
+        let zs = [o[1], o[1] + u[1], o[1] + v[1], o[1] + u[1] + v[1]];
+        let lo = |a: [f32; 4]| a.iter().copied().fold(f32::MAX, f32::min).clamp(0.0, 1.0);
+        let hi = |a: [f32; 4]| a.iter().copied().fold(f32::MIN, f32::max).clamp(0.0, 1.0);
+        [lo(xs), lo(zs), hi(xs), hi(zs)]
+    };
+    let mut up: Vec<&GpuQuad> = faces.iter().copied().filter(|q| normal_y(q).abs() > 0.7).collect();
+    if up.iter().any(|q| normal_y(q) > 0.7) {
+        up.retain(|q| normal_y(q) > 0.7);
+    }
+    up.sort_by(|a, b| f(b[1]).total_cmp(&f(a[1])));
+    let tint_of = |q: &GpuQuad| if q[3] >> 18 & 1 == 1 { m.top_tint } else { [255; 3] };
+    let uv_of = |q: &GpuQuad| [f(q[12]), f(q[13]), f(q[14]), f(q[15])];
+    let Some(&first) = up.first().or(faces.first()) else {
+        return TopView::AIR;
+    };
+    let layer = (first[3] & 0xffff) as u16;
+    // How much of the square the faces looking up cover, on a 16 × 16 grid.
+    let mut covered = [false; 256];
+    for q in &up {
+        let r = rect(q);
+        for z in (r[1] * 16.0).round() as usize..(r[3] * 16.0).round() as usize {
+            for x in (r[0] * 16.0).round() as usize..(r[2] * 16.0).round() as usize {
+                covered[(z.min(15)) * 16 + x.min(15)] = true;
+            }
+        }
+    }
+    let cover = covered.iter().filter(|c| **c).count() as f32 / 256.0;
+    let tint = tint_of(first);
+    if cover >= 0.85 {
+        let mut v = TopView { kind: TopKind::Block, layer, tint, uv: whole, area: whole, mean: [0; 4], light: m.light };
+        v.mean = mean(layer, tint, whole, 1.0);
+        v.mean[3] = 255;
+        return v;
+    }
+    let (uv, area) = if up.is_empty() { (uv_of(first), whole) } else { (uv_of(first), rect(first)) };
+    let size = ((area[2] - area[0]) * (area[3] - area[1])).clamp(0.0, 1.0);
+    let mut v = TopView { kind: TopKind::Overlay, layer, tint, uv, area, mean: [0; 4], light: m.light };
+    v.mean = mean(layer, tint, uv, if up.is_empty() { 0.6 } else { size });
+    v
 }

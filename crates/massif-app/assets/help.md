@@ -256,6 +256,13 @@ The brush faces the way the land faces over its whole area, not the face of the 
 - **Ghost** (at the bottom right, or `G`) flies through everything, as the game's spectator mode: into caves, under overhangs, along tunnels. With your eyes in the ground the view sees through it to the air beyond, a cave's walls, and the cursor and brush work on what it shows. `G` again flies out (from the first air above, if you are in the ground).
 Water slows you and lets you swim, and under it the world turns blue and dim, as in the game; a fall off the map puts you back where you last stood. Turn **Player** off to get the orbit camera back.
 
+## Diorama
+The **Diorama** (Beta), in the **View** section of an area's chooser, shows the map from straight above as the game would: block by block, with the game's textures, the trees, plants, houses and other objects the export places, the water over the shallows, and a light from the north-west that makes slopes, cliffs and valleys read, every tree and building casting its shadow. Put it in any area, beside the 2D map or floating; it follows the map's edits.
+- Drag to pan, the wheel to zoom down to the blocks, `Space` to come back to the map's middle, `R` turns the view a quarter (`Shift` + `R` back).
+- **Caves** (or `C`) shows what lies under a height, moved with `Page Up` and `Page Down` (`Shift`: 8 blocks) or the settings' slider: the floors of caves, ravines and cave lakes in their blocks, darker the deeper; rock is near black.
+- The strip at the top says what is shown, the block under the pointer (x, y, z), the chunks drawn and which way is up; the gear there holds the settings (Surface or Caves, the height, which way is up, how strong the relief is).
+- The tiles are built in the background, nearest the view first: a map of 1024 × 1024 blocks takes a fraction of a second on a recent Mac. From afar it shows a small image of each tile; up close, every block.
+
 # Render
 The **Render** side draws the open map path-traced: sunlight and skylight bouncing off the land, soft shadows, water that mirrors the sky and shows the shallows' floor, glowing blocks lighting what is around them, with the game's textures and models. The map is built as an export would write it, nearest the view first. Still, the image grows clean; moving, it is drawn coarser.
 

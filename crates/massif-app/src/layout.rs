@@ -18,6 +18,9 @@ pub enum EditorKind {
     View3d,
     /// The world in 3D with the tools to build and dig in it.
     Sculpt3d,
+    /// The map from above as the game shows it, block by block, with its
+    /// caves under a height.
+    Diorama,
     Tools,
     ToolSettings,
     BrushSettings,
@@ -68,7 +71,7 @@ impl EditorKind {
     /// with developer mode.
     pub const COLUMNS: [&'static [Section]; 5] = [
         &[
-            (tn!("View"), &[EditorKind::Map, EditorKind::View3d, EditorKind::Sculpt3d]),
+            (tn!("View"), &[EditorKind::Map, EditorKind::Diorama, EditorKind::View3d, EditorKind::Sculpt3d]),
             (tn!("World"), &[EditorKind::Info, EditorKind::Versions]),
         ],
         &[(
@@ -102,6 +105,7 @@ impl EditorKind {
             EditorKind::Map => tr!("The map from above, to paint and shape"),
             EditorKind::View3d => tr!("The whole map in 3D, block by block"),
             EditorKind::Sculpt3d => tr!("Build, dig and smooth in 3D, or walk it as a player"),
+            EditorKind::Diorama => tr!("The map from above as the game shows it, block by block, and its caves"),
             EditorKind::Tools => tr!("Every tool, a row for each theme"),
             EditorKind::ToolSettings => tr!("The options of the tool in hand"),
             EditorKind::BrushSettings => tr!("Size, intensity, rotation and where the brush paints"),
@@ -134,6 +138,7 @@ impl EditorKind {
             EditorKind::Map => tr!("Map"),
             EditorKind::View3d => tr!("3D View"),
             EditorKind::Sculpt3d => tr!("3D Sculpt"),
+            EditorKind::Diorama => tr!("Diorama"),
             EditorKind::Tools => tr!("Tools"),
             EditorKind::ToolSettings => tr!("Tool Settings"),
             EditorKind::BrushSettings => tr!("Brush Settings"),
@@ -160,12 +165,18 @@ impl EditorKind {
         }
     }
 
+    /// Still in beta: said beside its name.
+    pub const fn beta(self) -> bool {
+        matches!(self, EditorKind::Diorama)
+    }
+
     pub const fn icon(self) -> Icon {
         match self {
             EditorKind::Empty => Icon::LayoutGrid,
             EditorKind::Map => Icon::Map,
             EditorKind::View3d => Icon::Box,
             EditorKind::Sculpt3d => Icon::Pickaxe,
+            EditorKind::Diorama => Icon::Earth,
             EditorKind::Tools => Icon::Wrench,
             EditorKind::ToolSettings => Icon::SlidersHorizontal,
             EditorKind::BrushSettings => Icon::Settings2,

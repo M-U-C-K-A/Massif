@@ -516,6 +516,16 @@ impl<'a> ExportContext<'a> {
         })
     }
 
+    /// The name and properties of state `id` (a block of [`chunk_blocks`]).
+    pub fn state(&self, id: u16) -> Option<(&str, &[(String, String)])> {
+        self.states.get(id as usize).map(|(n, p)| (n.as_str(), p.as_slice()))
+    }
+
+    /// How many states there are.
+    pub fn state_count(&self) -> usize {
+        self.states.len()
+    }
+
     pub fn sections(&self) -> usize {
         ((self.max_y - self.min_y) / 16) as usize
     }
@@ -830,6 +840,43 @@ pub fn build_chunk(
     smooth: &[massif_core::shapes::Column],
     scratch: &mut Scratch,
 ) -> Vec<u8> {
+    fill_chunk(ctx, stack, tile, cx, cz, objects, steady, smooth, scratch, true)
+}
+
+/// The blocks of the chunk at `(cx, cz)` within the tile, as
+/// [`build_chunk`] lays them before writing them out: the states (see
+/// [`ExportContext::state`]) of its sections from the world's floor up,
+/// `(y * 16 + z) * 16 + x` in each, those past the end being air. Only for
+/// versions that store chunks as 1.18 does.
+#[allow(clippy::too_many_arguments)]
+pub fn chunk_blocks<'s>(
+    ctx: &ExportContext,
+    stack: &TileStack,
+    tile: TilePos,
+    cx: usize,
+    cz: usize,
+    objects: &[Placement],
+    steady: &[massif_core::water::Steady],
+    smooth: &[massif_core::shapes::Column],
+    scratch: &'s mut Scratch,
+) -> &'s [u16] {
+    fill_chunk(ctx, stack, tile, cx, cz, objects, steady, smooth, scratch, false);
+    &scratch.blocks[..scratch.dirty]
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fill_chunk(
+    ctx: &ExportContext,
+    stack: &TileStack,
+    tile: TilePos,
+    cx: usize,
+    cz: usize,
+    objects: &[Placement],
+    steady: &[massif_core::water::Steady],
+    smooth: &[massif_core::shapes::Column],
+    scratch: &mut Scratch,
+    nbt: bool,
+) -> Vec<u8> {
     let (ox, oz) = tile.origin();
     let (bx0, bz0) = (ox + cx as i32 * 16, oz + cz as i32 * 16);
     let (min_y, max_y) = (ctx.min_y, ctx.max_y);
@@ -1070,6 +1117,9 @@ pub fn build_chunk(
     *dirty = filled * SECTION_VOLUME;
 
     // ---- NBT ---------------------------------------------------------------
+    if !nbt {
+        return Vec::new();
+    }
     match ctx.era {
         Era::Modern => {}
         Era::Numbered => return numbered_chunk(ctx, blocks, biome_columns, bx0 >> 4, bz0 >> 4),

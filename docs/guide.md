@@ -2108,6 +2108,44 @@ every block state written is one of the 726,881 the game registers.
 Conquest Reforged's 222 MB jar is read with Minecraft 1.20.1 in about half
 a second, and its blocks take about 70 MB of memory.
 
+## Diorama
+
+The **Diorama** (Beta) is a view of the map from straight above, as the
+game would show it from the sky: block by block, with the game's textures
+(and those of the mods and resource packs read in the Blocks panel), the
+trees, plants, houses and other objects the export would place, the water
+over the shallows showing their floor, and a light from the north-west
+that makes slopes, cliffs and valleys read, each tree and building casting
+its shadow to the south-east. It is an editor like the map and the 3D View,
+in the **View** section of an area's chooser: put it beside the 2D map to
+paint on one and see the result on the other, float it, or give it the
+whole window. It follows the map's edits: the tiles changed are built
+again, the old ones shown until then.
+
+- Drag to pan, the wheel (or a pinch) to zoom, down to the blocks,
+  **Space** to come back to the middle of the map.
+- **R** turns the view a quarter clockwise (**Shift + R** back): north,
+  east, south or west up. The little **N** at the bottom right points north.
+- **Caves** (the button in the area's header, or **C**) shows what lies
+  under a height: the floors of the caves, ravines and cave lakes, in their
+  own blocks, darker the further under it they lie, and the rock near
+  black. **Page Up** and **Page Down** move the height a block (**Shift**: 8
+  blocks); the settings have a slider. Above the land it shows the surface.
+- The strip along the top says what is shown, the block under the pointer
+  (x, y, z: y is the top of the block seen), how many chunks are in view and
+  which way is up; its gear holds the settings: Surface or Caves, the
+  height, which way is up, and how strong the relief is. The strip along the
+  bottom lists the keys.
+
+The tiles are built by the exporter itself, in the background, nearest the
+view first, so what shows is what an export would write. Of each column
+only what can be seen from above is kept: where something lies under air or
+water, with what stands on it. A map of 1024 × 1024 blocks is built in
+about a quarter of a second on an M4, and a frame takes about 2 ms of the
+graphics card. From afar each tile is a small image; up close every block
+is drawn with its texture. The floors of the tiles seen least recently are
+let go of past 384 MB, and built again when looked at.
+
 ## Render
 
 The **Render** side (Beta, at the top left after Terrain and World) draws

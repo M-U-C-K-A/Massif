@@ -3007,5 +3007,25 @@
  "Added {n} reference images, to trace over (never exported). For heights: Edit ▸ Import Mask… ▸ Height": {
   "one": "Adicionada como imagem de referência, para decalcar (nunca exportada). Para suas alturas: Editar ▸ Import Mask… ▸ Altura",
   "other": "{n} imagens de referência adicionadas, para decalcar (nunca exportadas). Para alturas: Editar ▸ Import Mask… ▸ Altura"
+ },
+ "Diorama": "Diorama",
+ "The map from above as the game shows it, block by block, and its caves": "O mapa visto de cima como o jogo o mostra, bloco a bloco, e as suas cavernas",
+ "Building {done} of {all} tiles": "A construir {done} de {all} blocos de mapa",
+ "Caves under": "Cavernas abaixo de",
+ "Caves · under Y {y}": "Cavernas · abaixo de Y {y}",
+ "Diorama settings": "Definições do Diorama",
+ "Drag pan · Scroll zoom · C caves · PgUp/PgDn slice · R turn · Space recenter": "Arrastar: mover · Roda: zoom · C: cavernas · PgUp/PgDn: altura · R: rodar · Espaço: centrar",
+ "East up": "Este em cima",
+ "North up": "Norte em cima",
+ "South up": "Sul em cima",
+ "West up": "Oeste em cima",
+ "Nothing to show: the map is empty": "Nada a mostrar: o mapa está vazio",
+ "The Diorama could not be made: {e}": "Não foi possível fazer o Diorama: {e}",
+ "The Diorama needs the wgpu renderer": "O Diorama precisa do renderizador wgpu",
+ "Turn the view a quarter (R)": "Rodar a vista um quarto (R)",
+ "Up is": "Em cima",
+ "{n} chunks": {
+  "one": "{n} chunk",
+  "other": "{n} chunks"
  }
 }

@@ -1,0 +1,3 @@
+**Diorama (Beta): the map from above, as the game shows it**
+
+A new view, **Diorama**, in the **View** section of every area's chooser, shows the map from straight above block by block with the game's textures: the trees, plants, houses and other objects an export would place, the water over the shallows, and relief light and shadows so slopes, cliffs and valleys read. Drag to pan, scroll to zoom down to the blocks, **R** to turn the view, **Space** to recentre; **C** shows the caves under a height moved with **Page Up** and **Page Down**. It sits beside the 2D map, floats, and follows your edits as you paint.

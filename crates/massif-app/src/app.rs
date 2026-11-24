@@ -465,6 +465,7 @@ pub struct MassifApp {
     slots3d: HashMap<AreaId, usize>,
     /// The Render side: the map path-traced.
     render_side: crate::render_side::RenderSide,
+    diorama: crate::diorama::Diorama,
     /// The 3D Sculpt editor's view: its own camera and tiles.
     sculpt3d: View3d,
     hover: Option<(i32, i32)>,
@@ -1082,6 +1083,7 @@ impl MassifApp {
             extra3d: Vec::new(),
             slots3d: HashMap::new(),
             render_side: Default::default(),
+            diorama: Default::default(),
             sculpt3d: View3d::default(),
             hover: None,
             map_center: None,
@@ -4011,6 +4013,11 @@ impl MassifApp {
             EditorKind::RenderView => {
                 hui.label(RichText::new(tr!("Beta")).size(10.5).strong().color(pal.accent));
             }
+            EditorKind::Diorama => {
+                hui.label(RichText::new(tr!("Beta")).size(10.5).strong().color(pal.accent));
+                hui.add_space(8.0);
+                self.diorama.header(&mut hui);
+            }
             _ => {}
         }
         // Cut at the commands: what runs past fades out into the card.
@@ -4118,6 +4125,7 @@ impl MassifApp {
                     self.feedback = Some(note);
                 }
             }
+            EditorKind::Diorama => self.diorama.ui(&mut cui, frame, &mut self.doc, self.blocks.catalogue.clone()),
             EditorKind::Tools => scrolled(&mut cui, &mut |ui| panels::tools_panel(ui, &mut self.tools)),
             EditorKind::ToolSettings => {
                 scrolled(&mut cui, &mut |ui| panels::tool_settings(ui, &mut self.tools, &mut self.doc, &mut self.blocks))
@@ -5869,6 +5877,7 @@ impl MassifApp {
                 v.invalidate(&dirty);
             }
             self.render_side.invalidate(&dirty);
+            self.diorama.invalidate(&dirty);
             ctx.request_repaint();
         }
         let title = format!("{}{} — Massif", self.doc.title(), if self.doc.is_modified() { " •" } else { "" });
@@ -6566,6 +6575,8 @@ mod brush_edge_tests;
 #[cfg(test)]
 #[path = "reference_tests.rs"]
 mod reference_tests;
+#[path = "diorama_tests.rs"]
+mod diorama_tests;
 
 #[cfg(test)]
 mod tests {

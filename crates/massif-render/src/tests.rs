@@ -526,3 +526,90 @@ fn pbr_and_metals() {
         image::save_buffer(dir.join("render-pbr.png"), &rgba, w, h, image::ColorType::Rgba8).unwrap();
     }
 }
+
+/// The Diorama of the sample village, drawn straight from the floors
+/// (MASSIF_SNAPSHOT_DIR: the images at several zooms, the surface and the
+/// caves; MASSIF_PERF: the times to build and draw).
+#[test]
+fn the_diorama_draws_the_village() {
+    use crate::diorama::{Builder, DioramaGpu, View, colours, far_layout, sample};
+    let Some((device, queue)) = device() else {
+        eprintln!("no GPU adapter: skipping");
+        return;
+    };
+    let cat = massif_assets::load_newest().and_then(Result::ok).map(Arc::new);
+    if cat.is_none() {
+        eprintln!("Minecraft is not installed here: flat colours");
+    }
+    let world = std::env::var_os("MASSIF_DIORAMA_WORLD").map_or_else(sample::village, |p| load(Path::new(&p)));
+    let tiles: Vec<massif_core::TilePos> = world.dims[0].ground().positions().collect();
+    let (lo, hi) = tiles.iter().fold((tiles[0], tiles[0]), |(lo, hi), t| (massif_core::TilePos::new(lo.x.min(t.x), lo.z.min(t.z)), massif_core::TilePos::new(hi.x.max(t.x), hi.z.max(t.z))));
+    let materials = Arc::new(Materials::new(cat.clone(), device.limits().max_texture_array_layers as usize));
+    let size = far_layout(tiles.len()).0 as usize;
+    let started = Instant::now();
+    let cpu = cpu_time();
+    let mut builder = Builder::start(world, 0, map_source::target_for(cat.as_ref().map(|c| c.version.as_str())), materials.clone(), size).unwrap();
+    builder.want(&tiles, true);
+    let mut built = Vec::new();
+    while built.len() < tiles.len() {
+        built.push(builder.wait().expect("a tile"));
+    }
+    let (wall, thread) = (started.elapsed(), cpu_time() - cpu);
+    let floors: usize = built.iter().map(|b| b.floors.len()).sum();
+    eprintln!("diorama: {} tiles in {:.0} ms ({:.0} ms of processor, {:.1} a tile), {:.2} floors a column", tiles.len(), wall.as_secs_f64() * 1000.0, thread.as_secs_f64() * 1000.0, thread.as_secs_f64() * 1000.0 / tiles.len() as f64, floors as f64 / (tiles.len() * 16384) as f64);
+    let mut gpu = DioramaGpu::new(&device, &queue, lo, hi, tiles.len(), builder.min_y);
+    gpu.sync_materials(&materials);
+    let views = materials.top_views();
+    let water = materials.top_view(materials.id("minecraft:water", &[("level", "0")])).mean;
+    let lava = materials.top_view(materials.id("minecraft:lava", &[("level", "0")])).mean;
+    let by_tile: std::collections::HashMap<_, _> = built.iter().map(|b| (b.tile, b.floors.clone())).collect();
+    let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+    let (vx, vz) = sample::VILLAGE;
+    let shots: [(&str, [f64; 2], f32, Option<i32>); 6] = [
+        ("village", [vx as f64, vz as f64], 1.0 / 8.0, None),
+        ("houses", [vx as f64 - 20.0, vz as f64 - 20.0], 1.0 / 20.0, None),
+        ("halfway", [vx as f64, vz as f64], 0.5, None),
+        ("whole", [0.0, 0.0], 1.4, None),
+        ("caves", [vx as f64, vz as f64], 1.0 / 3.0, Some(40)),
+        ("caves-deep", [0.0, 0.0], 1.0, Some(10)),
+    ];
+    for (name, center, blocks_per_px, slice) in shots {
+        for t in &tiles {
+            let img = if slice.is_none() { by_tile[t].surface.clone() } else { colours(&by_tile[t], slice, size, &views, water, lava) };
+            gpu.put_far(*t, &img);
+        }
+        let [w, h] = [1600u32, 1000];
+        gpu.resize(w, h);
+        let view = View { center, blocks_per_px, turn: 0, slice, background: [24, 24, 27], relief: 1.0 };
+        let near = blocks_per_px <= 1.0;
+        if near {
+            let cx = |v: f64| (v / 128.0).floor() as i32;
+            let (rx, rz) = ((w as f64 * blocks_per_px as f64 / 256.0).ceil() as i32 + 1, (h as f64 * blocks_per_px as f64 / 256.0).ceil() as i32 + 1);
+            let mut wanted = Vec::new();
+            for tz in cx(center[1]) - rz..=cx(center[1]) + rz {
+                for tx in cx(center[0]) - rx..=cx(center[0]) + rx {
+                    if by_tile.contains_key(&massif_core::TilePos::new(tx, tz)) {
+                        wanted.push(massif_core::TilePos::new(tx, tz));
+                    }
+                }
+            }
+            for _ in 0..8 {
+                gpu.put_near(&wanted, &|t| by_tile.get(&t).cloned(), slice);
+            }
+        }
+        let mut best = Duration::MAX;
+        for _ in 0..6 {
+            let t = Instant::now();
+            queue.submit([gpu.render(&view, near).unwrap()]);
+            let _ = device.poll(wgpu::PollType::wait_indefinitely());
+            best = best.min(t.elapsed());
+        }
+        eprintln!("diorama {name}: {:.2} ms to draw {w} × {h} (best of 6)", best.as_secs_f64() * 1000.0);
+        let (w, h, rgba) = gpu.read_image().unwrap();
+        let mean: f64 = rgba.chunks(4).map(|p| (p[0] as f64 + p[1] as f64 + p[2] as f64) / 3.0).sum::<f64>() / (w * h) as f64;
+        eprintln!("diorama {name}: mean brightness {mean:.0}");
+        if let Some(dir) = &dir {
+            image::save_buffer(dir.join(format!("diorama-gpu-{name}.png")), &rgba, w, h, image::ColorType::Rgba8).unwrap();
+        }
+    }
+}

@@ -140,7 +140,12 @@ fn entry(ui: &mut Ui, kind: EditorKind, here: bool) -> Response {
     let room = rect.width() - TEXT_X - 8.0;
     let galley = WidgetText::from(name).into_galley(ui, Some(TextWrapMode::Truncate), room, TextStyle::Body);
     let ink = if here || hot { pal.text } else { theme::mix(pal.text, pal.weak, 0.35) };
+    let width = galley.size().x;
     painter.galley(pos2(rect.left() + TEXT_X, rect.center().y - galley.size().y / 2.0), galley, ink);
+    // Still in beta: said after its name, as on the Render side.
+    if kind.beta() && TEXT_X + width + 40.0 < rect.width() {
+        painter.text(pos2(rect.left() + TEXT_X + width + 6.0, rect.center().y), Align2::LEFT_CENTER, tr!("Beta"), FontId::proportional(10.5), pal.accent);
+    }
     response
 }
 
@@ -199,7 +204,7 @@ mod tests {
             let before = offered.len();
             offered.dedup();
             assert_eq!(offered.len(), before, "an editor offered twice");
-            assert_eq!(offered.len(), 26, "every editor but the empty area");
+            assert_eq!(offered.len(), 27, "every editor but the empty area");
             assert!(!offered.contains(&EditorKind::Empty));
         }
         assert!(!arrange(5, false).iter().flatten().any(|(_, kinds)| kinds.contains(&EditorKind::Developer)));

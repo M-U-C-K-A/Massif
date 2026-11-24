@@ -3127,5 +3127,27 @@
   "few": "Добавлено опорных изображений: {n}, для обводки (никогда не экспортируются). Для высот: Правка ▸ Import Mask… ▸ Высота",
   "many": "Добавлено опорных изображений: {n}, для обводки (никогда не экспортируются). Для высот: Правка ▸ Import Mask… ▸ Высота",
   "other": "Добавлено опорных изображений: {n}, для обводки (никогда не экспортируются). Для высот: Правка ▸ Import Mask… ▸ Высота"
+ },
+ "Diorama": "Диорама",
+ "The map from above as the game shows it, block by block, and its caves": "Карта сверху, как её показывает игра, блок за блоком, и её пещеры",
+ "Building {done} of {all} tiles": "Построение: {done} из {all} тайлов",
+ "Caves under": "Пещеры ниже",
+ "Caves · under Y {y}": "Пещеры · ниже Y {y}",
+ "Diorama settings": "Настройки диорамы",
+ "Drag pan · Scroll zoom · C caves · PgUp/PgDn slice · R turn · Space recenter": "Тянуть: сдвиг · Колесо: масштаб · C: пещеры · PgUp/PgDn: высота · R: поворот · Пробел: в центр",
+ "East up": "Восток сверху",
+ "North up": "Север сверху",
+ "South up": "Юг сверху",
+ "West up": "Запад сверху",
+ "Nothing to show: the map is empty": "Нечего показать: карта пуста",
+ "The Diorama could not be made: {e}": "Не удалось построить диораму: {e}",
+ "The Diorama needs the wgpu renderer": "Диораме нужен рендерер wgpu",
+ "Turn the view a quarter (R)": "Повернуть вид на четверть (R)",
+ "Up is": "Сверху",
+ "{n} chunks": {
+  "one": "{n} чанк",
+  "few": "{n} чанка",
+  "many": "{n} чанков",
+  "other": "{n} чанка"
  }
 }

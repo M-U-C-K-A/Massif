@@ -16,7 +16,7 @@ use std::num::NonZeroU64;
 pub const IMAGE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 pub const IMAGE_VIEW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// Levels of detail of a texture layer: 16, 8, 4, 2 and 1 pixels across.
-const MIPS: u32 = 5;
+pub(crate) const MIPS: u32 = 5;
 /// Levels the pyramid of heights may have (16: 2^15 chunks across).
 const LEVELS: usize = 16;
 
@@ -381,7 +381,7 @@ impl Renderer {
         Self::make_array(device, layers, wgpu::TextureFormat::Rgba8UnormSrgb)
     }
 
-    fn make_array(device: &wgpu::Device, layers: u32, format: wgpu::TextureFormat) -> (wgpu::Texture, wgpu::TextureView) {
+    pub(crate) fn make_array(device: &wgpu::Device, layers: u32, format: wgpu::TextureFormat) -> (wgpu::Texture, wgpu::TextureView) {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("massif render atlas"),
             size: wgpu::Extent3d { width: SIDE as u32, height: SIDE as u32, depth_or_array_layers: layers.max(1) },
@@ -404,7 +404,7 @@ impl Renderer {
 
     /// One layer of an array and its smaller levels; `holes`: averaged by
     /// alpha (colours), else plainly (a pack's maps).
-    fn write_into(queue: &wgpu::Queue, texture: &wgpu::Texture, layer: u32, rgba: &Layer, holes: bool) {
+    pub(crate) fn write_into(queue: &wgpu::Queue, texture: &wgpu::Texture, layer: u32, rgba: &Layer, holes: bool) {
         let mut level = rgba.to_vec();
         let mut side = SIDE;
         for mip in 0..MIPS {
