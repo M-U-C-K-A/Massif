@@ -780,6 +780,11 @@ pub fn input_json(events: &[egui::Event]) -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// The tests that record take turns: the profiler is one for the whole
+/// process, and a recording stopped by one test would cut another's short.
+#[cfg(test)]
+pub static RECORDING: Mutex<()> = Mutex::new(());
+
 #[cfg(test)]
 thread_local! {
     /// The tests' own folder for recordings, never the desktop.
@@ -845,6 +850,7 @@ mod tests {
     /// the next; the frames, their parts, the trace and the input come out.
     #[test]
     fn a_recording_has_its_frames_parts_and_input() {
+        let _turn = RECORDING.lock().unwrap_or_else(|e| e.into_inner());
         install();
         // Another test may be recording at the same time: its scopes then
         // reach this recording too.

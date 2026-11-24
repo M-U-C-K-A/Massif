@@ -140,6 +140,7 @@ fn circling(c: Pos2, r: f32, frames: usize) -> impl FnMut(&mut H, usize) {
 /// MASSIF_SNAPSHOT_DIR.
 #[test]
 fn recording_performance_from_the_help_menu() {
+    let _turn = crate::perf::RECORDING.lock().unwrap_or_else(|e| e.into_inner());
     use egui_kittest::kittest::Queryable;
     let dir = std::env::temp_dir().join(format!("massif-perf-app-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -196,6 +197,7 @@ fn profile_a_session() {
     if std::env::var_os("MASSIF_PROFILE").is_none() {
         return;
     }
+    let _turn = crate::perf::RECORDING.lock().unwrap_or_else(|e| e.into_inner());
     let tiles = std::env::var("MASSIF_PROFILE_TILES").ok().and_then(|v| v.parse().ok()).unwrap_or(32);
     let mut h = harness(vec2(1440.0, 900.0), 2.0);
     open(&mut h, std::env::var_os("MASSIF_MOVE_WORLD").map(PathBuf::from), tiles);
