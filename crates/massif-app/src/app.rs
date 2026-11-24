@@ -8572,9 +8572,10 @@ mod tests {
         assert!(!h.state().render_side.building(), "the scene was built");
         h.run_steps(24);
         assert!(h.state().render_side.samples() > 8, "samples add up while the view stays still");
+        settle_render(&mut h);
+        let shown = h.render().unwrap();
         if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
-            settle_render(&mut h);
-            h.render().unwrap().save(dir.join("render-side.png")).unwrap();
+            shown.save(dir.join("render-side.png")).unwrap();
         }
         // A still saved: drawn a band at a time, then written as a PNG.
         let out = std::env::var_os("MASSIF_SNAPSHOT_DIR").map_or_else(std::env::temp_dir, PathBuf::from).join("render-still.png");
@@ -8587,6 +8588,29 @@ mod tests {
         assert!(matches!(h.state().render_side.saved(), Some(Ok(_))), "{:?}", h.state().render_side.saved());
         let (w, hgt) = image::image_dimensions(&out).unwrap();
         assert_eq!((w, hgt), (1920, 1080));
+        // The view shows the image as bright as the still saved from the
+        // same camera: the middle of each, by its mean brightness (an sRGB
+        // view of its bytes once showed it much darker).
+        let middle = |rgba: &[u8], w: usize, r: Rect| {
+            let (mut sum, mut n) = (0.0f64, 0.0f64);
+            let (cx, cy, rx, ry) = (r.center().x as usize, r.center().y as usize, (r.width() / 10.0) as usize, (r.height() / 10.0) as usize);
+            for y in cy - ry..cy + ry {
+                for x in cx - rx..cx + rx {
+                    let p = &rgba[(y * w + x) * 4..][..3];
+                    sum += (p[0] as f64 + p[1] as f64 + p[2] as f64) / 3.0;
+                    n += 1.0;
+                }
+            }
+            sum / n
+        };
+        let still = image::open(&out).unwrap().to_rgba8();
+        let saved = middle(&still, 1920, Rect::from_min_size(egui::Pos2::ZERO, vec2(1920.0, 1080.0)));
+        let areas: Vec<(crate::layout::AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+        let ppp = h.ctx.pixels_per_point();
+        let area = areas.iter().find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::RenderView)).map(|(_, r)| *r).unwrap();
+        let viewed = middle(shown.as_raw(), shown.width() as usize, Rect::from_min_max(area.min * ppp, area.max * ppp));
+        eprintln!("render side: middle of the view {viewed:.1}, of the still {saved:.1}");
+        assert!((viewed / saved - 1.0).abs() < 0.2, "the view as bright as the still: {viewed:.1} against {saved:.1}");
         h.get_by_label_contains(&label(Icon::Map, "World")).click();
         h.run_steps(3);
         assert_eq!((h.state().layout.side(), h.state().layout.active), (Side::World, world));

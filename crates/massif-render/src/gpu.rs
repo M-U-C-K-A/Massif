@@ -11,10 +11,10 @@ use bytemuck::{Pod, Zeroable};
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 
-/// The image's format: written as sRGB values by the shader, shown
-/// through an sRGB view.
+/// The image's format: written as sRGB values by the shader, and shown
+/// as those bytes are (egui shows an image's bytes as gamma-encoded
+/// colours: an sRGB view would decode them once more, much darker).
 pub const IMAGE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-pub const IMAGE_VIEW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 /// Levels of detail of a texture layer: 16, 8, 4, 2 and 1 pixels across.
 pub(crate) const MIPS: u32 = 5;
 /// Levels the pyramid of heights may have (16: 2^15 chunks across).
@@ -701,11 +701,11 @@ impl Renderer {
             dimension: wgpu::TextureDimension::D2,
             format: IMAGE_FORMAT,
             usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[IMAGE_VIEW_FORMAT],
+            view_formats: &[],
         });
         let storage_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        // Shown through an sRGB view of the same pixels, which only samples.
-        let view = texture.create_view(&wgpu::TextureViewDescriptor { format: Some(IMAGE_VIEW_FORMAT), usage: Some(wgpu::TextureUsages::TEXTURE_BINDING), ..Default::default() });
+        // Shown through a view of the same bytes that only samples.
+        let view = texture.create_view(&wgpu::TextureViewDescriptor { usage: Some(wgpu::TextureUsages::TEXTURE_BINDING), ..Default::default() });
         let accum = storage(&self.device, "massif render accumulation", size[0] as u64 * size[1] as u64 * 16);
         self.image = Some(Image { size, texture, storage: storage_view, view, accum });
         self.bind_group = None;
@@ -717,7 +717,7 @@ impl Renderer {
         self.image.as_ref().map(|i| i.size)
     }
 
-    /// The image, as an sRGB view to show.
+    /// The image to show, its bytes sRGB colours.
     pub fn view(&self) -> Option<&wgpu::TextureView> {
         self.image.as_ref().map(|i| &i.view)
     }
