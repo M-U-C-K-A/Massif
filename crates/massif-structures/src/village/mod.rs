@@ -31,6 +31,7 @@
 //! `docs/village-packs.md`).
 
 pub mod buildings;
+pub mod geometry;
 pub mod lay;
 pub mod pack;
 pub mod plots;

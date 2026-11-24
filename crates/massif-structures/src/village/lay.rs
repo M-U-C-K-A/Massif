@@ -24,8 +24,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// The blocks of a road of `kind`, its middle and its edges, by weight.
-fn road_blocks(theme: &Theme, road: RoadType, kind: RoadKind) -> (Vec<(String, u32)>, Vec<(String, u32)>) {
-    let w = |v: &[(&str, u32)]| -> Vec<(String, u32)> { v.iter().map(|(b, w)| (format!("minecraft:{b}"), *w)).collect() };
+/// Blocks with their weights.
+type Weighted = Vec<(String, u32)>;
+
+fn road_blocks(theme: &Theme, road: RoadType, kind: RoadKind) -> (Weighted, Weighted) {
+    let w = |v: &[(&str, u32)]| -> Weighted { v.iter().map(|(b, w)| (format!("minecraft:{b}"), *w)).collect() };
     match road {
         RoadType::Theme => {
             let s = if kind == RoadKind::Side { &theme.side } else { &theme.main };

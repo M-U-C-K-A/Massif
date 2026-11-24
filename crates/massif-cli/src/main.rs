@@ -1013,7 +1013,7 @@ fn cmd_village(mut args: Args) -> Res<()> {
     let seed: u64 = args.option("--seed")?.map(|s| s.parse().map_err(|_| "--seed expects an integer")).transpose()?.unwrap_or(1);
     let jar = args.option("--jar")?;
     let walls = args.flag("--walls");
-    let num = |v: Option<String>, name: &str| -> Res<Option<f32>> { v.map(|s| s.parse::<f32>().map_err(|_| format!("{name} expects a number"))).transpose().map_err(Into::into) };
+    let num = |v: Option<String>, name: &str| -> Res<Option<f32>> { v.map(|s| s.parse::<f32>().map_err(|_| format!("{name} expects a number"))).transpose() };
     let houses = args.option("--houses")?.map(|s| s.parse::<u32>().map_err(|_| "--houses expects an integer")).transpose()?;
     let size_bias = num(args.option("--size-bias")?, "--size-bias")?;
     let density = num(args.option("--density")?, "--density")?;
@@ -1027,14 +1027,14 @@ fn cmd_village(mut args: Args) -> Res<()> {
         Some("premium") | Some("gravel") => RoadType::Premium,
         Some("stone") => RoadType::Stone,
         Some("planks") => RoadType::Planks,
-        Some(o) => return Err(format!("--road: theme, dirt, premium, stone or planks, not {o}").into()),
+        Some(o) => return Err(format!("--road: theme, dirt, premium, stone or planks, not {o}")),
     };
     let mill = match args.option("--mill")?.as_deref() {
         None | Some("auto") => MillMode::Auto,
         Some("wind") => MillMode::Wind,
         Some("water") => MillMode::Water,
         Some("none") => MillMode::None,
-        Some(o) => return Err(format!("--mill: auto, wind, water or none, not {o}").into()),
+        Some(o) => return Err(format!("--mill: auto, wind, water or none, not {o}")),
     };
     let d = Params::default();
     let params = Params {
