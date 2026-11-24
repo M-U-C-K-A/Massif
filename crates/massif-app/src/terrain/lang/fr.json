@@ -491,5 +491,7 @@
   "The graph has no active Map Output to apply": "Le graphe n'a pas de sortie de carte active à appliquer",
   "The terrain, window {k} of {n}": "Le terrain, fenêtre {k} sur {n}",
   "Villages and roads": "Villages et routes",
-  "{s} s · one step you can undo": "{s} s · une étape que vous pouvez annuler"
+  "{s} s · one step you can undo": "{s} s · une étape que vous pouvez annuler",
+  "Cost": "Coût",
+  "What making this node took the last time the graph changed: its time, and the memory of the tiles it made (a composite: all it holds). Thumbnails and the viewer ask for what they show only.": "Ce qu'a pris la fabrication de ce node la dernière fois que le graphe a changé : son temps, et la mémoire des tuiles qu'il a faites (un composite : tout ce qu'il contient). Les vignettes et le viewer ne demandent que ce qu'ils montrent."
 }

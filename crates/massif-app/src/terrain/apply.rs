@@ -68,6 +68,9 @@ pub struct Applying {
     levels: Option<Vec<usize>>,
     /// What went underground.
     under: Option<massif_terrain::underground::Applied>,
+    /// The caves, cave biomes and volumes being worked out on a thread of
+    /// their own, over the map as the ground now is.
+    prepared: Option<Receiver<Result<massif_terrain::underground::Prepared, String>>>,
 }
 
 /// What Apply did, to say.
@@ -135,7 +138,7 @@ impl Applying {
             .name("terrain apply".into())
             .spawn(move || work(e, c, side, per_row, tx, stop, count))
             .map_err(|e| e.to_string())?;
-        Ok(Applying { rx, cancel, made, windows, written: 0, phase: Phase::Terrain, started: Instant::now(), engine, compiled, folder, revision, geometry: None, notes: Vec::new(), heights, levels: None, under: None })
+        Ok(Applying { rx, cancel, made, windows, written: 0, phase: Phase::Terrain, started: Instant::now(), engine, compiled, folder, revision, geometry: None, notes: Vec::new(), heights, levels: None, under: None, prepared: None })
     }
 
     /// Stops it: what was written is taken back.
@@ -167,6 +170,16 @@ impl Applying {
                 Ok(Msg::Geometry(s, r)) => {
                     self.geometry = Some((s, r));
                     self.phase = Phase::Underground;
+                    // What goes underground, worked out off the interface's
+                    // thread on the map as its ground now is; written next.
+                    let dim = doc.world.dims[doc.dim].snapshot();
+                    let (engine, c, cancel) = (self.engine.clone(), self.compiled.clone(), self.cancel.clone());
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    self.prepared = Some(rx);
+                    let _ = std::thread::Builder::new().name("terrain apply underground".into()).spawn(move || {
+                        let stop = move || cancel.load(Ordering::Relaxed);
+                        let _ = tx.send(massif_terrain::underground::prepare(&engine, &c, &dim, &stop).map_err(|e| e.to_string()));
+                    });
                     // The dialog shows the next phase before it runs.
                     return None;
                 }
@@ -189,7 +202,18 @@ impl Applying {
                 let dim = doc.dim;
                 let cancel = self.cancel.clone();
                 let stop = move || cancel.load(Ordering::Relaxed);
-                let under = massif_terrain::underground::apply(&self.engine, &self.compiled, &reg, &mut doc.history.edit(&mut doc.world, 0), &stop);
+                let prepared = match self.prepared.as_ref().map(|rx| rx.try_recv()) {
+                    Some(Err(TryRecvError::Empty)) => return None,
+                    Some(Ok(Ok(p))) => Some(p),
+                    Some(Ok(Err(e))) => {
+                        doc.history.abandon(&mut doc.world);
+                        return Some(Err(e));
+                    }
+                    // No thread: worked out while writing.
+                    _ => None,
+                };
+                self.prepared = None;
+                let under = massif_terrain::underground::apply_prepared(&self.engine, &self.compiled, &reg, &mut doc.history.edit(&mut doc.world, 0), prepared.as_ref(), &stop);
                 match under {
                     Ok(u) => {
                         if u != Default::default() {

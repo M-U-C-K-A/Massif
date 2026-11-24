@@ -230,5 +230,7 @@
   "{n} points": "{n} puntos",
   "{s} s · one step you can undo": "{s} s · un paso que puedes deshacer",
   "{node}: {why}": "{node}: {why}",
-  "{name}: drag the points, double-click to add one, right-click to remove one": "{name}: arrastra los puntos, doble clic para añadir uno, clic derecho para quitar uno"
+  "{name}: drag the points, double-click to add one, right-click to remove one": "{name}: arrastra los puntos, doble clic para añadir uno, clic derecho para quitar uno",
+  "Cost": "Coste",
+  "What making this node took the last time the graph changed: its time, and the memory of the tiles it made (a composite: all it holds). Thumbnails and the viewer ask for what they show only.": "Lo que costó hacer este nodo la última vez que cambió el grafo: su tiempo y la memoria de las teselas que hizo (un compuesto: todo lo que contiene). Las miniaturas y el visor solo piden lo que muestran."
 }

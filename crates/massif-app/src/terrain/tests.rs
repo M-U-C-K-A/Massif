@@ -742,3 +742,34 @@ fn apply_goes_window_by_window_without_seams() {
     }
     assert!(worst <= 1.0, "the windows meet {worst} blocks apart from the whole");
 }
+
+/// Each node shows what it last cost to make, a composite what all it
+/// holds cost; a node only read from the cache keeps its cost.
+#[test]
+fn nodes_show_what_they_cost() {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).with_accessibility_check(false).build_ui_state(
+        |ui, p: &mut super::TerrainPanel| {
+            if ui.ctx().cumulative_pass_nr() == 0 {
+                crate::theme::install(ui.ctx());
+            }
+            p.ui(ui);
+        },
+        super::TerrainPanel::with_graph(Arc::new(Engine::new(Default::default())), mountain_graph()),
+    );
+    let t0 = std::time::Instant::now();
+    loop {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        if (h.state().previews_idle() && t0.elapsed().as_millis() > 300) || t0.elapsed().as_secs() > 120 {
+            break;
+        }
+    }
+    h.run_steps(2);
+    let p = h.state();
+    let (ms, bytes) = p.cost("worn").expect("the erosion was made");
+    assert!(ms > 0.0 && bytes > 0, "{ms} ms, {bytes} bytes");
+    let (inside, _) = p.cost("m").expect("the composite's nodes were made");
+    let one = p.costs.iter().filter(|(k, _)| k.starts_with("m__")).count();
+    assert!(one >= 2 && inside > 0.0, "{one} nodes inside measured");
+    assert!(super::canvas::cost_text(1500.0, 12 << 20) == "1.5 s · 12 MB");
+}

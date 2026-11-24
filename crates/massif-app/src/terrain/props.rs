@@ -256,6 +256,13 @@ fn node_ui(p: &mut TerrainPanel, ui: &mut Ui, id: &str) {
             widgets::row(ui, t!("Id"), |ui| {
                 ui.label(egui::RichText::new(id).size(11.5).color(pal.weak).monospace());
             });
+            if let Some((ms, bytes)) = p.cost(id) {
+                let top = ui.cursor().top();
+                widgets::row(ui, t!("Cost"), |ui| {
+                    ui.label(egui::RichText::new(super::canvas::cost_text(ms, bytes)).size(11.5).color(if ms >= 1000.0 { pal.danger } else { pal.weak }));
+                });
+                hover_help(p, ui, top, "What making this node took the last time the graph changed: its time, and the memory of the tiles it made (a composite: all it holds). Thumbnails and the viewer ask for what they show only.");
+            }
             if !is_output {
                 let top = ui.cursor().top();
                 let mut on = p.graph.nodes[id].bypass;

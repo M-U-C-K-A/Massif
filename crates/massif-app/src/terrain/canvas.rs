@@ -1156,6 +1156,18 @@ fn draw_node(p: &TerrainPanel, ui: &mut Ui, painter: &Painter, n: &Placed, pal: 
                 } else if text_on {
                     painter.text(t.center(), Align2::CENTER_CENTER, "…", FontId::proportional(14.0 * z), pal.weak);
                 }
+                // What it cost to make, at the bottom right.
+                if text_on
+                    && z >= 0.6
+                    && !bypassed
+                    && let Some((ms, bytes)) = p.cost(&n.id)
+                {
+                    let g = painter.layout_no_wrap(cost_text(ms, bytes), FontId::proportional(9.5 * z), Color32::WHITE);
+                    let chip = Rect::from_min_size(t.right_bottom() - vec2(g.size().x + 12.0, g.size().y + 8.0), g.size() + vec2(8.0, 4.0));
+                    let back = if ms >= 1000.0 { theme::mix(Color32::from_black_alpha(170), pal.danger, 0.55) } else { Color32::from_black_alpha(140) };
+                    painter.rect_filled(chip, theme::PILL, back);
+                    painter.galley(chip.min + vec2(4.0, 2.0), g, Color32::WHITE);
+                }
                 if bypassed && text_on {
                     let g = painter.layout_no_wrap(format!("{}  {}", theme::glyph(Icon::Ban), t!("Bypassed")), FontId::proportional(10.5 * z), pal.text);
                     let chip = Rect::from_center_size(t.center(), g.size() + vec2(14.0, 6.0) * z);
@@ -1373,6 +1385,14 @@ fn node_menu(p: &TerrainPanel, handle: &egui::Response, n: &Placed, is_output: b
             ui.close();
         }
     });
+}
+
+/// A node's cost in a few characters: `340 ms · 12 MB`.
+pub fn cost_text(ms: f64, bytes: u64) -> String {
+    let time = if ms >= 1000.0 { format!("{:.1} s", ms / 1000.0) } else { format!("{:.0} ms", ms.max(1.0)) };
+    let mb = bytes as f64 / (1u64 << 20) as f64;
+    let mem = if mb >= 10.0 { format!("{mb:.0} MB") } else if mb >= 0.1 { format!("{mb:.1} MB") } else { String::new() };
+    if mem.is_empty() { time } else { format!("{time} · {mem}") }
 }
 
 fn t_upper(s: &str) -> String {

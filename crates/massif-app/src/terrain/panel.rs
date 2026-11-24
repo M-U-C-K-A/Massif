@@ -186,6 +186,11 @@ pub struct TerrainPanel {
     shapes: RefCell<Shapes>,
     /// By node shown, what its thumbnail is of once composites unfold.
     pub thumb_keys: HashMap<String, Shown>,
+    /// What each node of the compiled graph last cost to make, by its
+    /// unfolded id: milliseconds and tiles (see [`Self::cost`]).
+    pub costs: HashMap<String, (f64, u64)>,
+    /// The engine's counts when the graph last changed.
+    cost_start: HashMap<String, (u64, f64)>,
     keys_for: (u64, u64),
 
     pub look: ViewerLook,
@@ -260,6 +265,8 @@ impl TerrainPanel {
             editing: false,
             shapes: RefCell::new(Shapes::default()),
             thumb_keys: HashMap::new(),
+            costs: HashMap::new(),
+            cost_start: HashMap::new(),
             keys_for: (0, u64::MAX),
             look: ViewerLook::default(),
             thumb_surface: Surface::Clay,
@@ -1101,11 +1108,45 @@ impl TerrainPanel {
         self.thumb_keys.get(id)
     }
 
+    /// The engine's counts of what each node made: tiles and milliseconds.
+    fn engine_counts(&self) -> HashMap<String, (u64, f64)> {
+        self.engine().map(|e| e.counters.by_node.lock().map(|m| m.clone()).unwrap_or_default()).unwrap_or_default()
+    }
+
+    /// What was made since the graph last changed, as each node's cost.
+    fn track_costs(&mut self) {
+        for (id, (tiles, ms)) in self.engine_counts() {
+            let (t0, m0) = self.cost_start.get(&id).copied().unwrap_or_default();
+            if tiles > t0 || ms > m0 + 0.01 {
+                self.costs.insert(id, (ms - m0, tiles - t0));
+            }
+        }
+    }
+
+    /// What node `id` of the graph shown last cost to make (a composite:
+    /// everything inside it): milliseconds, and the memory of the tiles it
+    /// made, in bytes. `None` before it was made.
+    pub fn cost(&self, id: &str) -> Option<(f64, u64)> {
+        let me = super::shape::unfolded_id(&self.crumbs(), id);
+        let inside = format!("{me}{}", massif_terrain::lower::SEP);
+        let planes = self.shape(id).map_or(1, |s| s.outputs.iter().map(|o| o.kind.planes()).sum::<usize>().max(1)) as u64;
+        let tile = (massif_terrain::TILE as u64).pow(2) * 4;
+        let mut found = None;
+        for (k, (ms, tiles)) in &self.costs {
+            if *k == me || k.starts_with(&inside) {
+                let (m, b) = found.unwrap_or((0.0, 0));
+                found = Some((m + ms, b + tiles * tile * if *k == me { planes } else { 1 }));
+            }
+        }
+        found
+    }
+
     /// Takes the pictures made, and asks for those wanted.
     fn update_previews(&mut self, ctx: &egui::Context, viewer_px: [usize; 2], thumb_px: usize) {
         if self.previews.is_none() {
             return;
         }
+        self.track_costs();
         for p in self.previews.as_ref().map(|p| p.take()).unwrap_or_default() {
             let image = egui::ColorImage::from_rgba_unmultiplied(p.size, &p.rgba);
             if p.viewer {
@@ -1164,6 +1205,10 @@ impl TerrainPanel {
         let graph_changed = self.asked.as_ref().is_none_or(|a| a.0 != self.revision || a.3 != self.thumb_surface || a.4 != nodes || a.5 != self.space || a.6 != thumb_px || a.7 != self.env_revision || a.8 != self.scope_revision);
         let doc_changed = self.asked.as_ref().is_none_or(|a| a.0 != self.revision || a.5 != self.space || a.7 != self.env_revision);
         self.asked = Some(key);
+        if graph_changed {
+            // What is made from now on is this version's cost.
+            self.cost_start = self.engine_counts();
+        }
         self.asks += 1;
         let mut thumbs = Vec::new();
         if graph_changed {
