@@ -1357,15 +1357,102 @@ Outputs:
 
 ## Simulate
 
+### Stream erosion — `erosion.stream`
+
+Rivers cut valleys that branch up into every slope, leaving sharp ridges between them, and lay what they carry down where they slow. The erosion that makes mountains look like mountains: water gathers into streams, the more of it the deeper they cut (stream power), their walls fall back to the talus angle, and the sediment settles at the feet of slopes, on valley floors and at the sea. Use it after shapes and noise to turn lumps into ranges drained by real valleys; follow it with Particle erosion for small gullies and Thermal erosion for scree. Strength is how far the rivers cut back into the land; Hardness keeps some rock standing; Rain gives more water where it falls.
+
+A simulation: it works over the whole terrain at the simulations' resolution.
+
+Inputs:
+
+- `height` (height) — The relief to erode.
+- `hardness` (mask, optional) — Rock that resists: 1 wears twenty times slower than 0. Left empty: soft rock everywhere.
+- `rainfall` (mask, optional) — How much rain falls where: a rainfall map, a rain shadow. Left empty: the same rain everywhere.
+- `uplift` (mask, optional) — Where the land rises while the rivers cut, as much as Rebuild says. Left empty: the relief itself: the higher, the more.
+
+Outputs:
+
+- `height` (height) — The relief eroded.
+- `flow` (mask) — Where water runs: 1 in the largest rivers, fading up the smallest rills.
+- `wear` (mask) — Where the water wore the ground away, the most where it cut the most: river beds, gullies.
+- `deposition` (mask) — Where what was worn away came to rest: fans, valley floors, deltas.
+- `sediment` (mask) — How much sediment the water carries at the end: muddy rivers, gravel beds.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `strength` | number | 1 | 0 to 20 | How hard the rivers cut: higher, deeper valleys reaching further up into the land. Usually 0 to 4. |
+| `rebuild` | number | 1 | 0 to 1 | How much of the relief rises while the rivers cut, then is brought back to its height: 1 turns any shape into mountains carved by their rivers; 0 only cuts valleys into it, down to the sea and the low ground. |
+| `iterations` | integer | 200 | 10 to 2000 | Steps at each level of the simulation: more, finer valleys reaching further, slower. |
+| `talus` | number | 55 | 10 to 80 degrees | The steepest the valleys' walls stand: lower, wider valleys and rounder ridges. In degrees. |
+| `deposition` | number | 0.5 | 0 to 1 | How readily the water drops what it carries where it slows: fans, filled valleys, deltas. |
+| `channel` | number | 24 | 0 to 512 blocks | The side of the smallest area that drains into a stream: under it the ground only creeps and slides. In blocks. |
+| `diffusion` | number | 0 | 0 to 1 | How much soil creeps downhill and rounds the land between the streams. |
+| `m` | number | 0.5 | 0.2 to 0.8 | How much more large rivers cut than small ones (m of K·A^m·S^n). |
+| `n` | number | 1 | 0.5 to 2 | How much more steep streams cut than gentle ones (n of K·A^m·S^n). |
+| `seed` | seed | — | 0 to 4294967295 | Another seed gives another variation of the same settings. Left out, it comes from the node's name. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "out": { "type": "output.map", "inputs": { "height": "stream" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } },
+    "stream": { "type": "erosion.stream", "inputs": { "height": "relief" } }
+  }
+}
+```
+
+### Particle erosion — `erosion.particle`
+
+Raindrops run down the slopes, wearing gullies and rills where they speed up and laying soil where they slow down. The fine detail of erosion: each drop of rain runs downhill, picks up soil where it gathers speed and drops it where it slows, in hollows and at the feet of slopes. Use it after Stream erosion, or on its own on hills and cliffs, for gullies, rills, scree fans and soft valley floors. More Rain cuts deeper; Capacity is how much a drop carries; Radius how wide it wears.
+
+A simulation: it works over the whole terrain at the simulations' resolution.
+
+Inputs:
+
+- `height` (height) — The relief to erode.
+- `hardness` (mask, optional) — Rock that resists: 1 wears twenty times slower than 0. Left empty: soft rock everywhere.
+- `rainfall` (mask, optional) — How much rain falls where: a rainfall map, a rain shadow. Left empty: the same rain everywhere.
+
+Outputs:
+
+- `height` (height) — The relief eroded.
+- `flow` (mask) — Where water runs: 1 in the largest rivers, fading up the smallest rills.
+- `wear` (mask) — Where the water wore the ground away, the most where it cut the most: river beds, gullies.
+- `deposition` (mask) — Where what was worn away came to rest: fans, valley floors, deltas.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `rain` | number | 1 | 0.05 to 16 | Raindrops for each sample of the simulation: more, deeper gullies, slower. Usually 0.1 to 4. |
+| `erosion` | number | 0.3 | 0 to 1 | How fast a drop picks up soil where it can carry more. |
+| `deposition` | number | 0.3 | 0 to 1 | How fast a drop lays down what it carries beyond what it can. |
+| `capacity` | number | 4 | 0 to 32 | How much soil a fast drop on a steep slope can carry. Usually 0.5 to 16. |
+| `evaporation` | number | 0.02 | 0 to 0.5 | How much of its water a drop loses at each step: higher, shorter gullies. |
+| `radius` | number | 6 | 1 to 64 blocks | How wide a drop wears the ground around it. In blocks. |
+| `inertia` | number | 0.05 | 0 to 0.95 | How much a drop keeps its way rather than turning downhill: higher, straighter and longer gullies. |
+| `seed` | seed | — | 0 to 4294967295 | Another seed gives another variation of the same settings. Left out, it comes from the node's name. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "out": { "type": "output.map", "inputs": { "height": "particle" } },
+    "particle": { "type": "erosion.particle", "inputs": { "height": "relief" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } }
+  }
+}
+```
+
 ### Thermal erosion — `erosion.thermal`
 
-Loose rock slides down slopes steeper than its angle of repose, and gathers at their feet as scree. Wears cliffs back and fills the feet of slopes with talus, the way frost and gravity do: what is steeper than Talus angle sheds material to the lower neighbours until it is stable. More iterations go further towards that angle; Strength is how much moves at each. The Talus output is where material came to rest: scree, gravel, rubble.
+Loose rock slides down slopes steeper than its angle of repose, and gathers at their feet as scree. Wears cliffs back and fills the feet of slopes with talus, the way frost and gravity do: what is steeper than Talus angle sheds material to the lower neighbours until it is stable. More iterations go further towards that angle; Strength is how much moves at each; Hardness keeps cliffs of hard rock standing while soft beds crumble. The Talus output is where material came to rest: scree, gravel, rubble.
 
 A simulation: it works over the whole terrain at the simulations' resolution.
 
 Inputs:
 
 - `height` (height) — The relief to wear.
+- `hardness` (mask, optional) — Rock that holds: 1 never crumbles, 0 crumbles as Strength says. Left empty: the same rock everywhere.
 
 Outputs:
 
@@ -1377,6 +1464,11 @@ Outputs:
 | `angle` | number | 35 | 5 to 80 degrees | The steepest slope loose material holds on. In degrees. |
 | `iterations` | integer | 50 | 1 to 1000 | How many times material slides: more, closer to the talus angle. |
 | `strength` | number | 0.5 | 0.01 to 1 | How much of what is too steep moves at each iteration. |
+| `strata` | number | 0 | 0 to 128 blocks | The thickness of the beds of rock: hard beds stand as cliffs while the soft ones between crumble back into benches, a staircase of terraces. 0: one rock throughout. In blocks. Usually 0 to 32. |
+| `strata_hardness` | number | 0.85 | 0 to 1 | How much the hard beds resist: 1 never crumbles. |
+| `strata_share` | number | 0.4 | 0.05 to 0.95 | How much of each pair of beds is hard rock: more, taller cliffs and narrower benches. |
+| `strata_warp` | number | 0.3 | 0 to 2 | How far the beds wave up and down across the land, in beds. |
+| `seed` | seed | — | 0 to 4294967295 | Another seed gives another variation of the same settings. Left out, it comes from the node's name. |
 
 ```json
 {
@@ -1385,6 +1477,255 @@ Outputs:
     "out": { "type": "output.map", "inputs": { "height": "thermal" } },
     "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } },
     "thermal": { "type": "erosion.thermal", "inputs": { "height": "relief" } }
+  }
+}
+```
+
+### Sediment — `sediment.deposit`
+
+Loose rock and soil shed by steep slopes run down with the water and settle where it slows: fans at the feet of mountains, filled valleys and basins, deltas at the sea. Lays down what the mountains shed, without cutting anything: the steep slopes of Source give Amount blocks of material over the run, the water carries it down its ways and drops it where they flatten, spreading alluvial fans at the mouths of valleys, flat floors in the valleys and basins, and deltas where rivers meet the sea. Use it after Stream erosion, or on any range, to soften its feet into the plains.
+
+A simulation: it works over the whole terrain at the simulations' resolution.
+
+Inputs:
+
+- `height` (height) — The relief that sheds and gathers.
+- `source` (mask, optional) — Where loose material comes from (still only from its steep slopes). Left empty: every steep slope.
+
+Outputs:
+
+- `height` (height) — The relief with its sediment laid down.
+- `deposition` (mask) — Where what was worn away came to rest: fans, valley floors, deltas.
+- `wear` (mask) — Where the material came from.
+- `sediment` (mask) — How much sediment the water carries at the end: muddy rivers, gravel beds.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `amount` | number | 6 | 0 to 200 blocks | Blocks of material the steepest slopes shed over the run. Usually 0 to 40. |
+| `deposition` | number | 0.7 | 0 to 1 | How readily the water drops what it carries: higher, shorter and steeper fans; lower, material carried far down the valleys and into the sea. |
+| `iterations` | integer | 150 | 10 to 2000 | Steps at each level of the simulation: more, fans spreading further. |
+| `creep` | number | 0.05 | 0 to 1 | How much the loose ground creeps and smooths. |
+| `seed` | seed | — | 0 to 4294967295 | Another seed gives another variation of the same settings. Left out, it comes from the node's name. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "deposit": { "type": "sediment.deposit", "inputs": { "height": "relief" } },
+    "out": { "type": "output.map", "inputs": { "height": "deposit" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } }
+  }
+}
+```
+
+### Glaciers — `ice.glacier`
+
+Ice gathers above the snow line, flows down the valleys and scours them into U-shapes, with cirques at their heads, fjords below the sea and moraines at their ends. Snow above the equilibrium line (ELA) turns to ice, which flows downhill and melts below the line. Where it slides it wears its bed: V-shaped river valleys become broad U-shaped troughs, their heads armchair cirques, side valleys left hanging, and valleys the ice carried below the sea become fjords. Moraines are laid along its edges and where it ends. Lower the line or raise Accumulation for larger glaciers; Strength is how deep they cut.
+
+A simulation: it works over the whole terrain at the simulations' resolution.
+
+Inputs:
+
+- `height` (height) — The relief the ice covers.
+- `snow` (mask, optional) — Where snow falls (a snow or rainfall map): 0 no ice grows. Left empty: the same snow everywhere.
+
+Outputs:
+
+- `height` (height) — The relief scoured by the ice, its moraines laid.
+- `ice` (mask) — Where the ice lies at the end, by how thick (1 for 30 blocks and more).
+- `wear` (mask) — Where the water wore the ground away, the most where it cut the most: river beds, gullies.
+- `deposition` (mask) — Where the ice laid its moraines, along its edges and where it ends.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `ela` | number | 170 | -64 to 320 blocks | The equilibrium line: above it snow gathers into ice, below it the ice melts. In blocks. Usually 60 to 300. |
+| `accumulation` | number | 1 | 0 to 10 | How fast ice gathers above the line, and melts below: higher, thicker glaciers reaching further down. Usually 0 to 4. |
+| `strength` | number | 1 | 0 to 10 | How deep the ice scours its bed. Usually 0 to 4. |
+| `iterations` | integer | 800 | 10 to 10000 | Steps of the simulation: more, an older ice age, deeper troughs. |
+| `moraines` | number | 3 | 0 to 32 blocks | How high the ridges of rubble along the ice's edges stand. In blocks. |
+| `flow` | number | 1 | 0 to 10 | How readily the ice flows and slides: higher, thinner and faster glaciers. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "glacier": { "type": "ice.glacier", "inputs": { "height": "relief" } },
+    "out": { "type": "output.map", "inputs": { "height": "glacier" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } }
+  }
+}
+```
+
+### Wind — `wind.erosion`
+
+The wind blows loose sand into dunes, ridged where sand is plenty and crescents where it is scarce, and wears bare rock that faces it. Spreads Sand blocks of loose sand (where the Sand mask says) and lets the wind work it: it lifts sand in the open, carries it a hop downwind, and drops it in the lee of every rise, so that dunes grow with gentle backs to the wind and steep slip faces away from it. Plenty of sand makes transverse ridges; little makes barchans. Abrasion wears rock facing the wind into streamlined ridges (yardangs). Connect a wind vector (Climate's wind) to make the wind turn over the land.
+
+A simulation: it works over the whole terrain at the simulations' resolution.
+
+Inputs:
+
+- `height` (height) — The ground under the sand.
+- `sand` (mask, optional) — Where loose sand lies at first. Left empty: sand everywhere.
+- `wind` (vector, optional) — The wind's way at each place. Left empty: the Direction setting everywhere.
+
+Outputs:
+
+- `height` (height) — The ground with its dunes.
+- `sand` (mask) — How deep the sand lies (1 for 8 blocks and more).
+- `wear` (mask) — Where the water wore the ground away, the most where it cut the most: river beds, gullies.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `direction` | number | 0 | 0 to 360 degrees | Where the wind blows towards: 0° east, 90° south. In degrees. |
+| `sand_depth` | number | 6 | 0 to 64 blocks | Blocks of loose sand to blow around: plenty, transverse ridges; little, crescents. Usually 0 to 24. |
+| `hop` | number | 12 | 1 to 128 blocks | How far a grain flies in one hop: longer, larger dunes further apart. In blocks. Usually 4 to 48. |
+| `iterations` | integer | 400 | 10 to 10000 | Steps of the simulation: more, dunes grown larger and more regular. |
+| `strength` | number | 1 | 0 to 5 | How much sand the wind lifts at each step. |
+| `abrasion` | number | 0 | 0 to 5 | How fast blown sand wears the bare rock that faces the wind. |
+| `seed` | seed | — | 0 to 4294967295 | Another seed gives another variation of the same settings. Left out, it comes from the node's name. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "erosion": { "type": "wind.erosion", "inputs": { "height": "relief" } },
+    "out": { "type": "output.map", "inputs": { "height": "erosion" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } }
+  }
+}
+```
+
+### Flow — `water.flow`
+
+Where the rain runs off, as a mask: bright in the rivers, fading up every rill. Follows the rain down the relief, across hollows and flats to the sea or the terrain's edge, and measures how much land drains through each place. Use it to paint river beds, wet valley floors and gullies, or to drive vegetation. Small streams shows more of the rills next to the rivers.
+
+A simulation: it works over the whole terrain at the simulations' resolution.
+
+Inputs:
+
+- `height` (height) — The relief the water runs over.
+- `rainfall` (mask, optional) — How much rain falls where: a rainfall map, a rain shadow. Left empty: the same rain everywhere.
+
+Outputs:
+
+- `flow` (mask) — Where water runs: 1 in the largest rivers, fading up the smallest rills.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `spread` | number | 0.5 | 0 to 1 | How much the small streams show next to the large rivers. |
+| `seed` | seed | — | 0 to 4294967295 | Another seed gives another variation of the same settings. Left out, it comes from the node's name. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "flow": { "type": "water.flow", "inputs": { "height": "relief" } },
+    "out": { "type": "output.map", "inputs": { "height": "relief", "mask.flow": "flow" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } }
+  }
+}
+```
+
+### Rivers — `water.rivers`
+
+Rivers where enough of the land drains, their beds and banks dug into the relief, wider and deeper downstream, holding lakes in deep hollows. Follows the rain to the sea or the terrain's edge and lays a river wherever enough land drains: a thread at its source, wider and deeper as water joins it. Its water only ever goes down, cutting through the rims of shallow hollows and filling deep ones with lakes. Threshold sets how many rivers there are; Width and Depth those of the largest; Banks how gently the land slopes down to them. Water already on the map (wired to Water) is kept, and rivers end where they reach it.
+
+A simulation: it works over the whole terrain at the simulations' resolution.
+
+Inputs:
+
+- `height` (height) — The relief the rivers run over.
+- `water` (height, optional) — Water already there (a map's rivers and lakes): kept, and rivers end in it. Left empty: no water yet.
+
+Outputs:
+
+- `height` (height) — The relief with the rivers' beds and banks dug in.
+- `rivers` (mask) — 1 in the rivers' beds, fading out over their banks.
+- `water` (height) — The surface of the water where there is some, in blocks; well under the ground elsewhere.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `threshold` | number | 0.55 | 0 to 1 | How much land must drain to a place for a river to run there: higher, fewer and larger rivers. |
+| `width` | number | 14 | 1 to 256 blocks | The width of the largest river; the smallest are a quarter of it. In blocks. Usually 2 to 64. |
+| `depth` | number | 5 | 0.5 to 64 blocks | The depth of the largest river. In blocks. Usually 1 to 16. |
+| `banks` | number | 1 | 0 to 8 | How far the banks slope down to the water, in river widths. Usually 0 to 4. |
+| `meander` | number | 0.5 | 0 to 3 | How far the rivers wind about the water's way, in river widths: 0 follows it straight. Usually 0 to 1.5. |
+| `lakes` | number | 0.5 | 0 to 1 | Which hollows hold lakes rather than being cut through: 0 none, 1 every hollow a block deep. |
+| `sea` | number | 62 | -64 to 320 blocks | Rivers end where the ground goes under it. In blocks. |
+| `seed` | seed | — | 0 to 4294967295 | Another seed gives another variation of the same settings. Left out, it comes from the node's name. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "out": { "type": "output.map", "inputs": { "height": "rivers" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } },
+    "rivers": { "type": "water.rivers", "inputs": { "height": "relief" } }
+  }
+}
+```
+
+### Lakes — `water.lakes`
+
+Every hollow fills up to where it spills: with water, or with ground. Finds every hollow of the relief, where rain would gather, and fills it to the level where it overflows. Amount 0 makes them lakes; 1 fills them with ground, as sediment would, smoothing the land; between, both. What lies under the sea level is the sea's, not a lake.
+
+A simulation: it works over the whole terrain at the simulations' resolution.
+
+Inputs:
+
+- `height` (height) — The relief whose hollows fill.
+
+Outputs:
+
+- `height` (height) — The relief, its hollows filled with ground as much as Amount says.
+- `lakes` (mask) — Where the lakes are, by how deep (1 for a block and a half and more).
+- `water` (height) — The surface of the water where there is some, in blocks; well under the ground elsewhere.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `amount` | number | 0 | 0 to 1 | How much of each hollow fills with ground rather than water: 0, lakes; 1, flat ground. |
+| `sea` | number | 62 | -64 to 320 blocks | Under it the hollows are the sea's: hollows spill into it. In blocks. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "lakes": { "type": "water.lakes", "inputs": { "height": "relief" } },
+    "out": { "type": "output.map", "inputs": { "height": "lakes" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } }
+  }
+}
+```
+
+### Sea — `water.sea`
+
+The sea up to a level, where the terrain's edge lets it in, and the shore around it. Floods the relief up to Level from the terrain's edge: low ground behind higher ground stays dry unless Connected is off. Its Shore mask follows the coast, a band of height around the level, for beaches and cliffs' feet.
+
+A simulation: it works over the whole terrain at the simulations' resolution.
+
+Inputs:
+
+- `height` (height) — The relief the sea floods.
+
+Outputs:
+
+- `height` (height) — The relief, as it is.
+- `water` (height) — The surface of the water where there is some, in blocks; well under the ground elsewhere.
+- `shore` (mask) — A band along the coast, Shore blocks of height either side of the level.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `level` | number | 62 | -64 to 320 blocks | The sea's surface. In blocks. |
+| `shore` | number | 4 | 0.5 to 64 blocks | How many blocks of height either side of the level the shore takes. Usually 0.5 to 16. |
+| `connected` | boolean | true |  | Only where the sea comes in from the terrain's edge; off, every place under the level is sea. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "out": { "type": "output.map", "inputs": { "height": "sea" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } },
+    "sea": { "type": "water.sea", "inputs": { "height": "relief" } }
   }
 }
 ```

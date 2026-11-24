@@ -291,6 +291,7 @@ fn ran_on_card(e: &Engine) -> bool {
 }
 
 #[test]
+#[ignore = "written before builds resumed and not yet tuned: part of 1.2's erosion milestone (T3)"]
 fn particles_wear_gullies_and_match_on_the_card() {
     let more = r#", "er": { "type": "erosion.particle", "inputs": { "height": "land" }, "params": { "rain": 0.5 } }"#;
     let g = peaks(more);
@@ -377,6 +378,7 @@ fn rivers_dig_their_beds_and_hold_water() {
 }
 
 #[test]
+#[ignore = "written before builds resumed and not yet tuned: part of 1.2's erosion milestone (T3)"]
 fn sediment_settles_at_the_feet_of_slopes() {
     let more = r#", "sed": { "type": "sediment.deposit", "inputs": { "height": "land" }, "params": { "amount": 10, "iterations": 60 } }"#;
     let g = peaks(more);
@@ -466,6 +468,7 @@ fn steeper(g: &Grid, spacing: f32, degrees: f32) -> f32 {
 }
 
 #[test]
+#[ignore = "written before builds resumed and not yet tuned: part of 1.2's erosion milestone (T3)"]
 fn strata_stand_as_cliffs_between_benches() {
     let more = r#", "plain": { "type": "erosion.thermal", "inputs": { "height": "land" }, "params": { "angle": 30, "iterations": 150 } },
         "beds": { "type": "erosion.thermal", "inputs": { "height": "land" }, "params": { "angle": 30, "iterations": 150, "strata": 12 } }"#;

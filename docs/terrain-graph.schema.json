@@ -3489,13 +3489,356 @@
       "title": "Craters",
       "type": "object"
     },
-    "erosion.thermal": {
+    "erosion.particle": {
       "additionalProperties": false,
-      "description": "Loose rock slides down slopes steeper than its angle of repose, and gathers at their feet as scree. Wears cliffs back and fills the feet of slopes with talus, the way frost and gravity do: what is steeper than Talus angle sheds material to the lower neighbours until it is stable. More iterations go further towards that angle; Strength is how much moves at each. The Talus output is where material came to rest: scree, gravel, rubble.",
+      "description": "Raindrops run down the slopes, wearing gullies and rills where they speed up and laying soil where they slow down. The fine detail of erosion: each drop of rain runs downhill, picks up soil where it gathers speed and drops it where it slows, in hollows and at the feet of slopes. Use it after Stream erosion, or on its own on hills and cliffs, for gullies, rills, scree fans and soft valley floors. More Rain cuts deeper; Capacity is how much a drop carries; Radius how wide it wears.",
       "properties": {
         "inputs": {
           "additionalProperties": false,
           "properties": {
+            "hardness": {
+              "$ref": "#/$defs/source",
+              "description": "Rock that resists: 1 wears twenty times slower than 0. (mask) Left empty: soft rock everywhere.",
+              "title": "Hardness"
+            },
+            "height": {
+              "$ref": "#/$defs/source",
+              "description": "The relief to erode. (height)",
+              "title": "Height"
+            },
+            "rainfall": {
+              "$ref": "#/$defs/source",
+              "description": "How much rain falls where: a rainfall map, a rain shadow. (mask) Left empty: the same rain everywhere.",
+              "title": "Rainfall"
+            }
+          },
+          "required": [
+            "height"
+          ],
+          "type": "object"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "capacity": {
+              "default": 4.0,
+              "description": "How much soil a fast drop on a steep slope can carry. Usually 0.5 to 16.",
+              "maximum": 32.0,
+              "minimum": 0.0,
+              "title": "Capacity",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.5,
+                16.0
+              ],
+              "x-unit": "ratio"
+            },
+            "deposition": {
+              "default": 0.3,
+              "description": "How fast a drop lays down what it carries beyond what it can.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Deposition",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "erosion": {
+              "default": 0.3,
+              "description": "How fast a drop picks up soil where it can carry more.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Erosion",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "evaporation": {
+              "default": 0.02,
+              "description": "How much of its water a drop loses at each step: higher, shorter gullies.",
+              "maximum": 0.5,
+              "minimum": 0.0,
+              "title": "Evaporation",
+              "type": "number",
+              "x-section": "detail",
+              "x-soft": [
+                0.0,
+                0.5
+              ],
+              "x-unit": "ratio"
+            },
+            "inertia": {
+              "default": 0.05,
+              "description": "How much a drop keeps its way rather than turning downhill: higher, straighter and longer gullies.",
+              "maximum": 0.95,
+              "minimum": 0.0,
+              "title": "Inertia",
+              "type": "number",
+              "x-section": "advanced",
+              "x-soft": [
+                0.0,
+                0.95
+              ],
+              "x-unit": "ratio"
+            },
+            "radius": {
+              "default": 6.0,
+              "description": "How wide a drop wears the ground around it. In blocks.",
+              "maximum": 64.0,
+              "minimum": 1.0,
+              "title": "Radius",
+              "type": "number",
+              "x-section": "detail",
+              "x-soft": [
+                1.0,
+                64.0
+              ],
+              "x-unit": "blocks"
+            },
+            "rain": {
+              "default": 1.0,
+              "description": "Raindrops for each sample of the simulation: more, deeper gullies, slower. Usually 0.1 to 4.",
+              "maximum": 16.0,
+              "minimum": 0.05,
+              "title": "Rain",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.1,
+                4.0
+              ],
+              "x-unit": "ratio"
+            },
+            "seed": {
+              "description": "Another seed gives another variation of the same settings. Left out, it comes from the node's name.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer",
+              "x-section": "detail"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "erosion.particle"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Particle erosion",
+      "type": "object"
+    },
+    "erosion.stream": {
+      "additionalProperties": false,
+      "description": "Rivers cut valleys that branch up into every slope, leaving sharp ridges between them, and lay what they carry down where they slow. The erosion that makes mountains look like mountains: water gathers into streams, the more of it the deeper they cut (stream power), their walls fall back to the talus angle, and the sediment settles at the feet of slopes, on valley floors and at the sea. Use it after shapes and noise to turn lumps into ranges drained by real valleys; follow it with Particle erosion for small gullies and Thermal erosion for scree. Strength is how far the rivers cut back into the land; Hardness keeps some rock standing; Rain gives more water where it falls.",
+      "properties": {
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "hardness": {
+              "$ref": "#/$defs/source",
+              "description": "Rock that resists: 1 wears twenty times slower than 0. (mask) Left empty: soft rock everywhere.",
+              "title": "Hardness"
+            },
+            "height": {
+              "$ref": "#/$defs/source",
+              "description": "The relief to erode. (height)",
+              "title": "Height"
+            },
+            "rainfall": {
+              "$ref": "#/$defs/source",
+              "description": "How much rain falls where: a rainfall map, a rain shadow. (mask) Left empty: the same rain everywhere.",
+              "title": "Rainfall"
+            },
+            "uplift": {
+              "$ref": "#/$defs/source",
+              "description": "Where the land rises while the rivers cut, as much as Rebuild says. (mask) Left empty: the relief itself: the higher, the more.",
+              "title": "Uplift"
+            }
+          },
+          "required": [
+            "height"
+          ],
+          "type": "object"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "channel": {
+              "default": 24.0,
+              "description": "The side of the smallest area that drains into a stream: under it the ground only creeps and slides. In blocks.",
+              "maximum": 512.0,
+              "minimum": 0.0,
+              "title": "Smallest stream",
+              "type": "number",
+              "x-section": "detail",
+              "x-soft": [
+                0.0,
+                512.0
+              ],
+              "x-unit": "blocks"
+            },
+            "deposition": {
+              "default": 0.5,
+              "description": "How readily the water drops what it carries where it slows: fans, filled valleys, deltas.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Deposition",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "diffusion": {
+              "default": 0.0,
+              "description": "How much soil creeps downhill and rounds the land between the streams.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Creep",
+              "type": "number",
+              "x-section": "detail",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "iterations": {
+              "default": 200,
+              "description": "Steps at each level of the simulation: more, finer valleys reaching further, slower.",
+              "maximum": 2000,
+              "minimum": 10,
+              "title": "Iterations",
+              "type": "integer",
+              "x-section": "main"
+            },
+            "m": {
+              "default": 0.5,
+              "description": "How much more large rivers cut than small ones (m of K·A^m·S^n).",
+              "maximum": 0.8,
+              "minimum": 0.2,
+              "title": "Area exponent",
+              "type": "number",
+              "x-section": "advanced",
+              "x-soft": [
+                0.2,
+                0.8
+              ],
+              "x-unit": "ratio"
+            },
+            "n": {
+              "default": 1.0,
+              "description": "How much more steep streams cut than gentle ones (n of K·A^m·S^n).",
+              "maximum": 2.0,
+              "minimum": 0.5,
+              "title": "Slope exponent",
+              "type": "number",
+              "x-section": "advanced",
+              "x-soft": [
+                0.5,
+                2.0
+              ],
+              "x-unit": "ratio"
+            },
+            "rebuild": {
+              "default": 1.0,
+              "description": "How much of the relief rises while the rivers cut, then is brought back to its height: 1 turns any shape into mountains carved by their rivers; 0 only cuts valleys into it, down to the sea and the low ground.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Rebuild",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "seed": {
+              "description": "Another seed gives another variation of the same settings. Left out, it comes from the node's name.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer",
+              "x-section": "detail"
+            },
+            "strength": {
+              "default": 1.0,
+              "description": "How hard the rivers cut: higher, deeper valleys reaching further up into the land. Usually 0 to 4.",
+              "maximum": 20.0,
+              "minimum": 0.0,
+              "title": "Strength",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                4.0
+              ],
+              "x-unit": "ratio"
+            },
+            "talus": {
+              "default": 55.0,
+              "description": "The steepest the valleys' walls stand: lower, wider valleys and rounder ridges. In degrees.",
+              "maximum": 80.0,
+              "minimum": 10.0,
+              "title": "Talus angle",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                10.0,
+                80.0
+              ],
+              "x-unit": "degrees"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "erosion.stream"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Stream erosion",
+      "type": "object"
+    },
+    "erosion.thermal": {
+      "additionalProperties": false,
+      "description": "Loose rock slides down slopes steeper than its angle of repose, and gathers at their feet as scree. Wears cliffs back and fills the feet of slopes with talus, the way frost and gravity do: what is steeper than Talus angle sheds material to the lower neighbours until it is stable. More iterations go further towards that angle; Strength is how much moves at each; Hardness keeps cliffs of hard rock standing while soft beds crumble. The Talus output is where material came to rest: scree, gravel, rubble.",
+      "properties": {
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "hardness": {
+              "$ref": "#/$defs/source",
+              "description": "Rock that holds: 1 never crumbles, 0 crumbles as Strength says. (mask) Left empty: the same rock everywhere.",
+              "title": "Hardness"
+            },
             "height": {
               "$ref": "#/$defs/source",
               "description": "The relief to wear. (height)",
@@ -3536,6 +3879,70 @@
               "title": "Iterations",
               "type": "integer",
               "x-section": "main"
+            },
+            "seed": {
+              "description": "Another seed gives another variation of the same settings. Left out, it comes from the node's name.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer",
+              "x-section": "detail"
+            },
+            "strata": {
+              "default": 0.0,
+              "description": "The thickness of the beds of rock: hard beds stand as cliffs while the soft ones between crumble back into benches, a staircase of terraces. 0: one rock throughout. In blocks. Usually 0 to 32.",
+              "maximum": 128.0,
+              "minimum": 0.0,
+              "title": "Strata",
+              "type": "number",
+              "x-section": "shape",
+              "x-soft": [
+                0.0,
+                32.0
+              ],
+              "x-unit": "blocks"
+            },
+            "strata_hardness": {
+              "default": 0.85,
+              "description": "How much the hard beds resist: 1 never crumbles.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Hard beds",
+              "type": "number",
+              "x-section": "shape",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "strata_share": {
+              "default": 0.4,
+              "description": "How much of each pair of beds is hard rock: more, taller cliffs and narrower benches.",
+              "maximum": 0.95,
+              "minimum": 0.05,
+              "title": "Hard share",
+              "type": "number",
+              "x-section": "shape",
+              "x-soft": [
+                0.05,
+                0.95
+              ],
+              "x-unit": "ratio"
+            },
+            "strata_warp": {
+              "default": 0.3,
+              "description": "How far the beds wave up and down across the land, in beds.",
+              "maximum": 2.0,
+              "minimum": 0.0,
+              "title": "Warp",
+              "type": "number",
+              "x-section": "shape",
+              "x-soft": [
+                0.0,
+                2.0
+              ],
+              "x-unit": "ratio"
             },
             "strength": {
               "default": 0.5,
@@ -3712,6 +4119,129 @@
         "type"
       ],
       "title": "Fault",
+      "type": "object"
+    },
+    "ice.glacier": {
+      "additionalProperties": false,
+      "description": "Ice gathers above the snow line, flows down the valleys and scours them into U-shapes, with cirques at their heads, fjords below the sea and moraines at their ends. Snow above the equilibrium line (ELA) turns to ice, which flows downhill and melts below the line. Where it slides it wears its bed: V-shaped river valleys become broad U-shaped troughs, their heads armchair cirques, side valleys left hanging, and valleys the ice carried below the sea become fjords. Moraines are laid along its edges and where it ends. Lower the line or raise Accumulation for larger glaciers; Strength is how deep they cut.",
+      "properties": {
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "height": {
+              "$ref": "#/$defs/source",
+              "description": "The relief the ice covers. (height)",
+              "title": "Height"
+            },
+            "snow": {
+              "$ref": "#/$defs/source",
+              "description": "Where snow falls (a snow or rainfall map): 0 no ice grows. (mask) Left empty: the same snow everywhere.",
+              "title": "Snow"
+            }
+          },
+          "required": [
+            "height"
+          ],
+          "type": "object"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "accumulation": {
+              "default": 1.0,
+              "description": "How fast ice gathers above the line, and melts below: higher, thicker glaciers reaching further down. Usually 0 to 4.",
+              "maximum": 10.0,
+              "minimum": 0.0,
+              "title": "Accumulation",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                4.0
+              ],
+              "x-unit": "ratio"
+            },
+            "ela": {
+              "default": 170.0,
+              "description": "The equilibrium line: above it snow gathers into ice, below it the ice melts. In blocks. Usually 60 to 300.",
+              "maximum": 320.0,
+              "minimum": -64.0,
+              "title": "Snow line",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                60.0,
+                300.0
+              ],
+              "x-unit": "blocks"
+            },
+            "flow": {
+              "default": 1.0,
+              "description": "How readily the ice flows and slides: higher, thinner and faster glaciers.",
+              "maximum": 10.0,
+              "minimum": 0.0,
+              "title": "Flow",
+              "type": "number",
+              "x-section": "advanced",
+              "x-soft": [
+                0.0,
+                10.0
+              ],
+              "x-unit": "ratio"
+            },
+            "iterations": {
+              "default": 800,
+              "description": "Steps of the simulation: more, an older ice age, deeper troughs.",
+              "maximum": 10000,
+              "minimum": 10,
+              "title": "Iterations",
+              "type": "integer",
+              "x-section": "main"
+            },
+            "moraines": {
+              "default": 3.0,
+              "description": "How high the ridges of rubble along the ice's edges stand. In blocks.",
+              "maximum": 32.0,
+              "minimum": 0.0,
+              "title": "Moraines",
+              "type": "number",
+              "x-section": "detail",
+              "x-soft": [
+                0.0,
+                32.0
+              ],
+              "x-unit": "blocks"
+            },
+            "strength": {
+              "default": 1.0,
+              "description": "How deep the ice scours its bed. Usually 0 to 4.",
+              "maximum": 10.0,
+              "minimum": 0.0,
+              "title": "Strength",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                4.0
+              ],
+              "x-unit": "ratio"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "ice.glacier"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Glaciers",
       "type": "object"
     },
     "input.heightmap": {
@@ -8244,6 +8774,36 @@
           "if": {
             "properties": {
               "type": {
+                "const": "erosion.stream"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/erosion.stream"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "erosion.particle"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/erosion.particle"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
                 "const": "erosion.thermal"
               }
             },
@@ -8253,6 +8813,111 @@
           },
           "then": {
             "$ref": "#/$defs/erosion.thermal"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "sediment.deposit"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/sediment.deposit"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "ice.glacier"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/ice.glacier"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "wind.erosion"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/wind.erosion"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "water.flow"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/water.flow"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "water.rivers"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/water.rivers"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "water.lakes"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/water.lakes"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "water.sea"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/water.sea"
           }
         },
         {
@@ -8852,7 +9517,16 @@
             "adjust.warp",
             "adjust.transform",
             "adjust.swirl",
+            "erosion.stream",
+            "erosion.particle",
             "erosion.thermal",
+            "sediment.deposit",
+            "ice.glacier",
+            "wind.erosion",
+            "water.flow",
+            "water.rivers",
+            "water.lakes",
+            "water.sea",
             "climate.temperature",
             "climate.wind",
             "climate.rainfall",
@@ -10072,6 +10746,109 @@
       "title": "Mesas and buttes",
       "type": "object"
     },
+    "sediment.deposit": {
+      "additionalProperties": false,
+      "description": "Loose rock and soil shed by steep slopes run down with the water and settle where it slows: fans at the feet of mountains, filled valleys and basins, deltas at the sea. Lays down what the mountains shed, without cutting anything: the steep slopes of Source give Amount blocks of material over the run, the water carries it down its ways and drops it where they flatten, spreading alluvial fans at the mouths of valleys, flat floors in the valleys and basins, and deltas where rivers meet the sea. Use it after Stream erosion, or on any range, to soften its feet into the plains.",
+      "properties": {
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "height": {
+              "$ref": "#/$defs/source",
+              "description": "The relief that sheds and gathers. (height)",
+              "title": "Height"
+            },
+            "source": {
+              "$ref": "#/$defs/source",
+              "description": "Where loose material comes from (still only from its steep slopes). (mask) Left empty: every steep slope.",
+              "title": "Source"
+            }
+          },
+          "required": [
+            "height"
+          ],
+          "type": "object"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "default": 6.0,
+              "description": "Blocks of material the steepest slopes shed over the run. Usually 0 to 40.",
+              "maximum": 200.0,
+              "minimum": 0.0,
+              "title": "Amount",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                40.0
+              ],
+              "x-unit": "blocks"
+            },
+            "creep": {
+              "default": 0.05,
+              "description": "How much the loose ground creeps and smooths.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Creep",
+              "type": "number",
+              "x-section": "detail",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "deposition": {
+              "default": 0.7,
+              "description": "How readily the water drops what it carries: higher, shorter and steeper fans; lower, material carried far down the valleys and into the sea.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Deposition",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "iterations": {
+              "default": 150,
+              "description": "Steps at each level of the simulation: more, fans spreading further.",
+              "maximum": 2000,
+              "minimum": 10,
+              "title": "Iterations",
+              "type": "integer",
+              "x-section": "main"
+            },
+            "seed": {
+              "description": "Another seed gives another variation of the same settings. Left out, it comes from the node's name.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer",
+              "x-section": "detail"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "sediment.deposit"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Sediment",
+      "type": "object"
+    },
     "source": {
       "description": "What feeds an input: a node's name, and after a dot one of its outputs (the first when left out), as \"hills\" or \"worn.flow\".",
       "pattern": "^[A-Za-z0-9_-]{1,64}(\\.[A-Za-z0-9_.-]{1,64})?$",
@@ -10702,6 +11479,499 @@
         "type"
       ],
       "title": "Glacial valley",
+      "type": "object"
+    },
+    "water.flow": {
+      "additionalProperties": false,
+      "description": "Where the rain runs off, as a mask: bright in the rivers, fading up every rill. Follows the rain down the relief, across hollows and flats to the sea or the terrain's edge, and measures how much land drains through each place. Use it to paint river beds, wet valley floors and gullies, or to drive vegetation. Small streams shows more of the rills next to the rivers.",
+      "properties": {
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "height": {
+              "$ref": "#/$defs/source",
+              "description": "The relief the water runs over. (height)",
+              "title": "Height"
+            },
+            "rainfall": {
+              "$ref": "#/$defs/source",
+              "description": "How much rain falls where: a rainfall map, a rain shadow. (mask) Left empty: the same rain everywhere.",
+              "title": "Rainfall"
+            }
+          },
+          "required": [
+            "height"
+          ],
+          "type": "object"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "seed": {
+              "description": "Another seed gives another variation of the same settings. Left out, it comes from the node's name.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer",
+              "x-section": "detail"
+            },
+            "spread": {
+              "default": 0.5,
+              "description": "How much the small streams show next to the large rivers.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Small streams",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "water.flow"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Flow",
+      "type": "object"
+    },
+    "water.lakes": {
+      "additionalProperties": false,
+      "description": "Every hollow fills up to where it spills: with water, or with ground. Finds every hollow of the relief, where rain would gather, and fills it to the level where it overflows. Amount 0 makes them lakes; 1 fills them with ground, as sediment would, smoothing the land; between, both. What lies under the sea level is the sea's, not a lake.",
+      "properties": {
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "height": {
+              "$ref": "#/$defs/source",
+              "description": "The relief whose hollows fill. (height)",
+              "title": "Height"
+            }
+          },
+          "required": [
+            "height"
+          ],
+          "type": "object"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "default": 0.0,
+              "description": "How much of each hollow fills with ground rather than water: 0, lakes; 1, flat ground.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Amount",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "sea": {
+              "default": 62.0,
+              "description": "Under it the hollows are the sea's: hollows spill into it. In blocks.",
+              "maximum": 320.0,
+              "minimum": -64.0,
+              "title": "Sea level",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -64.0,
+                320.0
+              ],
+              "x-unit": "blocks"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "water.lakes"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Lakes",
+      "type": "object"
+    },
+    "water.rivers": {
+      "additionalProperties": false,
+      "description": "Rivers where enough of the land drains, their beds and banks dug into the relief, wider and deeper downstream, holding lakes in deep hollows. Follows the rain to the sea or the terrain's edge and lays a river wherever enough land drains: a thread at its source, wider and deeper as water joins it. Its water only ever goes down, cutting through the rims of shallow hollows and filling deep ones with lakes. Threshold sets how many rivers there are; Width and Depth those of the largest; Banks how gently the land slopes down to them. Water already on the map (wired to Water) is kept, and rivers end where they reach it.",
+      "properties": {
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "height": {
+              "$ref": "#/$defs/source",
+              "description": "The relief the rivers run over. (height)",
+              "title": "Height"
+            },
+            "water": {
+              "$ref": "#/$defs/source",
+              "description": "Water already there (a map's rivers and lakes): kept, and rivers end in it. (height) Left empty: no water yet.",
+              "title": "Water"
+            }
+          },
+          "required": [
+            "height"
+          ],
+          "type": "object"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "banks": {
+              "default": 1.0,
+              "description": "How far the banks slope down to the water, in river widths. Usually 0 to 4.",
+              "maximum": 8.0,
+              "minimum": 0.0,
+              "title": "Banks",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                4.0
+              ],
+              "x-unit": "ratio"
+            },
+            "depth": {
+              "default": 5.0,
+              "description": "The depth of the largest river. In blocks. Usually 1 to 16.",
+              "maximum": 64.0,
+              "minimum": 0.5,
+              "title": "Depth",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                1.0,
+                16.0
+              ],
+              "x-unit": "blocks"
+            },
+            "lakes": {
+              "default": 0.5,
+              "description": "Which hollows hold lakes rather than being cut through: 0 none, 1 every hollow a block deep.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Lakes",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "meander": {
+              "default": 0.5,
+              "description": "How far the rivers wind about the water's way, in river widths: 0 follows it straight. Usually 0 to 1.5.",
+              "maximum": 3.0,
+              "minimum": 0.0,
+              "title": "Meanders",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.5
+              ],
+              "x-unit": "ratio"
+            },
+            "sea": {
+              "default": 62.0,
+              "description": "Rivers end where the ground goes under it. In blocks.",
+              "maximum": 320.0,
+              "minimum": -64.0,
+              "title": "Sea level",
+              "type": "number",
+              "x-section": "detail",
+              "x-soft": [
+                -64.0,
+                320.0
+              ],
+              "x-unit": "blocks"
+            },
+            "seed": {
+              "description": "Another seed gives another variation of the same settings. Left out, it comes from the node's name.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer",
+              "x-section": "detail"
+            },
+            "threshold": {
+              "default": 0.55,
+              "description": "How much land must drain to a place for a river to run there: higher, fewer and larger rivers.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Threshold",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "width": {
+              "default": 14.0,
+              "description": "The width of the largest river; the smallest are a quarter of it. In blocks. Usually 2 to 64.",
+              "maximum": 256.0,
+              "minimum": 1.0,
+              "title": "Width",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                2.0,
+                64.0
+              ],
+              "x-unit": "blocks"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "water.rivers"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Rivers",
+      "type": "object"
+    },
+    "water.sea": {
+      "additionalProperties": false,
+      "description": "The sea up to a level, where the terrain's edge lets it in, and the shore around it. Floods the relief up to Level from the terrain's edge: low ground behind higher ground stays dry unless Connected is off. Its Shore mask follows the coast, a band of height around the level, for beaches and cliffs' feet.",
+      "properties": {
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "height": {
+              "$ref": "#/$defs/source",
+              "description": "The relief the sea floods. (height)",
+              "title": "Height"
+            }
+          },
+          "required": [
+            "height"
+          ],
+          "type": "object"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "connected": {
+              "default": true,
+              "description": "Only where the sea comes in from the terrain's edge; off, every place under the level is sea.",
+              "title": "Connected",
+              "type": "boolean",
+              "x-section": "main"
+            },
+            "level": {
+              "default": 62.0,
+              "description": "The sea's surface. In blocks.",
+              "maximum": 320.0,
+              "minimum": -64.0,
+              "title": "Level",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -64.0,
+                320.0
+              ],
+              "x-unit": "blocks"
+            },
+            "shore": {
+              "default": 4.0,
+              "description": "How many blocks of height either side of the level the shore takes. Usually 0.5 to 16.",
+              "maximum": 64.0,
+              "minimum": 0.5,
+              "title": "Shore",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.5,
+                16.0
+              ],
+              "x-unit": "blocks"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "water.sea"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Sea",
+      "type": "object"
+    },
+    "wind.erosion": {
+      "additionalProperties": false,
+      "description": "The wind blows loose sand into dunes, ridged where sand is plenty and crescents where it is scarce, and wears bare rock that faces it. Spreads Sand blocks of loose sand (where the Sand mask says) and lets the wind work it: it lifts sand in the open, carries it a hop downwind, and drops it in the lee of every rise, so that dunes grow with gentle backs to the wind and steep slip faces away from it. Plenty of sand makes transverse ridges; little makes barchans. Abrasion wears rock facing the wind into streamlined ridges (yardangs). Connect a wind vector (Climate's wind) to make the wind turn over the land.",
+      "properties": {
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "height": {
+              "$ref": "#/$defs/source",
+              "description": "The ground under the sand. (height)",
+              "title": "Height"
+            },
+            "sand": {
+              "$ref": "#/$defs/source",
+              "description": "Where loose sand lies at first. (mask) Left empty: sand everywhere.",
+              "title": "Sand"
+            },
+            "wind": {
+              "$ref": "#/$defs/source",
+              "description": "The wind's way at each place. (vector) Left empty: the Direction setting everywhere.",
+              "title": "Wind"
+            }
+          },
+          "required": [
+            "height"
+          ],
+          "type": "object"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "abrasion": {
+              "default": 0.0,
+              "description": "How fast blown sand wears the bare rock that faces the wind.",
+              "maximum": 5.0,
+              "minimum": 0.0,
+              "title": "Abrasion",
+              "type": "number",
+              "x-section": "detail",
+              "x-soft": [
+                0.0,
+                5.0
+              ],
+              "x-unit": "ratio"
+            },
+            "direction": {
+              "default": 0.0,
+              "description": "Where the wind blows towards: 0° east, 90° south. In degrees.",
+              "maximum": 360.0,
+              "minimum": 0.0,
+              "title": "Direction",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                360.0
+              ],
+              "x-unit": "degrees"
+            },
+            "hop": {
+              "default": 12.0,
+              "description": "How far a grain flies in one hop: longer, larger dunes further apart. In blocks. Usually 4 to 48.",
+              "maximum": 128.0,
+              "minimum": 1.0,
+              "title": "Hop",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                4.0,
+                48.0
+              ],
+              "x-unit": "blocks"
+            },
+            "iterations": {
+              "default": 400,
+              "description": "Steps of the simulation: more, dunes grown larger and more regular.",
+              "maximum": 10000,
+              "minimum": 10,
+              "title": "Iterations",
+              "type": "integer",
+              "x-section": "main"
+            },
+            "sand_depth": {
+              "default": 6.0,
+              "description": "Blocks of loose sand to blow around: plenty, transverse ridges; little, crescents. Usually 0 to 24.",
+              "maximum": 64.0,
+              "minimum": 0.0,
+              "title": "Sand",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                24.0
+              ],
+              "x-unit": "blocks"
+            },
+            "seed": {
+              "description": "Another seed gives another variation of the same settings. Left out, it comes from the node's name.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer",
+              "x-section": "detail"
+            },
+            "strength": {
+              "default": 1.0,
+              "description": "How much sand the wind lifts at each step.",
+              "maximum": 5.0,
+              "minimum": 0.0,
+              "title": "Strength",
+              "type": "number",
+              "x-section": "detail",
+              "x-soft": [
+                0.0,
+                5.0
+              ],
+              "x-unit": "ratio"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "wind.erosion"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Wind",
       "type": "object"
     }
   },

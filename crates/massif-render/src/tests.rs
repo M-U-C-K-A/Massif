@@ -25,9 +25,10 @@ fn the_open_map_builds_into_chunks() {
     assert_eq!(chunks.len(), 256);
     assert!(chunks.iter().all(|c| c.top > 0), "land everywhere");
     assert!(materials.len() > 3, "stone, grass, water and more");
-    // The surface only: a few words a column.
+    // The surface only: a few words a column (and a little more where the
+    // large ore veins of the modern ores reach it).
     let bytes: usize = chunks.iter().map(|c| c.bytes()).sum();
-    assert!(bytes < 256 * 256 * 4, "{bytes} bytes for 65,536 columns");
+    assert!(bytes < 256 * 256 * 4 * 17 / 16, "{bytes} bytes for 65,536 columns");
 }
 
 fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
