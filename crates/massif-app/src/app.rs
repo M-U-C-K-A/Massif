@@ -12984,7 +12984,15 @@ mod tests {
         let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else { return };
         let packs = std::env::temp_dir().join(format!("massif-plains-renders-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&packs);
-        let pack = massif_structures::village::testpack::write_pack(&packs).unwrap();
+        // MASSIF_VILLAGE_PACK: another pack (the game's buildings, from
+        // massif-cli village-pack-from-game), and MASSIF_VILLAGE_THEME its
+        // pack and theme names, "pack/theme".
+        let pack = match std::env::var_os("MASSIF_VILLAGE_PACK") {
+            Some(p) => PathBuf::from(p),
+            None => massif_structures::village::testpack::write_pack(&packs).unwrap(),
+        };
+        let theme_names = std::env::var("MASSIF_VILLAGE_THEME").ok().and_then(|t| t.split_once('/').map(|(a, b)| (a.to_owned(), b.to_owned()))).unwrap_or(("Plains (test boxes)".into(), "Plains".into()));
+        let prefix = std::env::var("MASSIF_VILLAGE_NAME").unwrap_or_else(|_| "plains".into());
         let mut h = harness(ThemeChoice::Dark);
         h.run_steps(5);
         if let Some(Ok(cat)) = massif_assets::load_newest() {
@@ -13009,12 +13017,25 @@ mod tests {
         };
         let ppp = h.ctx.pixels_per_point();
         let top = massif_core::ops::height_at(h.state().doc.dimension(), 0, spot.0, spot.1, massif_core::ops::Surface::Top).unwrap_or(64.0);
-        for (name, walls, road) in [("walls-stone", true, RoadType::Stone), ("open-dirt", false, RoadType::Dirt)] {
+        let variants: Vec<(&str, bool, RoadType, f32, Option<u32>)> = if std::env::var_os("MASSIF_VILLAGE_PACK").is_some() {
+            vec![
+                ("walls-stone", true, RoadType::Stone, 0.0, None),
+                ("open-dirt", false, RoadType::Dirt, 0.0, None),
+                ("gravel-large", false, RoadType::Premium, 1.0, None),
+                ("walls-small-12", true, RoadType::Stone, -1.0, Some(12)),
+                ("dirt-40", false, RoadType::Dirt, 0.0, Some(40)),
+            ]
+        } else {
+            vec![("walls-stone", true, RoadType::Stone, 0.0, None), ("open-dirt", false, RoadType::Dirt, 0.0, None)]
+        };
+        for (name, walls, road, bias, houses) in variants {
             {
                 let s = h.state_mut();
                 s.tools.select(Tool::Village);
                 s.tools.village.packs = vec![pack.clone()];
-                s.tools.village.theme = ("Plains (test boxes)".into(), "Plains".into());
+                s.tools.village.theme = theme_names.clone();
+                s.tools.village.size_bias = bias;
+                s.tools.village.houses = houses;
                 s.tools.village.walls = walls;
                 s.tools.village.road = road;
                 s.tools.village.props = 0.7;
@@ -13037,7 +13058,7 @@ mod tests {
             assert_eq!(h.state().doc.dimension().structures.len(), 1, "built");
             h.state_mut().doc.select("Select", None);
             if name == "walls-stone" {
-                h.render().unwrap().save(dir.join(format!("village-plains-settings-{ppp}x.png"))).unwrap();
+                h.render().unwrap().save(dir.join(format!("village-{prefix}-settings-{ppp}x.png"))).unwrap();
             }
             // In the 3D view, from the south-east, high.
             h.state_mut().layout.current_mut().maximized = None;
@@ -13052,7 +13073,7 @@ mod tests {
                 }
             }
             h.run_steps(10);
-            h.render().unwrap().save(dir.join(format!("village-plains-{name}-3d-{ppp}x.png"))).unwrap();
+            h.render().unwrap().save(dir.join(format!("village-{prefix}-{name}-3d-{ppp}x.png"))).unwrap();
             // The Diorama, from straight above.
             h.state_mut().layout.active = 0;
             h.run_steps(3);
@@ -13071,7 +13092,7 @@ mod tests {
                 std::thread::sleep(std::time::Duration::from_millis(2));
             }
             h.run_steps(4);
-            h.render().unwrap().save(dir.join(format!("village-plains-{name}-diorama-{ppp}x.png"))).unwrap();
+            h.render().unwrap().save(dir.join(format!("village-{prefix}-{name}-diorama-{ppp}x.png"))).unwrap();
             h.state_mut().layout.current_mut().root.set_editor(id, EditorKind::Map);
             h.run_steps(3);
             for _ in 0..4 {

@@ -15,6 +15,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 rayon.workspace = true
 fastnbt = "2.6"
+fastanvil = { version = "0.32", default-features = false }
 
 [dev-dependencies]
 flate2.workspace = true

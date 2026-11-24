@@ -299,7 +299,14 @@ pub static WALLS: NodeSpec = NodeSpec {
     summary: "Ramparts round a village, three blocks inside its area: towers at the corners and along them, a gate where a main road crosses.",
     help: "The wall's line follows the area's outline; side roads stop short of it, main roads pass through its gates (Roads out is the roads cut so). With Walls off, it draws no wall and lets the roads through as they are.",
     keywords: &["village", "walls", "ramparts", "towers", "gates", "fortification"],
-    inputs: &[HEIGHT_IN, AREA_IN, ROADS_IN, PortSpec::new("squares", "Squares", PortKind::Points, "The squares, from Village site: the walls go round the village's reach of them.").or("round the whole area")],
+    inputs: &[
+        HEIGHT_IN,
+        AREA_IN,
+        ROADS_IN,
+        PortSpec::new("squares", "Squares", PortKind::Points, "The squares, from Village site: the walls go round the village's reach of them.").or("round the whole area"),
+        PortSpec::new("buildings", "Buildings", PortKind::Instances, "The buildings, from Village buildings: the walls go round them, eight blocks out.").optional(),
+        PortSpec::new("fields", "Fields", PortKind::Footprints, "The fields, kept within the walls too.").optional(),
+    ],
     outputs: &[
         PortSpec::new("walls", "Walls", PortKind::Splines, "The wall's line, closed."),
         PortSpec::new("towers", "Towers", PortKind::Points, "Its corners, towers and gates."),
@@ -320,8 +327,17 @@ fn walls(ctx: &Ctx, rasters: &[Option<&Grid>], _: &(dyn Fn() -> bool + Sync)) ->
     let area = area_of(ctx, rasters[1])?;
     let every = theme_of(ctx).map_or(40, |t| t.walls.towers);
     let mut roads = geo::roads_from(&roads_in);
+    // Round the buildings when they are given, else round the village's
+    // reach, else the area.
+    let mut boxes: Vec<([i32; 2], [i32; 2])> = ctx.geo(4).and_then(Geo::instances).map(|i| i.items.iter().filter(|i| !i.asset.starts_with("massif:")).map(|i| ([i.bbox.0[0], i.bbox.0[2]], [i.bbox.1[0], i.bbox.1[2]])).collect()).unwrap_or_default();
+    if let Some(f) = ctx.geo(5).and_then(Geo::footprints) {
+        boxes.extend(f.items.iter().map(|f| ([f.min[0] - 1, f.min[1] - 1], [f.max[0], f.max[1]])));
+    }
     let site = ctx.geo(3).and_then(Geo::points).and_then(|p| geo::site_from(p, &area)).filter(|s| s.1).map(|s| s.0);
-    let w = village::walls::walls(&area, &roads, site.as_ref());
+    let w = match village::walls::round_buildings(&area, &roads, &boxes) {
+        Some(w) => w,
+        None => village::walls::walls(&area, &roads, site.as_ref()),
+    };
     village::walls::trim(&mut roads, &w);
     let (line, towers) = geo::wall_geometry(&w, every, &land);
     // The roads cut, keeping what the splines carried (their type).
@@ -385,7 +401,11 @@ pub static BUILDINGS: NodeSpec = NodeSpec {
     help: "Each plot draws a type by the pack's shares and rules (the church and wells near the square, forges and taverns near the market, farms and towers toward the edge, manors on the heights), then a schematic of the size the plot likes, turned to face the road; a smaller one when it has not the room. Farms keep a field behind them, as often as Fields asks. It stops at Houses houses.",
     keywords: &["village", "buildings", "houses", "farms", "fields", "church", "instances"],
     inputs: &[HEIGHT_IN, AREA_IN, SQUARES_IN, ROADS_IN, WALLS_IN, PortSpec::new("plots", "Plots", PortKind::Footprints, "The plots, from Village plots.")],
-    outputs: &[PortSpec::new("buildings", "Buildings", PortKind::Instances, "The buildings: the pack's schematics placed and turned."), PortSpec::new("fields", "Fields", PortKind::Footprints, "The farms' fields, each its crop.")],
+    outputs: &[
+        PortSpec::new("buildings", "Buildings", PortKind::Instances, "The buildings: the pack's schematics placed and turned."),
+        PortSpec::new("fields", "Fields", PortKind::Footprints, "The farms' fields, each its crop."),
+        PortSpec::new("roads", "Roads", PortKind::Splines, "The roads, side roads cut after their last building (no door opens on the rest)."),
+    ],
     params: &[
         PACK,
         HOUSES,
@@ -409,13 +429,29 @@ fn buildings(ctx: &Ctx, rasters: &[Option<&Grid>], _: &(dyn Fn() -> bool + Sync)
     let land = Land::of(ctx, rasters[0]);
     let area = area_of(ctx, rasters[1])?;
     let site = site_of(ctx, 2, &area)?;
-    let roads = geo::roads_from(&splines(ctx, 3, "roads")?);
-    let reserved = walls_of(ctx, 4).map(|w| w.reserved()).unwrap_or_default();
-    let plots = geo::plots_from(&footprints(ctx, 5, "plots")?);
+    let lines = splines(ctx, 3, "roads")?;
+    let mut roads = geo::roads_from(&lines);
+    let walls = walls_of(ctx, 4);
+    let reserved = walls.as_ref().map(|w| w.reserved()).unwrap_or_default();
+    let mut plots = geo::plots_from(&footprints(ctx, 5, "plots")?);
+    // Within the walls only.
+    if let Some(w) = &walls {
+        plots = w.plots_within(&plots);
+    }
     let theme = theme_of(ctx)?;
     let b = village::buildings::buildings(&land, &area, &site, &roads, &reserved, &Default::default(), &plots, &theme, &params_of(ctx), seed(ctx));
     let (i, f) = geo::building_geometry(&b, &theme);
-    Ok(vec![Geo::Instances(i), Geo::Footprints(f)])
+    // The side roads no door opens on go; the other lines (the walls')
+    // pass as they came, the roads keeping what their splines carried.
+    let doors: Vec<[i32; 2]> = b.placed.iter().map(|p| [p.door[0], p.door[2]]).collect();
+    village::roads::prune(&mut roads, &doors);
+    let attrs = lines.lines.iter().find(|l| matches!(l.kind.as_str(), "main" | "side" | "square")).map(|l| l.attrs.clone()).unwrap_or_default();
+    let mut out = geo::road_splines(&roads, &land);
+    for l in &mut out.lines {
+        l.attrs = attrs.clone();
+    }
+    out.lines.extend(lines.lines.iter().filter(|l| !matches!(l.kind.as_str(), "main" | "side" | "square")).cloned());
+    Ok(vec![Geo::Instances(i), Geo::Footprints(f), Geo::Splines(out)])
 }
 
 // --------------------------------------------------------------- props --

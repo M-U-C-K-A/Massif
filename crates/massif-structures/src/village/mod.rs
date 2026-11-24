@@ -31,6 +31,8 @@
 //! `docs/village-packs.md`).
 
 pub mod buildings;
+pub mod from_game;
+pub mod from_world;
 pub mod geometry;
 pub mod graph;
 pub mod lay;
@@ -307,13 +309,34 @@ pub fn stages(lib: Option<&Library>, ground: &dyn Ground, req: &Request) -> Resu
         }
         let plots = if theme.vanilla.is_some() { Vec::new() } else { plots::plots(&roads, &site, p, req.seed) };
         let reserved = walls.as_ref().map(|w| w.reserved()).unwrap_or_default();
-        let buildings = buildings::buildings(ground, &area, &site, &roads, &reserved, &blocked, &plots, theme, p, req.seed);
+        let within = match &walls {
+            Some(w) => w.plots_within(&plots),
+            None => plots.clone(),
+        };
+        let buildings = buildings::buildings(ground, &area, &site, &roads, &reserved, &blocked, &within, theme, p, req.seed);
         let short = buildings.notes.iter().any(|n| n.contains("houses asked for"));
         k += 1;
         if !short || k >= 4 || theme.vanilla.is_some() {
             break (site, roads, walls, plots, buildings);
         }
     };
+    // Walls round a village of so many houses: drawn again round what was
+    // built, so that it does not stand in a ring of empty land.
+    let mut roads = roads;
+    let mut walls = walls;
+    if p.walls && p.houses.is_some() && theme.vanilla.is_none() {
+        let mut boxes: Vec<([i32; 2], [i32; 2])> = buildings.placed.iter().map(|b| ([b.min[0], b.min[2]], [b.max[0], b.max[2]])).collect();
+        boxes.extend(buildings.fields.iter().map(|f| ([f.rect[0] - 1, f.rect[1] - 1], [f.rect[2] + 1, f.rect[3] + 1])));
+        if let Some(w) = walls::round_buildings(&area, &roads, &boxes) {
+            walls::trim(&mut roads, &w);
+            walls = Some(w);
+        }
+    }
+    // Side roads no door opens on go (the game's villages keep their own).
+    if theme.vanilla.is_none() {
+        let doors: Vec<[i32; 2]> = buildings.placed.iter().map(|b| [b.door[0], b.door[2]]).collect();
+        roads::prune(&mut roads, &doors);
+    }
     let reserved = walls.as_ref().map(|w| w.reserved()).unwrap_or_default();
     let props = props::props(ground, &area, &site, &roads, &reserved, &buildings, theme, p, req.seed);
     Ok((Stages { area, site, roads, walls, plots, buildings, props }, jigsaw))

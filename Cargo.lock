@@ -2325,6 +2325,7 @@ dependencies = [
 name = "massif-structures"
 version = "1.2.0"
 dependencies = [
+ "fastanvil",
  "fastnbt",
  "flate2",
  "massif-assets",

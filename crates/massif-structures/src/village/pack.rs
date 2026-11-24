@@ -284,14 +284,21 @@ pub(crate) fn is_schematic(p: &Path) -> bool {
     p.extension().and_then(|e| e.to_str()).is_some_and(|e| massif_objects::EXTENSIONS.iter().any(|x| e.eq_ignore_ascii_case(x)))
 }
 
+/// Whether a file or folder is hidden: macOS's `._` shadow files, written
+/// beside every file on a drive formatted for Windows (exFAT), and the
+/// like.
+fn hidden(p: &Path) -> bool {
+    p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'))
+}
+
 pub(crate) fn files_in(dir: &Path) -> Vec<PathBuf> {
-    let mut out: Vec<PathBuf> = std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_file() && is_schematic(p)).collect();
+    let mut out: Vec<PathBuf> = std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_file() && is_schematic(p) && !hidden(p)).collect();
     out.sort();
     out
 }
 
 fn subdirs(dir: &Path) -> Vec<PathBuf> {
-    let mut out: Vec<PathBuf> = std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+    let mut out: Vec<PathBuf> = std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir() && !hidden(p)).collect();
     out.sort();
     out
 }
@@ -380,6 +387,8 @@ struct FileSpec {
     entrance: Option<Side>,
     weight: Option<f32>,
     water: Option<bool>,
+    /// Its door's lower half, when the schematic has none to find.
+    door: Option<[i32; 3]>,
 }
 
 fn file_spec(spec: Option<&serde_json::Value>, file: &Path) -> FileSpec {
@@ -390,6 +399,7 @@ fn file_spec(spec: Option<&serde_json::Value>, file: &Path) -> FileSpec {
         entrance: f.and_then(|f| f.get("entrance")).and_then(|v| v.as_str()).and_then(Side::parse),
         weight: f.and_then(|f| f.get("weight")).and_then(|v| v.as_f64()).map(|v| v.max(0.0) as f32),
         water: f.and_then(|f| f.get("water")).and_then(|v| v.as_bool()),
+        door: f.and_then(|f| f.get("door")).and_then(|v| v.as_array()).and_then(|a| Some([a.first()?.as_i64()? as i32, a.get(1)?.as_i64()? as i32, a.get(2)?.as_i64()? as i32])),
     }
 }
 
@@ -399,7 +409,7 @@ fn variant(file: &Path, spec: Option<&serde_json::Value>, sizes: &Sizes, foundat
     let plan = plan_of(file)?;
     let fs = file_spec(spec, file);
     let entrance = fs.entrance.or_else(|| spec.and_then(|s| s.get("entrance")).and_then(|v| v.as_str()).and_then(Side::parse)).unwrap_or(Side::South);
-    let found = find_door(&plan, entrance);
+    let found = find_door(&plan, entrance).or(fs.door);
     let door = found.unwrap_or_else(|| default_door(plan.size, entrance, foundation));
     let stem = file.file_stem().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
     let v = Variant {
@@ -560,14 +570,14 @@ pub fn read_pack_checked(dir: &Path) -> Result<Read, String> {
             }
             let (share, max, centre, edge, near, high) = default_type(&name);
             let f = |k: &str| spec.and_then(|s| s.get(k));
-            let field = f("field").map(|v| FieldSpec {
+            let field = f("field").filter(|v| v.as_bool() != Some(false)).map(|v| FieldSpec {
                 size: v.get("size").and_then(|p| p.as_array()).and_then(|a| Some([a.first()?.as_i64()? as i32, a.get(1)?.as_i64()? as i32])).unwrap_or([12, 24]),
                 crops: {
                     let c = strings(v.get("crops"));
                     if c.is_empty() { vec!["wheat".into(), "carrots".into(), "potatoes".into()] } else { c }
                 },
             });
-            let field = field.or_else(|| (name == "farm").then(|| FieldSpec { size: [12, 24], crops: vec!["wheat".into(), "carrots".into(), "potatoes".into()] }));
+            let field = field.or_else(|| (name == "farm" && f("field").and_then(|v| v.as_bool()) != Some(false)).then(|| FieldSpec { size: [12, 24], crops: vec!["wheat".into(), "carrots".into(), "potatoes".into()] }));
             types.push(BuildingType {
                 share: f("share").and_then(|v| v.as_f64()).map_or(share, |v| v.max(0.0) as f32),
                 max: f("max").and_then(|v| v.as_u64()).map(|v| v as u32).or(max),

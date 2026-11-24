@@ -37,18 +37,18 @@
   "nodes": {
     "site": { "type": "village.site", "inputs": { "height": "in.height", "area": "in.area" } },
     "roads": { "type": "village.roads", "inputs": { "height": "in.height", "area": "in.area", "squares": "site.squares" } },
-    "walls": { "type": "village.walls", "inputs": { "height": "in.height", "area": "in.area", "roads": "roads.roads", "squares": "site.squares" }, "params": { "on": false } },
-    "plots": { "type": "village.plots", "inputs": { "squares": "site.squares", "roads": "walls.roads" } },
-    "buildings": { "type": "village.buildings", "inputs": { "height": "in.height", "area": "in.area", "squares": "site.squares", "roads": "walls.roads", "walls": "walls.walls", "plots": "plots.plots" } },
+    "plots": { "type": "village.plots", "inputs": { "squares": "site.squares", "roads": "roads.roads" } },
+    "buildings": { "type": "village.buildings", "inputs": { "height": "in.height", "area": "in.area", "squares": "site.squares", "roads": "roads.roads", "plots": "plots.plots" } },
+    "walls": { "type": "village.walls", "inputs": { "height": "in.height", "area": "in.area", "roads": "buildings.roads", "squares": "site.squares", "buildings": "buildings.buildings", "fields": "buildings.fields" }, "params": { "on": false } },
     "props": { "type": "village.props", "inputs": { "height": "in.height", "area": "in.area", "squares": "site.squares", "roads": "walls.roads", "walls": "walls.walls", "buildings": "buildings.buildings", "fields": "buildings.fields" } },
     "ground": { "type": "village.ground", "inputs": { "height": "in.height", "buildings": "buildings.buildings", "fields": "buildings.fields", "roads": "walls.roads" } }
   },
   "ui": {
     "site": { "pos": [0, 0] },
     "roads": { "pos": [240, 0] },
-    "walls": { "pos": [480, 0] },
-    "plots": { "pos": [720, -80] },
-    "buildings": { "pos": [960, 0] },
+    "plots": { "pos": [480, -80] },
+    "buildings": { "pos": [720, 0] },
+    "walls": { "pos": [960, 0] },
     "props": { "pos": [1200, -80] },
     "ground": { "pos": [1200, 120] }
   }

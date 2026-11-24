@@ -52,6 +52,8 @@ fn small_pack(dir: &Path) -> PathBuf {
     write_schem(dir, "Countryside/house/longhouse.nbt", [11, 6, 7], [5, 3, 6]);
     write_schem(dir, "Countryside/church/chapel.nbt", [9, 12, 13], [4, 3, 12]);
     write_schem(dir, "Countryside/well/well.nbt", [5, 5, 5], [2, 3, 4]);
+    // macOS's shadow file on an exFAT drive: not a schematic.
+    std::fs::write(dir.join("Countryside/house/._cottage.nbt"), b"\x00\x05\x16\x07").unwrap();
     std::fs::write(dir.join("Countryside/village.json"), br#"{"roads": {"main": {"width": 3, "blocks": {"minecraft:gravel": 1}}}, "types": {"house": {"share": 0.8}}}"#).unwrap();
     dir.to_owned()
 }
@@ -99,6 +101,8 @@ fn packs_are_read_with_their_sizes_entrances_and_rules() {
     assert_eq!(house.variants[0].class, SizeClass::Small);
     assert!(house.variants.iter().all(|v| v.door_found && v.entrance == Side::South && v.door[1] == 3));
     assert_eq!(church.variants[0].class, SizeClass::Medium, "13 deep");
+    assert_eq!(house.variants.len(), 2, "the ._ shadow file is no schematic");
+    assert!(read_pack_checked(&t.0).unwrap().problems.is_empty());
 }
 
 #[test]
@@ -507,4 +511,65 @@ fn the_game_s_villages_fill_a_large_selection_in_districts() {
     let squares = s.pieces.iter().filter(|p| p.template == "t:square").count();
     assert!(squares >= 4, "{squares} districts");
     assert!(s.pieces.iter().all(|p| rect.contains(p.min[0], p.min[2]) && rect.contains(p.max[0], p.max[2])));
+}
+
+/// What a village of a real pack looks like, in numbers: run with
+/// MASSIF_VILLAGE_PACK=<pack folder> and `--ignored --nocapture`.
+#[test]
+#[ignore]
+fn pack_report() {
+    let Some(dir) = std::env::var_os("MASSIF_VILLAGE_PACK") else { return };
+    let th = read_pack(Path::new(&dir)).unwrap().remove(0);
+    if std::env::var_os("MASSIF_VILLAGE_DOORS").is_some() {
+        for t in &th.types {
+            for v in &t.variants {
+                println!("{} {} size {:?} door {:?} found {}", t.name, v.file.file_name().unwrap().to_string_lossy(), v.size, v.door, v.door_found);
+            }
+        }
+    }
+    let rect = BlockRect::new(0, 0, 400, 400);
+    let inside = |x: i32, z: i32| rect.contains(x, z);
+    for (name, params) in [
+        ("default", Params::default()),
+        ("houses 12 small", Params { houses: Some(12), size_bias: -1.0, ..Params::default() }),
+        ("houses 40", Params { houses: Some(40), ..Params::default() }),
+        ("large", Params { size_bias: 1.0, ..Params::default() }),
+        ("walls", Params { walls: true, ..Params::default() }),
+    ] {
+        let req = request(&th, rect, &inside, params);
+        let (st, _) = stages(None, &flat(), &req).unwrap();
+        let cells = st.roads.cells(&st.area);
+        let b = &st.buildings.placed;
+        let mut by_kind: std::collections::BTreeMap<&str, usize> = Default::default();
+        let mut by_class: std::collections::BTreeMap<&str, usize> = Default::default();
+        let (mut at_road, mut far, mut gaps) = (0, Vec::new(), Vec::new());
+        for p in b {
+            *by_kind.entry(p.kind.as_str()).or_default() += 1;
+            *by_class.entry(p.size.name()).or_default() += 1;
+            let s = p.facing.step();
+            match (1..=6).find(|k| cells.contains_key(&(p.door[0] + s[0] * k, p.door[2] + s[1] * k))) {
+                Some(1) => at_road += 1,
+                Some(k) => far.push(k),
+                None => far.push(99),
+            }
+            let gap = b.iter().filter(|q| !std::ptr::eq(*q, p)).map(|q| {
+                let dx = (q.min[0] - p.max[0]).max(p.min[0] - q.max[0]).max(0);
+                let dz = (q.min[2] - p.max[2]).max(p.min[2] - q.max[2]).max(0);
+                dx.max(dz) - 1
+            }).min().unwrap_or(0);
+            gaps.push(gap);
+        }
+        gaps.sort();
+        let sides: Vec<i32> = b.iter().map(|p| (p.max[0] - p.min[0] + 1).max(p.max[2] - p.min[2] + 1)).collect();
+        println!(
+            "{name}: {} buildings {by_kind:?} {by_class:?}; doors on a road {at_road}, further {far:?}; nearest neighbour gap min {} median {}; largest side {} median {}; fields {}; props {}",
+            b.len(),
+            gaps.first().unwrap_or(&0),
+            gaps.get(gaps.len() / 2).unwrap_or(&0),
+            sides.iter().max().unwrap_or(&0),
+            { let mut s = sides.clone(); s.sort(); s.get(s.len() / 2).copied().unwrap_or(0) },
+            st.buildings.fields.len(),
+            st.props.placed.len() + st.props.builtin.len()
+        );
+    }
 }

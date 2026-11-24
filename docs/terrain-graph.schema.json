@@ -14166,6 +14166,16 @@
               "description": "Where the village may go: over a half. At most 4096 × 4096 blocks. (mask) Left empty: the whole terrain.",
               "title": "Area"
             },
+            "buildings": {
+              "$ref": "#/$defs/source",
+              "description": "The buildings, from Village buildings: the walls go round them, eight blocks out. (instances)",
+              "title": "Buildings"
+            },
+            "fields": {
+              "$ref": "#/$defs/source",
+              "description": "The fields, kept within the walls too. (footprints)",
+              "title": "Fields"
+            },
             "height": {
               "$ref": "#/$defs/source",
               "description": "The relief the village stands on. (height) Left empty: the sea level.",

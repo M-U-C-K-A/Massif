@@ -42,6 +42,8 @@ USAGE
       [--props 0..1] [--fields 0..1] [--mill auto|wind|water|none]
   massif-cli village-test-pack <dir>      write a Plains pack of boxes at the sizes of the Plains list
   massif-cli village-check <pack>         what Massif reads of a village pack, and what is wrong in it
+  massif-cli village-pack-from-game <theme|all> <dir> [--jar PATH]   a pack of the game's own village buildings (never share it)
+  massif-cli village-pack-from-world <world> <dir> [--name NAME]     a pack cut from a world where builds stand side by side
 
   --size      map size in tiles of 128 blocks (default 8x8 = 1024x1024 blocks)
   --landform  flat | plains | hills | mountains | islands (default hills)
@@ -1111,6 +1113,64 @@ fn cmd_village_test_pack(args: Args) -> Res<()> {
     Ok(())
 }
 
+/// Write a pack of the game's own village buildings (read from the
+/// Minecraft installed here) into a folder: to try villages with real
+/// buildings. The pack stays on this computer: never share it.
+fn cmd_village_pack_from_game(mut args: Args) -> Res<()> {
+    let jar = args.option("--jar")?;
+    let [theme, dir] = args.positional(["<plains|desert|savanna|taiga|snowy|all>", "<dir>"])?;
+    let theme = theme.to_string_lossy().to_lowercase();
+    let (jar, version) = match jar {
+        Some(j) => {
+            let p = PathBuf::from(j);
+            let v = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            (p, v)
+        }
+        None => {
+            let j = massif_assets::find_jars().into_iter().next().ok_or("no Minecraft found: give its jar with --jar")?;
+            (j.path, j.version)
+        }
+    };
+    let lib = massif_structures::Library::open(&jar, &version, &[]).map_err(|e| e.to_string())?;
+    let themes: Vec<&str> = if theme == "all" { massif_structures::village::from_game::THEMES.to_vec() } else { vec![theme.as_str()] };
+    for t in themes {
+        let made = massif_structures::village::from_game::write_pack(&lib, t, &dir)?;
+        println!("{} ({version}): {} buildings", made.root.display(), made.written.len());
+        for (id, file, _) in &made.written {
+            println!("  {file:<28} {id}");
+        }
+        for s in &made.skipped {
+            println!("  left out: {s}");
+        }
+    }
+    Ok(())
+}
+
+/// Cut a pack from a world save where a builder laid out their builds
+/// side by side (a build bundle). The pack stays on this computer.
+fn cmd_village_pack_from_world(mut args: Args) -> Res<()> {
+    let name = args.option("--name")?;
+    let [world, dir] = args.positional(["<world folder>", "<dir>"])?;
+    let name = name.unwrap_or_else(|| world.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "World pack".into()));
+    if std::env::var_os("MASSIF_LAYERS").is_some() {
+        for (y, v) in massif_structures::village::from_world::layers(&world, -64, 12)? {
+            println!("y {y}: {v:?}");
+        }
+        return Ok(());
+    }
+    let started = Instant::now();
+    let cut = massif_structures::village::from_world::write_pack(&world, &name, &dir)?;
+    let mut by: std::collections::BTreeMap<String, usize> = Default::default();
+    for b in &cut.builds {
+        *by.entry(format!("{:?}", b.sort)).or_default() += 1;
+    }
+    println!("{}: ground at y {}, {} builds {by:?}, {:.1} s", cut.root.display(), cut.ground, cut.builds.len(), started.elapsed().as_secs_f32());
+    for b in &cut.builds {
+        println!("  {:<44} {:?} {}×{}×{} at {:?}, {} blocks, entrance {:?}, of {}", b.file, b.sort, b.max[0] - b.min[0] + 1, b.max[2] - b.min[2] + 1, b.max[1] - b.min[1] + 1, b.min, b.blocks, b.entrance, b.made_of.join(", "));
+    }
+    Ok(())
+}
+
 /// Check a village pack: what Massif reads of it, and what is wrong in it.
 fn cmd_village_check(args: Args) -> Res<()> {
     let [dir] = args.positional(["<pack>"])?;
@@ -1221,6 +1281,8 @@ fn main() -> ExitCode {
         "village" => cmd_village(args),
         "village-test-pack" => cmd_village_test_pack(args),
         "village-check" => cmd_village_check(args),
+        "village-pack-from-game" => cmd_village_pack_from_game(args),
+        "village-pack-from-world" => cmd_village_pack_from_world(args),
         "analyse" | "analyze" => cmd_analyse(args),
         "terrain" => terrain::cmd(args),
         other => Err(format!("unknown command \"{other}\"\n\n{USAGE}")),

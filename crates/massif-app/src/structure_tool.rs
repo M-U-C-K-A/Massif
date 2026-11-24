@@ -526,6 +526,8 @@ pub struct VillageSettings {
     pub road: massif_structures::village::RoadType,
     /// How many props: none (0) to many (1).
     pub props: f32,
+    /// How many houses; none: as many as the selection holds.
+    pub houses: Option<u32>,
     pub seed: u64,
     #[serde(skip)]
     pub rt: VillageRuntime,
@@ -533,7 +535,7 @@ pub struct VillageSettings {
 
 impl Default for VillageSettings {
     fn default() -> Self {
-        Self { theme: (String::new(), "Plains".into()), packs: Vec::new(), walls: false, density: 0.7, size_bias: 0.0, road: Default::default(), props: 0.5, seed: 1, rt: VillageRuntime::default() }
+        Self { theme: (String::new(), "Plains".into()), packs: Vec::new(), walls: false, density: 0.7, size_bias: 0.0, road: Default::default(), props: 0.5, houses: None, seed: 1, rt: VillageRuntime::default() }
     }
 }
 
@@ -624,7 +626,7 @@ impl VillageRuntime {
 impl VillageSettings {
     /// What the village is to be like, from these settings.
     pub fn params(&self) -> massif_structures::village::Params {
-        massif_structures::village::Params { walls: self.walls, density: self.density, size_bias: self.size_bias, road: self.road, props: self.props, ..Default::default() }
+        massif_structures::village::Params { walls: self.walls, density: self.density, size_bias: self.size_bias, road: self.road, props: self.props, houses: self.houses, ..Default::default() }
     }
 
     /// The theme chosen, among those offered.

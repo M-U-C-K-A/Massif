@@ -33,6 +33,30 @@ impl Walls {
         out
     }
 
+    /// Whether column `(x, z)` lies within the walls (their line, closed).
+    pub fn contains(&self, x: i32, z: i32) -> bool {
+        let l = &self.line;
+        if l.len() < 3 {
+            return true;
+        }
+        let (px, pz) = (x as f64 + 0.5, z as f64 + 0.5);
+        let mut inside = false;
+        let mut j = l.len() - 1;
+        for i in 0..l.len() {
+            let (xi, zi, xj, zj) = (l[i][0] as f64, l[i][1] as f64, l[j][0] as f64, l[j][1] as f64);
+            if (zi > pz) != (zj > pz) && px < (xj - xi) * (pz - zi) / (zj - zi) + xi {
+                inside = !inside;
+            }
+            j = i;
+        }
+        inside
+    }
+
+    /// The plots within the walls: those outside would stand beyond them.
+    pub fn plots_within(&self, plots: &[super::plots::Plot]) -> Vec<super::plots::Plot> {
+        plots.iter().filter(|p| self.contains(p.door[0], p.door[1])).cloned().collect()
+    }
+
     /// Whether column `(x, z)` is in a gate (a road passes there).
     pub fn in_gate(&self, x: i32, z: i32) -> bool {
         self.gates.iter().any(|g| (g[0] - x).abs() <= 2 && (g[1] - z).abs() <= 2)
@@ -111,10 +135,23 @@ pub fn walls(area: &Area, roads: &Roads, site: Option<&Site>) -> Walls {
         }
         None => area.samples(8),
     };
+    around(area, roads, &samples)
+}
+
+/// Walls round a village already built: round its buildings' boxes, eight
+/// blocks out, within the area.
+pub fn round_buildings(area: &Area, roads: &Roads, boxes: &[([i32; 2], [i32; 2])]) -> Option<Walls> {
+    let pts: Vec<[i32; 2]> = boxes.iter().flat_map(|(lo, hi)| [[lo[0] - 8, lo[1] - 8], [hi[0] + 8, lo[1] - 8], [lo[0] - 8, hi[1] + 8], [hi[0] + 8, hi[1] + 8]]).filter(|p| area.contains(p[0], p[1])).collect();
+    (pts.len() >= 3).then(|| around(area, roads, &pts))
+}
+
+/// Walls three blocks inside the hull of `samples`, gates where main roads
+/// cross.
+fn around(area: &Area, roads: &Roads, samples: &[[i32; 2]]) -> Walls {
     let mean = samples.iter().fold((0i64, 0i64), |a, p| (a.0 + p[0] as i64, a.1 + p[1] as i64));
     let n = samples.len().max(1) as i64;
     let c = [(mean.0 / n) as i32, (mean.1 / n) as i32];
-    let inset: Vec<[i32; 2]> = hull(&samples)
+    let inset: Vec<[i32; 2]> = hull(samples)
         .iter()
         .map(|&[x, z]| {
             let (dx, dz) = ((c[0] - x) as f32, (c[1] - z) as f32);

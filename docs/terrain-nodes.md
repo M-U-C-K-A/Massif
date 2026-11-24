@@ -2861,6 +2861,8 @@ Inputs:
 - `area` (mask, optional) — Where the village may go: over a half. At most 4096 × 4096 blocks. Left empty: the whole terrain.
 - `roads` (splines) — The roads, from Village roads (or Village walls).
 - `squares` (points, optional) — The squares, from Village site: the walls go round the village's reach of them. Left empty: round the whole area.
+- `buildings` (instances, optional) — The buildings, from Village buildings: the walls go round them, eight blocks out.
+- `fields` (footprints, optional) — The fields, kept within the walls too.
 
 Outputs:
 
@@ -2946,6 +2948,7 @@ Outputs:
 
 - `buildings` (instances) — The buildings: the pack's schematics placed and turned.
 - `fields` (footprints) — The farms' fields, each its crop.
+- `roads` (splines) — The roads, side roads cut after their last building (no door opens on the rest).
 
 | Setting | Kind | Default | Range | What it does |
 |---|---|---|---|---|

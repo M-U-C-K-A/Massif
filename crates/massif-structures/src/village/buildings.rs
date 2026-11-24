@@ -131,8 +131,20 @@ pub fn turn_for(entrance: Side, to: Side) -> u8 {
 
 /// Where variant `v` goes so that its door stands at `door` (a column, its
 /// floor `floor`) facing `facing`: its origin, turn and box.
+///
+/// A door set back from its front (a porch, steps before it) stands as far
+/// back from `door`: the front of the building is what meets the road.
 pub fn fit(v: &Variant, door: [i32; 2], floor: i32, facing: Side) -> ([i32; 3], u8, BBox) {
     let turn = turn_for(v.entrance, facing);
+    let depth = match v.entrance {
+        Side::South => v.size[2] - 1 - v.door[2],
+        Side::North => v.door[2],
+        Side::East => v.size[0] - 1 - v.door[0],
+        Side::West => v.door[0],
+    }
+    .max(0);
+    let back = facing.opposite().step();
+    let door = [door[0] + back[0] * depth, door[1] + back[1] * depth];
     let (dx, dz) = turn_xz(v.door[0], v.door[2], turn);
     let origin = [door[0] - dx, floor - v.door[1], door[1] - dz];
     (origin, turn, BBox::of_template(v.size, origin, turn))

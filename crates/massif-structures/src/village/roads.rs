@@ -218,3 +218,18 @@ pub fn roads(ground: &dyn Ground, area: &Area, site: &Site, blocked: &Cells, the
     }
     Roads { lines, extra: Vec::new() }
 }
+
+/// The side roads cut after their last building: a side road no door
+/// opens on goes, one that has some ends a few blocks past the last.
+/// `doors`: the columns in front of the buildings' doors.
+pub fn prune(roads: &mut Roads, doors: &[[i32; 2]]) {
+    for r in roads.lines.iter_mut().filter(|r| r.kind == RoadKind::Side) {
+        let reach = (r.width / 2 + 5) as i64;
+        let last = r.points.iter().rposition(|p| doors.iter().any(|d| dist2(*d, *p) <= reach * reach));
+        match last {
+            Some(k) => r.points.truncate((k + 3).min(r.points.len())),
+            None => r.points.clear(),
+        }
+    }
+    roads.lines.retain(|r| !r.points.is_empty());
+}

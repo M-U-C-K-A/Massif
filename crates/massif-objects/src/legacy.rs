@@ -218,6 +218,41 @@ pub fn state(id: u16, data: u8) -> Option<String> {
             let kind = ["spruce", "birch", "jungle", "dark_oak", "acacia"][(id - 188) as usize];
             Some(format!("minecraft:{kind}_fence[{},waterlogged=false]", sides(false, false, false, false)))
         }
+        // Doors: the lower half says which way the door faces and whether it
+        // is open, the upper half its hinge; the upper half's facing is the
+        // lower's, which a reader that has both mends (`north` here).
+        64 | 71 | 193..=197 => {
+            let kind = match id {
+                64 => "oak",
+                71 => "iron",
+                _ => ["spruce", "birch", "jungle", "acacia", "dark_oak"][(id - 193) as usize],
+            };
+            Some(if data & 8 == 0 {
+                format!("minecraft:{kind}_door[facing={},half=lower,hinge=left,open={},powered=false]", ["east", "south", "west", "north"][(data & 3) as usize], data & 4 != 0)
+            } else {
+                format!("minecraft:{kind}_door[facing=north,half=upper,hinge={},open=false,powered=false]", if data & 1 != 0 { "right" } else { "left" })
+            })
+        }
+        96 | 167 => {
+            let kind = if id == 96 { "oak" } else { "iron" };
+            Some(format!(
+                "minecraft:{kind}_trapdoor[facing={},half={},open={},powered=false,waterlogged=false]",
+                ["north", "south", "west", "east"][(data & 3) as usize],
+                if data & 8 != 0 { "top" } else { "bottom" },
+                data & 4 != 0
+            ))
+        }
+        26 => Some(format!("minecraft:red_bed[facing={},occupied=false,part={}]", ["south", "west", "north", "east"][(data & 3) as usize], if data & 8 != 0 { "head" } else { "foot" })),
+        59 => Some(format!("minecraft:wheat[age={}]", data.min(7))),
+        141 => Some(format!("minecraft:carrots[age={}]", data.min(7))),
+        142 => Some(format!("minecraft:potatoes[age={}]", data.min(7))),
+        63 => Some(format!("minecraft:oak_sign[rotation={},waterlogged=false]", data & 15)),
+        68 => Some(format!("minecraft:oak_wall_sign[facing={},waterlogged=false]", facing(data))),
+        70 => s("stone_pressure_plate[powered=false]"),
+        72 => s("oak_pressure_plate[powered=false]"),
+        118 => s("cauldron"),
+        140 => s("flower_pot"),
+        145 => Some(format!("minecraft:anvil[facing={}]", ["south", "west", "north", "east"][(data & 3) as usize])),
         201 => s("purpur_block"),
         202 => s("purpur_pillar[axis=y]"),
         206 => s("end_stone_bricks"),
@@ -236,6 +271,14 @@ pub fn state(id: u16, data: u8) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::state;
+
+    #[test]
+    fn doors_trapdoors_and_beds_are_known() {
+        assert_eq!(state(64, 1).unwrap(), "minecraft:oak_door[facing=south,half=lower,hinge=left,open=false,powered=false]");
+        assert_eq!(state(195, 9).unwrap(), "minecraft:jungle_door[facing=north,half=upper,hinge=right,open=false,powered=false]");
+        assert!(state(96, 12).unwrap().contains("half=top,open=true"));
+        assert!(state(26, 10).unwrap().starts_with("minecraft:red_bed[facing=north"));
+    }
 
     #[test]
     fn old_numbers_become_today_s_blocks() {
