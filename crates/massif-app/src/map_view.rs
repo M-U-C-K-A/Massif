@@ -1349,7 +1349,7 @@ impl MapView {
                 } else if scroll != Vec2::ZERO {
                     // Shift turns vertical scrolling into horizontal on some systems.
                     let amount = if scroll.y != 0.0 { scroll.y } else { scroll.x };
-                    if modifiers.ctrl || modifiers.alt || modifiers.command {
+                    if modifiers.ctrl || modifiers.command {
                         self.goal = None;
                         self.zoom_at(canvas, p, (amount * 0.004).exp());
                     } else if tools.tool.uses_brush() {
@@ -2314,7 +2314,8 @@ fn pointer_mark(ctx: &egui::Context, painter: &egui::Painter, p: Pos2) {
 }
 
 fn turns_brush(m: egui::Modifiers) -> bool {
-    m.mac_cmd || (!cfg!(target_os = "macos") && m.ctrl && m.shift)
+    // Alt, as in WorldPainter; ⌘ (Ctrl+Shift elsewhere) as before.
+    m.alt || m.mac_cmd || (!cfg!(target_os = "macos") && m.ctrl && m.shift)
 }
 
 #[cfg(test)]

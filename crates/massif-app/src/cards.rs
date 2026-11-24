@@ -60,7 +60,7 @@ pub fn brush(response: egui::Response, name: &str, key: &str, brush: Option<&Bru
             body: tr!("The picture shows the land this brush raises. When painting, it paints most where the land is highest."),
             actions: vec![
                 (tr!("Scroll"), tr!("On the map: change its size")),
-                (if cfg!(target_os = "macos") { tr!("⌘+scroll") } else { tr!("Ctrl+Shift+scroll") }, tr!("On the map: turn it")),
+                (tr!("Alt+scroll"), tr!("On the map: turn it")),
                 ("[  ]", tr!("Turn it by steps")),
             ],
             tip: None,

@@ -2653,8 +2653,8 @@ Brushes, Map, 3D view, Player — with a search over names and keys.
 | Left / right button | Apply the tool / its inverse (lower, erase, drain…) |
 | Alt + click | Pick what is under the cursor: the terrain, or the biome, ground cover or object layer of the tool in hand (in 3D too) |
 | Scroll | Brush size (Shift: one block at a time) |
-| ⌘ + scroll (the Windows key on a PC keyboard) | Turn the brush, 5° a notch (Shift: 1°); Ctrl + Shift + scroll on Windows and Linux |
-| Ctrl or Alt + scroll, pinch | Zoom the map |
+| Alt + scroll | Turn the brush, as in WorldPainter, 5° a notch (Shift: 1°); ⌘ + scroll too on a Mac, Ctrl + Shift + scroll on Windows and Linux |
+| Ctrl + scroll, pinch | Zoom the map |
 | Middle button, Space + drag | Move the map |
 | Home, View ▸ Fit the whole map, the button by the zoom | The whole map in view (a map opened is framed so by itself) |
 | `−` `+` | Brush size |

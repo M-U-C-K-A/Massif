@@ -9723,23 +9723,19 @@ mod tests {
             h.run_steps(20);
             let r1 = h.state().tools.brush.radius;
             assert!(r1 < r0, "scrolling up should shrink the brush: {r0} -> {r1}");
-            // ...and with Alt (or ⌘, or Ctrl) it zooms.
+            // ...and with Ctrl it zooms.
             let map = h.state().active_map.expect("the map was hovered");
             let z0 = h.state().maps[&map].zoom;
-            h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
-            h.event(wheel(-80.0, Modifiers::ALT));
+            h.event(egui::Event::ModifiersChanged(Modifiers::CTRL));
+            h.event(wheel(-80.0, Modifiers::CTRL));
             h.run_steps(20);
             h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
             let z1 = h.state().maps[&map].zoom;
-            assert!(z1 < z0, "Alt + scrolling down should zoom out: {z0} -> {z1}");
+            assert!(z1 < z0, "Ctrl + scrolling down should zoom out: {z0} -> {z1}");
             assert_eq!(h.state().tools.brush.radius, r1);
-            // ⌘ and the wheel (the Windows key of a PC keyboard) turn the
-            // brush, 5° a notch, without zooming.
-            let turn = if cfg!(target_os = "macos") {
-                Modifiers::MAC_CMD | Modifiers::COMMAND
-            } else {
-                Modifiers::CTRL | Modifiers::SHIFT | Modifiers::COMMAND
-            };
+            // Alt and the wheel turn the brush, as in WorldPainter, 5° a
+            // notch, without zooming.
+            let turn = Modifiers::ALT;
             let a0 = h.state().tools.brush.rotation;
             h.event(egui::Event::ModifiersChanged(turn));
             h.event(wheel(80.0, turn));

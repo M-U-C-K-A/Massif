@@ -384,8 +384,8 @@ Massif's own keys, as they are out of the box. **Settings ▸ Keyboard** changes
 | Left / right button | The tool / its inverse (a layer's right button rubs out that layer alone) |
 | `Alt` + click | Pick what is under the cursor: the terrain, or the biome, ground cover or object layer of the tool in hand (in 3D too, without dragging) |
 | Scroll | Brush size (`Shift`: one block at a time) |
-| `⌘` + scroll | Turn the brush |
-| `Ctrl` or `Alt` + scroll, pinch | Zoom the map |
+| `Alt` + scroll | Turn the brush, as in WorldPainter (`⌘` + scroll too) |
+| `Ctrl` + scroll, pinch | Zoom the map |
 | `Home` | The whole map in view (also View ▸ Fit the whole map, and the button by the zoom) |
 | Middle button, `Space` + drag | Move the map |
 | `−` `+` | Brush size |
