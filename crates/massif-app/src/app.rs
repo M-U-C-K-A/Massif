@@ -439,6 +439,8 @@ enum Dialog {
     Layer(crate::layers::Kind, usize),
     /// What WorldPainter `.layer` files became.
     LayerImport(Vec<crate::layers::LayerImport>),
+    /// File ▸ World Information…: the world's settings, size and memory.
+    WorldInfo,
     /// The block palettes window.
     Palettes(Box<crate::palettes::PaletteEditor>),
     /// Edit ▸ Smooth terrain…: the map's switch and each terrain's shapes.
@@ -3882,6 +3884,7 @@ impl MassifApp {
             }
             Command::HomeScreen => self.open_home(Page::NewMap),
             Command::About => self.dialog = Some(Dialog::About),
+            Command::WorldInfo => self.dialog = Some(Dialog::WorldInfo),
             Command::CheckUpdates => {
                 // Asked for: whatever the setting and the day's answer.
                 if let Some(cache) = crate::update::default_cache() {
@@ -4709,6 +4712,9 @@ impl MassifApp {
                 }
                 view.annotations = self.tools.show_annotations;
                 view.ui(&mut cui, frame, &mut self.doc, &mut self.tools, self.map_center, false);
+                if let Some(at) = view.pointed {
+                    self.hover = Some(at);
+                }
                 // What it shows is kept with the layout.
                 let look = crate::layout::View3dLook { mode: view.mode, water: view.water };
                 if look == Default::default() {
@@ -4726,6 +4732,9 @@ impl MassifApp {
                 }
                 self.sculpt3d.annotations = self.tools.show_annotations;
                 self.sculpt3d.ui(&mut cui, frame, &mut self.doc, &mut self.tools, self.map_center, true);
+                if let Some(at) = self.sculpt3d.pointed {
+                    self.hover = Some(at);
+                }
                 if let Some(note) = self.sculpt3d.feedback.take() {
                     self.feedback = Some(note);
                 }
@@ -4824,30 +4833,16 @@ impl MassifApp {
                 }
             }
             EditorKind::Info => {
-                let stats = self.map_cache.stats();
-                let mut affects_map = false;
-                let palettes = self.all_palettes();
-                let before = self.doc.world.meta.palette.clone();
-                let mut edit = false;
-                scrolled(&mut cui, &mut |ui| affects_map = panels::info_panel(ui, &mut self.doc, self.hover, stats, &palettes, &mut edit));
-                if edit {
-                    let shown = self.doc.world.meta.palette.name.clone();
-                    self.open_palettes(Some(&shown));
+                // Read again only when the cursor moves to another column or
+                // the map changes.
+                let key = (self.hover, (self.doc.revision, self.doc.generation, self.doc.dim));
+                if self.inspected.as_ref().is_none_or(|(k, _)| *k != key) {
+                    let info = self.hover.and_then(|(x, z)| crate::inspect::ColumnInfo::read(&self.doc, x, z));
+                    self.inspected = Some((key, info));
                 }
-                if self.doc.world.meta.palette != before {
-                    // The terrains' new blocks in their real colours, and the
-                    // mods' read when installed here but not yet read.
-                    self.blocks.applied = None;
-                    let ctx = cui.ctx().clone();
-                    let palette = self.doc.world.meta.palette.clone();
-                    self.read_mods_of(&ctx, &palette);
-                }
-                if affects_map {
-                    self.map_cache.invalidate_all();
-                    self.view3d.invalidate_all();
-                    self.sculpt3d.invalidate_all();
-                    self.extra3d.iter_mut().for_each(View3d::invalidate_all);
-                }
+                let info = self.inspected.as_ref().and_then(|(_, i)| i.as_ref());
+                let reg = &self.doc.world.registry;
+                scrolled(&mut cui, &mut |ui| crate::inspect::panel(ui, info, reg));
             }
             EditorKind::Graph => {
                 if let Some(msg) = self.graph.canvas_ui(&mut cui, &mut self.doc, &self.blocks) {
@@ -6401,6 +6396,47 @@ impl MassifApp {
                 }
                 if keep {
                     self.dialog = Some(Dialog::Update);
+                }
+            }
+            Dialog::WorldInfo => {
+                let stats = self.map_cache.stats();
+                let palettes = self.all_palettes();
+                let before = self.doc.world.meta.palette.clone();
+                let (mut edit, mut affects_map) = (false, false);
+                let response = modal(ctx, "world info").show(ctx, |ui| {
+                    ui.set_width(420.0);
+                    ui.label(RichText::new(tr!("World Information")).bold().size(15.0));
+                    affects_map = panels::world_info(ui, &mut self.doc, stats, &palettes, &mut edit);
+                    ui.add_space(10.0);
+                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                        if ui.add(theme::primary_button(ui, tr!("Close"))).clicked() {
+                            keep = false;
+                        }
+                    });
+                });
+                if response.should_close() {
+                    keep = false;
+                }
+                if edit {
+                    let shown = self.doc.world.meta.palette.name.clone();
+                    self.open_palettes(Some(&shown));
+                    keep = false;
+                }
+                if self.doc.world.meta.palette != before {
+                    // The terrains' new blocks in their real colours, and the
+                    // mods' read when installed here but not yet read.
+                    self.blocks.applied = None;
+                    let palette = self.doc.world.meta.palette.clone();
+                    self.read_mods_of(ctx, &palette);
+                }
+                if affects_map {
+                    self.map_cache.invalidate_all();
+                    self.view3d.invalidate_all();
+                    self.sculpt3d.invalidate_all();
+                    self.extra3d.iter_mut().for_each(View3d::invalidate_all);
+                }
+                if keep && self.dialog.is_none() {
+                    self.dialog = Some(Dialog::WorldInfo);
                 }
             }
             Dialog::About => {
@@ -18197,7 +18233,11 @@ mod tests {
             h.render().unwrap().save(dir.join("palette-map.png")).unwrap();
         }
 
-        // Back to the game's blocks from the map's settings, in one step.
+        // Back to the game's blocks from the world's settings (File ▸
+        // World Information…), in one step.
+        let ctx = h.ctx.clone();
+        h.state_mut().command(&ctx, Command::WorldInfo);
+        h.run_steps(4);
         h.get_by_value("Conquest Reforged").click();
         h.run_steps(2);
         h.get_by_label("Vanilla").click();
@@ -18207,6 +18247,7 @@ mod tests {
         let grass = reg.terrain(reg.terrain_by_name("Grass").unwrap());
         assert!(grass.strata.iter().flat_map(|s| &s.blocks).all(|b| reg.block(b.0).state.starts_with("minecraft:")));
         assert_eq!(h.state().doc.history.undo_label(), Some("Blocks: Vanilla"));
+        h.state_mut().dialog = None;
         settle(&mut h, &|app| app.view3d.pending() == 0);
         h.run_steps(3);
         if let Some(dir) = &shots {
@@ -18218,6 +18259,8 @@ mod tests {
 
         // A palette of one's own: Conquest's duplicated, a block typed into
         // its grass, kept in the settings.
+        h.state_mut().command(&ctx, Command::WorldInfo);
+        h.run_steps(4);
         h.get_by_value("Conquest Reforged").click();
         h.run_steps(2);
         h.get_by_label("Edit palettes…").click();
@@ -18243,7 +18286,9 @@ mod tests {
         assert_eq!(own.len(), 1);
         assert_eq!(own[0].name, "Conquest Reforged copy");
         assert!(own[0].terrains["Grass"].strata[0].blocks.iter().any(|b| b.0 == "conquest:peat"));
-        // Picked from the map's settings, it makes the map of its blocks.
+        // Picked from the world's settings, it makes the map of its blocks.
+        h.state_mut().command(&ctx, Command::WorldInfo);
+        h.run_steps(4);
         h.get_by_value("Conquest Reforged").click();
         h.run_steps(2);
         h.get_by_label("Conquest Reforged copy").click();

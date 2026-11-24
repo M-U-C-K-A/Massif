@@ -232,6 +232,24 @@ one and each step still draws its line over it, thinner and fainter the
 further out; further still, where a pixel spans 8 blocks or more, both are
 the smooth shading.
 
+### Info
+
+The **Info** panel (World) is WorldPainter's: it shows what is under the
+cursor, on the 2D map or in the 3D view, and follows it as it moves — the
+column's coordinates, its height (the block one stands on), the water over
+it and how deep, its terrain, its biome (painted, or the one the land calls
+for on automatic), whether the selection takes it, the levels that have it,
+and every layer painted there: its ground cover, its tree or object layer
+and the one under the trees, its tree size, its underground pockets, its
+smoothed steps, the combined layers that may have painted it, and its
+annotation, each in its colour, with its intensity where it has one (the
+share of the columns a cover grows on, of the squares a tree stands in, of
+the rock the pockets take).
+
+The world's own details — its name, seed, sea level, spawn and block
+palette, the map's size, the memory it takes and the map's cache, its
+file — are in **File ▸ World Information…**.
+
 **Help ▸ Massif Help** (F1) opens the help: every part of Massif, topic by
 topic, with a search, and the keyboard shortcuts.
 

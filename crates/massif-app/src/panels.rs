@@ -5,17 +5,13 @@ use crate::blocks::BlockLibrary;
 use crate::brushes::{BrushLibrary, BrushSource};
 use crate::doc::Document;
 use crate::layout::EditorKind;
-use crate::map_render::ColumnSampler;
 use crate::theme::{self, Icon, Palette, RichTextExt};
 use crate::tools::{AnchorMode, SurfaceChoice, Tool, ToolState};
 use egui::{Align, Color32, CornerRadius, Rect, RichText, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
-use massif_core::compose::TileStack;
-use massif_core::coords::local_index;
 use massif_core::level::LevelKind;
 use massif_core::registry::{BiomeId, Registry, TerrainId};
 use massif_core::stamps::{Family, Stamp};
-use massif_core::tile::NO_FLUID;
-use massif_core::{MAX_RADIUS, TilePos};
+use massif_core::MAX_RADIUS;
 use std::collections::HashSet;
 
 pub(crate) fn section(ui: &mut Ui, icon: Icon, title: &str) {
@@ -4492,10 +4488,11 @@ pub fn levels_panel(ui: &mut Ui, doc: &mut Document, rename: &mut Option<(usize,
 
 // ------------------------------------------------------------------- info --
 
-/// Returns true when a world setting that affects the map changed.
-/// `palettes`: the block palettes to make the map's terrains of; `edit` is
+/// File ▸ World Information…: the world's name, seed, sea level, spawn and
+/// blocks, the map's size, memory and file. Returns true when a world
+/// setting that affects the map changed. `palettes`: the block palettes to make the map's terrains of; `edit` is
 /// set when their window is asked for.
-pub fn info_panel(ui: &mut Ui, doc: &mut Document, hover: Option<(i32, i32)>, cache: (usize, usize, usize), palettes: &[massif_core::materials::Palette], edit: &mut bool) -> bool {
+pub fn world_info(ui: &mut Ui, doc: &mut Document, cache: (usize, usize, usize), palettes: &[massif_core::materials::Palette], edit: &mut bool) -> bool {
     let pal = Palette::of(ui);
     let mut affects_map = false;
     let (bottom, top) = (doc.dimension().min_y, doc.dimension().max_y);
@@ -4568,12 +4565,6 @@ pub fn info_panel(ui: &mut Ui, doc: &mut Document, hover: Option<(i32, i32)>, ca
     }
     ui.label(RichText::new(tr!("Build height {min_y} … {value}", min_y = dim.min_y, value = dim.max_y - 1)).color(pal.weak));
 
-    section(ui, Icon::Crosshair, tr!("Under the cursor"));
-    match hover {
-        Some((x, z)) => column_info(ui, doc, x, z),
-        None => hint(ui, tr!("Hover the map to inspect a column.")),
-    }
-
     section(ui, Icon::Activity, tr!("Memory"));
     let mut hot = 0;
     let mut cold = 0;
@@ -4602,48 +4593,6 @@ pub fn info_panel(ui: &mut Ui, doc: &mut Document, hover: Option<(i32, i32)>, ca
         ui.label(RichText::new(tr!("Unsaved changes")).color(pal.accent));
     }
     affects_map
-}
-
-fn column_info(ui: &mut Ui, doc: &Document, x: i32, z: i32) {
-    let pal = Palette::of(ui);
-    ui.label(RichText::new(tr!("Column {x}, {z}", x, z)).bold());
-    let dim = doc.dimension();
-    let Some(stack) = TileStack::new(dim, TilePos::containing(x, z), true) else {
-        hint(ui, tr!("Outside the map"));
-        return;
-    };
-    let cell = local_index(x, z);
-    let (mut spans, mut fluids) = (Vec::new(), Vec::new());
-    stack.spans(cell, &mut spans);
-    stack.fluids(cell, &spans, &mut fluids);
-    let reg = &doc.world.registry;
-    let mut rows: Vec<(i32, String)> = spans
-        .iter()
-        .map(|s| (s.y0, format!("{} … {}  {}", s.y0, s.y1 - 1, reg.terrain(s.terrain).name)))
-        .collect();
-    rows.extend(fluids.iter().map(|&(a, b)| (a, tr!("{a} … {value}  Water", value = b - 1, a))));
-    rows.sort_by_key(|r| std::cmp::Reverse(r.0));
-    for (_, text) in rows {
-        ui.label(RichText::new(text).monospace().size(11.5));
-    }
-    let mut sampler = ColumnSampler::default();
-    let s = sampler.sample(&stack, cell);
-    let biome = if s.biome == 0 {
-        tr!("automatic").to_owned()
-    } else {
-        reg.biome(BiomeId(s.biome)).name.clone()
-    };
-    ui.label(RichText::new(tr!("Biome: {biome}", biome)).color(pal.weak));
-    if let Some(cover) = reg.cover(s.cover) {
-        ui.label(RichText::new(tr!("Cover: {name}", name = cover.name)).color(pal.weak));
-    }
-    let levels: Vec<String> = stack
-        .layers()
-        .filter(|(_, _, t)| t.present(cell))
-        .map(|(i, _, _)| dim.levels[i].name.clone())
-        .collect();
-    ui.label(RichText::new(tr!("Levels: {join}", join = levels.join(", "))).color(pal.weak));
-    let _ = NO_FLUID;
 }
 
 pub fn human(bytes: u64) -> String {
@@ -4703,7 +4652,7 @@ mod tests {
                     egui::Frame::new().fill(pal.panel).inner_margin(12).show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         let mut edit = false;
-                        info_panel(ui, doc, None, (0, 0, 0), &palettes, &mut edit);
+                        world_info(ui, doc, (0, 0, 0), &palettes, &mut edit);
                     });
                 },
                 doc,

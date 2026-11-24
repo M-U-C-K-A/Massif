@@ -117,7 +117,7 @@ impl EditorKind {
             EditorKind::Layers => tr!("Ground covers, objects and terrain mixes: paint, show or hide them"),
             EditorKind::Packs => tr!("Ready-made trees, plants and mixes of blocks to paint"),
             EditorKind::Levels => tr!("Levels that add rock over the ground or carve it away"),
-            EditorKind::Info => tr!("Name, seed, sea level and size; the column under the cursor"),
+            EditorKind::Info => tr!("What is under the cursor: height, water, terrain, biome and every layer painted there"),
             EditorKind::Graph => tr!("The nodes the terrain is generated from"),
             EditorKind::GraphView => tr!("The graph's terrain in relief, under its sky"),
             EditorKind::GraphProps => tr!("The settings of the selected node"),

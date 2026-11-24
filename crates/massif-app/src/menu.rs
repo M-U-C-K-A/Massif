@@ -30,6 +30,8 @@ pub enum Command {
     SaveAs,
     /// Keep the map as it is now under a name (see `versions`).
     SavePoint,
+    /// The world's name, seed, sea level, size, memory and blocks.
+    WorldInfo,
     ExportHeightMap,
     /// A part of the map as images, to bring back with Import mask.
     ExportRegion,
@@ -260,6 +262,7 @@ pub fn menus(state: &State) -> Vec<Menu> {
         item(Command::Save, Icon::Save, tr!("Save"), map),
         item(Command::SaveAs, Icon::Save, tr!("Save As…"), map),
         tipped(Command::SavePoint, Icon::BookmarkPlus, tr!("Save Point…"), map, tr!("Keep the map as it is now under a name, to come back to it or compare")),
+        tipped(Command::WorldInfo, Icon::Info, tr!("World Information…"), map, tr!("The world's name, seed, sea level and spawn, its blocks, the map's size and the memory it takes")),
         Entry::Separator,
         item(Command::ExportHeightMap, Icon::ImageDown, tr!("Export Height Map…"), map),
         tipped(Command::ExportRegion, Icon::ImageDown, tr!("Export Region…"), map, tr!("A part of the map as a heightmap and masks, to work on in another tool and import back in place")),
@@ -552,6 +555,7 @@ mod tests {
                 "Save",
                 "Save As…",
                 "Save Point…",
+                "World Information…",
                 "Export Height Map…",
                 "Export Region…",
                 "Export to Minecraft…",

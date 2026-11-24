@@ -4600,6 +4600,9 @@ pub struct View3d {
     pub feedback: Option<String>,
     /// Where the cursor points in the world.
     hover: Option<massif_core::voxel::Hit>,
+    /// The column under the pointer while it is over the view (the Info
+    /// panel's, the filters' eyedropper's).
+    pub pointed: Option<(i32, i32)>,
     /// The surface there, smoothed: where the brush lies, which way.
     frame: Option<massif_core::voxel::Frame>,
     /// Asked from the header: look where the map view is, frame the map.
@@ -4803,6 +4806,7 @@ impl Default for View3d {
             pressed: false,
             feedback: None,
             hover: None,
+            pointed: None,
             frame: None,
             goto_map: false,
             frame_map: false,
@@ -6254,6 +6258,24 @@ impl View3d {
 
         // ---- sculpting -------------------------------------------------------
         self.hover = None;
+        // The column under the pointer, for the Info panel and the
+        // eyedropper: only when the pointer moved or the view did.
+        self.pointed = match response.hover_pos() {
+            Some(p) if !captured => {
+                let (o, d) = self.ray(rect, p);
+                massif_core::voxel::raycast_out(doc.dimension(), o, d, (self.camera.distance as f64 + extent as f64) * 1.5).map(|h| (h.block.0, h.block.2))
+            }
+            _ => None,
+        };
+        if tools.filter_pick.is_some()
+            && response.clicked()
+            && let (Some(at), Some(p)) = (self.pointed, response.interact_pointer_pos())
+        {
+            tools.filter_pick_at = Some((at, p));
+        }
+        if tools.filter_pick.is_some() && response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        }
         // Holding the mouse, the brush is where the crosshair is; else under
         // the cursor.
         let aim = if captured { Some(rect.center()) } else { response.hover_pos() };
