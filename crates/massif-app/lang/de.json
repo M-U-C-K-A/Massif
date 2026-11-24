@@ -2502,7 +2502,6 @@
  "{name} copy": "{name} Kopie",
  "{name} height map.png": "{name} Höhenkarte.png",
  "{name} works on the map: here the left button turns the view, the right one moves it": "{name} wirkt auf der Karte: hier dreht die linke Taste die Ansicht, die rechte verschiebt sie",
- "{name} · Minecraft {v}": "{name} · Minecraft {v}",
  "{name} · y {min} to {max}, most at {peak} · {veins} veins a chunk · {size} blocks a vein": "{name} · y {min} bis {max}, meist bei {peak} · {veins} Adern pro Chunk · {size} Blöcke pro Ader",
  "{name} · {point} (read-only)": "{name} · {point} (schreibgeschützt)",
  "{name} — for {use_for}": "{name} — für {use_for}",

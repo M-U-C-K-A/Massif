@@ -2499,7 +2499,6 @@
  "{name} copy": "{name} copia",
  "{name} height map.png": "{name} mapa de alturas.png",
  "{name} works on the map: here the left button turns the view, the right one moves it": "{name} se usa en el mapa: aquí el botón izquierdo gira la vista y el derecho la mueve",
- "{name} · Minecraft {v}": "{name} · Minecraft {v}",
  "{name} · y {min} to {max}, most at {peak} · {veins} veins a chunk · {size} blocks a vein": "{name} · y {min} a {max}, sobre todo a {peak} · {veins} vetas por chunk · {size} bloques por veta",
  "{name} · {point} (read-only)": "{name} · {point} (solo lectura)",
  "{name} — for {use_for}": "{name} — para {use_for}",

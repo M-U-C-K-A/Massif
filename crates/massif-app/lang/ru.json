@@ -2491,7 +2491,6 @@
  "{name} copy": "{name} копия",
  "{name} height map.png": "{name} карта высот.png",
  "{name} works on the map: here the left button turns the view, the right one moves it": "{name} работает на карте: здесь левая кнопка поворачивает вид, правая сдвигает его",
- "{name} · Minecraft {v}": "{name} · Minecraft {v}",
  "{name} · y {min} to {max}, most at {peak} · {veins} veins a chunk · {size} blocks a vein": "{name} · y от {min} до {max}, больше всего на {peak} · жил на чанк: {veins} · блоков в жиле: {size}",
  "{name} · {point} (read-only)": "{name} · {point} (только чтение)",
  "{name} — for {use_for}": "{name} — для: {use_for}",
@@ -3050,5 +3049,16 @@
  "Time": "Время",
  "Wind": "Ветер",
  "the graphics card gave no image": "видеокарта не вернула изображения",
- "{n} samples a pixel": "{n} сэмплов на пиксель"
+ "{n} samples a pixel": "{n} сэмплов на пиксель",
+ "Search instances and mods": "Поиск по сборкам и модам",
+ "{n} of {total} mods": "{n} из {total} модов",
+ "Mod id: {id}": "ID мода: {id}",
+ "Blocks: {namespaces}": "Блоки: {namespaces}",
+ "No instance or mod has that name.": "Нет сборки или мода с таким названием.",
+ "{n} mods": {
+  "one": "{n} мод",
+  "few": "{n} мода",
+  "many": "{n} модов",
+  "other": "{n} мода"
+ }
 }
