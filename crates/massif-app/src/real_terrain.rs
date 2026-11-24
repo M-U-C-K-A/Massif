@@ -5,7 +5,7 @@
 
 use crate::theme::{self, Icon, Palette, RichTextExt};
 use crate::tiles::{Place, TileStore, parse_coords};
-use crate::widgets::{Field, Part, button_group, input_group, row, switch, well};
+use crate::widgets::{Field, button_group, row, switch, well};
 use egui::{Color32, ColorImage, Rect, RichText, Sense, TextureHandle, TextureOptions, Ui, pos2, vec2};
 use massif_core::coords::BlockRect;
 use massif_core::heightmap::Heightmap;
@@ -609,16 +609,7 @@ impl RealForm {
         if !self.keep_size {
             let (mut w, mut d) = self.new_size;
             row(ui, tr!("New size"), |ui| {
-                input_group(
-                    ui,
-                    "real map new size",
-                    &mut [
-                        Part::Snapped(&mut w, 128..=MAX_SIZE, 64.0, whole_tiles, tr!("whole tiles of 128 blocks")),
-                        Part::Text("×"),
-                        Part::Snapped(&mut d, 128..=MAX_SIZE, 64.0, whole_tiles, tr!("whole tiles of 128 blocks")),
-                        Part::Text(tr!("blocks")),
-                    ],
-                );
+                crate::widgets::size_pair(ui, "real map new size", &mut w, &mut d, 128..=MAX_SIZE, whole_tiles, tr!("whole tiles of 128 blocks"));
             });
             self.new_size = (w, d);
         }
@@ -665,11 +656,8 @@ impl RealForm {
                 ui.label(RichText::new(tr!("Name")).size(12.5));
                 ui.add(egui::TextEdit::singleline(&mut self.name).hint_text(tr!("Real place")).desired_width(f32::INFINITY));
             });
-            row(ui, tr!("Width"), |ui| {
-                ui.add(Field::new(&mut self.area.width, 128..=MAX_SIZE).suffix(tr!(" blocks")));
-            });
-            row(ui, tr!("Depth"), |ui| {
-                ui.add(Field::new(&mut self.area.depth, 128..=MAX_SIZE).suffix(tr!(" blocks")));
+            row(ui, tr!("Size"), |ui| {
+                crate::widgets::size_pair(ui, "real place size", &mut self.area.width, &mut self.area.depth, 128..=MAX_SIZE, |v| v, "");
             });
         }
         row(ui, tr!("Blocks a metre"), |ui| {

@@ -615,6 +615,8 @@ pub enum Part<'a> {
     Edit(&'a mut String, f32),
     /// A button showing an icon, with what it does.
     Button(Icon, &'a str),
+    /// A chain between two values: linked, they stay equal.
+    Link(&'a mut bool),
 }
 
 /// `ui.add(drag)`, but a number clicked to be typed in gets the caret at
@@ -807,7 +809,7 @@ pub fn input_group(ui: &mut Ui, id: &str, parts: &mut [Part]) -> (bool, Option<u
             Part::Text(t) => ui.painter().layout_no_wrap((*t).to_owned(), font.clone(), pal.weak).size().x + 24.0,
             Part::Int(..) | Part::Snapped(..) => 66.0,
             Part::Edit(_, w) => *w,
-            Part::Button(..) => 32.0,
+            Part::Button(..) | Part::Link(_) => 32.0,
         })
         .collect();
     let (rect, _) = ui.allocate_exact_size(vec2(widths.iter().sum(), GROUP_H), Sense::hover());
@@ -852,6 +854,21 @@ pub fn input_group(ui: &mut Ui, id: &str, parts: &mut [Part]) -> (bool, Option<u
                     clicked = Some(k);
                 }
             }
+            Part::Link(on) => {
+                let tip = if **on { tr!("Linked: both sides stay equal") } else { tr!("Unlinked: each side set apart") };
+                let r = ui.interact(seg, egui::Id::unique((id, k, "link")), Sense::click()).on_hover_text(tip);
+                r.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, **on, tr!("Link the sides")));
+                if r.hovered() {
+                    painter.rect_filled(seg, corners(k, n), theme::mix(pal.control(), pal.text, 0.08));
+                    ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                }
+                let (icon, ink) = if **on { (Icon::Link, theme::accent()) } else { (Icon::Unlink, pal.weak) };
+                painter.text(seg.center(), Align2::CENTER_CENTER, theme::glyph(icon).to_string(), FontId::proportional(13.5), ink);
+                if r.clicked() {
+                    **on = !**on;
+                    clicked = Some(k);
+                }
+            }
         }
         if k > 0 {
             painter.vline(x, seg.y_range(), Stroke::new(1.0, pal.border));
@@ -860,6 +877,47 @@ pub fn input_group(ui: &mut Ui, id: &str, parts: &mut [Part]) -> (bool, Option<u
     }
     painter.rect_stroke(rect, GROUP_R, Stroke::new(1.0, pal.border), StrokeKind::Inside);
     (changed, clicked)
+}
+
+/// A size of two sides in blocks, `w × d`, with a chain between them:
+/// linked (as it is at first, remembered under `id`), typing one sets the
+/// other to it. `snap` makes each side one it may be. True when either
+/// changed.
+pub fn size_pair(ui: &mut Ui, id: &str, w: &mut i32, d: &mut i32, range: RangeInclusive<i32>, snap: fn(i32) -> i32, why: &str) -> bool {
+    let key = egui::Id::unique((id, "linked"));
+    let mut linked = ui.data_mut(|m| *m.get_persisted_mut_or(key, true));
+    let (was_w, was_d) = (*w, *d);
+    let (mut nw, mut nd) = (*w, *d);
+    let (changed, clicked) = input_group(
+        ui,
+        id,
+        &mut [
+            Part::Snapped(&mut nw, range.clone(), 64.0, snap, why),
+            Part::Link(&mut linked),
+            Part::Snapped(&mut nd, range, 64.0, snap, why),
+            Part::Text(tr!("blocks")),
+        ],
+    );
+    ui.data_mut(|m| m.insert_persisted(key, linked));
+    let (w2, d2) = link_sides(linked, (was_w, was_d), (nw, nd), clicked == Some(1));
+    *w = w2;
+    *d = d2;
+    changed || (w2, d2) != (was_w, was_d)
+}
+
+/// Two sides after an edit: linked, the side that changed sets the other
+/// (the width when both did); linking them makes the depth the width.
+pub fn link_sides(linked: bool, was: (i32, i32), now: (i32, i32), just_linked: bool) -> (i32, i32) {
+    if !linked {
+        return now;
+    }
+    if now.0 != was.0 || just_linked {
+        (now.0, now.0)
+    } else if now.1 != was.1 {
+        (now.1, now.1)
+    } else {
+        now
+    }
 }
 
 /// A segmented control: choices side by side in a pill, those `on` raised

@@ -511,16 +511,7 @@ impl Home {
                 rows = Some(rows.map_or(r, |all| all.union(r)));
             };
             row(ui, tr!("Size"), &mut |ui| {
-                input_group(
-                    ui,
-                    "home size",
-                    &mut [
-                        Part::Snapped(&mut nm.width, MAP_SIDES, 64.0, whole_tiles, tr!("whole tiles of 128 blocks")),
-                        Part::Text("×"),
-                        Part::Snapped(&mut nm.depth, MAP_SIDES, 64.0, whole_tiles, tr!("whole tiles of 128 blocks")),
-                        Part::Text(tr!("blocks")),
-                    ],
-                );
+                crate::widgets::size_pair(ui, "home size", &mut nm.width, &mut nm.depth, MAP_SIDES, whole_tiles, tr!("whole tiles of 128 blocks"));
             });
             row(ui, tr!("Height"), &mut |ui| limits(ui, &mut nm.params.min_y, &mut nm.params.max_y));
             row(ui, tr!("Land"), &mut |ui| {
