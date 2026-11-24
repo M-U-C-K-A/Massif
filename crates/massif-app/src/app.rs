@@ -113,6 +113,9 @@ struct Settings {
     no_slow_note: bool,
     /// The author written in the packs exported.
     pack_author: String,
+    /// The 2D map shows the biomes while a biome tool is in hand, the
+    /// terrains while a terrain one is (Settings ▸ Appearance).
+    map_follows_tool: bool,
     /// The language of the interface: the system's, or one chosen.
     language: crate::i18n::Language,
     /// The keyboard shortcuts: a preset and what was changed in it.
@@ -193,6 +196,7 @@ impl Default for Settings {
             skipped_version: None,
             no_slow_note: false,
             pack_author: String::new(),
+            map_follows_tool: true,
             language: crate::i18n::Language::System,
             tour_done: false,
             origin_asked: false,
@@ -1359,6 +1363,10 @@ impl MassifApp {
     /// that style's few settings — none to touch for it to look right.
     fn prefs_home_background(&mut self, ui: &mut Ui, ctx: &egui::Context) {
         use crate::backdrop::{Direction, FPS, Motion, PrismPalette, RidgesPalette, Shape, Style, WavesPalette};
+            // Paint biome shows the map's biomes, Paint terrain its terrains.
+            crate::widgets::row(ui, tr!("Switch the map's view with the tool"), |ui| {
+                crate::widgets::switch(ui, &mut self.settings.map_follows_tool);
+            });
         let pal = Palette::of(ui);
         let page = crate::home::backdrop_fill(&pal);
         let reduced = theme::reduce_motion(ctx);
@@ -4096,6 +4104,7 @@ impl MassifApp {
             EditorKind::View3d => {
                 // Opened on a map it has not built: what the 2D map read of
                 // its tiles, for a first look at once.
+                view.follow_tool(self.tools.tool, self.settings.map_follows_tool);
                 let k = self.slots3d.get(&id).copied().unwrap_or(0);
                 let view = match k {
                     0 => &mut self.view3d,

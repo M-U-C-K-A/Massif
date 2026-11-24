@@ -228,6 +228,12 @@ type WaterTag = (String, Option<(i32, i32)>);
 type WaterTagKey = ((i32, i32), (u64, usize, u32), Tool, (tools::WaterHeight, tools::WaterHeight, i16, i32), (bool, i16, bool), Option<i16>);
 
 pub struct MapView {
+    /// The tool last seen, to follow a change of it (see
+    /// [`MapView::follow_tool`]).
+    followed: Option<Tool>,
+    /// The view the map was in when picking a tool changed it, and the one
+    /// it changed it to: put back on leaving the tool, unless changed since.
+    followed_from: Option<(MapMode, MapMode)>,
     /// Block coordinates at the centre of the view.
     pub center: [f64; 2],
     /// Screen points per block.
@@ -314,6 +320,8 @@ const FLING_DECAY: f32 = 0.25;
 impl Default for MapView {
     fn default() -> Self {
         Self {
+            followed: None,
+            followed_from: None,
             center: [0.0, 0.0],
             zoom: 1.0,
             mode: MapMode::Terrain,
@@ -379,6 +387,43 @@ pub struct MapInput<'a> {
 }
 
 impl MapView {
+    /// The view that shows what `tool` paints: the biomes for Paint biome
+    /// and Auto biome, the terrains for Paint terrain and the Gradient
+    /// brush.
+    fn view_for(tool: Tool) -> Option<MapMode> {
+        match tool {
+            Tool::PaintBiome | Tool::AutoBiome => Some(MapMode::Biome),
+            Tool::PaintTerrain | Tool::Gradient => Some(MapMode::Terrain),
+            _ => None,
+        }
+    }
+
+    /// Picking a tool that paints biomes shows the biomes, one that paints
+    /// terrains the terrains (Settings ▸ Appearance ▸ The map's view
+    /// follows the tool); leaving it puts back the view the map was in,
+    /// unless it was changed meanwhile.
+    pub fn follow_tool(&mut self, tool: Tool, on: bool) {
+        let before = self.followed.replace(tool);
+        if !on || before.is_none_or(|b| b == tool) {
+            return;
+        }
+        match Self::view_for(tool) {
+            Some(view) if view != self.mode => {
+                let from = self.followed_from.map_or(self.mode, |(from, _)| from);
+                self.followed_from = Some((from, view));
+                self.mode = view;
+            }
+            Some(_) => {}
+            None => {
+                if let Some((from, set)) = self.followed_from.take()
+                    && self.mode == set
+                {
+                    self.mode = from;
+                }
+            }
+        }
+    }
+
     /// Display-mode tabs and toggles, shown in the area header.
     pub fn header(&mut self, ui: &mut Ui) {
         let narrow = ui.available_width() < 420.0;
