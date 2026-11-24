@@ -26,6 +26,7 @@ use crate::space::Rect;
 use massif_core::caves::{CaveDef, CaveLayers};
 use massif_core::history::Edit;
 use massif_core::voxel::{ChunkPos, SOLID, VoxelChunk};
+use massif_core::world::Dimension;
 use massif_core::{BlockRect, Registry, TILE_SIZE, TilePos, ops};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -50,8 +51,71 @@ const BATCH: usize = 64;
 /// registry is `reg`) what the active Map Output of `c` puts under the
 /// ground, over the tiles of the map the graph covers.
 pub fn apply(engine: &Engine, c: &Compiled, reg: &Registry, edit: &mut Edit, cancel: Cancel) -> Result<Applied, EvalError> {
+    apply_prepared(engine, c, reg, edit, None, cancel)
+}
+
+/// What [`prepare`] worked out ahead: the samples of the caves' and cave
+/// biomes' outputs over each tile, and the volumes' bricks.
+#[derive(Default)]
+pub struct Prepared {
+    grids: HashMap<((usize, u8), TilePos), Option<Grid>>,
+    bricks: HashMap<((usize, u8), [i32; 3]), Arc<Brick>>,
+}
+
+/// The costly part of [`apply`], off the interface's thread: everything
+/// the graph puts under the ground of `dim` (as it will be when written:
+/// after the ground), evaluated; [`apply_prepared`] then only writes. What
+/// it did not foresee (the ground changed meanwhile) is made while
+/// writing, so the result is the same either way.
+pub fn prepare(engine: &Engine, c: &Compiled, dim: &Dimension, cancel: Cancel) -> Result<Prepared, EvalError> {
+    let mut p = Prepared::default();
+    let tiles = tiles_of(c, dim);
+    let f = Fetch { engine, prepared: None };
+    for name in ["caves", "cave_biomes"] {
+        let Some(src) = c.output(name) else { continue };
+        for batch in tiles.chunks(BATCH) {
+            for &pos in batch {
+                p.grids.insert((src, pos), tile_grid(&f, c, src, pos, cancel)?);
+            }
+        }
+    }
+    let (carve, add) = (c.output("volume.carve"), c.output("volume.add"));
+    if carve.is_some() || add.is_some() {
+        let (carve_box, add_box) = boxes(engine, c, carve, add, cancel)?;
+        for batch in tiles.chunks(BATCH) {
+            let (carve_at, add_at) = brick_origins(dim, carve.is_some() && carve_box != Aabb::EMPTY, add.is_some() && add_box != Aabb::EMPTY, &carve_box, &add_box, batch);
+            for (src, at) in [(carve, carve_at), (add, add_at)] {
+                let Some(src) = src else { continue };
+                for b in engine.bricks(c, src, &at, cancel)? {
+                    p.bricks.insert((src, b.origin), b);
+                }
+            }
+        }
+    }
+    Ok(p)
+}
+
+/// Where the engine's results come from: worked out ahead, or made now.
+struct Fetch<'a> {
+    engine: &'a Engine,
+    prepared: Option<&'a Prepared>,
+}
+
+impl Fetch<'_> {
+    fn bricks(&self, c: &Compiled, src: (usize, u8), at: &[[i32; 3]], cancel: Cancel) -> Result<Vec<Arc<Brick>>, EvalError> {
+        let Some(p) = self.prepared else { return self.engine.bricks(c, src, at, cancel) };
+        let missing: Vec<[i32; 3]> = at.iter().copied().filter(|o| !p.bricks.contains_key(&(src, *o))).collect();
+        let mut made = self.engine.bricks(c, src, &missing, cancel)?.into_iter();
+        Ok(at.iter().map(|o| p.bricks.get(&(src, *o)).cloned().unwrap_or_else(|| made.next().expect("one each"))).collect())
+    }
+}
+
+/// [`apply`] with what [`prepare`] worked out (`None`: made now).
+pub fn apply_prepared(engine: &Engine, c: &Compiled, reg: &Registry, edit: &mut Edit, prepared: Option<&Prepared>, cancel: Cancel) -> Result<Applied, EvalError> {
+    let f = Fetch { engine, prepared };
+    let engine = &f;
     let mut done = Applied::default();
-    let tiles = tiles_of(c, edit);
+    let tiles = tiles_of(c, edit.dim());
     if let Some(src) = c.output("caves") {
         let (layers, columns) = caves(engine, c, src, edit, &tiles, cancel)?;
         done.cave_layers = layers;
@@ -74,16 +138,20 @@ pub fn apply(engine: &Engine, c: &Compiled, reg: &Registry, edit: &mut Edit, can
 }
 
 /// The map's tiles under the graph's terrain.
-fn tiles_of(c: &Compiled, edit: &Edit) -> Vec<TilePos> {
+fn tiles_of(c: &Compiled, dim: &Dimension) -> Vec<TilePos> {
     let s = &c.space;
     let rect = BlockRect::new(s.x0, s.z0, s.x0 + s.size as i32, s.z0 + s.size as i32);
-    let ground = edit.dim().ground();
+    let ground = dim.ground();
     rect.tiles().filter(|t| ground.contains(*t)).collect()
 }
 
 /// The samples of `src` over tile `pos` (level 0), `None` where the tile
 /// lies outside the graph's terrain.
-fn tile_grid(engine: &Engine, c: &Compiled, src: (usize, u8), pos: TilePos, cancel: Cancel) -> Result<Option<Grid>, EvalError> {
+fn tile_grid(f: &Fetch, c: &Compiled, src: (usize, u8), pos: TilePos, cancel: Cancel) -> Result<Option<Grid>, EvalError> {
+    if let Some(g) = f.prepared.and_then(|p| p.grids.get(&(src, pos))) {
+        return Ok(g.clone());
+    }
+    let engine = f.engine;
     let (x0, z0) = pos.origin();
     let rect = Rect::new(x0 - c.space.x0, z0 - c.space.z0, TILE_SIZE as u32, TILE_SIZE as u32).intersect(&c.space.whole(0));
     if rect.is_empty() {
@@ -93,7 +161,7 @@ fn tile_grid(engine: &Engine, c: &Compiled, src: (usize, u8), pos: TilePos, canc
 }
 
 /// The samples of `src` over a batch of tiles, side by side.
-fn grids(engine: &Engine, c: &Compiled, src: (usize, u8), batch: &[TilePos], cancel: Cancel) -> Result<HashMap<TilePos, Grid>, EvalError> {
+fn grids(engine: &Fetch, c: &Compiled, src: (usize, u8), batch: &[TilePos], cancel: Cancel) -> Result<HashMap<TilePos, Grid>, EvalError> {
     use rayon::prelude::*;
     let made: Vec<(TilePos, Option<Grid>)> = batch.par_iter().map(|&p| tile_grid(engine, c, src, p, cancel).map(|g| (p, g))).collect::<Result<_, _>>()?;
     Ok(made.into_iter().filter_map(|(p, g)| g.map(|g| (p, g))).collect())
@@ -124,7 +192,7 @@ fn upstream(c: &Compiled, src: usize) -> HashSet<usize> {
     seen
 }
 
-fn caves(engine: &Engine, c: &Compiled, src: (usize, u8), edit: &mut Edit, tiles: &[TilePos], cancel: Cancel) -> Result<(usize, usize), EvalError> {
+fn caves(engine: &Fetch, c: &Compiled, src: (usize, u8), edit: &mut Edit, tiles: &[TilePos], cancel: Cancel) -> Result<(usize, usize), EvalError> {
     // The graph's layers: those its Cave Layer nodes feeding the output
     // make, in place of those it made before.
     let mut defs = edit.dim().caves.to_vec();
@@ -205,7 +273,7 @@ fn biome_keys(c: &Compiled, reg: &Registry, src: usize, memo: &mut HashMap<usize
     out
 }
 
-fn biomes(engine: &Engine, c: &Compiled, src: (usize, u8), reg: &Registry, edit: &mut Edit, tiles: &[TilePos], cancel: Cancel) -> Result<usize, EvalError> {
+fn biomes(engine: &Fetch, c: &Compiled, src: (usize, u8), reg: &Registry, edit: &mut Edit, tiles: &[TilePos], cancel: Cancel) -> Result<usize, EvalError> {
     let by_key = biome_keys(c, reg, src.0, &mut HashMap::new());
     if by_key.is_empty() {
         return Ok(0);
@@ -236,46 +304,11 @@ fn reaches(b: &Brick) -> bool {
     b.data.iter().any(|&v| fill(v) > 0)
 }
 
-fn volumes(engine: &Engine, c: &Compiled, carve: Option<(usize, u8)>, add: Option<(usize, u8)>, edit: &mut Edit, tiles: &[TilePos], cancel: Cancel) -> Result<usize, EvalError> {
-    let (min_y, max_y) = (edit.dim().min_y, edit.dim().max_y);
-    let per = TILE_SIZE / BRICK;
-    let (cy0, cy1) = (min_y.div_euclid(BRICK), (max_y - 1).div_euclid(BRICK));
-    // Where the volumes can reach at all: bricks outside hold nothing,
-    // and most of a map's bricks are outside a tunnel's or a hall's.
-    let mut memo = HashMap::new();
-    let carve_box = match carve {
-        Some(src) => reach(engine, c, src.0, cancel, &mut memo)?,
-        None => Aabb::EMPTY,
-    };
-    let add_box = match add {
-        Some(src) => reach(engine, c, src.0, cancel, &mut memo)?,
-        None => Aabb::EMPTY,
-    };
+fn volumes(engine: &Fetch, c: &Compiled, carve: Option<(usize, u8)>, add: Option<(usize, u8)>, edit: &mut Edit, tiles: &[TilePos], cancel: Cancel) -> Result<usize, EvalError> {
+    let (carve_box, add_box) = boxes(engine.engine, c, carve, add, cancel)?;
     let mut written = 0;
     for batch in tiles.chunks(BATCH) {
-        // The bricks of each tile: a carving reaches no higher than the
-        // highest matter of the tile's levels (nothing to cut above);
-        // added rock anywhere.
-        let mut carve_at: Vec<[i32; 3]> = Vec::new();
-        let mut add_at: Vec<[i32; 3]> = Vec::new();
-        for &t in batch {
-            let top = highest(edit, t).map_or(cy0 - 1, |h| (h.ceil() as i32).div_euclid(BRICK).min(cy1));
-            let (x0, z0) = t.origin();
-            for bz in 0..per {
-                for bx in 0..per {
-                    let (x, z) = (x0 + bx * BRICK, z0 + bz * BRICK);
-                    for cy in cy0..=cy1 {
-                        let o = [x, cy * BRICK, z];
-                        if carve.is_some() && cy <= top && carve_box.meets(o) {
-                            carve_at.push(o);
-                        }
-                        if add.is_some() && add_box.meets(o) {
-                            add_at.push(o);
-                        }
-                    }
-                }
-            }
-        }
+        let (carve_at, add_at) = brick_origins(edit.dim(), carve.is_some(), add.is_some(), &carve_box, &add_box, batch);
         let mut bricks: HashMap<ChunkPos, ChunkBricks> = HashMap::new();
         for (src, at, slot) in [(carve, &carve_at, 0), (add, &add_at, 1)] {
             let Some(src) = src else { continue };
@@ -303,6 +336,52 @@ fn volumes(engine: &Engine, c: &Compiled, carve: Option<(usize, u8)>, add: Optio
         written += positions.iter().filter(|p| edit.dim().voxels.get(**p).is_some()).count();
     }
     Ok(written)
+}
+
+/// Where the volumes carving (`carve`) and adding (`add`) can reach at all:
+/// bricks outside hold nothing, and most of a map's bricks are outside a
+/// tunnel's or a hall's.
+fn boxes(engine: &Engine, c: &Compiled, carve: Option<(usize, u8)>, add: Option<(usize, u8)>, cancel: Cancel) -> Result<(Aabb, Aabb), EvalError> {
+    let mut memo = HashMap::new();
+    let carve_box = match carve {
+        Some(src) => reach(engine, c, src.0, cancel, &mut memo)?,
+        None => Aabb::EMPTY,
+    };
+    let add_box = match add {
+        Some(src) => reach(engine, c, src.0, cancel, &mut memo)?,
+        None => Aabb::EMPTY,
+    };
+    Ok((carve_box, add_box))
+}
+
+/// The bricks of each tile of `batch` to make: a carving reaches no
+/// higher than the highest matter of the tile's levels (nothing to cut
+/// above); added rock anywhere.
+fn brick_origins(dim: &Dimension, carve: bool, add: bool, carve_box: &Aabb, add_box: &Aabb, batch: &[TilePos]) -> (Vec<[i32; 3]>, Vec<[i32; 3]>) {
+    let (min_y, max_y) = (dim.min_y, dim.max_y);
+    let per = TILE_SIZE / BRICK;
+    let (cy0, cy1) = (min_y.div_euclid(BRICK), (max_y - 1).div_euclid(BRICK));
+    let mut carve_at: Vec<[i32; 3]> = Vec::new();
+    let mut add_at: Vec<[i32; 3]> = Vec::new();
+    for &t in batch {
+        let top = highest(dim, t).map_or(cy0 - 1, |h| (h.ceil() as i32).div_euclid(BRICK).min(cy1));
+        let (x0, z0) = t.origin();
+        for bz in 0..per {
+            for bx in 0..per {
+                let (x, z) = (x0 + bx * BRICK, z0 + bz * BRICK);
+                for cy in cy0..=cy1 {
+                    let o = [x, cy * BRICK, z];
+                    if carve && cy <= top && carve_box.meets(o) {
+                        carve_at.push(o);
+                    }
+                    if add && add_box.meets(o) {
+                        add_at.push(o);
+                    }
+                }
+            }
+        }
+    }
+    (carve_at, add_at)
 }
 
 /// A box of the world a volume reaches no further than (its value is
@@ -416,9 +495,8 @@ fn reach(engine: &Engine, c: &Compiled, n: usize, cancel: Cancel, memo: &mut Has
 }
 
 /// The highest top of the levels over tile `t`.
-fn highest(edit: &Edit, t: TilePos) -> Option<f32> {
-    edit.dim()
-        .levels
+fn highest(dim: &Dimension, t: TilePos) -> Option<f32> {
+    dim.levels
         .iter()
         .filter_map(|l| l.view(t))
         .map(|tile| (0..massif_core::TILE_AREA).map(|i| tile.top.get(i)).fold(f32::MIN, f32::max))

@@ -30,8 +30,13 @@ fn compiled(world: &World, json: &str) -> Compiled {
     c
 }
 
-/// Apply as the panel does: the ground, then what lies under it.
+/// Apply as the panel does: the ground, then what lies under it (worked
+/// out ahead, off the interface's thread, when `ahead`).
 fn apply(world: &mut World, c: &Compiled, e: &Engine) -> Applied {
+    apply_ahead(world, c, e, false).0
+}
+
+fn apply_ahead(world: &mut World, c: &Compiled, e: &Engine, ahead: bool) -> (Applied, std::time::Duration) {
     let (extent, out) = outputs(e, c, 0, &never).unwrap();
     let (seed, sea) = (world.meta.seed as u64, world.meta.sea_level);
     let reg = world.registry.clone();
@@ -44,10 +49,36 @@ fn apply(world: &mut World, c: &Compiled, e: &Engine) -> Applied {
         let paint = massif_core::graph::Painting { palette: &palette, climate: None };
         let write = massif_core::graph::GroundWrite { tiles: &tiles, create: true, map: None, sea, blank: TerrainId::ROCK };
         massif_core::graph::apply(&mut edit, &extent, &out, seed, &paint, &write);
-        underground::apply(e, c, &reg, &mut edit, &never).unwrap()
+        if ahead {
+            let prepared = underground::prepare(e, c, edit.dim(), &never).unwrap();
+            let started = std::time::Instant::now();
+            let done = underground::apply_prepared(e, c, &reg, &mut edit, Some(&prepared), &never).unwrap();
+            (done, started.elapsed())
+        } else {
+            let started = std::time::Instant::now();
+            let done = underground::apply(e, c, &reg, &mut edit, &never).unwrap();
+            (done, started.elapsed())
+        }
     };
     history.commit();
     done
+}
+
+/// Worked out ahead, then written: the same map as applied at once, the
+/// writing itself short enough for the interface's thread.
+#[test]
+fn prepared_ahead_writes_the_same_quickly() {
+    let (mut a, mut b) = (world(), world());
+    let c = compiled(&a, GRAPH);
+    let (once, t_once) = apply_ahead(&mut a, &c, &Engine::new(Default::default()), false);
+    let (ahead, t_write) = apply_ahead(&mut b, &c, &Engine::new(Default::default()), true);
+    assert_eq!(once, ahead);
+    assert_eq!(a.dims[0].caves.defs(), b.dims[0].caves.defs());
+    for t in a.dims[0].ground().positions() {
+        assert_eq!(a.dims[0].ground().view(t).map(|x| x.caves.clone()), b.dims[0].ground().view(t).map(|x| x.caves.clone()), "{t:?}");
+    }
+    eprintln!("under the ground at once {t_once:?}, written after preparing {t_write:?}");
+    assert!(t_write < t_once, "{t_write:?} {t_once:?}");
 }
 
 #[test]
