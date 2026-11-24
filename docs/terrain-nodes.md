@@ -2774,6 +2774,281 @@ Outputs:
 }
 ```
 
+### Village site — `village.site`
+
+Where a village's squares go: on flat dry land of the area, one for each district. The first stage of a village. The squares stand where the land is flattest and driest near the middle of the area, as much as Flat ground asks; a village of more than forty houses gets more districts, each round its own square. Houses, Density and Spread set how far the village reaches, which the roads follow.
+
+It makes geometry over the whole terrain at once, reading reliefs and masks at the simulations' resolution.
+
+Inputs:
+
+- `height` (height, optional) — The relief the village stands on. Left empty: the sea level.
+- `area` (mask, optional) — Where the village may go: over a half. At most 4096 × 4096 blocks. Left empty: the whole terrain.
+
+Outputs:
+
+- `squares` (points) — The squares, the village's first.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `houses` | integer | 18 | 3 to 120 | How many houses (not counting wells, stalls, mills and towers): the village reaches as far as it needs to hold them. |
+| `density` | number | 0.6 | 0.2 to 1 | From airy (0.2) to tight (1): how close the plots follow one another along the roads. |
+| `spread` | number | 0.5 | 0 to 1 | From a compact hamlet (0) to a village strung out along its roads (1). |
+| `flat` | number | 0.7 | 0 to 1 | How much the squares prefer flat land over the area's middle. |
+| `seed` | seed | — | 0 to 4294967295 | Another seed gives another variation of the same settings. Left out, it comes from the node's name. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "out": { "type": "output.map", "inputs": { "height": "relief" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } },
+    "site": { "type": "village.site" }
+  }
+}
+```
+
+### Village roads — `village.roads`
+
+A village's roads: main roads that follow the land between its squares and out of it, side roads off them. Main roads find their way between the squares and toward the area's edge, choosing gentle slopes and dry land; side roads branch off them every few dozen blocks, longer as Spread grows. Type is the blocks they are laid in when the map is applied; Width the main roads' width (0: the pack's).
+
+It makes geometry over the whole terrain at once, reading reliefs and masks at the simulations' resolution.
+
+It reads the files its settings name, and follows them when they change.
+
+Inputs:
+
+- `height` (height, optional) — The relief the village stands on. Left empty: the sea level.
+- `area` (mask, optional) — Where the village may go: over a half. At most 4096 × 4096 blocks. Left empty: the whole terrain.
+- `squares` (points) — The squares, from Village site.
+
+Outputs:
+
+- `roads` (splines) — The roads: main, side, and the squares.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `pack` | text | `` |  | The folder of the village pack: its schematics by type (house/, church/, farm/…) and its village.json. |
+| `road` | choice | `theme` | `theme`, `dirt`, `premium`, `stone`, `planks` | The blocks the roads are laid in. `theme`: The blocks the pack's village.json gives its roads. `dirt`: Dirt path and a little coarse dirt. `premium`: Dirt path and gravel, coarse dirt on the edges. `stone`: Cobblestone, andesite and stone bricks, slabs where they climb. `planks`: Spruce and oak planks. |
+| `spread` | number | 0.5 | 0 to 1 | From a compact hamlet (0) to a village strung out along its roads (1). |
+| `width` | integer | 0 | 0 to 9 | The main roads' width in blocks; 0 keeps the pack's. |
+| `theme` | text | `` |  | Which theme of the pack, when it has several: the first one when left empty. |
+| `seed` | seed | — | 0 to 4294967295 | Another seed gives another variation of the same settings. Left out, it comes from the node's name. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "out": { "type": "output.map", "inputs": { "height": "relief", "roads": "roads" } },
+    "places": { "type": "points.scatter", "inputs": { "height": "relief" }, "params": { "spacing": 256 } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } },
+    "roads": { "type": "village.roads", "inputs": { "squares": "places" } }
+  }
+}
+```
+
+### Village walls — `village.walls`
+
+Ramparts round a village, three blocks inside its area: towers at the corners and along them, a gate where a main road crosses. The wall's line follows the area's outline; side roads stop short of it, main roads pass through its gates (Roads out is the roads cut so). With Walls off, it draws no wall and lets the roads through as they are.
+
+It makes geometry over the whole terrain at once, reading reliefs and masks at the simulations' resolution.
+
+It reads the files its settings name, and follows them when they change.
+
+Inputs:
+
+- `height` (height, optional) — The relief the village stands on. Left empty: the sea level.
+- `area` (mask, optional) — Where the village may go: over a half. At most 4096 × 4096 blocks. Left empty: the whole terrain.
+- `roads` (splines) — The roads, from Village roads (or Village walls).
+- `squares` (points, optional) — The squares, from Village site: the walls go round the village's reach of them. Left empty: round the whole area.
+
+Outputs:
+
+- `walls` (splines) — The wall's line, closed.
+- `towers` (points) — Its corners, towers and gates.
+- `roads` (splines) — The roads, side roads cut at the wall.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `on` | boolean | true |  | Whether the village has walls. |
+| `pack` | text | `` |  | The folder of the village pack: its schematics by type (house/, church/, farm/…) and its village.json. |
+| `theme` | text | `` |  | Which theme of the pack, when it has several: the first one when left empty. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "out": { "type": "output.map", "inputs": { "height": "relief" } },
+    "places": { "type": "points.scatter", "inputs": { "height": "relief" }, "params": { "spacing": 256 } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } },
+    "streets": { "type": "village.roads", "inputs": { "height": "relief", "squares": "places" } },
+    "walls": { "type": "village.walls", "inputs": { "roads": "streets" } }
+  }
+}
+```
+
+### Village plots — `village.plots`
+
+Plots along both sides of a village's roads, each the size of building it would like and its door to the road. A plot every 9 to 15 blocks along each road, fewer as Density falls; nearer the squares first. Their sizes lean small or large as Small ↔ large asks, and a little larger away from the squares.
+
+It makes geometry over the whole terrain at once, reading reliefs and masks at the simulations' resolution.
+
+It reads the files its settings name, and follows them when they change.
+
+Inputs:
+
+- `squares` (points) — The squares, from Village site.
+- `roads` (splines) — The roads, from Village roads (or Village walls).
+
+Outputs:
+
+- `plots` (footprints) — The plots: each its door, the way it faces, its size class.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `density` | number | 0.6 | 0.2 to 1 | From airy (0.2) to tight (1): how close the plots follow one another along the roads. |
+| `size_bias` | number | 0 | -1 to 1 | From small houses (−1) to large houses and manors (+1). |
+| `pack` | text | `` |  | The folder of the village pack: its schematics by type (house/, church/, farm/…) and its village.json. |
+| `theme` | text | `` |  | Which theme of the pack, when it has several: the first one when left empty. |
+| `seed` | seed | — | 0 to 4294967295 | Another seed gives another variation of the same settings. Left out, it comes from the node's name. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "out": { "type": "output.map", "inputs": { "height": "relief" } },
+    "places": { "type": "points.scatter", "inputs": { "height": "relief" }, "params": { "spacing": 256 } },
+    "plots": { "type": "village.plots", "inputs": { "roads": "streets", "squares": "places" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } },
+    "streets": { "type": "village.roads", "inputs": { "height": "relief", "squares": "places" } }
+  }
+}
+```
+
+### Village buildings — `village.buildings`
+
+A building of the pack on each plot with room for it, its door to the road: houses, the church by the square, farms with their fields toward the edge. Each plot draws a type by the pack's shares and rules (the church and wells near the square, forges and taverns near the market, farms and towers toward the edge, manors on the heights), then a schematic of the size the plot likes, turned to face the road; a smaller one when it has not the room. Farms keep a field behind them, as often as Fields asks. It stops at Houses houses.
+
+It makes geometry over the whole terrain at once, reading reliefs and masks at the simulations' resolution.
+
+It reads the files its settings name, and follows them when they change.
+
+Inputs:
+
+- `height` (height, optional) — The relief the village stands on. Left empty: the sea level.
+- `area` (mask, optional) — Where the village may go: over a half. At most 4096 × 4096 blocks. Left empty: the whole terrain.
+- `squares` (points) — The squares, from Village site.
+- `roads` (splines) — The roads, from Village roads (or Village walls).
+- `walls` (splines, optional) — The walls' line, from Village walls: kept clear.
+- `plots` (footprints) — The plots, from Village plots.
+
+Outputs:
+
+- `buildings` (instances) — The buildings: the pack's schematics placed and turned.
+- `fields` (footprints) — The farms' fields, each its crop.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `pack` | text | `` |  | The folder of the village pack: its schematics by type (house/, church/, farm/…) and its village.json. |
+| `houses` | integer | 18 | 3 to 120 | How many houses (not counting wells, stalls, mills and towers): the village reaches as far as it needs to hold them. |
+| `size_bias` | number | 0 | -1 to 1 | From small houses (−1) to large houses and manors (+1). |
+| `fields` | number | 1 | 0 to 1 | The share of farms that keep a field. |
+| `mill` | choice | `auto` | `auto`, `wind`, `water`, `none` | Which mill the village has. `auto`: A watermill when water is near and the pack has one, else a windmill. `wind`: A windmill, toward the edge. `water`: A watermill by the water. `none`: No mill. |
+| `max_slope` | integer | 10 | 1 to 32 | The most a plot's land may rise across it, in blocks. |
+| `margin` | integer | 1 | 0 to 8 | Blocks kept free round each building, at least. |
+| `theme` | text | `` |  | Which theme of the pack, when it has several: the first one when left empty. |
+| `seed` | seed | — | 0 to 4294967295 | Another seed gives another variation of the same settings. Left out, it comes from the node's name. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "buildings": { "type": "village.buildings", "inputs": { "plots": "lots", "roads": "streets", "squares": "places" } },
+    "lots": { "type": "village.plots", "inputs": { "roads": "streets", "squares": "places" } },
+    "out": { "type": "output.map", "inputs": { "height": "relief", "structures": "buildings" } },
+    "places": { "type": "points.scatter", "inputs": { "height": "relief" }, "params": { "spacing": 256 } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } },
+    "streets": { "type": "village.roads", "inputs": { "height": "relief", "squares": "places" } }
+  }
+}
+```
+
+### Village props — `village.props`
+
+A village's props: market stalls round the square, lampposts and benches along the roads, hay and carts by the farms, fences round the fields. The pack's own props (its props/ and market/ folders) where it has them, Massif's simple ones otherwise; Props sets how many, the market's stalls standing whatever it says. Everything is the buildings and the props together, for the map.
+
+It makes geometry over the whole terrain at once, reading reliefs and masks at the simulations' resolution.
+
+It reads the files its settings name, and follows them when they change.
+
+Inputs:
+
+- `height` (height, optional) — The relief the village stands on. Left empty: the sea level.
+- `area` (mask, optional) — Where the village may go: over a half. At most 4096 × 4096 blocks. Left empty: the whole terrain.
+- `squares` (points) — The squares, from Village site.
+- `roads` (splines) — The roads, from Village roads (or Village walls).
+- `walls` (splines, optional) — The walls' line, from Village walls: kept clear.
+- `buildings` (instances) — The buildings, from Village buildings.
+- `fields` (footprints, optional) — The fields, from Village buildings.
+
+Outputs:
+
+- `props` (instances) — The props.
+- `all` (instances) — The buildings and the props.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `pack` | text | `` |  | The folder of the village pack: its schematics by type (house/, church/, farm/…) and its village.json. |
+| `props` | number | 0.5 | 0 to 1 | How many props: none (0) to many (1). |
+| `theme` | text | `` |  | Which theme of the pack, when it has several: the first one when left empty. |
+| `seed` | seed | — | 0 to 4294967295 | Another seed gives another variation of the same settings. Left out, it comes from the node's name. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "houses": { "type": "village.buildings", "inputs": { "height": "relief", "plots": "lots", "roads": "streets", "squares": "places" } },
+    "lots": { "type": "village.plots", "inputs": { "roads": "streets", "squares": "places" } },
+    "out": { "type": "output.map", "inputs": { "height": "relief", "structures": "props" } },
+    "places": { "type": "points.scatter", "inputs": { "height": "relief" }, "params": { "spacing": 256 } },
+    "props": { "type": "village.props", "inputs": { "buildings": "houses", "roads": "streets", "squares": "places" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } },
+    "streets": { "type": "village.roads", "inputs": { "height": "relief", "squares": "places" } }
+  }
+}
+```
+
+### Village ground — `village.ground`
+
+The relief levelled under a village's buildings and fields, and a mask of what the village takes. Each building's ground is cut or raised to its floor, sloping back to the land over four blocks; each field to its own. The mask is 1 under the buildings, the fields and the roads: keep the forest and the ores' veins out of the village with it.
+
+Inputs:
+
+- `height` (height, optional) — The relief. Left empty: the sea level.
+- `buildings` (instances) — The buildings (and props), from the village.
+- `fields` (footprints, optional) — The fields.
+- `roads` (splines, optional) — The roads.
+
+Outputs:
+
+- `height` (height) — The relief levelled under the village.
+- `mask` (mask) — 1 where the village stands.
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "ground": { "type": "village.ground", "inputs": { "buildings": "houses" } },
+    "houses": { "type": "village.buildings", "inputs": { "height": "relief", "plots": "lots", "roads": "streets", "squares": "places" } },
+    "lots": { "type": "village.plots", "inputs": { "roads": "streets", "squares": "places" } },
+    "out": { "type": "output.map", "inputs": { "height": "ground" } },
+    "places": { "type": "points.scatter", "inputs": { "height": "relief" }, "params": { "spacing": 256 } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } },
+    "streets": { "type": "village.roads", "inputs": { "height": "relief", "squares": "places" } }
+  }
+}
+```
+
 ## Volumes
 
 ### Relief to volume — `volume.from_height`

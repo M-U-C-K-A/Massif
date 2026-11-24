@@ -10063,6 +10063,111 @@
           "if": {
             "properties": {
               "type": {
+                "const": "village.site"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/village.site"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "village.roads"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/village.roads"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "village.walls"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/village.walls"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "village.plots"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/village.plots"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "village.buildings"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/village.buildings"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "village.props"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/village.props"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "village.ground"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/village.ground"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
                 "const": "volume.from_height"
               }
             },
@@ -10335,6 +10440,13 @@
                 "combine.blend",
                 "points.scatter",
                 "points.mask",
+                "village.site",
+                "village.roads",
+                "village.walls",
+                "village.plots",
+                "village.buildings",
+                "village.props",
+                "village.ground",
                 "volume.from_height",
                 "legacy.floating_islands",
                 "legacy.overhang",
@@ -12571,6 +12683,802 @@
         "type"
       ],
       "title": "Glacial valley",
+      "type": "object"
+    },
+    "village.buildings": {
+      "additionalProperties": false,
+      "description": "A building of the pack on each plot with room for it, its door to the road: houses, the church by the square, farms with their fields toward the edge. Each plot draws a type by the pack's shares and rules (the church and wells near the square, forges and taverns near the market, farms and towers toward the edge, manors on the heights), then a schematic of the size the plot likes, turned to face the road; a smaller one when it has not the room. Farms keep a field behind them, as often as Fields asks. It stops at Houses houses.",
+      "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "area": {
+              "$ref": "#/$defs/source",
+              "description": "Where the village may go: over a half. At most 4096 × 4096 blocks. (mask) Left empty: the whole terrain.",
+              "title": "Area"
+            },
+            "height": {
+              "$ref": "#/$defs/source",
+              "description": "The relief the village stands on. (height) Left empty: the sea level.",
+              "title": "Height"
+            },
+            "plots": {
+              "$ref": "#/$defs/source",
+              "description": "The plots, from Village plots. (footprints)",
+              "title": "Plots"
+            },
+            "roads": {
+              "$ref": "#/$defs/source",
+              "description": "The roads, from Village roads (or Village walls). (splines)",
+              "title": "Roads"
+            },
+            "squares": {
+              "$ref": "#/$defs/source",
+              "description": "The squares, from Village site. (points)",
+              "title": "Squares"
+            },
+            "walls": {
+              "$ref": "#/$defs/source",
+              "description": "The walls' line, from Village walls: kept clear. (splines)",
+              "title": "Walls"
+            }
+          },
+          "required": [
+            "squares",
+            "roads",
+            "plots"
+          ],
+          "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "fields": {
+              "default": 1.0,
+              "description": "The share of farms that keep a field.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Fields",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "houses": {
+              "default": 18,
+              "description": "How many houses (not counting wells, stalls, mills and towers): the village reaches as far as it needs to hold them.",
+              "maximum": 120,
+              "minimum": 3,
+              "title": "Houses",
+              "type": "integer",
+              "x-section": "main"
+            },
+            "margin": {
+              "default": 1,
+              "description": "Blocks kept free round each building, at least.",
+              "maximum": 8,
+              "minimum": 0,
+              "title": "Margin",
+              "type": "integer",
+              "x-section": "advanced"
+            },
+            "max_slope": {
+              "default": 10,
+              "description": "The most a plot's land may rise across it, in blocks.",
+              "maximum": 32,
+              "minimum": 1,
+              "title": "Steepest plot",
+              "type": "integer",
+              "x-section": "advanced"
+            },
+            "mill": {
+              "default": "auto",
+              "description": "Which mill the village has.",
+              "enum": [
+                "auto",
+                "wind",
+                "water",
+                "none"
+              ],
+              "title": "Mill",
+              "x-options": [
+                {
+                  "help": "A watermill when water is near and the pack has one, else a windmill.",
+                  "label": "Auto",
+                  "value": "auto"
+                },
+                {
+                  "help": "A windmill, toward the edge.",
+                  "label": "Windmill",
+                  "value": "wind"
+                },
+                {
+                  "help": "A watermill by the water.",
+                  "label": "Watermill",
+                  "value": "water"
+                },
+                {
+                  "help": "No mill.",
+                  "label": "None",
+                  "value": "none"
+                }
+              ],
+              "x-section": "main"
+            },
+            "pack": {
+              "default": "",
+              "description": "The folder of the village pack: its schematics by type (house/, church/, farm/…) and its village.json.",
+              "title": "Pack",
+              "type": "string",
+              "x-section": "main"
+            },
+            "seed": {
+              "description": "Another seed gives another variation of the same settings. Left out, it comes from the node's name.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer",
+              "x-section": "detail"
+            },
+            "size_bias": {
+              "default": 0.0,
+              "description": "From small houses (−1) to large houses and manors (+1).",
+              "maximum": 1.0,
+              "minimum": -1.0,
+              "title": "Small ↔ large",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -1.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "theme": {
+              "default": "",
+              "description": "Which theme of the pack, when it has several: the first one when left empty.",
+              "title": "Theme",
+              "type": "string",
+              "x-section": "advanced"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "village.buildings"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Village buildings",
+      "type": "object"
+    },
+    "village.ground": {
+      "additionalProperties": false,
+      "description": "The relief levelled under a village's buildings and fields, and a mask of what the village takes. Each building's ground is cut or raised to its floor, sloping back to the land over four blocks; each field to its own. The mask is 1 under the buildings, the fields and the roads: keep the forest and the ores' veins out of the village with it.",
+      "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "buildings": {
+              "$ref": "#/$defs/source",
+              "description": "The buildings (and props), from the village. (instances)",
+              "title": "Buildings"
+            },
+            "fields": {
+              "$ref": "#/$defs/source",
+              "description": "The fields. (footprints)",
+              "title": "Fields"
+            },
+            "height": {
+              "$ref": "#/$defs/source",
+              "description": "The relief. (height) Left empty: the sea level.",
+              "title": "Height"
+            },
+            "roads": {
+              "$ref": "#/$defs/source",
+              "description": "The roads. (splines)",
+              "title": "Roads"
+            }
+          },
+          "required": [
+            "buildings"
+          ],
+          "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {},
+          "type": "object"
+        },
+        "type": {
+          "const": "village.ground"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Village ground",
+      "type": "object"
+    },
+    "village.plots": {
+      "additionalProperties": false,
+      "description": "Plots along both sides of a village's roads, each the size of building it would like and its door to the road. A plot every 9 to 15 blocks along each road, fewer as Density falls; nearer the squares first. Their sizes lean small or large as Small ↔ large asks, and a little larger away from the squares.",
+      "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "roads": {
+              "$ref": "#/$defs/source",
+              "description": "The roads, from Village roads (or Village walls). (splines)",
+              "title": "Roads"
+            },
+            "squares": {
+              "$ref": "#/$defs/source",
+              "description": "The squares, from Village site. (points)",
+              "title": "Squares"
+            }
+          },
+          "required": [
+            "squares",
+            "roads"
+          ],
+          "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "density": {
+              "default": 0.6,
+              "description": "From airy (0.2) to tight (1): how close the plots follow one another along the roads.",
+              "maximum": 1.0,
+              "minimum": 0.2,
+              "title": "Density",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.2,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "pack": {
+              "default": "",
+              "description": "The folder of the village pack: its schematics by type (house/, church/, farm/…) and its village.json.",
+              "title": "Pack",
+              "type": "string",
+              "x-section": "main"
+            },
+            "seed": {
+              "description": "Another seed gives another variation of the same settings. Left out, it comes from the node's name.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer",
+              "x-section": "detail"
+            },
+            "size_bias": {
+              "default": 0.0,
+              "description": "From small houses (−1) to large houses and manors (+1).",
+              "maximum": 1.0,
+              "minimum": -1.0,
+              "title": "Small ↔ large",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -1.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "theme": {
+              "default": "",
+              "description": "Which theme of the pack, when it has several: the first one when left empty.",
+              "title": "Theme",
+              "type": "string",
+              "x-section": "advanced"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "village.plots"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Village plots",
+      "type": "object"
+    },
+    "village.props": {
+      "additionalProperties": false,
+      "description": "A village's props: market stalls round the square, lampposts and benches along the roads, hay and carts by the farms, fences round the fields. The pack's own props (its props/ and market/ folders) where it has them, Massif's simple ones otherwise; Props sets how many, the market's stalls standing whatever it says. Everything is the buildings and the props together, for the map.",
+      "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "area": {
+              "$ref": "#/$defs/source",
+              "description": "Where the village may go: over a half. At most 4096 × 4096 blocks. (mask) Left empty: the whole terrain.",
+              "title": "Area"
+            },
+            "buildings": {
+              "$ref": "#/$defs/source",
+              "description": "The buildings, from Village buildings. (instances)",
+              "title": "Buildings"
+            },
+            "fields": {
+              "$ref": "#/$defs/source",
+              "description": "The fields, from Village buildings. (footprints)",
+              "title": "Fields"
+            },
+            "height": {
+              "$ref": "#/$defs/source",
+              "description": "The relief the village stands on. (height) Left empty: the sea level.",
+              "title": "Height"
+            },
+            "roads": {
+              "$ref": "#/$defs/source",
+              "description": "The roads, from Village roads (or Village walls). (splines)",
+              "title": "Roads"
+            },
+            "squares": {
+              "$ref": "#/$defs/source",
+              "description": "The squares, from Village site. (points)",
+              "title": "Squares"
+            },
+            "walls": {
+              "$ref": "#/$defs/source",
+              "description": "The walls' line, from Village walls: kept clear. (splines)",
+              "title": "Walls"
+            }
+          },
+          "required": [
+            "squares",
+            "roads",
+            "buildings"
+          ],
+          "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "pack": {
+              "default": "",
+              "description": "The folder of the village pack: its schematics by type (house/, church/, farm/…) and its village.json.",
+              "title": "Pack",
+              "type": "string",
+              "x-section": "main"
+            },
+            "props": {
+              "default": 0.5,
+              "description": "How many props: none (0) to many (1).",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Props",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "seed": {
+              "description": "Another seed gives another variation of the same settings. Left out, it comes from the node's name.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer",
+              "x-section": "detail"
+            },
+            "theme": {
+              "default": "",
+              "description": "Which theme of the pack, when it has several: the first one when left empty.",
+              "title": "Theme",
+              "type": "string",
+              "x-section": "advanced"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "village.props"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Village props",
+      "type": "object"
+    },
+    "village.roads": {
+      "additionalProperties": false,
+      "description": "A village's roads: main roads that follow the land between its squares and out of it, side roads off them. Main roads find their way between the squares and toward the area's edge, choosing gentle slopes and dry land; side roads branch off them every few dozen blocks, longer as Spread grows. Type is the blocks they are laid in when the map is applied; Width the main roads' width (0: the pack's).",
+      "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "area": {
+              "$ref": "#/$defs/source",
+              "description": "Where the village may go: over a half. At most 4096 × 4096 blocks. (mask) Left empty: the whole terrain.",
+              "title": "Area"
+            },
+            "height": {
+              "$ref": "#/$defs/source",
+              "description": "The relief the village stands on. (height) Left empty: the sea level.",
+              "title": "Height"
+            },
+            "squares": {
+              "$ref": "#/$defs/source",
+              "description": "The squares, from Village site. (points)",
+              "title": "Squares"
+            }
+          },
+          "required": [
+            "squares"
+          ],
+          "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "pack": {
+              "default": "",
+              "description": "The folder of the village pack: its schematics by type (house/, church/, farm/…) and its village.json.",
+              "title": "Pack",
+              "type": "string",
+              "x-section": "main"
+            },
+            "road": {
+              "default": "theme",
+              "description": "The blocks the roads are laid in.",
+              "enum": [
+                "theme",
+                "dirt",
+                "premium",
+                "stone",
+                "planks"
+              ],
+              "title": "Type",
+              "x-options": [
+                {
+                  "help": "The blocks the pack's village.json gives its roads.",
+                  "label": "Pack's",
+                  "value": "theme"
+                },
+                {
+                  "help": "Dirt path and a little coarse dirt.",
+                  "label": "Dirt path",
+                  "value": "dirt"
+                },
+                {
+                  "help": "Dirt path and gravel, coarse dirt on the edges.",
+                  "label": "Gravel",
+                  "value": "premium"
+                },
+                {
+                  "help": "Cobblestone, andesite and stone bricks, slabs where they climb.",
+                  "label": "Stone",
+                  "value": "stone"
+                },
+                {
+                  "help": "Spruce and oak planks.",
+                  "label": "Planks",
+                  "value": "planks"
+                }
+              ],
+              "x-section": "main"
+            },
+            "seed": {
+              "description": "Another seed gives another variation of the same settings. Left out, it comes from the node's name.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer",
+              "x-section": "detail"
+            },
+            "spread": {
+              "default": 0.5,
+              "description": "From a compact hamlet (0) to a village strung out along its roads (1).",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Spread",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "theme": {
+              "default": "",
+              "description": "Which theme of the pack, when it has several: the first one when left empty.",
+              "title": "Theme",
+              "type": "string",
+              "x-section": "advanced"
+            },
+            "width": {
+              "default": 0,
+              "description": "The main roads' width in blocks; 0 keeps the pack's.",
+              "maximum": 9,
+              "minimum": 0,
+              "title": "Width",
+              "type": "integer",
+              "x-section": "advanced"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "village.roads"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Village roads",
+      "type": "object"
+    },
+    "village.site": {
+      "additionalProperties": false,
+      "description": "Where a village's squares go: on flat dry land of the area, one for each district. The first stage of a village. The squares stand where the land is flattest and driest near the middle of the area, as much as Flat ground asks; a village of more than forty houses gets more districts, each round its own square. Houses, Density and Spread set how far the village reaches, which the roads follow.",
+      "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "area": {
+              "$ref": "#/$defs/source",
+              "description": "Where the village may go: over a half. At most 4096 × 4096 blocks. (mask) Left empty: the whole terrain.",
+              "title": "Area"
+            },
+            "height": {
+              "$ref": "#/$defs/source",
+              "description": "The relief the village stands on. (height) Left empty: the sea level.",
+              "title": "Height"
+            }
+          },
+          "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "density": {
+              "default": 0.6,
+              "description": "From airy (0.2) to tight (1): how close the plots follow one another along the roads.",
+              "maximum": 1.0,
+              "minimum": 0.2,
+              "title": "Density",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.2,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "flat": {
+              "default": 0.7,
+              "description": "How much the squares prefer flat land over the area's middle.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Flat ground",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "houses": {
+              "default": 18,
+              "description": "How many houses (not counting wells, stalls, mills and towers): the village reaches as far as it needs to hold them.",
+              "maximum": 120,
+              "minimum": 3,
+              "title": "Houses",
+              "type": "integer",
+              "x-section": "main"
+            },
+            "seed": {
+              "description": "Another seed gives another variation of the same settings. Left out, it comes from the node's name.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer",
+              "x-section": "detail"
+            },
+            "spread": {
+              "default": 0.5,
+              "description": "From a compact hamlet (0) to a village strung out along its roads (1).",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Spread",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "village.site"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Village site",
+      "type": "object"
+    },
+    "village.walls": {
+      "additionalProperties": false,
+      "description": "Ramparts round a village, three blocks inside its area: towers at the corners and along them, a gate where a main road crosses. The wall's line follows the area's outline; side roads stop short of it, main roads pass through its gates (Roads out is the roads cut so). With Walls off, it draws no wall and lets the roads through as they are.",
+      "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "area": {
+              "$ref": "#/$defs/source",
+              "description": "Where the village may go: over a half. At most 4096 × 4096 blocks. (mask) Left empty: the whole terrain.",
+              "title": "Area"
+            },
+            "height": {
+              "$ref": "#/$defs/source",
+              "description": "The relief the village stands on. (height) Left empty: the sea level.",
+              "title": "Height"
+            },
+            "roads": {
+              "$ref": "#/$defs/source",
+              "description": "The roads, from Village roads (or Village walls). (splines)",
+              "title": "Roads"
+            },
+            "squares": {
+              "$ref": "#/$defs/source",
+              "description": "The squares, from Village site: the walls go round the village's reach of them. (points) Left empty: round the whole area.",
+              "title": "Squares"
+            }
+          },
+          "required": [
+            "roads"
+          ],
+          "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "on": {
+              "default": true,
+              "description": "Whether the village has walls.",
+              "title": "Walls",
+              "type": "boolean",
+              "x-section": "main"
+            },
+            "pack": {
+              "default": "",
+              "description": "The folder of the village pack: its schematics by type (house/, church/, farm/…) and its village.json.",
+              "title": "Pack",
+              "type": "string",
+              "x-section": "main"
+            },
+            "theme": {
+              "default": "",
+              "description": "Which theme of the pack, when it has several: the first one when left empty.",
+              "title": "Theme",
+              "type": "string",
+              "x-section": "advanced"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "village.walls"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Village walls",
       "type": "object"
     },
     "volume.from_height": {
