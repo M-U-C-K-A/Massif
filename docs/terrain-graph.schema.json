@@ -10063,6 +10063,21 @@
           "if": {
             "properties": {
               "type": {
+                "const": "volume.from_height"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/volume.from_height"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
                 "const": "legacy.floating_islands"
               }
             },
@@ -10320,6 +10335,7 @@
                 "combine.blend",
                 "points.scatter",
                 "points.mask",
+                "volume.from_height",
                 "legacy.floating_islands",
                 "legacy.overhang",
                 "legacy.rocks",
@@ -12555,6 +12571,52 @@
         "type"
       ],
       "title": "Glacial valley",
+      "type": "object"
+    },
+    "volume.from_height": {
+      "additionalProperties": false,
+      "description": "The ground of a relief as a volume: matter under its heights, air above. Where volumes start: caves are cut out of it, arches and overhangs added to it, and Volume to relief reads its top back. Its value is the height above the ground in blocks, negative under it.",
+      "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "height": {
+              "$ref": "#/$defs/source",
+              "description": "The relief. (height)",
+              "title": "Height"
+            }
+          },
+          "required": [
+            "height"
+          ],
+          "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {},
+          "type": "object"
+        },
+        "type": {
+          "const": "volume.from_height"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Relief to volume",
       "type": "object"
     },
     "water.flow": {

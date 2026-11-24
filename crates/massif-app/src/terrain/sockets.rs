@@ -76,6 +76,7 @@ pub fn family(f: Family) -> Color32 {
         Family::Color => Color32::from_rgb(236, 96, 164),
         Family::Combine => Color32::from_rgb(168, 124, 255),
         Family::Geometry => Color32::from_rgb(0, 214, 214),
+        Family::Volume => Color32::from_rgb(180, 120, 220),
         Family::Output => Color32::from_rgb(244, 84, 104),
         Family::Internal => Color32::GRAY,
     }
@@ -95,6 +96,7 @@ pub fn family_icon(f: Family) -> crate::theme::Icon {
         Family::Color => Icon::Palette,
         Family::Combine => Icon::Layers,
         Family::Geometry => Icon::Shrub,
+        Family::Volume => Icon::Pickaxe,
         Family::Output => Icon::Flag,
         Family::Internal => Icon::Circle,
     }

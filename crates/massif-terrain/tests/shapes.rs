@@ -135,6 +135,10 @@ fn every_node_evaluates_with_its_defaults() {
         );
         let c = compiled(&json);
         for (p, port) in spec.outputs.iter().enumerate() {
+            if port.kind.is_volume() {
+                assert!(Engine::new(Settings::default()).bricks(&c, c.source("n", Some(port.name)).unwrap(), &[[0, 64, 0]], &never).is_ok(), "{}.{}", spec.id, port.name);
+                continue;
+            }
             if port.kind.is_geometry() {
                 assert!(Engine::new(Settings::default()).geometry(&c, c.source("n", Some(port.name)).unwrap(), &never).is_ok(), "{}.{}", spec.id, port.name);
                 continue;

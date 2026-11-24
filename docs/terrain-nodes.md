@@ -2774,6 +2774,31 @@ Outputs:
 }
 ```
 
+## Volumes
+
+### Relief to volume — `volume.from_height`
+
+The ground of a relief as a volume: matter under its heights, air above. Where volumes start: caves are cut out of it, arches and overhangs added to it, and Volume to relief reads its top back. Its value is the height above the ground in blocks, negative under it.
+
+Inputs:
+
+- `height` (height) — The relief.
+
+Outputs:
+
+- `volume` (density) — Negative under the ground, the height above it elsewhere.
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "from_height": { "type": "volume.from_height", "inputs": { "height": "relief" } },
+    "out": { "type": "output.map", "inputs": { "height": "relief" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } }
+  }
+}
+```
+
 ## Outputs
 
 ### Map output — `output.map`

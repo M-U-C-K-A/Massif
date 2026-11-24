@@ -43,6 +43,13 @@ fn fingerprints() -> BTreeMap<String, Vec<f64>> {
         let (c, _) = compile(&g, Space::new(2048), 256);
         let e = Engine::new(Default::default());
         for port in spec.outputs {
+            if port.kind.is_volume() {
+                // A volume: four bricks about the terrain, their means.
+                let bricks = e.bricks(&c, c.source("n", Some(port.name)).unwrap(), &[[0, 48, 0], [512, 64, 512], [1024, 96, 256], [256, 0, 1536]], &never).unwrap();
+                let f: Vec<f64> = bricks.iter().map(|b| b.data.iter().map(|v| *v as f64).sum::<f64>() / b.data.len() as f64).collect();
+                out.insert(format!("{}.{}", spec.type_name(), port.name), f);
+                continue;
+            }
             if port.kind.is_geometry() {
                 // Geometry: how many, and where they are on the whole.
                 let geo = e.geometry(&c, c.source("n", Some(port.name)).unwrap(), &never).unwrap();

@@ -24,7 +24,7 @@
 
 use crate::compile::Compiled;
 use crate::gpu::{Gpu, GpuGrid, GpuTile, Job};
-use crate::kernel::{Geo, Grid, Stats};
+use crate::kernel::{BRICK, Brick, Geo, Grid, Stats};
 use crate::registry::Kernel;
 use crate::space::{Rect, Space, TILE};
 use rayon::prelude::*;
@@ -147,6 +147,8 @@ enum Key {
     Stats { hash: u64, port: u8, lod: u8 },
     /// Geometry a node made, whole.
     Geo { hash: u64, port: u8 },
+    /// A brick of a volume, by its west, bottom, north block.
+    Brick { hash: u64, port: u8, x: i32, y: i32, z: i32 },
 }
 
 #[derive(Clone)]
@@ -155,6 +157,7 @@ enum Entry {
     Whole(Arc<Grid>),
     Stats(Stats),
     Geo(Arc<Geo>),
+    Brick(Arc<Brick>),
 }
 
 impl Entry {
@@ -164,6 +167,7 @@ impl Entry {
             Entry::Whole(g) => g.data.len() * 4,
             Entry::Stats(_) => 64,
             Entry::Geo(g) => geo_bytes(g),
+            Entry::Brick(b) => b.data.len() * 4 + 32,
         }
     }
 }
@@ -325,7 +329,7 @@ impl Engine {
 
         let kind = c.kind(out);
         if !kind.is_raster() {
-            let why = if kind.is_geometry() { "its geometry is made whole (Engine::geometry), not by tiles" } else { "volumes are made by bricks, from the engine's next milestone" };
+            let why = if kind.is_geometry() { "its geometry is made whole (Engine::geometry), not by tiles" } else { "its volume is made by bricks (Engine::bricks), not by tiles" };
             return Err(EvalError::Broken { node: node.id.clone(), why: why.to_owned() });
         }
 
@@ -568,6 +572,66 @@ impl Engine {
             return Ok(Vec::new());
         }
         node.inputs.iter().map(|i| i.filter(|&src| c.kind(src).is_geometry()).map(|src| self.geometry(c, src, cancel)).transpose()).collect()
+    }
+
+    /// Bricks of volume output `out`, each at its west, bottom, north
+    /// block (a multiple of 16 from the world's origin), on every core;
+    /// each brick from the same bricks of its volume inputs and, for its
+    /// raster inputs, the columns under it at one sample a block with the
+    /// node's halo around (cut to the terrain).
+    pub fn bricks(&self, c: &Compiled, out: (usize, u8), origins: &[[i32; 3]], cancel: Cancel) -> Result<Vec<Arc<Brick>>, EvalError> {
+        let out = resolve(c, out);
+        if let Some(o) = origins.iter().find(|o| o.iter().any(|v| v.rem_euclid(BRICK) != 0)) {
+            return Err(EvalError::Broken { node: c.nodes[out.0].id.clone(), why: format!("a brick starts on a multiple of {BRICK}, not at {o:?}") });
+        }
+        origins.par_iter().map(|&o| self.brick(c, out, o, cancel)).collect()
+    }
+
+    /// One brick of volume output `out`, from the cache or made.
+    fn brick(&self, c: &Compiled, out: (usize, u8), origin: [i32; 3], cancel: Cancel) -> Result<Arc<Brick>, EvalError> {
+        let (n, port) = out;
+        let node = &c.nodes[n];
+        if let Some(why) = &node.broken {
+            return Err(EvalError::Broken { node: node.id.clone(), why: why.clone() });
+        }
+        let Kernel::Volume { cpu, halo } = node.spec.kernel else {
+            return Err(EvalError::Broken { node: node.id.clone(), why: "it makes no volume".to_owned() });
+        };
+        let [x, y, z] = origin;
+        if let Some(Entry::Brick(b)) = self.get(&Key::Brick { hash: node.hash, port, x, y, z }) {
+            self.counters.hits.fetch_add(1, Ordering::Relaxed);
+            return Ok(b);
+        }
+        if cancel() {
+            return Err(EvalError::Cancelled);
+        }
+        let geos = self.geos(c, n, cancel)?;
+        // The columns under the brick, in samples of level 0 from the
+        // terrain's corner.
+        let under = Rect::new(x - c.space.x0 - halo as i32, z - c.space.z0 - halo as i32, BRICK as u32 + 2 * halo, BRICK as u32 + 2 * halo).intersect(&c.space.whole(0));
+        let mut rasters: Vec<Option<Grid>> = Vec::with_capacity(node.inputs.len());
+        let mut volumes: Vec<Option<Arc<Brick>>> = Vec::with_capacity(node.inputs.len());
+        for i in &node.inputs {
+            let kind = i.map(|src| c.kind(src));
+            rasters.push(match (i, kind) {
+                (Some(src), Some(k)) if k.is_raster() && !under.is_empty() => Some(self.region(c, *src, 0, under, cancel)?),
+                _ => None,
+            });
+            volumes.push(match (i, kind) {
+                (Some(src), Some(k)) if k.is_volume() => Some(self.brick(c, resolve(c, *src), origin, cancel)?),
+                _ => None,
+            });
+        }
+        let rs: Vec<Option<&Grid>> = rasters.iter().map(Option::as_ref).collect();
+        let vs: Vec<Option<&Brick>> = volumes.iter().map(|v| v.as_deref()).collect();
+        let mut outs: Vec<Brick> = node.spec.outputs.iter().map(|_| Brick::filled(origin, 1.0)).collect();
+        cpu(&ctx_of(c, &geos, n, 0, under, &[], &[]), origin, &rs, &vs, &mut outs);
+        self.counters.tiles.fetch_add(1, Ordering::Relaxed);
+        let made: Vec<Arc<Brick>> = outs.into_iter().map(Arc::new).collect();
+        for (p, b) in made.iter().enumerate() {
+            self.put(Key::Brick { hash: node.hash, port: p as u8, x, y, z }, Entry::Brick(b.clone()));
+        }
+        Ok(made[port as usize].clone())
     }
 
     /// Geometry output `out` (points, splines, footprints, instances),

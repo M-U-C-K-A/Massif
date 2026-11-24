@@ -21,6 +21,8 @@ pub enum Family {
     Combine,
     /// Points, lines, footprints and what stands on them.
     Geometry,
+    /// Fields over the volume: caves, arches, overhangs.
+    Volume,
     Output,
     /// Nodes a compiled graph adds itself (conversions): never in a graph's
     /// JSON nor in the library.
@@ -28,7 +30,7 @@ pub enum Family {
 }
 
 impl Family {
-    pub const ALL: [Family; 11] = [Family::Input, Family::Primitive, Family::Shape, Family::Adjust, Family::Simulate, Family::Climate, Family::Mask, Family::Color, Family::Combine, Family::Geometry, Family::Output];
+    pub const ALL: [Family; 12] = [Family::Input, Family::Primitive, Family::Shape, Family::Adjust, Family::Simulate, Family::Climate, Family::Mask, Family::Color, Family::Combine, Family::Geometry, Family::Volume, Family::Output];
 
     pub const fn label(self) -> &'static str {
         match self {
@@ -42,6 +44,7 @@ impl Family {
             Family::Color => "Colours",
             Family::Combine => "Combine",
             Family::Geometry => "Geometry",
+            Family::Volume => "Volumes",
             Family::Output => "Outputs",
             Family::Internal => "Internal",
         }
@@ -421,9 +424,8 @@ pub enum Kernel {
     Geometry { cpu: GeometryFn },
     /// A field over the volume, one brick of 16³ blocks at a time from the
     /// same bricks of its volume inputs and the columns under them of its
-    /// raster inputs (with `halo` samples around). Evaluated by the engine
-    /// from milestone T2; until then its nodes compile and can be called
-    /// directly.
+    /// raster inputs (with `halo` samples around), by
+    /// [`crate::engine::Engine::bricks`]; cached brick by brick.
     Volume { cpu: VolumeFn, halo: u32 },
     /// What the graph gives the map: never evaluated, its inputs are.
     Output,

@@ -59,3 +59,31 @@ fn geometry_feeds_only_its_own_type() {
     let errors: Vec<&str> = d.iter().filter(|d| d.severity == Severity::Error).map(|d| d.path.as_str()).collect();
     assert!(errors.contains(&"nodes.bad.inputs.mask") && errors.contains(&"nodes.out.inputs.height"), "{errors:?}");
 }
+
+/// Volumes are made brick by brick from the relief under them, cached, and
+/// say so when asked by tiles.
+#[test]
+fn volumes_are_made_by_bricks() {
+    let g = Graph::from_json(r#"{ "nodes": {
+        "land": { "type": "noise.fbm", "params": { "scale": 300, "height": 40, "base": 70 } },
+        "solid": { "type": "volume.from_height", "inputs": { "height": "land" } }
+    } }"#).unwrap();
+    let (c, d) = compile(&g, Space::new(1024), 512);
+    assert!(d.iter().all(|d| d.severity != Severity::Error), "{d:#?}");
+    let e = Engine::new(Default::default());
+    let solid = c.node("solid").unwrap();
+    let land = e.region(&c, (c.node("land").unwrap(), 0), 0, massif_terrain::space::Rect::new(0, 0, 32, 32), &never).unwrap();
+    let origins = [[0, 64, 0], [16, 64, 16], [0, 48, 0]];
+    let bricks = e.bricks(&c, (solid, 0), &origins, &never).unwrap();
+    for (b, o) in bricks.iter().zip(origins) {
+        assert_eq!(b.origin, o);
+        for (x, y, z) in [(o[0], o[1], o[2]), (o[0] + 15, o[1] + 15, o[2] + 15), (o[0] + 7, o[1] + 3, o[2] + 9)] {
+            let h = land.at(x, z);
+            assert!((b.at(x, y, z) - (y as f32 + 0.5 - h)).abs() < 1e-4, "({x}, {y}, {z})");
+        }
+    }
+    let again = e.bricks(&c, (solid, 0), &origins[..1], &never).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&again[0], &bricks[0]), "cached");
+    assert!(e.bricks(&c, (solid, 0), &[[3, 0, 0]], &never).is_err(), "bricks start on multiples of 16");
+    assert!(e.region(&c, (solid, 0), 0, massif_terrain::space::Rect::new(0, 0, 16, 16), &never).is_err());
+}
