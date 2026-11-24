@@ -3740,5 +3740,11 @@
  "Every frame and where its time went, while you use Massif: a file to send us when it slows down": "Каждый кадр и на что ушло его время, пока вы работаете в Massif: файл, который можно отправить нам, когда он тормозит",
  "The pointer, the keys and the tool in hand, frame by frame": "Указатель, клавиши и инструмент в руке, кадр за кадром",
  "Massif, the computer, the settings, the map's size, the workspaces": "Massif, компьютер, настройки, размер карты, рабочие области",
- "The workspaces, for the replay": "Рабочие области, для воспроизведения"
+ "The workspaces, for the replay": "Рабочие области, для воспроизведения",
+ "Hide the palette on the map": "Скрыть палитру на карте",
+ "Show the palette on the map": "Показать палитру на карте",
+ "Some layers of the palette are hidden: show them all": "Некоторые слои палитры скрыты: показать все",
+ "{what}. Alt-click: show only this palette": "{what}. Alt-щелчок: показать только эту палитру",
+ "Show only this palette": "Показать только эту палитру",
+ "Alt-click its eye does the same; again, every layer is shown": "Alt-щелчок по глазу делает то же; повторно — снова показаны все слои"
 }

@@ -205,6 +205,10 @@ enum Action {
     MovePalette(String, bool),
     /// Its layers go back to their sections.
     DeletePalette(String),
+    /// Show every layer of the palette, or hide them all if all were shown.
+    ShowPalette(String),
+    /// Show only the palette's layers; again, every layer.
+    SoloPalette(String),
     Find(massif_core::filter::Match),
 }
 
@@ -688,13 +692,45 @@ fn palette_group(ui: &mut Ui, name: &str, place: usize, count: usize, members: &
     if response.hovered() {
         painter.rect_filled(rect, theme::TILE_RADIUS, pal.header);
     }
+    // The eye: every layer of the palette the map draws shown, none, or
+    // some (half an eye). Alt-click shows the palette alone.
+    let eyed: Vec<bool> = members.iter().filter_map(|e| e.shown).collect();
+    if !eyed.is_empty() {
+        let shown = if eyed.iter().all(|&s| s) { Some(true) } else if eyed.iter().any(|&s| s) { None } else { Some(false) };
+        let at = Rect::from_center_size(rect.left_center() + vec2(13.0, 0.0), vec2(20.0, 20.0));
+        let r = ui.interact(at, id.with("eye"), Sense::click());
+        let label = match shown {
+            Some(true) => tr!("Hide the palette on the map"),
+            Some(false) => tr!("Show the palette on the map"),
+            None => tr!("Some layers of the palette are hidden: show them all"),
+        };
+        r.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, shown != Some(false), label));
+        let font = egui::FontId::proportional(14.0);
+        match shown {
+            Some(on) => {
+                painter.text(at.center(), egui::Align2::CENTER_CENTER, theme::glyph(if on { Icon::Eye } else { Icon::EyeOff }), font, if on || r.hovered() { pal.text } else { pal.weak });
+            }
+            None => {
+                // Half an eye: its left half drawn, its right half faint.
+                let (left, right) = at.split_left_right_at_x(at.center().x);
+                painter.with_clip_rect(left).text(at.center(), egui::Align2::CENTER_CENTER, theme::glyph(Icon::Eye), font.clone(), pal.text);
+                painter.with_clip_rect(right).text(at.center(), egui::Align2::CENTER_CENTER, theme::glyph(Icon::Eye), font, pal.weak.gamma_multiply(0.5));
+            }
+        }
+        let r = r.on_hover_text(tr!("{what}. Alt-click: show only this palette", what = label));
+        if r.clicked() {
+            // Alt as the button was let go (or held now).
+            let alt = ui.input(|i| i.modifiers.alt || i.events.iter().any(|e| matches!(e, egui::Event::PointerButton { pressed: false, modifiers, .. } if modifiers.alt)));
+            actions.push(if alt { Action::SoloPalette(name.to_owned()) } else { Action::ShowPalette(name.to_owned()) });
+        }
+    }
     let caret = if open { Icon::ChevronDown } else { Icon::ChevronRight };
-    painter.text(rect.left_center() + vec2(9.0, 0.0), egui::Align2::CENTER_CENTER, theme::glyph(caret), egui::FontId::proportional(12.0), pal.weak);
-    painter.text(rect.left_center() + vec2(26.0, 0.0), egui::Align2::CENTER_CENTER, theme::glyph(if open { Icon::FolderOpen } else { Icon::Folder }), egui::FontId::proportional(12.5), pal.text);
+    painter.text(rect.left_center() + vec2(32.0, 0.0), egui::Align2::CENTER_CENTER, theme::glyph(caret), egui::FontId::proportional(12.0), pal.weak);
+    painter.text(rect.left_center() + vec2(49.0, 0.0), egui::Align2::CENTER_CENTER, theme::glyph(if open { Icon::FolderOpen } else { Icon::Folder }), egui::FontId::proportional(12.5), pal.text);
     let count_text = painter.layout_no_wrap(members.len().to_string(), egui::FontId::proportional(11.0), pal.weak);
     let count_w = count_text.size().x;
     painter.galley(rect.right_center() - vec2(8.0 + count_w, count_text.size().y / 2.0), count_text, pal.weak);
-    let name_rect = Rect::from_min_max(rect.left_top() + vec2(40.0, 3.0), rect.right_bottom() - vec2(16.0 + count_w, 3.0));
+    let name_rect = Rect::from_min_max(rect.left_top() + vec2(63.0, 3.0), rect.right_bottom() - vec2(16.0 + count_w, 3.0));
     match &mut state.rename_palette {
         Some((old, text)) if old == name => {
             let r = ui.put(name_rect, egui::TextEdit::singleline(text).desired_width(name_rect.width()));
@@ -726,6 +762,17 @@ fn palette_group(ui: &mut Ui, name: &str, place: usize, count: usize, members: &
         if crate::widgets::button(ui, theme::with_icon(Icon::Pencil, tr!("Rename"))).clicked() {
             state.rename_palette = Some((name.to_owned(), name.to_owned()));
             ui.close();
+        }
+        if members.iter().any(|e| e.shown.is_some()) {
+            let all = members.iter().all(|e| e.shown != Some(false));
+            if crate::widgets::button(ui, theme::with_icon(if all { Icon::EyeOff } else { Icon::Eye }, if all { tr!("Hide on the map") } else { tr!("Show on the map") })).clicked() {
+                actions.push(Action::ShowPalette(name.to_owned()));
+                ui.close();
+            }
+            if crate::widgets::button(ui, theme::with_icon(Icon::ScanEye, tr!("Show only this palette"))).on_hover_text(tr!("Alt-click its eye does the same; again, every layer is shown")).clicked() {
+                actions.push(Action::SoloPalette(name.to_owned()));
+                ui.close();
+            }
         }
         if place > 0 && crate::widgets::button(ui, theme::with_icon(Icon::ArrowUp, tr!("Move up"))).clicked() {
             actions.push(Action::MovePalette(name.to_owned(), true));
@@ -951,6 +998,21 @@ fn set_palette(reg: &mut massif_core::registry::Registry, mixes: &mut [crate::to
     }
 }
 
+/// Every cover and object layer the map draws shown or hidden by its
+/// palette: `shown(palette)`, `None` to leave it as it is.
+fn set_shown(reg: &mut massif_core::registry::Registry, shown: impl Fn(&str) -> Option<bool>) {
+    for c in reg.covers.iter_mut().filter(|c| !c.removed) {
+        if let Some(on) = shown(&c.palette) {
+            c.hidden = !on;
+        }
+    }
+    for l in reg.object_layers.iter_mut().filter(|l| !l.removed) {
+        if let Some(on) = shown(&l.palette) {
+            l.hidden = !on;
+        }
+    }
+}
+
 /// Every layer of palette `old` moved to palette `new` ("": none).
 fn rename_palette(reg: &mut massif_core::registry::Registry, mixes: &mut [crate::tools::PatternPreset], old: &str, new: &str) {
     let slots = reg
@@ -1021,6 +1083,15 @@ fn apply(action: Action, tools: &mut ToolState, doc: &mut Document, state: &mut 
         Action::DeletePalette(name) => {
             reg.palettes = names.into_iter().filter(|n| *n != name).collect();
             rename_palette(reg, &mut tools.pattern.saved, &name, "");
+        }
+        Action::ShowPalette(name) => {
+            let all = reg.covers.iter().filter(|c| !c.removed && c.palette == name).map(|c| !c.hidden).chain(reg.object_layers.iter().filter(|l| !l.removed && l.palette == name).map(|l| !l.hidden)).all(|s| s);
+            set_shown(reg, |palette| (palette == name).then_some(!all));
+        }
+        Action::SoloPalette(name) => {
+            // Already alone: every layer comes back.
+            let alone = reg.covers.iter().filter(|c| !c.removed).map(|c| (c.palette == name, !c.hidden)).chain(reg.object_layers.iter().filter(|l| !l.removed).map(|l| (l.palette == name, !l.hidden))).all(|(own, shown)| own == shown);
+            set_shown(reg, |palette| Some(alone || palette == name));
         }
         Action::Find(what) => state.find = Some(what),
         Action::Settings(kind, n) => {
@@ -1449,6 +1520,96 @@ mod tests {
         assert_eq!(s.doc.world.registry.palettes, ["Flowers and grass"], "an empty palette stays");
         h.run_steps(2);
         assert_eq!(h.query_all_by_label("Oaks").count(), 1);
+    }
+
+    /// A palette's eye hides or shows all its layers at once, ground covers
+    /// and object layers alike; with some hidden it is half an eye and
+    /// shows them all; Alt-click shows only the palette, again every layer.
+    #[test]
+    fn a_palettes_eye_shows_and_hides_its_layers() {
+        let mut s = state();
+        let reg = &mut s.doc.world.registry;
+        let flowers = reg.cover_by_name("Flowers").unwrap() as usize - 1;
+        let grass = reg.cover_by_name("Grass").unwrap() as usize - 1;
+        reg.palettes = vec!["Forest".into()];
+        reg.object_layers[0].palette = "Forest".into();
+        reg.covers[flowers].palette = "Forest".into();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(320.0, 1200.0)).build_ui_state(draw, s);
+        h.run_steps(2);
+        let shown = |s: &State| (!s.doc.world.registry.covers[flowers].hidden, !s.doc.world.registry.object_layers[0].hidden, !s.doc.world.registry.covers[grass].hidden);
+        h.get_by_label("Hide the palette on the map").click();
+        h.run_steps(2);
+        assert_eq!(shown(h.state()), (false, false, true), "its cover and its trees hidden, nothing else");
+        h.get_by_label("Show the palette on the map").click();
+        h.run_steps(2);
+        assert_eq!(shown(h.state()), (true, true, true));
+        // One hidden by its own eye: half an eye, that shows them all.
+        h.state_mut().doc.world.registry.object_layers[0].hidden = true;
+        h.run_steps(2);
+        h.get_by_label("Some layers of the palette are hidden: show them all").click();
+        h.run_steps(2);
+        assert_eq!(shown(h.state()), (true, true, true));
+        // Alone, then every layer again.
+        h.get_by_label("Hide the palette on the map").click_modifiers(egui::Modifiers::ALT);
+        h.run_steps(2);
+        assert_eq!(shown(h.state()), (true, true, false), "only the palette");
+        assert!(h.state().doc.world.registry.covers.iter().filter(|c| !c.removed && c.palette.is_empty()).all(|c| c.hidden));
+        h.get_by_label("Hide the palette on the map").click_modifiers(egui::Modifiers::ALT);
+        h.run_steps(2);
+        assert!(h.state().doc.world.registry.covers.iter().all(|c| !c.hidden) && !h.state().doc.world.registry.object_layers[0].hidden, "every layer again");
+        // A palette of only mixes has no eye.
+        let s = h.state_mut();
+        apply(Action::NewPalette(None), &mut s.tools, &mut s.doc, &mut s.ui, &[]);
+        apply(Action::RenamePalette("Palette".into(), "Paths".into()), &mut s.tools, &mut s.doc, &mut s.ui, &[]);
+        apply(Action::SetPalette(Kind::Mix, 0, "Paths".into()), &mut s.tools, &mut s.doc, &mut s.ui, &[]);
+        h.run_steps(2);
+        assert_eq!(h.query_all_by_label_contains("the palette on the map").count(), 1);
+    }
+
+    /// A palette's eye in its three states, in both themes. Needs a GPU:
+    /// runs with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn palette_eyes_render() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from) else {
+            return;
+        };
+        let ppp = std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(2.0);
+        for dark in [true, false] {
+            let mut s = state();
+            let reg = &mut s.doc.world.registry;
+            reg.palettes = vec!["Deciduous".into(), "Coniferous".into(), "Ground".into()];
+            reg.object_layers[0].palette = "Deciduous".into();
+            let mut pines = reg.object_layers[0].clone();
+            (pines.name, pines.color, pines.palette, pines.hidden) = ("Scots pine".into(), [40, 90, 60], "Coniferous".into(), true);
+            reg.add_object_layer(pines);
+            let mut firs = reg.object_layers[1].clone();
+            (firs.name, firs.hidden) = ("Firs".into(), false);
+            reg.add_object_layer(firs);
+            let mut spruce = reg.object_layers[1].clone();
+            spruce.name = "Spruce".into();
+            reg.add_object_layer(spruce);
+            for name in ["Flowers", "Tall grass"] {
+                let k = reg.cover_by_name(name).unwrap() as usize - 1;
+                (reg.covers[k].palette, reg.covers[k].hidden) = ("Ground".into(), true);
+            }
+            let mut h = egui_kittest::Harness::builder()
+                .with_size(vec2(320.0, 360.0))
+                .with_pixels_per_point(ppp)
+                .with_accessibility_check(false)
+                .wgpu()
+                .build_ui_state(
+                    move |ui, s: &mut State| {
+                        ui.ctx().set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
+                        draw(ui, s);
+                    },
+                    s,
+                );
+            h.run_steps(2);
+            h.get_by_label("Coniferous").hover();
+            h.run_steps(2);
+            let suffix = if ppp > 1.5 { "2x" } else { "1x" };
+            h.render().unwrap().save(dir.join(format!("palette-eyes-{}-{suffix}.png", if dark { "dark" } else { "light" }))).unwrap();
+        }
     }
 
     /// Palettes drawn offscreen in both themes: one open with layers of

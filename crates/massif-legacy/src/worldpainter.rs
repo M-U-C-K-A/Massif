@@ -641,6 +641,28 @@ fn overlays(arena: &Arena, dimension: Value) -> Vec<massif_core::reference::Refe
     out
 }
 
+/// The palettes WorldPainter hid (`Dimension.hiddenPalettes`) and the one it
+/// showed alone (`soloedPalette`): their layers are hidden on the map as
+/// they were, every other layer too while a palette is soloed.
+fn palette_visibility(arena: &Arena, dimension: Value, reg: &mut Registry) {
+    let hidden: Vec<String> = arena
+        .field(dimension, "hiddenPalettes")
+        .filter(|v| *v != Value::Null)
+        .and_then(|v| arena.list_items(v))
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|n| arena.string(n).map(|n| n.trim().to_owned()))
+        .collect();
+    let solo = arena.field(dimension, "soloedPalette").and_then(|v| arena.string(v)).map(str::trim).filter(|n| !n.is_empty()).map(str::to_owned);
+    let hide = |palette: &str| solo.as_ref().is_some_and(|s| s != palette) || (!palette.is_empty() && hidden.iter().any(|h| h == palette));
+    for c in &mut reg.covers {
+        c.hidden |= hide(&c.palette);
+    }
+    for l in &mut reg.object_layers {
+        l.hidden |= hide(&l.palette);
+    }
+}
+
 fn damaged(e: JavaError, progress: &ImportProgress) -> ImportError {
     if progress.cancel.load(Ordering::Relaxed) {
         return ImportError::Cancelled;
@@ -959,6 +981,7 @@ pub fn import_stream<R: Read + Send>(reader: R, progress: &ImportProgress) -> Re
     let spawn_y = massif_core::ops::height_at(&dims[0], 0, sx, sz, massif_core::ops::Surface::Top)
         .map_or(sea_level + 1, block_top);
 
+    palette_visibility(&arena, main, &mut mapper.registry);
     report.overlays = references.len();
     report.ground_covers = converter.laid.clone();
     report.layers = layers.into_iter().collect();
@@ -1575,6 +1598,63 @@ mod tests {
         w.u8(TC_ENDBLOCKDATA);
         w.string("Layered");
         w.out
+    }
+
+    /// A Dimension holding only `hiddenPalettes` (a HashSet of names) and
+    /// `soloedPalette`.
+    fn palette_dimension(hidden: &[&str], solo: Option<&str>) -> Vec<u8> {
+        let mut w = StreamWriter::new();
+        w.u8(TC_OBJECT).class("org.pepsoft.worldpainter.Dimension", SC_SERIALIZABLE, &[(b'L', "hiddenPalettes", Some("Ljava/util/Set;")), (b'L', "soloedPalette", Some("Ljava/lang/String;"))], |w| {
+            w.u8(TC_NULL);
+        });
+        w.handle();
+        w.u8(TC_OBJECT).class("java.util.HashSet", SC_SERIALIZABLE | SC_WRITE_METHOD, &[], |w| {
+            w.u8(TC_NULL);
+        });
+        w.handle();
+        w.u8(TC_BLOCKDATA).u8(12).i32(16).i32(0x3F40_0000).i32(hidden.len() as i32);
+        for name in hidden {
+            w.string(name);
+        }
+        w.u8(TC_ENDBLOCKDATA);
+        match solo {
+            Some(s) => {
+                w.string(s);
+            }
+            None => {
+                w.u8(TC_NULL);
+            }
+        }
+        w.out
+    }
+
+    /// The palettes WorldPainter hid stay hidden: their covers and object
+    /// layers are hidden on the map; a soloed palette hides every layer
+    /// but its own.
+    #[test]
+    fn hidden_palettes_stay_hidden() {
+        let visible = |hidden: &[&str], solo: Option<&str>| -> Vec<(String, bool)> {
+            let mut reg = Registry::vanilla();
+            let fern = reg.covers.iter().position(|c| c.name == "Flowers").unwrap();
+            reg.covers[fern].palette = "Forest".into();
+            let mut oaks = massif_core::objects::ObjectLayerDef::new("Oaks", &[], &reg);
+            oaks.palette = "Forest".into();
+            reg.add_object_layer(oaks);
+            let mut rocks = massif_core::objects::ObjectLayerDef::new("Rocks", &[], &reg);
+            rocks.palette = "Stones".into();
+            reg.add_object_layer(rocks);
+            let bytes = palette_dimension(hidden, solo);
+            let mut parser = Parser::new(&bytes[..]).unwrap();
+            let dim = parser.next_object().unwrap().unwrap();
+            palette_visibility(&parser.arena, dim, &mut reg);
+            let grass = reg.covers.iter().find(|c| c.name == "Grass").unwrap();
+            [(grass.name.clone(), !grass.hidden), ("Flowers".into(), !reg.covers[fern].hidden)].into_iter().chain(reg.object_layers.iter().map(|l| (l.name.clone(), !l.hidden))).collect()
+        };
+        let shown = |v: Vec<(String, bool)>| v.into_iter().filter(|s| s.1).map(|s| s.0).collect::<Vec<_>>();
+        assert_eq!(shown(visible(&[], None)), ["Grass", "Flowers", "Oaks", "Rocks"]);
+        assert_eq!(shown(visible(&["Forest"], None)), ["Grass", "Rocks"]);
+        assert_eq!(shown(visible(&["Forest", "Stones"], None)), ["Grass"]);
+        assert_eq!(shown(visible(&[], Some("Stones"))), ["Rocks"]);
     }
 
     /// WorldPainter's custom ground covers are ground covers of Massif,

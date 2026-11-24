@@ -3578,5 +3578,11 @@
  "Every frame and where its time went, while you use Massif: a file to send us when it slows down": "Cada fotograma y en qué se fue su tiempo mientras usas Massif: un archivo para enviarnos cuando va lento",
  "The pointer, the keys and the tool in hand, frame by frame": "El puntero, las teclas y la herramienta en mano, fotograma a fotograma",
  "Massif, the computer, the settings, the map's size, the workspaces": "Massif, el ordenador, los ajustes, el tamaño del mapa, los espacios de trabajo",
- "The workspaces, for the replay": "Los espacios de trabajo, para la reproducción"
+ "The workspaces, for the replay": "Los espacios de trabajo, para la reproducción",
+ "Hide the palette on the map": "Ocultar la paleta en el mapa",
+ "Show the palette on the map": "Mostrar la paleta en el mapa",
+ "Some layers of the palette are hidden: show them all": "Algunas capas de la paleta están ocultas: mostrarlas todas",
+ "{what}. Alt-click: show only this palette": "{what}. Alt-clic: mostrar solo esta paleta",
+ "Show only this palette": "Mostrar solo esta paleta",
+ "Alt-click its eye does the same; again, every layer is shown": "Alt-clic en su ojo hace lo mismo; otra vez, se muestran todas las capas"
 }

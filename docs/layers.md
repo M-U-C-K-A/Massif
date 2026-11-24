@@ -157,10 +157,20 @@ renames it, moves it up or down, or deletes it: its layers go back to
 their sections, none is removed. Palettes are a way of listing layers, not
 of painting them: they never change the map's blocks.
 
+A palette's **eye**, on the left of its title, hides or shows every layer
+of it at once on the map and in the 3D views, ground covers and object
+layers alike, as each layer's own eye does (the export is never changed).
+When some of its layers are hidden and some shown, it is half an eye, and
+a click shows them all. **Alt-click** the eye, or ▸ **Show only this
+palette** in its menu, to show that palette alone, as WorldPainter's
+solo: every other cover and object layer is hidden; again, every layer is
+shown.
+
 The map saves its palettes and which layer is in which; a terrain mix,
 kept with the app's settings rather than the map, keeps its palette too.
 A WorldPainter world or `.layer` file brings each custom layer in the
-palette WorldPainter sorted it into, in its place there.
+palette WorldPainter sorted it into, in its place there; a palette
+hidden in WorldPainter stays hidden, and a soloed one stays alone.
 
 Your own **brushes** have palettes of their own: the groups of the
 Brushes panel, each a folder of Massif's brushes folder. They fold,
