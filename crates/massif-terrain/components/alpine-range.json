@@ -1,0 +1,34 @@
+{
+  "label": "Alpine Range",
+  "category": "Shapes",
+  "summary": "A mountain chain along a drawn line, grown by its rivers: a snowy crest branching into spurs, valleys cut up every flank, plains at its feet.",
+  "outputs": [
+    { "name": "height", "label": "Height", "from": "settle.height" },
+    { "name": "snow", "label": "Snow", "from": "snow.mask" },
+    { "name": "flow", "label": "Flow", "from": "erode.flow" },
+    { "name": "wear", "label": "Wear", "from": "erode.wear" },
+    { "name": "range", "label": "Range", "from": "shape.mask" }
+  ],
+  "exposed": [
+    { "name": "spine", "label": "Crest", "help": "The line the crest follows, drawn on the terrain.", "targets": ["shape.spine"], "category": "Shape" },
+    { "name": "seed", "label": "Seed", "help": "Another seed gives another chain along the same line.", "targets": ["shape.seed", "erode.seed", "snow.seed"] },
+    { "name": "height", "label": "Mountain height", "help": "How high the summits rise over the foot, in blocks.", "targets": ["shape.height"], "default": 220, "min": 0, "max": 2000, "soft": [20, 320], "unit": "blocks", "category": "Shape" },
+    { "name": "base", "label": "Foot", "help": "The height of the plains at the chain's foot, in blocks.", "targets": ["shape.base"], "default": 70, "unit": "blocks", "category": "Shape" },
+    { "name": "width", "label": "Width", "help": "How wide the chain is from foot to foot, in blocks.", "targets": ["shape.width"], "default": 2600, "unit": "blocks", "category": "Shape" },
+    { "name": "spurs", "label": "Spurs", "help": "How strongly side ridges run down the flanks.", "targets": ["shape.spurs"], "category": "Shape" },
+    { "name": "erosion", "label": "Erosion strength", "help": "How deep the rivers cut their valleys.", "targets": ["erode.strength"], "default": 2, "category": "Erosion" },
+    { "name": "snowline", "label": "Snow line", "help": "The height above which snow lies on open ground, in blocks.", "targets": ["snow.line"], "default": 210, "unit": "blocks", "category": "Snow" }
+  ],
+  "nodes": {
+    "shape": { "type": "mountain.range", "params": { "spine": [{ "x": 0.05, "z": 0.3 }, { "x": 0.4, "z": 0.45 }, { "x": 0.65, "z": 0.4 }, { "x": 0.95, "z": 0.6 }] } },
+    "erode": { "type": "erosion.stream", "inputs": { "height": "shape.height" }, "params": { "rebuild": 1 } },
+    "settle": { "type": "erosion.thermal", "inputs": { "height": "erode.height" }, "params": { "angle": 38, "iterations": 15 } },
+    "snow": { "type": "mask.snow", "inputs": { "height": "settle.height" } }
+  },
+  "ui": {
+    "shape": { "pos": [0, 0] },
+    "erode": { "pos": [260, 0] },
+    "settle": { "pos": [520, 0] },
+    "snow": { "pos": [780, 120] }
+  }
+}

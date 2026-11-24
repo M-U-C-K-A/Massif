@@ -21,7 +21,7 @@
     { "name": "snowline", "label": "Snow line", "help": "The height above which snow lies on open ground, in blocks.", "targets": ["snow.line"], "default": 200, "unit": "blocks", "category": "Snow" }
   ],
   "nodes": {
-    "shape": { "type": "mountain.alpine", "inputs": { "area": "in.area" } },
+    "shape": { "type": "mountain.alpine", "inputs": { "area": "in.area" }, "params": { "coverage": 0.85 } },
     "erode": { "type": "erosion.stream", "inputs": { "height": "shape.height" }, "params": { "rebuild": 0.6 } },
     "settle": { "type": "erosion.thermal", "inputs": { "height": "erode.height" }, "params": { "angle": 38, "iterations": 15 } },
     "snow": { "type": "mask.snow", "inputs": { "height": "settle.height" } }
