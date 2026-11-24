@@ -126,6 +126,13 @@ brushes, terrain and biome palettes, levels or world info.
 - Workspaces are tabs of arrangements; duplicate one with `+`, right-click
   it to reset it (back to how it was at first; a copy goes back to what it
   was copied from), duplicate it or delete it. The layout is remembered.
+- Each 3D View area is a view of its own: its mode (Terrain, Height,
+  Slope, Biome, Relief), its water and its camera. Split one to watch the
+  map in Terrain and in Slope side by side; each area is remembered with
+  the layout (a duplicated workspace keeps them), and a new one opens in
+  Terrain, looking where the first 3D View looks. Two areas in one mode
+  each build their own tiles; a view out of sight builds nothing and gives
+  its memory back after a while.
 
 A slider is a slim track with its value after it: click the track to jump
 there, drag the thumb (Shift: finer), drag the value sideways, or click it to

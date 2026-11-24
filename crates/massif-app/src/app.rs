@@ -445,6 +445,13 @@ pub struct MassifApp {
     maps: HashMap<AreaId, MapView>,
     map_cache: MapCache,
     view3d: View3d,
+    /// The 3D views shown beside the first one in the workspace: each 3D
+    /// View area has a view of its own (its mode, its camera, its tiles),
+    /// slot 0 being `view3d` and slot `k` `extra3d[k - 1]`. Slots outlive
+    /// the areas: switching workspaces finds a view's tiles as they were.
+    extra3d: Vec<View3d>,
+    /// The slot each 3D View area of the workspace shown is drawn with.
+    slots3d: HashMap<AreaId, usize>,
     /// The Render side: the map path-traced.
     render_side: crate::render_side::RenderSide,
     /// The 3D Sculpt editor's view: its own camera and tiles.
@@ -1012,6 +1019,8 @@ impl MassifApp {
             maps: HashMap::new(),
             map_cache: MapCache::default(),
             view3d: View3d::default(),
+            extra3d: Vec::new(),
+            slots3d: HashMap::new(),
             render_side: Default::default(),
             sculpt3d: View3d::default(),
             hover: None,
@@ -1962,7 +1971,7 @@ impl MassifApp {
         // once a run, never past Low, never once dismissed. Not while its
         // tiles are being built: those frames are slow for a while
         // whatever the preset.
-        let building = self.view3d.is_building() || self.sculpt3d.is_building();
+        let building = self.view3d.is_building() || self.sculpt3d.is_building() || self.extra3d.iter().any(View3d::is_building);
         if crate::graphics::take_drew_3d() && now - self.last_input < 0.5 && !building && !self.settings.no_slow_note {
             let preset = crate::graphics::get().preset();
             if preset != crate::graphics::Preset::Low && self.slow_frames.frame(dt) {
@@ -2066,7 +2075,8 @@ impl MassifApp {
         let (chunks, grids, _) = self.map_cache.stats();
         let (columns, textures) = self.map_cache.bytes();
         let voxels = dim.voxels.len();
-        let (t3, g3) = (self.view3d.tiles_built() + self.sculpt3d.tiles_built(), self.view3d.gpu_bytes() + self.sculpt3d.gpu_bytes());
+        let all3d = || [&self.view3d, &self.sculpt3d].into_iter().chain(&self.extra3d);
+        let (t3, g3) = (all3d().map(View3d::tiles_built).sum::<usize>(), all3d().map(View3d::gpu_bytes).sum::<u64>());
         let keeps = vec![
             (tr!("Decoded tiles"), mb(hot_bytes as u64), tr!("{hot} of {tiles}, at most {max_hot_tiles} a level", max_hot_tiles = self.doc.max_hot_tiles, hot, tiles)),
             (tr!("Map, compressed"), mb(cold_bytes as u64), String::new()),
@@ -2282,6 +2292,7 @@ impl MassifApp {
                     self.map_cache.invalidate_all();
                     self.view3d.invalidate_all();
                     self.sculpt3d.invalidate_all();
+                    self.extra3d.iter_mut().for_each(View3d::invalidate_all);
                     self.say(ctx, tr!("Restored “{name}”: undo to take it back", name), false, None);
                 }
             }
@@ -2654,6 +2665,7 @@ impl MassifApp {
             self.map_cache.invalidate_all();
             self.view3d.invalidate_all();
             self.sculpt3d.invalidate_all();
+            self.extra3d.iter_mut().for_each(View3d::invalidate_all);
         }
     }
 
@@ -2670,6 +2682,7 @@ impl MassifApp {
             self.map_cache.invalidate_all();
             self.view3d.invalidate_all();
             self.sculpt3d.invalidate_all();
+            self.extra3d.iter_mut().for_each(View3d::invalidate_all);
         }
     }
 
@@ -2875,6 +2888,7 @@ impl MassifApp {
                         self.map_cache.invalidate_all();
                         self.view3d.invalidate_all();
                         self.sculpt3d.invalidate_all();
+                        self.extra3d.iter_mut().for_each(View3d::invalidate_all);
                         let (w, d) = rect.unwrap_or_default();
                         let msg = if resized {
                             tr!("Relief of a real place: the map is now {w} × {d} blocks, {columns} columns written in {secs:.1} s", w, d, columns, secs)
@@ -3603,6 +3617,8 @@ impl MassifApp {
 
         let shown: HashSet<EditorKind> = areas.iter().map(|a| a.1).collect();
         self.map_center = None;
+        let views: Vec<AreaId> = areas.iter().filter(|a| a.1 == EditorKind::View3d).map(|a| a.0).collect();
+        self.assign_3d_slots(&views);
         for (id, editor, rect) in &areas {
             self.area(ui, frame, *id, *editor, *rect, &shown);
         }
@@ -3639,6 +3655,55 @@ impl MassifApp {
                 }
                 self.dragging_area = None;
             }
+        }
+    }
+
+    /// The 3D view area `id` is drawn with.
+    fn slot3d(&mut self, id: AreaId) -> &mut View3d {
+        match self.slots3d.get(&id).copied().unwrap_or(0) {
+            0 => &mut self.view3d,
+            k => &mut self.extra3d[k - 1],
+        }
+    }
+
+    /// Give each 3D View area of the workspace shown (`views`, in order) a
+    /// view of its own. An area keeps its view from frame to frame; one
+    /// newly shown takes a free view already in its mode where there is
+    /// one (its tiles built), else the first free one, made if need be,
+    /// and is shown as the layout keeps it.
+    fn assign_3d_slots(&mut self, views: &[AreaId]) {
+        let before = std::mem::take(&mut self.slots3d);
+        let mut taken = vec![false; views.len().max(1 + self.extra3d.len())];
+        for id in views {
+            if let Some(&k) = before.get(id)
+                && !taken[k]
+            {
+                taken[k] = true;
+                self.slots3d.insert(*id, k);
+            }
+        }
+        for id in views {
+            if self.slots3d.contains_key(id) {
+                continue;
+            }
+            let look = self.layout.view3d.get(id).copied().unwrap_or_default();
+            let same = |v: &View3d| v.mode == look.mode && v.water == look.water;
+            let k = (0..taken.len())
+                .find(|&k| !taken[k] && k <= self.extra3d.len() && same(if k == 0 { &self.view3d } else { &self.extra3d[k - 1] }))
+                .or_else(|| (0..taken.len()).find(|&k| !taken[k]))
+                .unwrap_or(taken.len());
+            if k > self.extra3d.len() {
+                // A view more: looking where the first one does.
+                self.extra3d.push(self.view3d.beside());
+            }
+            if k >= taken.len() {
+                taken.resize(k + 1, false);
+            }
+            taken[k] = true;
+            self.slots3d.insert(*id, k);
+            let v = self.slot3d(*id);
+            v.mode = look.mode;
+            v.water = look.water;
         }
     }
 
@@ -3758,7 +3823,7 @@ impl MassifApp {
             }
             EditorKind::View3d => {
                 hui.add_space(8.0);
-                self.view3d.header(&mut hui);
+                self.slot3d(id).header(&mut hui);
                 hui.separator();
                 // Its name too, when there is room for it.
                 let text = if hui.available_width() >= 80.0 { theme::with_icon(Icon::Pickaxe, tr!("Sculpt")) } else { theme::glyph(Icon::Pickaxe).to_string() };
@@ -3852,10 +3917,22 @@ impl MassifApp {
             EditorKind::View3d => {
                 // Opened on a map it has not built: what the 2D map read of
                 // its tiles, for a first look at once.
-                if self.view3d.wants_glimpse(&self.doc) {
-                    self.view3d.give_glimpse(&self.doc, self.map_cache.summaries_of(self.doc.generation));
+                let k = self.slots3d.get(&id).copied().unwrap_or(0);
+                let view = match k {
+                    0 => &mut self.view3d,
+                    k => &mut self.extra3d[k - 1],
+                };
+                if view.wants_glimpse(&self.doc) {
+                    view.give_glimpse(&self.doc, self.map_cache.summaries_of(self.doc.generation));
                 }
-                self.view3d.ui(&mut cui, frame, &mut self.doc, &mut self.tools, self.map_center, false)
+                view.ui(&mut cui, frame, &mut self.doc, &mut self.tools, self.map_center, false);
+                // What it shows is kept with the layout.
+                let look = crate::layout::View3dLook { mode: view.mode, water: view.water };
+                if look == Default::default() {
+                    self.layout.view3d.remove(&id);
+                } else {
+                    self.layout.view3d.insert(id, look);
+                }
             }
             EditorKind::Sculpt3d => {
                 let called = egui::Frame::new()
@@ -3948,6 +4025,7 @@ impl MassifApp {
                     self.map_cache.invalidate_all();
                     self.view3d.invalidate_all();
                     self.sculpt3d.invalidate_all();
+                    self.extra3d.iter_mut().for_each(View3d::invalidate_all);
                 }
             }
             EditorKind::Versions => {
@@ -3982,6 +4060,7 @@ impl MassifApp {
                     self.map_cache.invalidate_all();
                     self.view3d.invalidate_all();
                     self.sculpt3d.invalidate_all();
+                    self.extra3d.iter_mut().for_each(View3d::invalidate_all);
                 }
             }
             EditorKind::Graph => {
@@ -5426,6 +5505,7 @@ impl MassifApp {
             self.map_cache.invalidate_all();
             self.view3d.invalidate_all();
             self.sculpt3d.invalidate_all();
+            self.extra3d.iter_mut().for_each(View3d::invalidate_all);
             self.say(&ctx, tr!("This save point is open read-only: Save As… makes it a map of its own to change"), true, None);
         }
         let now = ctx.input(|i| i.time);
@@ -5436,6 +5516,9 @@ impl MassifApp {
         // its memory back after a while.
         self.view3d.rest_if_hidden(&ctx);
         self.sculpt3d.rest_if_hidden(&ctx);
+        for v in &mut self.extra3d {
+            v.rest_if_hidden(&ctx);
+        }
         let open = self.dialog.is_some();
         if open != self.dialog_was_open {
             crate::sounds::play(if open { Cue::Open } else { Cue::Close });
@@ -5456,6 +5539,9 @@ impl MassifApp {
         self.view3d.catalogue.clone_from(&self.blocks.catalogue);
         crate::blocks::note_catalogue(self.blocks.catalogue.as_ref());
         self.sculpt3d.catalogue.clone_from(&self.blocks.catalogue);
+        for v in &mut self.extra3d {
+            v.catalogue.clone_from(&self.blocks.catalogue);
+        }
         if let Some(cat) = self.blocks.catalogue.clone()
             && self.blocks.applied != Some(self.doc.generation)
         {
@@ -5464,6 +5550,7 @@ impl MassifApp {
             self.map_cache.invalidate_all();
             self.view3d.invalidate_all();
             self.sculpt3d.invalidate_all();
+            self.extra3d.iter_mut().for_each(View3d::invalidate_all);
         }
         // A cover or an object layer changed how it looks.
         let covers = covers_key(&self.doc.world.registry);
@@ -5471,6 +5558,7 @@ impl MassifApp {
             self.map_cache.invalidate_all();
             self.view3d.invalidate_all();
             self.sculpt3d.invalidate_all();
+            self.extra3d.iter_mut().for_each(View3d::invalidate_all);
         }
         self.covers_key = Some(covers);
         step("the files the system asks to open, and the shortcuts");
@@ -5569,6 +5657,9 @@ impl MassifApp {
             self.map_cache.invalidate(&dirty);
             self.view3d.invalidate(&dirty);
             self.sculpt3d.invalidate(&dirty);
+            for v in &mut self.extra3d {
+                v.invalidate(&dirty);
+            }
             self.render_side.invalidate(&dirty);
             ctx.request_repaint();
         }
@@ -7672,6 +7763,153 @@ mod tests {
         h.run_steps(3);
         assert!(h.state().dialog.is_none());
         let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// Four 3D View areas in one workspace, in Terrain, Height, Slope and
+    /// Biome at once: each keeps its own mode, a change in one leaves the
+    /// others as they are, and the layout saved and read back (as eframe
+    /// keeps it, and as the settings' backup copy does) opens each area
+    /// in its mode again. MASSIF_SNAPSHOT_DIR: the workspace, at
+    /// MASSIF_SNAPSHOT_PPP; MASSIF_PERF: a frame's time turning the four
+    /// views, and one alone.
+    #[test]
+    fn each_3d_view_keeps_its_own_mode() {
+        use crate::layout::View3dLook;
+        use crate::map_render::MapMode;
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(3);
+        let ids = [9001, 9002, 9003, 9004];
+        let modes = [MapMode::Terrain, MapMode::Height, MapMode::Slope, MapMode::Biome];
+        let area = |k: usize| Box::new(Node::Area { id: ids[k], editor: EditorKind::View3d });
+        let root = Node::Split {
+            dir: Dir::Column,
+            ratio: 0.5,
+            a: Box::new(Node::Split { dir: Dir::Row, ratio: 0.5, a: area(0), b: area(1) }),
+            b: Box::new(Node::Split { dir: Dir::Row, ratio: 0.5, a: area(2), b: area(3) }),
+        };
+        {
+            let app = h.state_mut();
+            app.layout.workspaces.push(crate::layout::Workspace { name: "Four views".into(), root, maximized: None, terrain: false });
+            let layout = std::mem::take(&mut app.layout).sanitize();
+            app.layout = layout;
+            app.layout.activate(app.layout.workspaces.len() - 1);
+            for (id, mode) in ids.iter().zip(modes).skip(1) {
+                app.layout.view3d.insert(*id, View3dLook { mode, water: true });
+            }
+        }
+        h.run_steps(3);
+        let shown = |h: &egui_kittest::Harness<'static, MassifApp>| -> Vec<MapMode> {
+            let app = h.state();
+            ids.iter().map(|id| match app.slots3d[id] {
+                0 => app.view3d.mode,
+                k => app.extra3d[k - 1].mode,
+            }).collect()
+        };
+        assert_eq!(shown(&h), modes, "each area shows the mode the layout keeps for it");
+        assert_eq!(h.state().extra3d.len(), 3, "a view of its own for each area beside the first");
+        // A change in one view is that view's alone, and kept.
+        h.state_mut().slot3d(ids[2]).mode = MapMode::Relief;
+        h.run_steps(2);
+        assert_eq!(shown(&h), [MapMode::Terrain, MapMode::Height, MapMode::Relief, MapMode::Biome]);
+        assert_eq!(h.state().layout.view3d[&ids[2]].mode, MapMode::Relief);
+        h.state_mut().slot3d(ids[2]).mode = MapMode::Slope;
+        h.run_steps(2);
+        assert!(!h.state().layout.view3d.contains_key(&ids[0]), "the defaults are not written down");
+
+        // Saved and read back, as eframe does (RON) and the backup (JSON).
+        #[derive(Default)]
+        struct Store(HashMap<String, String>);
+        impl eframe::Storage for Store {
+            fn get_string(&self, key: &str) -> Option<String> {
+                self.0.get(key).cloned()
+            }
+            fn set_string(&mut self, key: &str, value: String) {
+                self.0.insert(key.into(), value);
+            }
+            fn remove_string(&mut self, key: &str) {
+                self.0.remove(key);
+            }
+            fn flush(&mut self) {}
+        }
+        let mut store = Store::default();
+        eframe::set_value(&mut store, LAYOUT_KEY, &h.state().layout);
+        let ron: Layout = eframe::get_value::<Layout>(&store, LAYOUT_KEY).expect("the layout read back").sanitize();
+        let json: Layout = serde_json::from_str::<Layout>(&serde_json::to_string(&h.state().layout).unwrap()).unwrap().sanitize();
+        assert_eq!(ron.view3d, h.state().layout.view3d);
+        assert_eq!(json.view3d, h.state().layout.view3d);
+        // Opened again: the views come back in their modes.
+        {
+            let app = h.state_mut();
+            app.layout = ron;
+            app.slots3d.clear();
+            app.view3d.mode = MapMode::Terrain;
+            for v in &mut app.extra3d {
+                v.mode = MapMode::Terrain;
+            }
+        }
+        h.run_steps(2);
+        assert_eq!(shown(&h), modes, "the layout read back shows each area in its mode");
+        // A copy of the workspace too.
+        h.state_mut().layout.duplicate_current();
+        h.run_steps(2);
+        let mut copy = Vec::new();
+        h.state().layout.current().root.areas(&mut copy);
+        assert_eq!(copy.iter().map(|(id, _)| h.state().layout.view3d.get(id).copied().unwrap_or_default().mode).collect::<Vec<_>>(), modes);
+        let k = h.state().layout.workspaces.len() - 2;
+        h.state_mut().layout.activate(k);
+        h.run_steps(2);
+
+        // Built, for the eye.
+        let busy = |app: &MassifApp| [&app.view3d].into_iter().chain(&app.extra3d).any(|v| v.pending() > 0 || v.building());
+        let mut frames = 0;
+        while (frames < 10 || busy(h.state())) && frames < 3000 {
+            h.step();
+            frames += 1;
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            let ppp = h.ctx.pixels_per_point();
+            h.render().unwrap().save(dir.join(format!("view3d-four-modes@{ppp}x.png"))).unwrap();
+        }
+        if std::env::var_os("MASSIF_PERF").is_none() {
+            return;
+        }
+        // A frame's time, the views turning: the four, then one alone in
+        // its quarter (the others emptied), best of several runs.
+        let turn = |h: &mut egui_kittest::Harness<'static, MassifApp>| {
+            let app = h.state_mut();
+            app.view3d.camera.yaw += 0.02;
+            for v in &mut app.extra3d {
+                v.camera.yaw += 0.02;
+            }
+        };
+        let time = |h: &mut egui_kittest::Harness<'static, MassifApp>, name: &str| {
+            for _ in 0..20 {
+                turn(h);
+                h.step();
+            }
+            let mut best = f64::MAX;
+            for _ in 0..5 {
+                let mut each = Vec::new();
+                for _ in 0..60 {
+                    turn(h);
+                    let t = std::time::Instant::now();
+                    h.step();
+                    each.push(t.elapsed().as_secs_f64() * 1000.0);
+                }
+                each.sort_by(f64::total_cmp);
+                best = best.min(each[each.len() / 2]);
+            }
+            eprintln!("{name}: a frame {best:.2} ms (best middle of 5 runs of 60)");
+            best
+        };
+        let four = time(&mut h, "four 3D views");
+        for id in &ids[1..] {
+            h.state_mut().layout.current_mut().root.set_editor(*id, EditorKind::Empty);
+        }
+        h.run_steps(5);
+        let one = time(&mut h, "one 3D view");
+        eprintln!("four / one: {:.2}", four / one);
     }
 
     fn harness(theme: ThemeChoice) -> egui_kittest::Harness<'static, MassifApp> {

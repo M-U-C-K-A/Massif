@@ -4746,6 +4746,12 @@ impl Default for View3d {
 }
 
 impl View3d {
+    /// A view of its own beside this one: looking where it looks, with
+    /// the game's blocks it has, nothing built yet.
+    pub fn beside(&self) -> Self {
+        Self { camera: self.camera, reduce_while_moving: self.reduce_while_moving, catalogue: self.catalogue.clone(), ..Self::default() }
+    }
+
     pub fn header(&mut self, ui: &mut Ui) {
         let narrow = ui.available_width() < 480.0;
         crate::map_view::mode_selector(ui, &mut self.mode, narrow, "3d mode");

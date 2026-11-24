@@ -6,7 +6,9 @@
 //! takes to build any arrangement.
 
 use crate::theme::Icon;
+use crate::map_render::MapMode;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// What an area shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -453,6 +455,25 @@ pub struct Layout {
     /// kept: Massif opens on the side of the workspace it was left in.
     #[serde(skip)]
     pub render: bool,
+    /// What each 3D View area shows (its mode, its water), by area: an
+    /// area missing here shows the defaults.
+    #[serde(default)]
+    pub view3d: BTreeMap<AreaId, View3dLook>,
+}
+
+/// What a 3D View area shows: kept with the layout, so that each area
+/// opens again as it was left.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct View3dLook {
+    pub mode: MapMode,
+    pub water: bool,
+}
+
+impl Default for View3dLook {
+    fn default() -> Self {
+        Self { mode: MapMode::Terrain, water: true }
+    }
 }
 
 /// The sides of Massif, in the order of the switcher: the terrain
@@ -652,6 +673,7 @@ impl Default for Layout {
             last: [0, first_terrain],
             version: LAYOUT_VERSION,
             render: false,
+            view3d: BTreeMap::new(),
         }
     }
 }
@@ -738,6 +760,12 @@ impl Layout {
             }
         }
         self.version = LAYOUT_VERSION;
+        // The looks of 3D View areas no longer there.
+        let mut kept = Vec::new();
+        for w in &self.workspaces {
+            w.root.areas(&mut kept);
+        }
+        self.view3d.retain(|id, _| kept.iter().any(|(k, e)| k == id && *e == EditorKind::View3d));
         self
     }
 
@@ -879,8 +907,17 @@ impl Layout {
     /// Add a copy of the current workspace and switch to it.
     pub fn duplicate_current(&mut self) {
         let mut copy = self.current().clone();
-        // Give the copy its own area ids so view state is not shared.
+        // Give the copy its own area ids so view state is not shared; its
+        // 3D views show what the originals do.
+        let (mut old, mut new) = (Vec::new(), Vec::new());
+        copy.root.areas(&mut old);
         renumber(&mut copy.root, &mut self.next_id);
+        copy.root.areas(&mut new);
+        for ((o, _), (n, _)) in old.iter().zip(&new) {
+            if let Some(look) = self.view3d.get(o).copied() {
+                self.view3d.insert(*n, look);
+            }
+        }
         copy.maximized = None;
         let base = copy.name.trim_end_matches(|c: char| c.is_ascii_digit() || c == ' ').to_owned();
         let taken = |name: &str| self.workspaces.iter().any(|w| w.name == name);

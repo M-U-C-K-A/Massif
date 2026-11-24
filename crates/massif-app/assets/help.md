@@ -229,6 +229,7 @@ Levels lay rock over the ground or dig into it, each in its own layer that can b
 - Double-click looks at the point under the cursor.
 - A turn or a move let go while moving goes on a little and dies away; flying with the keys starts and stops softly; a double-click glides to the point.
 - While the view moves it is drawn at a lower resolution, sharp again the moment it stops.
+- Each 3D View area has its own mode (Terrain, Height, Slope, Biome, Relief), water and camera: split one to see the map in two modes at once. Each area is remembered with the layout; a new one opens in Terrain.
 - In the **Terrain** look every block shows its own texture, from the game and from the mods and resource packs read in the Blocks panel, with what grows on it and the shade in its corners; far off, where a block is smaller than a pixel, it blends into the colour of its texture. **Settings ▸ Graphics ▸ Game textures in the 3D views** turns it off (Low draws a flat colour a block). The textures come from the game: when no Minecraft is found (nor chosen in the Blocks panel), or the graphics card cannot draw them, the views show a flat colour a block, up close too, and a line under that switch says why.
 
 ## 3D Sculpt
