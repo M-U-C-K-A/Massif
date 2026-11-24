@@ -225,7 +225,7 @@ impl Tool {
             Tool::AutoPaint => {
                 tr!("Paints what the land calls for: rock on cliffs, sand on shores…")
             }
-            Tool::Eyedropper => tr!("Pick the terrain, biome, height and water under the cursor."),
+            Tool::Eyedropper => tr!("Pick what is under the cursor to paint with it: its terrain, its biome or a layer. Shift: its terrain, height and water at once."),
             Tool::Flood => tr!("Fill a basin with water; on water, raise it a block. Right button: lower it a block, Shift: drain it. Hold to repeat."),
             Tool::Water => tr!("Lay water under the brush. Right button: take it off."),
             Tool::River => {
@@ -565,6 +565,10 @@ pub struct ToolState {
     /// show what is there by.
     #[serde(skip)]
     pub filter_pick_at: Option<((i32, i32), egui::Pos2)>,
+    /// The column the Eyedropper tool was clicked on, with several things
+    /// to paint with there: the window offers them by the pointer.
+    #[serde(skip)]
+    pub eyedrop_at: Option<(i32, i32)>,
     /// Test Export's regions being picked on the map: a click or a drag
     /// takes whole region files rather than the tool acting.
     #[serde(skip)]
@@ -1173,6 +1177,7 @@ impl Default for ToolState {
             filter_list_open: false,
             filter_pick: None,
             filter_pick_at: None,
+            eyedrop_at: None,
             region_pick: None,
             select_mode: Default::default(),
             select_feather: 0,
@@ -2522,29 +2527,73 @@ pub fn pick(doc: &Document, tools: &mut ToolState, x: i32, z: i32) -> Feedback {
     })
 }
 
+/// The Eyedropper tool's pick: the tool that paints `what`, chosen, with
+/// it ready to paint. Returns what to say.
+pub fn apply_paint(tools: &mut ToolState, reg: &massif_core::registry::Registry, what: crate::inspect::Paint) -> String {
+    use crate::inspect::Paint;
+    let name = |n: u16, names: &dyn Fn(usize) -> Option<String>| names(n as usize).unwrap_or_default();
+    let (tool, said) = match what {
+        Paint::Terrain(t) => {
+            tools.terrain = t.0;
+            tools.pattern.on = false;
+            (Tool::PaintTerrain, reg.terrain(t).name.clone())
+        }
+        Paint::Biome(b) => {
+            tools.biome = b.0;
+            (Tool::PaintBiome, reg.biome(b).name.clone())
+        }
+        Paint::Cover(n) => {
+            tools.cover = n;
+            (Tool::Cover, name(n, &|k| reg.covers.get(k.wrapping_sub(1)).map(|c| c.name.clone())))
+        }
+        Paint::Objects(n) => {
+            tools.object_layer = n;
+            (Tool::Objects, name(n, &|k| reg.object_layers.get(k.wrapping_sub(1)).map(|l| l.name.clone())))
+        }
+        Paint::Size(n) => {
+            tools.tree_size = n;
+            (Tool::TreeSize, reg.tree_size(n).map(|t| crate::i18n::tr_name(&t.name).to_owned()).unwrap_or_default())
+        }
+        Paint::Pockets(n) => {
+            tools.pocket_layer = n;
+            (Tool::Pockets, name(n, &|k| reg.pockets.get(k.wrapping_sub(1)).map(|p| p.name.clone())))
+        }
+        Paint::Annotation(n) => {
+            tools.annotation = n;
+            tools.annotation_curve = false;
+            (Tool::Annotate, crate::panels::annotation_label(n, &reg.annotations))
+        }
+        Paint::Combined(n) => {
+            tools.combined = n;
+            (Tool::Combined, name(n, &|k| reg.combined.get(k.wrapping_sub(1)).map(|c| c.name.clone())))
+        }
+    };
+    tools.select(tool);
+    tr!("Painting with {name}", name = said)
+}
+
 /// A single-click tool at block `(x, z)`. `inverse` is the right button.
 pub fn click(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, inverse: bool) -> Feedback {
     match tools.tool {
+        // As WorldPainter's: what is here to paint with. One thing, it is
+        // picked at once; several, the window offers them by the pointer.
         Tool::Eyedropper => {
-            let p = probe(doc, x, z)?;
-            let reg = &doc.world.registry;
-            let terrain_name = reg.terrain(TerrainId(p.terrain)).name.clone();
-            tools.terrain = p.terrain;
-            tools.target_height = p.height.round();
-            if p.biome != 0 {
-                tools.biome = p.biome;
+            let Some(info) = crate::inspect::ColumnInfo::read(doc, x, z) else {
+                return Some(tr!("Nothing here to pick").to_owned());
+            };
+            let choices = info.paints(&doc.world.registry);
+            // Only a terrain (and the biome the land calls for, painted by
+            // nobody): the terrain.
+            let bare = info.biome.is_none() && info.layers.iter().all(|l| l.paint.is_none());
+            match choices.as_slice() {
+                [] => Some(tr!("Nothing here to pick").to_owned()),
+                [(only, _, _)] => Some(apply_paint(tools, &doc.world.registry, *only)),
+                [(terrain @ crate::inspect::Paint::Terrain(_), _, _), _] if bare => Some(apply_paint(tools, &doc.world.registry, *terrain)),
+                _ => {
+                    tools.eyedrop_at = Some((x, z));
+                    None
+                }
             }
-            if p.fluid != NO_FLUID {
-                tools.water_level = p.fluid;
-            }
-            if p.cover != 0 {
-                tools.cover = p.cover;
-            }
-            if p.objects != 0 {
-                tools.object_layer = p.objects;
-            }
-            tools.tool = tools.previous;
-            Some(tr!("Picked {terrain_name} at height {block_top}", block_top = block_top(p.height), terrain_name))
         }
         // Flood's own button, the right one: a block lower (Shift: drained
         // whole).
@@ -2558,6 +2607,34 @@ pub fn click(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, inverse:
         _ => None,
     }
 }
+
+/// The Eyedropper tool with Shift, as it was before: the terrain, height,
+/// biome, water, cover and trees under the cursor all taken at once, back
+/// to the tool used before.
+pub fn pick_all(doc: &Document, tools: &mut ToolState, x: i32, z: i32) -> Feedback {
+    let p = probe(doc, x, z)?;
+    let reg = &doc.world.registry;
+    let terrain_name = reg.terrain(TerrainId(p.terrain)).name.clone();
+    tools.terrain = p.terrain;
+    tools.target_height = p.height.round();
+    if p.biome != 0 {
+        tools.biome = p.biome;
+    }
+    if p.fluid != NO_FLUID {
+        tools.water_level = p.fluid;
+    }
+    if p.cover != 0 {
+        tools.cover = p.cover;
+    }
+    if p.objects != 0 {
+        tools.object_layer = p.objects;
+    }
+    if tools.tool == Tool::Eyedropper {
+        tools.tool = tools.previous;
+    }
+    Some(tr!("Picked {terrain_name} at height {block_top}", block_top = block_top(p.height), terrain_name))
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -2997,10 +3074,37 @@ mod tests {
         tools.select(Tool::Eyedropper);
         assert_eq!(tools.previous, Tool::Raise);
         tools.terrain = 99;
-        let msg = click(&mut d, &mut tools, 3, 3, false).unwrap();
+        // Shift: everything at once, back to the tool before.
+        let msg = pick_all(&d, &mut tools, 3, 3).unwrap();
         assert!(msg.starts_with("Picked Grass"), "{msg}");
         assert_eq!(tools.tool, Tool::Raise);
         assert_eq!(tools.terrain, d.world.registry.terrain_by_name("Grass").unwrap().0);
+        // A click on bare ground (a terrain, the biome left automatic):
+        // Paint terrain with it at once.
+        let grass = d.world.registry.terrain_by_name("Grass").unwrap().0;
+        d.world.registry.covers.iter_mut().for_each(|c| c.removed = true);
+        tools.select(Tool::Eyedropper);
+        tools.terrain = 99;
+        let msg = click(&mut d, &mut tools, 3, 3, false).unwrap();
+        assert_eq!((msg.as_str(), tools.tool, tools.terrain, tools.eyedrop_at), ("Painting with Grass", Tool::PaintTerrain, grass, None));
+        // With a biome painted there too, the choice is offered.
+        tools.select(Tool::PaintBiome);
+        tools.biome = 7;
+        tools.brush.radius = 4.0;
+        tools.brush.strength = 1.0;
+        let (st, _) = begin_stroke(&mut d, &tools, (3.5, 3.5), false, false);
+        let mut st = st.unwrap();
+        continue_stroke(&mut d, &tools, &mut st, (3.5, 3.5), 0.1);
+        end_stroke(&mut d, st);
+        tools.select(Tool::Eyedropper);
+        assert!(click(&mut d, &mut tools, 3, 3, false).is_none());
+        assert_eq!((tools.tool, tools.eyedrop_at), (Tool::Eyedropper, Some((3, 3))));
+        let info = crate::inspect::ColumnInfo::read(&d, 3, 3).unwrap();
+        let paints = info.paints(&d.world.registry);
+        assert_eq!(paints.iter().map(|p| p.0).collect::<Vec<_>>(), [crate::inspect::Paint::Terrain(TerrainId(grass)), crate::inspect::Paint::Biome(massif_core::registry::BiomeId(7))]);
+        tools.biome = 1;
+        apply_paint(&mut tools, &d.world.registry, paints[1].0);
+        assert_eq!((tools.tool, tools.biome), (Tool::PaintBiome, 7));
 
         tools.select(Tool::Flood);
         tools.flood_height = WaterHeight::Fixed;
@@ -3970,8 +4074,7 @@ mod tests {
         let frame = at(&d);
         tools.target_height = 0.0;
         let (s, note) = begin_sculpt(&mut d, &mut tools, false, &frame);
-        assert!(note.is_some() && tools.target_height == 64.0, "picked the height: {note:?}");
-        assert_eq!(tools.tool, Tool::PaintBiome, "back to the tool before");
+        assert!(note.as_deref().is_some_and(|n| n.starts_with("Painting with")) || tools.eyedrop_at.is_some(), "picked, or the choice offered: {note:?}");
         assert!(end_sculpt(&mut d, s.unwrap()).is_none());
         // A selection shape does nothing in 3D.
         tools.select(Tool::SelectRect);

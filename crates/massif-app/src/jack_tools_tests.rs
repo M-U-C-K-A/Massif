@@ -558,3 +558,83 @@ fn test_export_writes_the_regions_picked() {
         let _ = std::fs::remove_dir_all(&out);
     }
 }
+
+// ------------------------------------------------------- the Eyedropper tool --
+
+/// The Eyedropper tool, as WorldPainter's (Jack: "Pick whatever is under
+/// the cursor and paint with that terrain/layer/biome"): clicked where
+/// several things are, it offers them by the pointer, and the one picked
+/// is painted with, its tool in hand; where there is only a terrain, it is
+/// picked at once; Shift-click takes the terrain, height and water and
+/// goes back to the tool before; Esc puts the choices away (rendered at 1×
+/// and 2×).
+#[test]
+fn the_eyedropper_tool_paints_with_what_it_picks() {
+    use egui_kittest::kittest::Queryable;
+    for ppp in densities() {
+        let mut h = app(ppp, Tool::Eyedropper);
+        look(&mut h, 300.0, 300.0, 6.0);
+        let revision = h.state().doc.revision;
+        let p = map(&h).screen_of(300.5, 300.5);
+        super::tests::click_on(&mut h, p, PointerButton::Primary);
+        assert_eq!(h.state().doc.revision, revision, "nothing painted");
+        assert_eq!(h.state().tools.eyedrop_at, Some((300, 300)));
+        assert!(h.query_by_label("Paint with…").is_some(), "the choices shown");
+        for name in ["Terrain: Stone", "Trees: Oak wood", "Pockets: Iron veins"] {
+            assert!(h.query_by_label(name).is_some(), "{name}");
+        }
+        save(&mut h, "eyedropper-tool", ppp);
+        h.get_by_label("Trees: Oak wood").click();
+        h.run_steps(3);
+        let tools = &h.state().tools;
+        let oaks = h.state().doc.world.registry.object_layers.iter().position(|l| l.name == "Oak wood").unwrap() as u16 + 1;
+        assert_eq!((tools.tool, tools.object_layer, tools.eyedrop_at), (Tool::Objects, oaks, None), "the trees in hand");
+        assert!(h.query_by_label("Paint with…").is_none());
+
+        // Another pick: its terrain, with Paint terrain.
+        h.state_mut().tools.select(Tool::Eyedropper);
+        super::tests::click_on(&mut h, p, PointerButton::Primary);
+        h.get_by_label("Terrain: Stone").click();
+        h.run_steps(3);
+        let stone = h.state().doc.world.registry.terrain_by_name("Stone").unwrap().0;
+        assert_eq!((h.state().tools.tool, h.state().tools.terrain), (Tool::PaintTerrain, stone));
+
+        // Esc puts the choices away, the eyedropper still in hand.
+        h.state_mut().tools.select(Tool::Eyedropper);
+        super::tests::click_on(&mut h, p, PointerButton::Primary);
+        assert!(h.query_by_label("Paint with…").is_some());
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        assert!(h.query_by_label("Paint with…").is_none() && h.state().tools.eyedrop_at.is_none());
+        assert_eq!(h.state().tools.tool, Tool::Eyedropper);
+
+        // Shift-click: terrain, height and water at once, back to the tool
+        // before.
+        h.state_mut().tools.select(Tool::Raise);
+        h.state_mut().tools.select(Tool::Eyedropper);
+        h.state_mut().tools.terrain = 0;
+        h.event(egui::Event::PointerMoved(p));
+        h.event(egui::Event::ModifiersChanged(Modifiers::SHIFT));
+        h.step();
+        press(&mut h, p, true, Modifiers::SHIFT);
+        press(&mut h, p, false, Modifiers::SHIFT);
+        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        h.run_steps(3);
+        let tools = &h.state().tools;
+        assert_eq!((tools.tool, tools.terrain, tools.eyedrop_at), (Tool::Raise, stone, None));
+
+        // Bare ground (a terrain, its biome automatic): picked at once.
+        let bare = (200..1800).step_by(37).flat_map(|x| (200..1800).step_by(41).map(move |z| (x, z))).find(|&(x, z)| {
+            let info = crate::inspect::ColumnInfo::read(&h.state().doc, x, z).unwrap();
+            info.biome.is_none() && info.layers.iter().all(|l| l.paint.is_none())
+        });
+        if let Some((x, z)) = bare {
+            look(&mut h, x as f64, z as f64, 6.0);
+            h.state_mut().tools.select(Tool::Eyedropper);
+            let q = map(&h).screen_of(x as f64 + 0.5, z as f64 + 0.5);
+            super::tests::click_on(&mut h, q, PointerButton::Primary);
+            let terrain = crate::inspect::ColumnInfo::read(&h.state().doc, x, z).unwrap().terrain.unwrap().0;
+            assert_eq!((h.state().tools.tool, h.state().tools.terrain, h.state().tools.eyedrop_at), (Tool::PaintTerrain, terrain, None), "at {x}, {z}");
+        }
+    }
+}

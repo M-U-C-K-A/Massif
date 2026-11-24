@@ -1573,10 +1573,7 @@
  "Pick it in Terrain or Blocks, or Alt-click it on the map. Noise mixes several.": "Escolha em Terreno ou Blocos, ou use Alt-clique no mapa. Ruído mistura vários.",
  "Pick it in Terrain or Blocks; Alt-click picks it on the map.": "Escolha em Terreno ou Blocos; Alt-clique pega no mapa.",
  "Pick the height on the map": "Pegar a altura no mapa",
- "Pick the terrain, biome, height and water under the cursor.": "Pegar o terreno, o bioma, a altura e a água sob o cursor.",
- "Pick what is here": "Pegar o que está aqui",
  "Picked {terrain_name} at height {block_top}": "{terrain_name} pego na altura {block_top}",
- "Picks the terrain, biome, height and water under the cursor.": "Pega o terreno, o bioma, a altura e a água sob o cursor.",
  "Picture": "Imagem",
  "Pictures": "Imagens",
  "Place": "Lugar",
@@ -3584,5 +3581,11 @@
  "Some layers of the palette are hidden: show them all": "Algumas camadas da paleta estão ocultas: mostrar todas",
  "{what}. Alt-click: show only this palette": "{what}. Alt-clique: mostrar só esta paleta",
  "Show only this palette": "Mostrar só esta paleta",
- "Alt-click its eye does the same; again, every layer is shown": "Alt-clique no olho faz o mesmo; de novo, todas as camadas voltam"
+ "Alt-click its eye does the same; again, every layer is shown": "Alt-clique no olho faz o mesmo; de novo, todas as camadas voltam",
+ "Shift+Click": "Shift+clique",
+ "Paint with…": "Pintar com…",
+ "Pick what is under the cursor to paint with it: its terrain, its biome or a layer. Shift: its terrain, height and water at once.": "Pega o que está sob o cursor para pintar com ele: o terreno, o bioma ou uma camada. Shift: terreno, altura e água de uma vez.",
+ "Picks what is under the cursor to paint with it: its terrain, its biome or a layer, as WorldPainter's.": "Pega o que está sob o cursor para pintar com ele: o terreno, o bioma ou uma camada, como o do WorldPainter.",
+ "Choose what to paint with": "Escolher com o que pintar",
+ "Terrain, height and water at once": "Terreno, altura e água de uma vez"
 }

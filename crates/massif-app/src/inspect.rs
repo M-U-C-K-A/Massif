@@ -28,6 +28,22 @@ pub struct LayerHere {
     /// columns a cover grows on, of the squares a tree stands in, of the
     /// rock the pockets take.
     pub intensity: Option<f32>,
+    /// What the Eyedropper tool paints with when it is picked.
+    pub paint: Option<Paint>,
+}
+
+/// What the Eyedropper tool can pick to paint with: the tool it takes and
+/// what that tool paints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Paint {
+    Terrain(TerrainId),
+    Biome(BiomeId),
+    Cover(u16),
+    Objects(u16),
+    Size(u16),
+    Pockets(u16),
+    Annotation(u16),
+    Combined(u16),
 }
 
 /// One column of the map, with all it holds.
@@ -72,21 +88,21 @@ impl ColumnInfo {
         let levels = stack.layers().filter(|(_, _, t)| t.present(cell)).map(|(i, _, _)| dim.levels[i].name.clone()).collect();
         let mut layers = Vec::new();
         if let Some(c) = reg.cover(s.cover) {
-            layers.push(LayerHere { matches: Some(Match::Layer(Painted::Cover, s.cover)), kind: tr!("Cover"), name: c.name.clone(), color: c.color, intensity: Some(c.density) });
+            layers.push(LayerHere { matches: Some(Match::Layer(Painted::Cover, s.cover)), kind: tr!("Cover"), name: c.name.clone(), color: c.color, intensity: Some(c.density), paint: Some(Paint::Cover(s.cover)) });
         }
         for (plane, n, kind) in [(Painted::Objects, s.objects, tr!("Trees")), (Painted::Understory, s.understory, tr!("Under the trees"))] {
             if let Some(l) = reg.object_layer(n) {
-                layers.push(LayerHere { matches: Some(Match::Layer(plane, n)), kind, name: l.name.clone(), color: l.color, intensity: Some(l.density) });
+                layers.push(LayerHere { matches: Some(Match::Layer(plane, n)), kind, name: l.name.clone(), color: l.color, intensity: Some(l.density), paint: Some(Paint::Objects(n)) });
             }
         }
         if let Some(size) = reg.tree_size(s.size as u16).filter(|t| !t.removed) {
-            layers.push(LayerHere { matches: None, kind: tr!("Tree size"), name: crate::i18n::tr_name(&size.name).to_owned(), color: size.color, intensity: None });
+            layers.push(LayerHere { matches: None, kind: tr!("Tree size"), name: crate::i18n::tr_name(&size.name).to_owned(), color: size.color, intensity: None, paint: Some(Paint::Size(s.size as u16)) });
         }
         if let Some(p) = reg.pocket(s.pockets) {
-            layers.push(LayerHere { matches: Some(Match::Layer(Painted::Pockets, s.pockets)), kind: tr!("Pockets"), name: p.name.clone(), color: p.color, intensity: Some(p.share) });
+            layers.push(LayerHere { matches: Some(Match::Layer(Painted::Pockets, s.pockets)), kind: tr!("Pockets"), name: p.name.clone(), color: p.color, intensity: Some(p.share), paint: Some(Paint::Pockets(s.pockets)) });
         }
         if s.flags & FLAG_SLABS != 0 {
-            layers.push(LayerHere { matches: None, kind: tr!("Smoothing"), name: tr!("Steps smoothed").to_owned(), color: [170, 170, 170], intensity: None });
+            layers.push(LayerHere { matches: None, kind: tr!("Smoothing"), name: tr!("Steps smoothed").to_owned(), color: [170, 170, 170], intensity: None, paint: None });
         }
         // Combined layers paint their parts into the others' planes: one
         // all of whose parts are here may have painted it.
@@ -110,14 +126,13 @@ impl ColumnInfo {
             // missing here: the parts painted everywhere must be here, and
             // one at least.
             if c.parts.iter().filter(|p| p.share >= 1.0).all(has) && c.parts.iter().any(has) {
-                let _ = i;
-                layers.push(LayerHere { matches: None, kind: tr!("Combined"), name: c.name.clone(), color: c.color, intensity: None });
+                layers.push(LayerHere { matches: None, kind: tr!("Combined"), name: c.name.clone(), color: c.color, intensity: None, paint: Some(Paint::Combined(i as u16 + 1)) });
             }
         }
         if s.annotation != 0 {
             let n = s.annotation as u16;
             let color = reg.annotations.color(n).unwrap_or([128; 3]);
-            layers.push(LayerHere { matches: Some(Match::Layer(Painted::Annotation, n)), kind: tr!("Annotation"), name: crate::panels::annotation_label(n, &reg.annotations), color, intensity: None });
+            layers.push(LayerHere { matches: Some(Match::Layer(Painted::Annotation, n)), kind: tr!("Annotation"), name: crate::panels::annotation_label(n, &reg.annotations), color, intensity: None, paint: Some(Paint::Annotation(n)) });
         }
         let selected = doc.selection().map(|sel| sel.weight(x, z));
         Some(Self { x, z, height, terrain: (!empty).then_some(TerrainId(s.terrain)), water, biome, auto_biome, levels, layers, selected })
@@ -144,6 +159,57 @@ impl ColumnInfo {
         }
         out
     }
+}
+
+impl ColumnInfo {
+    /// What the Eyedropper tool can paint with from here: the terrain, the
+    /// biome (painted, or the one the land calls for), and each layer
+    /// painted on it, with what to call them.
+    pub fn paints(&self, reg: &massif_core::registry::Registry) -> Vec<(Paint, String, [u8; 3])> {
+        let mut out = Vec::new();
+        if let Some(t) = self.terrain {
+            out.push((Paint::Terrain(t), format!("{}: {}", tr!("Terrain"), reg.terrain(t).name), reg.terrain(t).color));
+        }
+        if let Some(b) = self.biome {
+            out.push((Paint::Biome(b), format!("{}: {}", tr!("Biome"), reg.biome(b).name), reg.biome(b).color));
+        } else if let Some(b) = self.auto_biome {
+            out.push((Paint::Biome(b), format!("{}: {}{}", tr!("Biome"), reg.biome(b).name, tr!(" (automatic)")), reg.biome(b).color));
+        }
+        for l in &self.layers {
+            if let Some(p) = l.paint {
+                out.push((p, format!("{}: {}", l.kind, l.name), l.color));
+            }
+        }
+        out
+    }
+}
+
+/// The Eyedropper tool's choices at a spot: its coordinates, then each
+/// thing there to paint with. Returns `Some(Some(what))` once one is
+/// picked, `Some(None)` on Cancel.
+pub fn paint_popup(ui: &mut Ui, info: &ColumnInfo, choices: &[(Paint, String, [u8; 3])]) -> Option<Option<Paint>> {
+    let pal = Palette::of(ui);
+    let mut out = None;
+    ui.set_min_width(200.0);
+    ui.label(RichText::new(tr!("Paint with…")).strong());
+    ui.label(RichText::new(tr!("At {x}, {z}", x = info.x, z = info.z)).size(11.0).color(pal.weak));
+    ui.add_space(4.0);
+    for (what, name, color) in choices {
+        let clicked = ui
+            .horizontal(|ui| {
+                swatch(ui, *color);
+                ui.add(egui::Button::new(name.as_str()).frame(false)).clicked()
+            })
+            .inner;
+        if clicked {
+            out = Some(Some(*what));
+        }
+    }
+    ui.add_space(4.0);
+    if ui.button(tr!("Cancel")).clicked() {
+        out = Some(None);
+    }
+    out
 }
 
 /// A coloured square before a name.

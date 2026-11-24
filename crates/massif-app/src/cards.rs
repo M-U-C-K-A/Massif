@@ -284,8 +284,8 @@ pub fn tool_card(tool: Tool) -> Card<'static> {
             Some(Demo::AutoBiome),
         ),
         Tool::Eyedropper => card(
-            tr!("Picks the terrain, biome, height and water under the cursor."),
-            vec![(tr!("Click"), tr!("Pick what is here"))],
+            tr!("Picks what is under the cursor to paint with it: its terrain, its biome or a layer, as WorldPainter's."),
+            vec![(tr!("Click"), tr!("Choose what to paint with")), (tr!("Shift+Click"), tr!("Terrain, height and water at once"))],
             None,
             Some(Demo::Eyedropper),
         ),

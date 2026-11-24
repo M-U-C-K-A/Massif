@@ -1575,10 +1575,7 @@
  "Pick it in Terrain or Blocks, or Alt-click it on the map. Noise mixes several.": "In Gelände oder Blöcke wählen oder per Alt-Klick auf der Karte. Rauschen mischt mehrere.",
  "Pick it in Terrain or Blocks; Alt-click picks it on the map.": "In Gelände oder Blöcke wählen; Alt-Klick nimmt es auf der Karte auf.",
  "Pick the height on the map": "Höhe auf der Karte aufnehmen",
- "Pick the terrain, biome, height and water under the cursor.": "Gelände, Biom, Höhe und Wasser unter dem Zeiger aufnehmen.",
- "Pick what is here": "Aufnehmen, was hier ist",
  "Picked {terrain_name} at height {block_top}": "{terrain_name} auf Höhe {block_top} aufgenommen",
- "Picks the terrain, biome, height and water under the cursor.": "Nimmt Gelände, Biom, Höhe und Wasser unter dem Zeiger auf.",
  "Picture": "Bild",
  "Pictures": "Bilder",
  "Place": "Ort",
@@ -3587,5 +3584,11 @@
  "Some layers of the palette are hidden: show them all": "Einige Ebenen der Palette sind ausgeblendet: alle einblenden",
  "{what}. Alt-click: show only this palette": "{what}. Alt-Klick: nur diese Palette zeigen",
  "Show only this palette": "Nur diese Palette zeigen",
- "Alt-click its eye does the same; again, every layer is shown": "Alt-Klick auf ihr Auge tut dasselbe; noch einmal, und alle Ebenen sind wieder sichtbar"
+ "Alt-click its eye does the same; again, every layer is shown": "Alt-Klick auf ihr Auge tut dasselbe; noch einmal, und alle Ebenen sind wieder sichtbar",
+ "Shift+Click": "Umschalt+Klick",
+ "Paint with…": "Malen mit…",
+ "Pick what is under the cursor to paint with it: its terrain, its biome or a layer. Shift: its terrain, height and water at once.": "Nimmt, was unter dem Cursor liegt, um damit zu malen: Gelände, Biom oder eine Ebene. Umschalt: Gelände, Höhe und Wasser auf einmal.",
+ "Picks what is under the cursor to paint with it: its terrain, its biome or a layer, as WorldPainter's.": "Nimmt, was unter dem Cursor liegt, um damit zu malen: Gelände, Biom oder eine Ebene, wie in WorldPainter.",
+ "Choose what to paint with": "Wählen, womit gemalt wird",
+ "Terrain, height and water at once": "Gelände, Höhe und Wasser auf einmal"
 }

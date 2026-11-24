@@ -1575,10 +1575,7 @@
  "Pick it in Terrain or Blocks, or Alt-click it on the map. Noise mixes several.": "Choisissez-le dans Terrain ou Blocs, ou Alt-cliquez-le sur la carte. Le bruit en mélange plusieurs.",
  "Pick it in Terrain or Blocks; Alt-click picks it on the map.": "Choisissez-le dans Terrain ou Blocs ; Alt-clic le prend sur la carte.",
  "Pick the height on the map": "Prendre la hauteur sur la carte",
- "Pick the terrain, biome, height and water under the cursor.": "Prendre le terrain, le biome, la hauteur et l'eau sous le curseur.",
- "Pick what is here": "Prendre ce qui est ici",
  "Picked {terrain_name} at height {block_top}": "{terrain_name} pris à la hauteur {block_top}",
- "Picks the terrain, biome, height and water under the cursor.": "Prend le terrain, le biome, la hauteur et l'eau sous le curseur.",
  "Picture": "Image",
  "Pictures": "Images",
  "Place": "Lieu",
@@ -3648,5 +3645,11 @@
  "Some layers of the palette are hidden: show them all": "Certains calques de la palette sont masqués : les afficher tous",
  "{what}. Alt-click: show only this palette": "{what}. Alt-clic : n'afficher que cette palette",
  "Show only this palette": "N'afficher que cette palette",
- "Alt-click its eye does the same; again, every layer is shown": "Alt-clic sur son œil fait de même ; une seconde fois, tous les calques reviennent"
+ "Alt-click its eye does the same; again, every layer is shown": "Alt-clic sur son œil fait de même ; une seconde fois, tous les calques reviennent",
+ "Shift+Click": "Maj+clic",
+ "Paint with…": "Peindre avec…",
+ "Pick what is under the cursor to paint with it: its terrain, its biome or a layer. Shift: its terrain, height and water at once.": "Prendre ce qui est sous le curseur pour peindre avec : son terrain, son biome ou un calque. Maj : son terrain, sa hauteur et son eau d'un coup.",
+ "Picks what is under the cursor to paint with it: its terrain, its biome or a layer, as WorldPainter's.": "Prend ce qui est sous le curseur pour peindre avec : son terrain, son biome ou un calque, comme celle de WorldPainter.",
+ "Choose what to paint with": "Choisir avec quoi peindre",
+ "Terrain, height and water at once": "Terrain, hauteur et eau d'un coup"
 }

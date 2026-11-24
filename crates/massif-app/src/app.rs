@@ -562,6 +562,9 @@ pub struct MassifApp {
     region_form: Option<ExportForm>,
     /// Where the filters' eyedropper's choices were last shown.
     pick_shown: Option<((i32, i32), egui::Pos2)>,
+    /// Where the Eyedropper tool's choices are shown, by the pointer as it
+    /// clicked.
+    eyedrop_shown: Option<((i32, i32), egui::Pos2)>,
     /// Layers ▸ Find: the layer looked for, its places nearest first, and
     /// the one shown.
     finding: Option<Finding>,
@@ -1192,6 +1195,7 @@ impl MassifApp {
             presence: Default::default(),
             used: None,
             pick_shown: None,
+            eyedrop_shown: None,
             region_form: None,
             finding: None,
             inspected: None,
@@ -3184,6 +3188,55 @@ impl MassifApp {
             self.tools.filter_pick = None;
             self.tools.filter_pick_at = None;
             self.pick_shown = None;
+        }
+    }
+
+    /// The Eyedropper tool clicked where several things are: they are
+    /// offered by the pointer; the one picked is painted with, its tool
+    /// chosen. Esc, or a click elsewhere, puts them away.
+    fn eyedrop_ui(&mut self, ctx: &egui::Context) {
+        let Some(at) = self.tools.eyedrop_at.filter(|_| self.tools.tool == crate::tools::Tool::Eyedropper) else {
+            self.tools.eyedrop_at = None;
+            self.eyedrop_shown = None;
+            return;
+        };
+        if crate::keymap::peek(ctx, crate::keymap::Action::Cancel) && !ctx.egui_wants_keyboard_input() {
+            self.tools.eyedrop_at = None;
+            self.eyedrop_shown = None;
+            return;
+        }
+        let fresh = self.eyedrop_shown.is_none_or(|s| s.0 != at);
+        if fresh {
+            let pos = ctx.input(|i| i.pointer.latest_pos()).unwrap_or_else(|| ctx.content_rect().center());
+            self.eyedrop_shown = Some((at, pos));
+        }
+        let pos = self.eyedrop_shown.map_or(egui::Pos2::ZERO, |s| s.1);
+        let Some(info) = crate::inspect::ColumnInfo::read(&self.doc, at.0, at.1) else {
+            self.tools.eyedrop_at = None;
+            return;
+        };
+        let choices = info.paints(&self.doc.world.registry);
+        let area = egui::Area::new(Id::unique("eyedropper pick")).order(egui::Order::Foreground).fixed_pos(pos + vec2(14.0, 10.0)).constrain(true).show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| crate::inspect::paint_popup(ui, &info, &choices)).inner
+        });
+        let mut done = false;
+        match area.inner {
+            Some(Some(what)) => {
+                let said = crate::tools::apply_paint(&mut self.tools, &self.doc.world.registry, what);
+                self.say(ctx, said, false, None);
+                done = true;
+            }
+            Some(None) => done = true,
+            None => {}
+        }
+        // A press anywhere else puts them away; on the map, the eyedropper
+        // still in hand looks at the new spot.
+        if !done && !fresh && ctx.input(|i| i.pointer.any_pressed()) && !ctx.input(|i| i.pointer.interact_pos()).is_some_and(|p| area.response.rect.contains(p)) {
+            done = true;
+        }
+        if done {
+            self.tools.eyedrop_at = None;
+            self.eyedrop_shown = None;
         }
     }
 
@@ -7102,6 +7155,7 @@ impl MassifApp {
             self.say(&ctx, msg, false, None);
         }
         self.filter_pick_ui(&ctx);
+        self.eyedrop_ui(&ctx);
         self.region_pick_ui(&ctx);
         // A flood beyond a hollow to ask about.
         if self.dialog.is_none()

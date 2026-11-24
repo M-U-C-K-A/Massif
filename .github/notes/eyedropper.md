@@ -1,0 +1,3 @@
+**The Eyedropper tool works as WorldPainter's**
+
+The Eyedropper tool (⌥Y) now picks what you want to paint with. Click the 2D map or a 3D view and a small list by the pointer shows what is there: its terrain, its biome, and every layer painted there (ground cover, trees, under the trees, tree size, pockets, annotation, combined layer). Click one and its tool is chosen with it, ready to paint: Paint terrain, Paint biome or the layer's own tool. Where there is only a terrain, it is picked at once. Shift-click does what the Eyedropper did before: it takes the terrain, height and water at once and goes back to your tool. Alt-click while painting works as before. Asked for by Jack (Fornad).

@@ -1435,6 +1435,9 @@ impl MapView {
                 // Alt + click, either button: what is under the cursor, as
                 // WorldPainter's eyedropper.
                 *feedback = tools::pick(doc, tools, bx, bz).or(feedback.take());
+            } else if tools.tool == Tool::Eyedropper && modifiers.shift {
+                // Shift: everything here at once, back to the tool before.
+                *feedback = tools::pick_all(doc, tools, bx, bz).or(feedback.take());
             } else if tools.tool == Tool::Annotate && tools.annotation_curve {
                 if let Some(p) = pointer {
                     let screen = |q: [f32; 2]| self.to_screen(canvas, q[0] as f64, q[1] as f64);

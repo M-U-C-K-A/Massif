@@ -1573,10 +1573,7 @@
  "Pick it in Terrain or Blocks, or Alt-click it on the map. Noise mixes several.": "Elígelo en Terreno o Bloques, o haz Alt-clic en el mapa. Ruido mezcla varios.",
  "Pick it in Terrain or Blocks; Alt-click picks it on the map.": "Elígelo en Terreno o Bloques; Alt-clic lo toma del mapa.",
  "Pick the height on the map": "Tomar la altura del mapa",
- "Pick the terrain, biome, height and water under the cursor.": "Tomar el terreno, el bioma, la altura y el agua bajo el cursor.",
- "Pick what is here": "Tomar lo que hay aquí",
  "Picked {terrain_name} at height {block_top}": "{terrain_name} tomado a la altura {block_top}",
- "Picks the terrain, biome, height and water under the cursor.": "Toma el terreno, el bioma, la altura y el agua bajo el cursor.",
  "Picture": "Imagen",
  "Pictures": "Imágenes",
  "Place": "Lugar",
@@ -3584,5 +3581,11 @@
  "Some layers of the palette are hidden: show them all": "Algunas capas de la paleta están ocultas: mostrarlas todas",
  "{what}. Alt-click: show only this palette": "{what}. Alt-clic: mostrar solo esta paleta",
  "Show only this palette": "Mostrar solo esta paleta",
- "Alt-click its eye does the same; again, every layer is shown": "Alt-clic en su ojo hace lo mismo; otra vez, se muestran todas las capas"
+ "Alt-click its eye does the same; again, every layer is shown": "Alt-clic en su ojo hace lo mismo; otra vez, se muestran todas las capas",
+ "Shift+Click": "Mayús+clic",
+ "Paint with…": "Pintar con…",
+ "Pick what is under the cursor to paint with it: its terrain, its biome or a layer. Shift: its terrain, height and water at once.": "Toma lo que hay bajo el cursor para pintar con ello: su terreno, su bioma o una capa. Mayús: su terreno, altura y agua a la vez.",
+ "Picks what is under the cursor to paint with it: its terrain, its biome or a layer, as WorldPainter's.": "Toma lo que hay bajo el cursor para pintar con ello: su terreno, su bioma o una capa, como el de WorldPainter.",
+ "Choose what to paint with": "Elegir con qué pintar",
+ "Terrain, height and water at once": "Terreno, altura y agua a la vez"
 }

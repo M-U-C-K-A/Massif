@@ -1571,10 +1571,7 @@
  "Pick it in Terrain or Blocks, or Alt-click it on the map. Noise mixes several.": "Выберите её в «Местности» или «Блоках» или Alt+щелчком на карте. Шум смешивает несколько.",
  "Pick it in Terrain or Blocks; Alt-click picks it on the map.": "Выберите её в «Местности» или «Блоках»; Alt+щелчок выбирает её на карте.",
  "Pick the height on the map": "Выбрать высоту на карте",
- "Pick the terrain, biome, height and water under the cursor.": "Выбрать местность, биом, высоту и воду под курсором.",
- "Pick what is here": "Взять то, что здесь",
  "Picked {terrain_name} at height {block_top}": "Выбрано: {terrain_name} на высоте {block_top}",
- "Picks the terrain, biome, height and water under the cursor.": "Выбирает местность, биом, высоту и воду под курсором.",
  "Picture": "Изображение",
  "Pictures": "Изображения",
  "Place": "Место",
@@ -3746,5 +3743,11 @@
  "Some layers of the palette are hidden: show them all": "Некоторые слои палитры скрыты: показать все",
  "{what}. Alt-click: show only this palette": "{what}. Alt-щелчок: показать только эту палитру",
  "Show only this palette": "Показать только эту палитру",
- "Alt-click its eye does the same; again, every layer is shown": "Alt-щелчок по глазу делает то же; повторно — снова показаны все слои"
+ "Alt-click its eye does the same; again, every layer is shown": "Alt-щелчок по глазу делает то же; повторно — снова показаны все слои",
+ "Shift+Click": "Shift+щелчок",
+ "Paint with…": "Рисовать…",
+ "Pick what is under the cursor to paint with it: its terrain, its biome or a layer. Shift: its terrain, height and water at once.": "Взять то, что под курсором, чтобы рисовать им: местность, биом или слой. Shift: местность, высоту и воду сразу.",
+ "Picks what is under the cursor to paint with it: its terrain, its biome or a layer, as WorldPainter's.": "Берёт то, что под курсором, чтобы рисовать им: местность, биом или слой, как в WorldPainter.",
+ "Choose what to paint with": "Выбрать, чем рисовать",
+ "Terrain, height and water at once": "Местность, высота и вода сразу"
 }

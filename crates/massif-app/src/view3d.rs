@@ -6379,6 +6379,13 @@ impl View3d {
             let (x, z) = (frame.center[0].floor() as i32, frame.center[2].floor() as i32);
             self.feedback = crate::tools::pick(doc, tools, x, z).or(self.feedback.take());
         }
+        // The Eyedropper tool with Shift: everything there at once.
+        if sculpting && shift && tools.tool == crate::tools::Tool::Eyedropper && self.walk.is_none() && response.clicked()
+            && let Some(frame) = self.frame
+        {
+            let (x, z) = (frame.center[0].floor() as i32, frame.center[2].floor() as i32);
+            self.feedback = crate::tools::pick_all(doc, tools, x, z).or(self.feedback.take());
+        }
         match (&mut self.sculpt, pressed, self.frame) {
             // Once over the land: a stroke of the map's brushes begins where
             // it is.
