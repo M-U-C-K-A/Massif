@@ -6354,6 +6354,9 @@ impl View3d {
             let dt = last.elapsed().as_secs_f32().max(1.0 / 60.0);
             *last = Instant::now();
             crate::tools::sculpt_dab(doc, tools, stroke, &frame, dt);
+            if let Some(note) = stroke.take_note() {
+                self.feedback = Some(note);
+            }
         }
         if self.sculpt.is_some() {
             ui.ctx().request_repaint();

@@ -1261,9 +1261,22 @@ pub struct Stroke {
     /// The step to undo it records into, and its label.
     step: u64,
     label: String,
+    /// With a selection on the map: whether a dab has reached it yet.
+    reached: Option<bool>,
+    /// What to say once of the stroke (it is all outside the selection).
+    note: Option<String>,
+    /// The Pencil drew its first block: the next part of the line starts
+    /// past the block it ended on.
+    drawn: bool,
 }
 
 impl Stroke {
+    /// What the stroke has to say, once: that it is all outside the
+    /// selection, where the tools do nothing.
+    pub fn take_note(&mut self) -> Option<String> {
+        self.note.take()
+    }
+
     pub fn secondary(&self) -> bool {
         self.secondary
     }
@@ -1298,6 +1311,42 @@ impl ToolState {
 /// spot used.
 fn under_the_limit(tools: &ToolState) -> String {
     tr!("The height limit {water_limit} is under this spot: raise it or turn it off in Tool Settings.", water_limit = tools.water_limit)
+}
+
+/// What a stroke all outside the selection says: the tools act only inside
+/// it.
+pub const OUTSIDE_SELECTION: &str = tn!("A selection is on: the tools act only inside it. Press Esc with a Select tool, or Edit ▸ Deselect, to act everywhere again.");
+
+/// The blocks from `from` to `to`, both in, each beside the last along one
+/// of its sides: a line one block wide without a step across a corner, as
+/// WorldPainter's Pencil draws it ("joined up").
+pub fn pencil_path(from: (i32, i32), to: (i32, i32)) -> Vec<(i32, i32)> {
+    let (dx, dz) = ((to.0 - from.0).abs() as i64, (to.1 - from.1).abs() as i64);
+    let (sx, sz) = ((to.0 - from.0).signum(), (to.1 - from.1).signum());
+    let mut out = Vec::with_capacity((dx + dz + 1) as usize);
+    let (mut x, mut z) = from;
+    out.push((x, z));
+    let (mut ix, mut iz) = (0i64, 0i64);
+    while ix < dx || iz < dz {
+        // Step along the axis whose next block boundary the line crosses
+        // first.
+        if iz >= dz || (ix < dx && (1 + 2 * ix) * dz < (1 + 2 * iz) * dx) {
+            x += sx;
+            ix += 1;
+        } else {
+            z += sz;
+            iz += 1;
+        }
+        out.push((x, z));
+    }
+    out
+}
+
+/// Whether the selection takes any column of `rect`.
+pub fn touches_selection(sel: &massif_core::selection::Selection, rect: massif_core::coords::BlockRect) -> bool {
+    let Some(bounds) = sel.bounds() else { return false };
+    let r = rect.intersect(&bounds);
+    r.width() > 0 && r.depth() > 0 && sel.weights(r).is_some_and(|w| w.iter().any(|&v| v > 0))
 }
 
 /// Begin a stroke at block position `at`. Returns `None` when the tool
@@ -1355,6 +1404,9 @@ pub fn begin_stroke(doc: &mut Document, tools: &ToolState, at: (f32, f32), inver
         back,
         step,
         label,
+        reached: (doc.selection().is_some() && tool != Tool::SelectBrush).then_some(false),
+        note: None,
+        drawn: false,
     };
     if tool == Tool::Gradient {
         // The map keeps the gradients it is painted with.
@@ -1442,6 +1494,23 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
         Some((parts, _)) => (parts.clone(), Vec::new()),
         None => (Vec::new(), Vec::new()),
     };
+    // Painted all outside the selection, the stroke does nothing: said once.
+    if stroke.reached == Some(false)
+        && let Some(sel) = doc.selection()
+    {
+        let r = brush.radius.ceil() as i32 + 1;
+        let reached = (1..=n).any(|k| {
+            let t = k as f32 / n as f32;
+            let (x, z) = ((stroke.last.0 + dx * t).floor() as i32, (stroke.last.1 + dz * t).floor() as i32);
+            touches_selection(sel, massif_core::coords::BlockRect::new(x - r, z - r, x + r + 1, z + r + 1))
+        });
+        if reached {
+            stroke.reached = Some(true);
+        } else {
+            stroke.reached = None;
+            stroke.note = Some(crate::i18n::tr_name(OUTSIDE_SELECTION).to_owned());
+        }
+    }
     let mut dabs = Vec::new();
     // Locked layers keep their blocks.
     doc.history.locks = massif_core::registry::Locks::of(&doc.world.registry);
@@ -1618,6 +1687,17 @@ pub struct SculptStroke {
     /// stroke of the map's brushes keeps its own, a click none).
     step: u64,
     label: String,
+}
+
+impl SculptStroke {
+    /// What a stroke of the map's brushes has to say (see
+    /// [`Stroke::take_note`]).
+    pub fn take_note(&mut self) -> Option<String> {
+        match &mut self.what {
+            Stroke3d::Map(map) => map.take_note(),
+            _ => None,
+        }
+    }
 }
 
 enum Stroke3d {

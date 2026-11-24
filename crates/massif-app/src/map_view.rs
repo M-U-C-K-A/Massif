@@ -1513,6 +1513,9 @@ impl MapView {
                     // read again.
                     let mut stroke = stroke.with_classes(self.auto_classes.take().filter(|(k, _)| k.1 == doc.generation && k.2 == doc.dim && k.3 == doc.revision).map(|(_, c)| c));
                     tools::continue_stroke(doc, tools, &mut stroke, (x as f32, z as f32), 1.0 / 60.0);
+                    if let Some(note) = stroke.take_note() {
+                        *feedback = Some(note);
+                    }
                     self.stroke = Some(stroke);
                 }
             }

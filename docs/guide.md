@@ -753,7 +753,9 @@ every brush (sculpting, painting, covers, objects, water, levels, the 3D tools
 used on the map), the Flood fill (it stops at the selection's edge), **Auto
 biome** and **Auto paint** over the whole map, noise painting over the whole
 map, and **Edit ▸ Whole map** (erosion, rivers, terraces…). Nothing changes
-outside it; a stroke wholly outside does nothing at all.
+outside it; a stroke wholly outside does nothing at all, and a short word at
+the foot of the window says so once a stroke, with how to act everywhere
+again (Esc with a Select tool, or Edit ▸ Deselect).
 
 **Feathering.** A selection weighs every column from fully in to fully out.
 **Feather** in Tool Settings fades new shapes over that many blocks on either

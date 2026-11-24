@@ -136,7 +136,7 @@ The options under the brush settings limit where a brush acts, as in WorldPainte
 
 # Selections
 ## Selecting an area
-The **Select** tools mark the part of the map the other tools change: once something is selected, every brush, a fill, the 3D tools on the map, **Auto biome**, **Auto paint**, noise painting and **Edit ▸ Whole map** act only inside it, and fade along its edge where it is feathered. A dashed outline, its dashes marching (still with **Reduce motion**), shows it on the map.
+The **Select** tools mark the part of the map the other tools change: once something is selected, every brush, a fill, the 3D tools on the map, **Auto biome**, **Auto paint**, noise painting and **Edit ▸ Whole map** act only inside it, and fade along its edge where it is feathered. A stroke all outside it does nothing, and a word at the foot of the window says so, once a stroke. A dashed outline, its dashes marching (still with **Reduce motion**), shows it on the map.
 - **Rectangle** and **Ellipse**: drag across the map. **Lasso**: draw around an area; let go and it closes. **Selection brush**: paint it with the brush (right button: take it out); its soft edge feathers it.
 - Shift or ⌘ (Ctrl) adds to the selection, Alt or the right button takes out of it, both together keep only what both hold; the **New · Add · Subtract · Intersect** buttons set what a shape does with no key held. A right-click, **Esc** or **Clear** beside the modes clears the selection (a left click without dragging too, in the New mode).
 - **Feather** fades new shapes over that many blocks on either side of their edge (up to 64); **Feather it** softens the selection there is.
