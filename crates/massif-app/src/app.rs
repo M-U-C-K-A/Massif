@@ -2664,7 +2664,7 @@ impl MassifApp {
             return;
         }
         let snapshot = self.doc.world.snapshot();
-        self.jobs.push(Job::read_mask(ctx, images, Some(snapshot)).on(self.doc.generation));
+        self.jobs.push(Job::read_mask(ctx, images, Some(snapshot), self.doc.dim).on(self.doc.generation));
     }
 
     /// What the review of a contribution asks.
@@ -18704,7 +18704,7 @@ mod tests {
         {
             let app = h.state_mut();
             let snapshot = app.doc.world.snapshot();
-            app.jobs.push(Job::read_mask(&ctx, files.clone(), Some(snapshot)).on(app.doc.generation));
+            app.jobs.push(Job::read_mask(&ctx, files.clone(), Some(snapshot), app.doc.dim).on(app.doc.generation));
         }
         wait(&mut h);
         let Some(Dialog::ImportMask(form)) = &mut h.state_mut().dialog else {
