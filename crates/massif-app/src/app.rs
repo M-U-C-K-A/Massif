@@ -13047,7 +13047,7 @@ mod tests {
         let rock = grid.0.iter().filter(|s| s.flags & crate::map_render::FLAG_CUT_ROCK != 0).count();
         assert!(caves > 200 && rock > caves, "{caves} columns of caves, {rock} of rock at y 0");
         // The X-ray: floors and ceilings of caves under the ground.
-        let style = crate::view3d::Style { mode: crate::map_render::MapMode::Terrain, water: true, lava: false, caves: massif_core::compose::Caves::All, xray: true };
+        let style = crate::view3d::Style { mode: crate::map_render::MapMode::Terrain, water: true, lava: false, notes: None, caves: massif_core::compose::Caves::All, xray: true };
         let built = crate::view3d::build_tile(dim, &h.state().doc.world.registry, 63.0, 0, pos, style);
         assert!(built.faces.xray.len() > 500, "{} x-ray faces", built.faces.xray.len());
         let Some(dir) = dir else { return };

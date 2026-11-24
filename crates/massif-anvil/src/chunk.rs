@@ -1121,7 +1121,7 @@ pub fn build_chunk(
     caves: &CaveWork,
     scratch: &mut Scratch,
 ) -> Vec<u8> {
-    fill_chunk(ctx, stack, tile, cx, cz, objects, steady, smooth, scratch, true)
+    fill_chunk(ctx, stack, tile, cx, cz, objects, steady, smooth, caves, scratch, true)
 }
 
 /// The blocks of the chunk at `(cx, cz)` within the tile, as
@@ -1139,9 +1139,10 @@ pub fn chunk_blocks<'s>(
     objects: &[Placement],
     steady: &[massif_core::water::Steady],
     smooth: &[massif_core::shapes::Column],
+    caves: &CaveWork,
     scratch: &'s mut Scratch,
 ) -> &'s [u16] {
-    fill_chunk(ctx, stack, tile, cx, cz, objects, steady, smooth, scratch, false);
+    fill_chunk(ctx, stack, tile, cx, cz, objects, steady, smooth, caves, scratch, false);
     &scratch.blocks[..scratch.dirty]
 }
 
@@ -1155,6 +1156,7 @@ fn fill_chunk(
     objects: &[Placement],
     steady: &[massif_core::water::Steady],
     smooth: &[massif_core::shapes::Column],
+    caves: &CaveWork,
     scratch: &mut Scratch,
     nbt: bool,
 ) -> Vec<u8> {

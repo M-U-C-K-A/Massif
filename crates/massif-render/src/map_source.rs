@@ -155,11 +155,12 @@ impl MapBuilder {
                                     // first image comes sooner, and seams barely differ).
                                     let steady = if planner.as_ref().is_some_and(|p| p.needs(pos)) { massif_core::water::steady_tile(d, pos, planner.as_ref()) } else { Vec::new() };
                                     let slabs = massif_core::shapes::plan_tile(d, &world.meta.smooth, pos);
+                                    let caves = massif_anvil::chunk::CaveWork::of(&world, d, pos, false);
                                     let mut patch = Patch::new(pos.x * TILE_CHUNKS, pos.z * TILE_CHUNKS, TILE_CHUNKS as usize, TILE_CHUNKS as usize, sections);
                                     patch.edges = edges(d, pos, ctx.min_y, sections, world.meta.lava);
                                     for cz in 0..TILE_CHUNKS as usize {
                                         for cx in 0..TILE_CHUNKS as usize {
-                                            let nbt = build_chunk(&ctx, &stack, pos, cx, cz, &objects, &steady, &slabs, scratch);
+                                            let nbt = build_chunk(&ctx, &stack, pos, cx, cz, &objects, &steady, &slabs, &caves, scratch);
                                             if let Some(c) = chunk::decode(&nbt, &materials, lookup, ctx.min_y, sections) {
                                                 patch.put(c);
                                             }

@@ -453,6 +453,12 @@ impl Mig<'_> {
             }
             K::HeightOutput => self.input(n, 0, OUT, "height"),
             K::WaterOutput => self.input(n, 0, OUT, "water"),
+            K::NoisePaint { .. } => {
+                // 1.1's paint by a noise: a terrain node of the new
+                // generator will take it (milestone T5); meanwhile the map's
+                // terrains stay where it painted.
+                self.warn(n, "the noise paint of 1.1 is not migrated yet: the map keeps its terrains there");
+            }
             K::TerrainOutput { .. } => {
                 if let Some((node, slot)) = self.terrain_slots.get(&n.id).cloned() {
                     self.input(n, 0, &node, &format!("mask_{slot}"));

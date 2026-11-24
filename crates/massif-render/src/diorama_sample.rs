@@ -99,6 +99,8 @@ pub fn village() -> massif_core::World {
     for pos in positions {
         let (ox, oz) = pos.origin();
         let tile = world.dims[0].ground_mut().tile_mut(pos).unwrap();
+        // Caves under it all (layer 1, below).
+        tile.caves = massif_core::plane::Plane::Uniform(1);
         for i in 0..TILE_AREA {
             let (x, z) = (ox + (i % 128) as i32, oz + (i / 128) as i32);
             let top = tile.top.get(i);
@@ -129,15 +131,9 @@ pub fn village() -> massif_core::World {
             }
         }
     }
-    // Caves under it all, with lakes of water in the caverns.
+    // Caves under it all, as the game carves them, with its aquifers.
     let dim = &mut world.dims[0];
-    let mut caves = massif_core::caves::CaveSettings::for_dimension(dim, sea as i32);
-    caves.density = 0.8;
-    caves.lake = Some(massif_core::voxel::Fluid::Water);
-    let carved = massif_core::caves::carve(dim, &caves, &massif_core::auto::Steps::default());
-    for (pos, chunk) in carved.chunks {
-        dim.voxels.insert(pos, chunk);
-    }
+    dim.caves = massif_core::caves::CaveLayers::new(vec![massif_core::caves::CaveDef::vanilla("Caves", 11, dim.min_y, dim.max_y, sea as i32)]);
     dim.ground_mut().take_dirty();
     dim.voxels.take_dirty();
     world

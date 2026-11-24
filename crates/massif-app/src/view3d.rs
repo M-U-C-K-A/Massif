@@ -7011,7 +7011,7 @@ mod tests {
         t.bottom = Some(massif_core::Plane::Uniform(150.0));
         t.terrain = massif_core::Plane::Uniform(1);
         w.dims[0].levels[slab].insert(tile, t);
-        let style = Style { mode: MapMode::Terrain, water: true, lava: false, notes: None };
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false, notes: None, caves: massif_core::compose::Caves::Openings, xray: false };
         let dim = &w.dims[0];
         for stride in [2, 4] {
             let cell = grid_tile(tile, stride);

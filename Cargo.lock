@@ -2180,6 +2180,7 @@ dependencies = [
  "massif-render",
  "massif-script",
  "massif-structures",
+ "massif-terrain",
  "massif-thumbnails",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
@@ -2221,7 +2222,9 @@ dependencies = [
  "massif-legacy",
  "massif-script",
  "massif-structures",
+ "massif-terrain",
  "rayon",
+ "serde_json",
 ]
 
 [[package]]
@@ -2320,7 +2323,7 @@ dependencies = [
 
 [[package]]
 name = "massif-structures"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "fastnbt",
  "flate2",
@@ -2331,6 +2334,23 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "massif-terrain"
+version = "1.1.0"
+dependencies = [
+ "bytemuck",
+ "image",
+ "log",
+ "massif-core",
+ "png",
+ "pollster",
+ "rayon",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "wgpu",
 ]
 
 [[package]]

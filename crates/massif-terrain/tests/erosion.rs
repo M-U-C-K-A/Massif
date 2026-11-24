@@ -135,7 +135,8 @@ fn node_renders() {
     let only = std::env::var("MASSIF_EROSION_ONLY").unwrap_or_default();
     // Name, shape, seed, the chain from `shape` to `er` (more nodes), the
     // node shown before, masks of `er`.
-    let cases: &[(&str, &str, u32, &str, &str, &[&str])] = &[
+    type Case<'a> = (&'a str, &'a str, u32, &'a str, &'a str, &'a [&'a str]);
+    let cases: &[Case] = &[
         ("stream-alpine", ALPINE, 13, r#""er": { "type": "erosion.stream", "inputs": { "height": "shape" } }"#, "shape", &["flow", "wear", "deposition"]),
         ("stream-range", RANGE, 11, r#""er": { "type": "erosion.stream", "inputs": { "height": "shape" } }"#, "shape", &["flow", "wear", "deposition"]),
         ("stream-sea", SEA, 18, r#""er": { "type": "erosion.stream", "inputs": { "height": "shape" } }"#, "shape", &["flow", "wear", "deposition"]),

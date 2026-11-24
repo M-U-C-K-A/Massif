@@ -414,10 +414,11 @@ impl Builder {
                                     scratch.lay_ores(&ctx, &stack, pos);
                                     let steady = if planner.as_ref().is_some_and(|p| p.needs(pos)) { massif_core::water::steady_tile(d, pos, planner.as_ref()) } else { Vec::new() };
                                     let slabs = massif_core::shapes::plan_tile(d, &world.meta.smooth, pos);
+                                    let caves = massif_anvil::chunk::CaveWork::of(&world, d, pos, false);
                                     let mut per_cell: Vec<Vec<Floor>> = vec![Vec::new(); AREA];
                                     for cz in 0..TILE_CHUNKS {
                                         for cx in 0..TILE_CHUNKS {
-                                            let blocks = chunk_blocks(&ctx, &stack, pos, cx, cz, &objects, &steady, &slabs, scratch);
+                                            let blocks = chunk_blocks(&ctx, &stack, pos, cx, cz, &objects, &steady, &slabs, &caves, scratch);
                                             chunk_floors(&ctx, &mats, seen, blocks, columns);
                                             for (column, list) in columns.iter_mut().enumerate() {
                                                 let (lx, lz) = (column & 15, column >> 4);
