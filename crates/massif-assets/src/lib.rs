@@ -57,12 +57,26 @@ fn app_data_dirs() -> Vec<PathBuf> {
 /// Folders where launchers keep their game versions.
 fn version_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
-    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from);
-    if let Some(home) = &home {
+    // Both: on Windows, a tool may set HOME to a folder of its own while the
+    // launchers keep to the user's profile.
+    let homes: Vec<PathBuf> = ["HOME", "USERPROFILE"].iter().filter_map(std::env::var_os).map(PathBuf::from).collect();
+    for home in &homes {
         dirs.push(home.join("Library/Application Support/minecraft/versions"));
         dirs.push(home.join(".minecraft/versions"));
         dirs.push(home.join("Documents/curseforge/minecraft/Install/versions"));
         dirs.push(home.join("curseforge/minecraft/Install/versions"));
+    }
+    // Windows: CurseForge and others installed on another drive.
+    if cfg!(windows) {
+        for letter in b'C'..=b'Z' {
+            let drive = PathBuf::from(format!("{}:\\", letter as char));
+            if !drive.is_dir() {
+                continue;
+            }
+            for sub in ["curseforge/minecraft/Install/versions", "CurseForge/minecraft/Install/versions", "Games/CurseForge/minecraft/Install/versions", "minecraft/Install/versions", "Minecraft/versions"] {
+                dirs.push(drive.join(sub));
+            }
+        }
     }
     // The Modrinth App keeps the game's versions as the official launcher
     // does, under its own folder.
@@ -82,6 +96,30 @@ fn version_dirs() -> Vec<PathBuf> {
         }
     }
     dirs
+}
+
+/// The client jars of the game installed beside a mod's jar `path`: the
+/// launcher's versions found walking up from it (CurseForge keeps its
+/// instances' mods under `minecraft/Instances/<name>/mods` and the game
+/// under `minecraft/Install/versions`, on whatever drive it is), newest
+/// first.
+pub fn jars_near(path: &Path) -> Vec<Jar> {
+    let mut jars = Vec::new();
+    for dir in path.ancestors().skip(1).take(6) {
+        for sub in ["Install/versions", "versions", ".minecraft/versions"] {
+            let Ok(read) = std::fs::read_dir(dir.join(sub)) else { continue };
+            for entry in read.flatten() {
+                let version = entry.file_name().to_string_lossy().into_owned();
+                let jar = entry.path().join(format!("{version}.jar"));
+                if release_numbers(&version).is_some() && jar.is_file() {
+                    jars.push(Jar { version, path: jar });
+                }
+            }
+        }
+    }
+    jars.sort_by_key(|j| std::cmp::Reverse(release_numbers(&j.version)));
+    jars.dedup_by(|a, b| a.version == b.version);
+    jars
 }
 
 /// Client jars of released versions, newest first. Prism and MultiMC keep
@@ -1733,6 +1771,26 @@ pub fn flat_icon(cat: &Catalogue, block: &Block, size: usize) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    /// A mod chosen in a CurseForge instance on any drive: the game it
+    /// plays on is found beside it, under the launcher's Install/versions,
+    /// newest first; snapshots and other folders are left.
+    #[test]
+    fn the_game_is_found_beside_a_mods_jar() {
+        let root = std::env::temp_dir().join(format!("massif-jars-near-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let mc = root.join("curseforge/minecraft");
+        for v in ["1.20.1", "1.21.1", "24w14a"] {
+            std::fs::create_dir_all(mc.join("Install/versions").join(v)).unwrap();
+            std::fs::write(mc.join("Install/versions").join(v).join(format!("{v}.jar")), b"").unwrap();
+        }
+        let mods = mc.join("Instances/Conquest/mods");
+        std::fs::create_dir_all(&mods).unwrap();
+        let found: Vec<String> = super::jars_near(&mods.join("conquest.jar")).into_iter().map(|j| j.version).collect();
+        assert_eq!(found, ["1.21.1", "1.20.1"]);
+        assert!(super::jars_near(&root.join("elsewhere/mod.jar")).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     use super::*;
 
     /// Mods' names from their jars' file names, as modpacks of every era

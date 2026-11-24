@@ -102,7 +102,12 @@ impl BlockLibrary {
         let (tx, rx) = channel();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let jars = massif_assets::find_jars();
+            let mut jars = massif_assets::find_jars();
+            // None where launchers keep the game: the one beside the mods
+            // chosen (a CurseForge instance on another drive).
+            if jars.is_empty() {
+                jars = mods.iter().flat_map(|m| massif_assets::jars_near(m)).collect();
+            }
             let chosen = jar
                 .filter(|p| p.is_file())
                 .map(|p| {
