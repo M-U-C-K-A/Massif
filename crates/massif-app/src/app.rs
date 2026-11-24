@@ -6700,6 +6700,122 @@ mod tests {
         footer.save(dir.join("brush-footer.png")).unwrap();
     }
 
+    /// The pointer over the 2D map with a brush: the crosshair of Settings
+    /// ▸ Appearance in place of the system's thin black one (lost on dark
+    /// land), white in a dark edge, over land and over water, in high
+    /// contrast too; with None, the system's crosshair. Crops of each saved
+    /// to MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn the_pointer_shows_on_the_map_in_every_crosshair() {
+        use crate::reticle::{Reticle, Shape};
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        for high in [false, true] {
+            let mut h = harness(ThemeChoice::Dark);
+            h.state_mut().settings.high_contrast = if high { crate::access::Follow::On } else { crate::access::Follow::Off };
+            h.state_mut().tools.select(Tool::Raise);
+            h.state_mut().tools.brush.radius = 30.0;
+            h.run_steps(5);
+            let id = h.state().active_map.or_else(|| h.state().maps.keys().next().copied()).expect("a map view");
+            // A column of land and one of water, near the middle.
+            let (land, water) = {
+                let doc = &h.state().doc;
+                let (mut land, mut water) = (None, None);
+                for x in (-400..400).step_by(7) {
+                    if let Some(p) = crate::tools::probe(doc, x, x / 3) {
+                        if p.fluid == massif_core::NO_FLUID { land.get_or_insert((x, x / 3)) } else { water.get_or_insert((x, x / 3)) };
+                    }
+                }
+                (land.expect("land"), water.expect("water"))
+            };
+            let ppp = h.ctx.pixels_per_point();
+            for (ground, (x, z)) in [("land", land), ("water", water)] {
+                {
+                    let view = h.state_mut().maps.get_mut(&id).unwrap();
+                    view.center = [x as f64, z as f64];
+                    view.zoom = 1.0;
+                }
+                h.run_steps(5);
+                for shape in Shape::ALL {
+                    crate::reticle::set(&h.ctx, Reticle { shape, ..Default::default() });
+                    let p = h.state().maps[&id].screen_of(x as f64 + 0.5, z as f64 + 0.5);
+                    h.event(egui::Event::PointerMoved(p));
+                    h.run_steps(3);
+                    let icon = h.output().platform_output.cursor_icon;
+                    if shape == Shape::None {
+                        assert_eq!(icon, egui::CursorIcon::Crosshair, "{shape:?}");
+                    } else {
+                        assert_eq!(icon, egui::CursorIcon::None, "{shape:?}: the crosshair drawn stands for the system's");
+                    }
+                    let image = h.render().expect("rendered");
+                    let half = (24.0 * ppp) as u32;
+                    let (cx, cy) = ((p.x * ppp) as u32, (p.y * ppp) as u32);
+                    let crop = image::imageops::crop_imm(&image, cx - half, cy - half, 2 * half, 2 * half).to_image();
+                    // White ink and a dark edge under the pointer, whatever
+                    // the ground.
+                    let near = image::imageops::crop_imm(&image, cx - (8.0 * ppp) as u32, cy - (8.0 * ppp) as u32, (16.0 * ppp) as u32, (16.0 * ppp) as u32).to_image();
+                    let luma = |p: &image::Rgba<u8>| 0.3 * p[0] as f32 + 0.59 * p[1] as f32 + 0.11 * p[2] as f32;
+                    assert!(near.pixels().any(|p| luma(p) > 225.0), "{shape:?} over {ground}: no white ink under the pointer");
+                    assert!(near.pixels().any(|p| luma(p) < 50.0), "{shape:?} over {ground}: no dark edge under the pointer");
+                    if let Some(dir) = &dir {
+                        let contrast = if high { "-high" } else { "" };
+                        crop.save(dir.join(format!("map-pointer-{}-{ground}{contrast}.png", format!("{shape:?}").to_lowercase()))).unwrap();
+                    }
+                }
+            }
+            crate::reticle::set(&h.ctx, Reticle::default());
+        }
+    }
+
+    /// Zoomed out on the map, around the zooms where a part of it showed
+    /// black (a chunk drawn with holes, the map's shadow under them), the
+    /// grids kept few as on a large map: once drawn, no texel of the map
+    /// is black. Renders of each zoom to MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn the_map_zoomed_out_has_no_black_tiles() {
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let mut h = harness(ThemeChoice::Dark);
+        h.state_mut().map_cache.max_grids = 18;
+        h.state_mut().tools.select(Tool::Raise);
+        h.run_steps(5);
+        let id = h.state().active_map.or_else(|| h.state().maps.keys().next().copied()).expect("a map view");
+        let ppp = h.ctx.pixels_per_point();
+        for zoom in [0.12f32, 0.18, 0.23, 0.27, 0.35, 0.6] {
+            {
+                let view = h.state_mut().maps.get_mut(&id).unwrap();
+                view.center = [37.0, -71.0];
+                view.zoom = zoom;
+            }
+            h.run_steps(2);
+            for _ in 0..400 {
+                h.step();
+                if !h.state().map_cache.busy() {
+                    break;
+                }
+            }
+            h.run_steps(3);
+            let image = h.render().expect("rendered");
+            let view = &h.state().maps[&id];
+            let (lo, hi) = h.state().doc.dimension().bounds().unwrap();
+            let t = massif_core::TILE_SIZE as f64;
+            let map = Rect::from_min_max(view.screen_of(lo.x as f64 * t, lo.z as f64 * t), view.screen_of((hi.x + 1) as f64 * t, (hi.z + 1) as f64 * t));
+            // Inside the map, clear of its edge, the scale and the footer.
+            let inside = map.shrink(2.0).intersect(view.canvas().shrink(40.0));
+            let mut black = 0;
+            for y in (inside.top() * ppp) as u32..(inside.bottom() * ppp) as u32 {
+                for x in (inside.left() * ppp) as u32..(inside.right() * ppp) as u32 {
+                    let p = image.get_pixel(x, y);
+                    if p[0] < 24 && p[1] < 24 && p[2] < 24 {
+                        black += 1;
+                    }
+                }
+            }
+            if let Some(dir) = &dir {
+                image.save(dir.join(format!("map-zoomed-out-{:02}.png", (zoom * 100.0).round() as u32))).unwrap();
+            }
+            assert_eq!(black, 0, "zoom {zoom}: black pixels on the map");
+        }
+    }
+
     /// A backup left by a run that crashed: offered at the start, restored
     /// as the map it was (its name, its file, changes to save), then
     /// removed once the map is saved (a render of the dialog with

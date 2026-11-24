@@ -1,0 +1,3 @@
+**The 2D map no longer shows black squares zoomed out, and shows the pointer**
+
+Zoomed out on a large map, a square or two of the map could stay black until you zoomed in: a part of the map drawn while the tiles it needed were being dropped from memory was drawn with holes, and kept so. It is now always drawn whole, and a part not drawn yet shows the plain background rather than black. The pointer over the 2D map is now the crosshair you chose in Settings ▸ Appearance (dot, cross, circle or Minecraft's plus), white in a dark edge that reads on dark forest as on light sand, stronger in high contrast, in place of the system's thin black crosshair that was lost on dark land; with None, the system's crosshair stays.

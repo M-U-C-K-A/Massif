@@ -1,5 +1,6 @@
-//! The crosshair at the middle of the player's view (Settings ▸
-//! Appearance ▸ Crosshair): its shape, size and opacity, and how it is
+//! The crosshair at the middle of the player's view and under the pointer
+//! on the map (Settings ▸ Appearance ▸ Crosshair): its shape, size and
+//! opacity, and how it is
 //! drawn, white in a soft dark outline so that it reads on snow as on deep
 //! water.
 
@@ -87,7 +88,9 @@ pub fn paint(painter: &Painter, c: Pos2, reticle: &Reticle) {
     let c = Pos2::new((c.x * ppp).round() / ppp, (c.y * ppp).round() / ppp);
     let r = (reticle.size * 0.5).clamp(*SIZES.start() * 0.5, *SIZES.end() * 0.5);
     let ink = Color32::from_white_alpha((255.0 * a) as u8);
-    let shade = |k: f32| Color32::from_black_alpha((255.0 * a * k) as u8);
+    // In high contrast, a dark edge twice as strong.
+    let strong = if crate::theme::high_contrast(painter.ctx()) { 2.0 } else { 1.0 };
+    let shade = |k: f32| Color32::from_black_alpha((255.0 * a * (k * strong).min(1.0)) as u8);
     // The width of the white strokes: thin, a little thicker as it grows.
     let w = (1.0 + r / 12.0).min(2.0);
     match reticle.shape {

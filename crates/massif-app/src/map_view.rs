@@ -1473,6 +1473,10 @@ impl MapView {
                 color: Color32::from_black_alpha(if pal.dark { 170 } else { 70 }),
             };
             painter.add(shadow.as_shape(under, 3));
+            // The shadow fills its rectangle: covered with the canvas, a
+            // part of the map not drawn yet (or no tile) shows as nothing
+            // rather than as a black hole.
+            painter.rect_filled(under, 0, pal.canvas);
         }
 
         let style = MapStyle {
@@ -1547,20 +1551,33 @@ impl MapView {
                     painter.image(tex.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
                     continue;
                 }
-                // Fall back on a coarser chunk while this one is built.
+                // Fall back on a coarser chunk while this one is built, as
+                // coarse as need be, then on the four finer ones (zooming
+                // out, they are there), then on nothing.
                 let mut parent = *key;
-                for up in 1..=4u8 {
-                    if parent.lod >= MAX_LOD {
-                        break;
-                    }
+                let mut shown = false;
+                let mut up = 0u8;
+                while parent.lod < MAX_LOD {
                     parent = parent.parent();
+                    up += 1;
                     if let Some(tex) = cache.texture(style, parent) {
-                        let n = (1i32 << up) as f32;
-                        let u = (key.x - (parent.x << up)) as f32 / n;
-                        let v = (key.z - (parent.z << up)) as f32 / n;
+                        let n = (1i64 << up) as f32;
+                        let u = (key.x as i64 - ((parent.x as i64) << up)) as f32 / n;
+                        let v = (key.z as i64 - ((parent.z as i64) << up)) as f32 / n;
                         let uv = Rect::from_min_size(pos2(u, v), vec2(1.0 / n, 1.0 / n));
                         painter.image(tex.id(), rect, uv, Color32::WHITE);
+                        shown = true;
                         break;
+                    }
+                }
+                if !shown && key.lod > 0 {
+                    for (dx, dz) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                        let child = ChunkKey { lod: key.lod - 1, x: key.x * 2 + dx, z: key.z * 2 + dz };
+                        if let Some(tex) = cache.texture(style, child) {
+                            let half = rect.size() * 0.5;
+                            let r = Rect::from_min_size(rect.min + vec2(dx as f32 * half.x, dz as f32 * half.y), half);
+                            painter.image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                        }
                     }
                 }
             }
@@ -1838,10 +1855,9 @@ impl MapView {
                         lp.add(egui::Shape::closed_line(ring.clone(), line));
                     }
                 }
-                painter.circle_filled(p, 1.5, Color32::WHITE);
-                ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+                pointer_mark(ui.ctx(), &painter, p);
             } else if (tools.tool != Tool::River || tools.river_draft.is_none()) && (tools.tool != Tool::Road || tools.road_draft.is_none()) {
-                ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+                pointer_mark(ui.ctx(), &painter, p);
             }
         }
 
@@ -2074,6 +2090,22 @@ impl MapView {
 /// Whether the wheel turns the brush: with ⌘ on a Mac (the Windows key of a
 /// PC keyboard), with Ctrl + Shift elsewhere, where the Windows key does not
 /// reach applications.
+/// The pointer over the map: the crosshair of Settings ▸ Appearance in
+/// place of the system's (a thin black cross, lost on dark land), white in
+/// a dark outline so that it reads on snow as on deep water. With None
+/// chosen, the system's crosshair and a white dot in a dark ring.
+fn pointer_mark(ctx: &egui::Context, painter: &egui::Painter, p: Pos2) {
+    let reticle = crate::reticle::get(ctx);
+    if reticle.shape == crate::reticle::Shape::None || reticle.opacity <= 0.0 {
+        painter.circle_filled(p, 2.6, Color32::from_black_alpha(140));
+        painter.circle_filled(p, 1.5, Color32::WHITE);
+        ctx.set_cursor_icon(CursorIcon::Crosshair);
+    } else {
+        crate::reticle::paint(painter, p, &reticle);
+        ctx.set_cursor_icon(CursorIcon::None);
+    }
+}
+
 fn turns_brush(m: egui::Modifiers) -> bool {
     m.mac_cmd || (!cfg!(target_os = "macos") && m.ctrl && m.shift)
 }

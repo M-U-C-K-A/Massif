@@ -1422,7 +1422,28 @@ impl MapCache {
                         (needed, fresh)
                     }
                 };
+                // The tiles it needs that are read already count as used
+                // now: while its other tiles are read, over several batches,
+                // trimming the grids after each must not drop them, or the
+                // chunk would be drawn with holes (black, the map's shadow
+                // under them) and kept so.
+                for t in needed.iter() {
+                    if fine {
+                        if let Some(e) = self.grids.get_mut(t) {
+                            e.used = clock;
+                        }
+                    } else if let Some(e) = self.summaries.get_mut(t) {
+                        e.used = clock;
+                    }
+                }
                 let reads = if fine { &mut fine_reads } else { &mut coarse_reads };
+                // And should one be missing all the same, it is read again.
+                if fresh.is_empty() {
+                    fresh.extend(needed.iter().copied().filter(|t| {
+                        let cached = if fine { self.grids.contains_key(t) } else { self.summaries.get(t).is_some_and(|e| e.holds(size)) };
+                        !cached && reads.get(t).is_none_or(|&s| s < size)
+                    }));
+                }
                 fresh.retain(|t| reads.get(t).is_none_or(|&s| s < size));
                 // A grid takes about twice the time of a summary.
                 let cost = if fine { 2 } else { 1 };
@@ -1502,17 +1523,20 @@ impl MapCache {
                     }
                 }
             }
-            self.trim_grids();
+            self.trim_grids(clock);
         }
         self.trim_chunks();
         false
     }
 
-    fn trim_grids(&mut self) {
+    /// Drop the grids least lately used while there are more than
+    /// `max_grids`, never those used in the batch of `clock`: the chunk
+    /// being read needs them all, even past the limit.
+    fn trim_grids(&mut self, clock: u64) {
         if self.grids.len() <= self.max_grids {
             return;
         }
-        let mut by_age: Vec<(u64, TilePos)> = self.grids.iter().map(|(t, e)| (e.used, *t)).collect();
+        let mut by_age: Vec<(u64, TilePos)> = self.grids.iter().filter(|(_, e)| e.used < clock).map(|(t, e)| (e.used, *t)).collect();
         by_age.sort_unstable();
         for (_, t) in by_age.iter().take(self.grids.len() - self.max_grids) {
             self.grids.remove(t);
@@ -2151,5 +2175,51 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A chunk whose tiles are read over several batches while the grids
+    /// kept are few: the grids it found read already used to be dropped
+    /// between two batches, and the chunk drawn with holes there, black
+    /// on the map (seen zoomed out on a 4096 × 4096 map) and kept so. It
+    /// is now drawn whole, as without any cache.
+    #[test]
+    fn a_chunk_read_in_several_batches_has_no_holes() {
+        let w = generate(&GenParams { tiles_x: 8, tiles_z: 8, landform: Landform::Islands, seed: 5, ..GenParams::default() });
+        let dim = &w.dims[0];
+        let (lo, hi) = dim.bounds().unwrap();
+        let middle = TilePos::new((lo.x + hi.x) / 2, (lo.z + hi.z) / 2);
+        let (fine, coarse) = (ChunkKey::of_tile(middle, 1), ChunkKey::of_tile(middle, 2));
+        let style = MapStyle::default();
+        // One thread: four grids a batch.
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+        let ctx = egui::Context::default();
+        let mut cache = MapCache { max_grids: 18, ..MapCache::default() };
+        cache.sync_generation(1);
+        let mut images: HashMap<egui::TextureId, Arc<ColorImage>> = HashMap::new();
+        pool.install(|| {
+            // First the tiles around the middle; then, in one update, a
+            // chunk all of whose tiles are read (drawn in the first batch,
+            // after which the grids are trimmed) and one that needs more.
+            for wanted in [vec![fine], vec![ChunkKey::of_tile(middle, 0), coarse]] {
+                let mut out = ctx.run_pass(egui::RawInput::default(), |ctx| {
+                    while cache.update(ctx, dim, &w.registry, 63.0, style, &wanted, Duration::from_secs(30)) {}
+                });
+                for (id, deltas) in &out.textures_delta.set {
+                    for delta in deltas {
+                        let egui::ImageData::Color(image) = &delta.image;
+                        images.insert(*id, image.clone());
+                    }
+                }
+                out.textures_delta.clear();
+            }
+        });
+        assert!(cache.is_ready(style, coarse));
+        let id = cache.texture(style, coarse).unwrap().id();
+        let (x0, z0) = coarse.origin();
+        let whole = render_region(dim, &w.registry, 63.0, style, 2, x0 as i32, z0 as i32, 1, 1);
+        let drawn = &images[&id];
+        let holes = drawn.pixels.iter().zip(&whole.pixels).filter(|(a, b)| a.a() == 0 && b.a() != 0).count();
+        assert_eq!(holes, 0, "texels left empty in the chunk");
+        assert!(drawn.pixels == whole.pixels, "the chunk as drawn without a cache");
     }
 }
