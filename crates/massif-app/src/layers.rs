@@ -298,8 +298,16 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
         })
         .collect();
     if header(ui, Icon::Blend, tr!("Terrain mixes"), tr!("New mix"), tr!("Terrains mixed by a noise: set them up in Tool Settings, then save them")) {
+        // A mix of its own at once, from the noise as it stands: listed,
+        // chosen to paint with, its name ready to change; its terrains and
+        // noise set in Tool Settings.
+        let built_in = crate::tools::PatternPreset::built_in();
+        let name = unique_name(tr!("Mix"), tools.pattern.saved.iter().map(|p| p.name.as_str()).chain(built_in.iter().map(|p| p.name.as_str())));
+        tools.pattern.save(&name);
         tools.pattern.on = true;
         tools.select(Tool::PaintTerrain);
+        let k = tools.pattern.saved.len() - 1;
+        actions.push(Action::Rename(Kind::Mix, k, name));
     }
     if mixes.is_empty() {
         hint(ui, tr!("Mixes saved from Paint terrain ▸ Noise show here."));
@@ -915,6 +923,26 @@ mod tests {
             assert!(badge.right() <= width - 12.0 + 0.5, "{width}: inside the panel, {badge:?}");
             assert!(badge.min.y >= button.max.y - 1.0 || (badge.left() >= button.right() && badge.center().y > button.top() && badge.center().y < button.bottom()), "{width}: beside the button or under it, {badge:?} {button:?}");
         }
+    }
+
+    /// New mix makes a mix at once: listed, chosen to paint with (Paint
+    /// terrain's noise), its name ready to change (Kitt: the button did
+    /// nothing to be seen).
+    #[test]
+    fn new_mix_makes_a_mix() {
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(320.0, 900.0)).build_ui_state(draw, state());
+        h.run_steps(2);
+        let before = h.state().tools.pattern.saved.len();
+        h.get_by_label_contains("New mix").click();
+        h.run_steps(3);
+        let tools = &h.state().tools;
+        assert_eq!(tools.pattern.saved.len(), before + 1);
+        assert!(tools.tool == Tool::PaintTerrain && tools.pattern.on);
+        assert_eq!(tools.pattern.saved.last().map(|p| p.name.as_str()), Some("Mix"));
+        assert!(matches!(&h.state().ui.rename, Some((Kind::Mix, _, name)) if name == "Mix"), "its name ready to change");
+        h.get_by_label_contains("New mix").click();
+        h.run_steps(3);
+        assert_eq!(h.state().tools.pattern.saved.last().map(|p| p.name.as_str()), Some("Mix 2"));
     }
 
     /// Every cover, object layer and saved mix is listed; a click paints
