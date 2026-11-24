@@ -55,7 +55,8 @@ const TAG_SIZES: u8 = 10;
 const TAG_POCKETS: u8 = 11;
 const TAG_SLABS: u8 = 12;
 const TAG_CAVES: u8 = 13;
-const TAG_CAVE_BIOMES: u8 = 14;
+// 14 is the WorldPainter import's plane of several layers (1.1.1).
+const TAG_CAVE_BIOMES: u8 = 15;
 
 /// The tree sizes a column may ask for (see [`Tile::sizes`]): any size,
 /// then bushes, small, medium and large trees.

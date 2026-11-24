@@ -118,7 +118,7 @@ impl CaveBiomes {
         self.layers.len() * (LAYER * 2 + 16)
     }
 
-    /// The layers as the tile's plane of tag 14: their count, then for each
+    /// The layers as the tile's plane of tag 15: their count, then for each
     /// its cell height and its cells in runs of one biome.
     pub fn encode(&self, out: &mut Vec<u8>) {
         codec::put_varu(out, self.layers.len() as u64);
