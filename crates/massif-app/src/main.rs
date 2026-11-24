@@ -47,6 +47,7 @@ mod region_export;
 mod report;
 mod report_view;
 mod render_side;
+mod references;
 mod reshape;
 mod reticle;
 mod run_script;

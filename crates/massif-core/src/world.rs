@@ -45,6 +45,10 @@ pub struct WorldMeta {
     /// The camera path of the Render side's animation, when one was made.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub animation: Option<crate::animation::Animation>,
+    /// Pictures laid over or under the map to trace over: shown only,
+    /// never exported.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<crate::reference::ReferenceImage>,
 }
 
 impl Default for WorldMeta {
@@ -62,6 +66,7 @@ impl Default for WorldMeta {
             palette: Default::default(),
             smooth: Default::default(),
             animation: None,
+            references: Vec::new(),
         }
     }
 }

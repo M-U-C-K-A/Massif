@@ -440,6 +440,8 @@ pub struct MassifApp {
     /// An imported image kept on the 2D map to trace over, and the map
     /// it was for (see `import_mask`).
     guide: Option<(crate::import_mask::Guide, u64)>,
+    /// The reference images' textures and handles on the map.
+    references: crate::references::References,
     /// The place, scale and heights the relief of a real place was last
     /// made with (per run of the app).
     real: Option<crate::real_terrain::Remembered>,
@@ -704,6 +706,24 @@ impl MassifApp {
             app.open_home(Page::NewMap);
         }
         app
+    }
+
+    /// Pick pictures to lay on the map as reference images, in the middle
+    /// of the map shown.
+    fn pick_reference(&mut self) {
+        if let Some(paths) = rfd::FileDialog::new().set_title(tr!("Images to trace over")).add_filter(tr!("Images"), &["png", "jpg", "jpeg"]).pick_files() {
+            self.add_references(&paths, None);
+        }
+    }
+
+    /// Lay the pictures at `paths` on the map, at `at` (blocks) or in the
+    /// middle of the map shown.
+    fn add_references(&mut self, paths: &[PathBuf], at: Option<(f64, f64)>) {
+        let (x, z) = at.or(self.map_center.map(|c| (c[0], c[1]))).or_else(|| self.maps.values().next().map(|v| (v.center[0], v.center[1]))).unwrap_or((0.0, 0.0));
+        for (k, path) in paths.iter().filter(|p| crate::references::is_image(p)).enumerate() {
+            self.references.add(&mut self.doc.world.meta.references, path, x + k as f64 * 16.0, z + k as f64 * 16.0);
+        }
+        self.doc.mark_changed();
     }
 
     /// Pick a height map, and show on the home screen how it would become
@@ -1049,6 +1069,7 @@ impl MassifApp {
             next_generation: 1,
             caves: None,
             guide: None,
+            references: Default::default(),
             real: None,
             real_parked: None,
             versions: Default::default(),
@@ -3320,6 +3341,7 @@ impl MassifApp {
             Command::AutoPaint => self.tools.run_auto = Some(false),
             Command::AutoRules => self.dialog = Some(Dialog::AutoRules(false)),
             Command::WholeMap(what) => self.open_reshape(what),
+            Command::AddReference => self.pick_reference(),
             Command::SmoothTerrain => self.dialog = Some(Dialog::Smooth(Box::new(crate::smooth_page::SmoothForm::new(self.doc.world.meta.smooth.clone(), &self.doc.world.registry, self.doc.dimension())))),
             Command::Caves => self.open_caves(),
             Command::ImportMask => self.pick_mask(ctx, false),
@@ -3959,6 +3981,13 @@ impl MassifApp {
                 {
                     self.guide = None;
                 }
+                let mut add = false;
+                if self.references.header(&mut hui, &mut self.doc.world.meta.references, &mut add) {
+                    self.doc.mark_changed();
+                }
+                if add {
+                    self.pick_reference();
+                }
             }
             EditorKind::View3d => {
                 hui.add_space(8.0);
@@ -4050,6 +4079,7 @@ impl MassifApp {
                         overlay,
                         guide,
                         view3d: shows_3d.then_some(&mut self.view3d),
+                        references: &mut self.references,
                     },
                 );
                 if self.map_center.is_none() {
@@ -5750,6 +5780,12 @@ impl MassifApp {
                 let note = panels::import_objects(&mut self.doc, &mut self.tools, &dropped, None, self.blocks.catalogue.as_deref());
                 self.feedback = Some(note);
             }
+            // Pictures dropped on a map: reference images, where they fell.
+            let (images, at): (Vec<PathBuf>, Option<egui::Pos2>) = ctx.input(|i| (i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| crate::references::is_image(p)).collect(), i.pointer.hover_pos()));
+            if !images.is_empty() {
+                let spot = at.and_then(|p| self.maps.values().find_map(|v| v.world_under(p)));
+                self.add_references(&images, spot);
+            }
             // WorldPainter's custom layers: layers of the map.
             let layers: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("layer"))).collect());
             if !layers.is_empty() {
@@ -6519,6 +6555,10 @@ mod water_ux_tests;
 #[cfg(test)]
 #[path = "brush_edge_tests.rs"]
 mod brush_edge_tests;
+
+#[cfg(test)]
+#[path = "reference_tests.rs"]
+mod reference_tests;
 
 #[cfg(test)]
 mod tests {

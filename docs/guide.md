@@ -11,6 +11,7 @@ The editor, part by part: the home screen, the window, brushes and their options
 - [Brushes](#brushes)
 - [Automatic biomes and paint](#automatic-biomes-and-paint)
 - [Noise painting](#noise-painting)
+- [Reference images](#reference-images)
 - [Layers](#layers)
 - [Packs](#packs)
 - [Ground covers](#ground-covers)
@@ -854,6 +855,26 @@ larger map is read a sample every few blocks and the change is spread over
 the blocks between, so the ground keeps its own detail. On a WorldPainter
 map of 5,888 blocks a side, erosion takes about twenty seconds, the others
 two or three, terraces and smoothing under half a second.
+
+## Reference images
+
+A reference image is a picture laid over or under the 2D map to trace over,
+as WorldPainter's overlay: a plan, a sketch, a real map. It only shows: it
+never changes the land and is never exported. **Edit ▸ Add Reference
+Image…**, or drop a PNG or JPEG on the map, adds one where it falls; a picture
+larger than the map is fitted to it, others take a block a pixel.
+
+The picture button in the map's header lists them, each with an eye to show
+or hide it and a lock to keep it in place; click one for its settings:
+**Over the map** or **Under it** (the shaded relief then fades over it, as
+much as the image is opaque), **Opacity**, its **Middle**, its **Scale** in
+blocks a pixel and its **Rotation**, typed in. With **Handles on the map**,
+drag the image to move it, a corner to scale it (the opposite corner stays),
+the knob above it to turn it (Shift: by 15°). There can be several. They are
+saved with the map by the path of their files, found again beside the map
+when the map and its pictures move together. Each is read once and kept on
+the graphics card with mipmaps, scaled down past 8,192 pixels a side: a large
+picture costs nothing a frame at any zoom.
 
 ## Caves
 

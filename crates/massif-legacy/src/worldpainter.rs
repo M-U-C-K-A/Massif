@@ -916,6 +916,7 @@ pub fn import_stream<R: Read + Send>(reader: R, progress: &ImportProgress) -> Re
             palette: Default::default(),
             smooth: Default::default(),
             animation: None,
+            references: Vec::new(),
         },
         registry: mapper.registry,
         dims,

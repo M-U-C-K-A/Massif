@@ -373,6 +373,9 @@ pub struct MapInput<'a> {
     /// The 3D View, when the workspace shows one: its mark on the map, to
     /// drag (see [`MapView::view3d_mark`]).
     pub view3d: Option<&'a mut crate::view3d::View3d>,
+    /// The reference images' textures and handles (the images are the
+    /// map's).
+    pub references: &'a mut crate::references::References,
 }
 
 impl MapView {
@@ -811,6 +814,12 @@ impl MapView {
         self.block_strength.as_ref().map(|(_, texture, c)| (texture.id(), *c))
     }
 
+    /// The block position under screen point `p` when it is over the map,
+    /// as the last frame drew it.
+    pub fn world_under(&self, p: Pos2) -> Option<(f64, f64)> {
+        self.canvas.contains(p).then(|| self.to_world(self.canvas, p))
+    }
+
     /// Where block coordinates `(x, z)` were on the screen, last frame.
     #[cfg(test)]
     pub fn screen_of(&self, x: f64, z: f64) -> Pos2 {
@@ -1090,7 +1099,19 @@ impl MapView {
             overlay,
             guide,
             mut view3d,
+            references,
         } = input;
+        // The reference images read, those just added placed.
+        {
+            let map = doc.dimension().bounds().map(|(lo, hi)| {
+                let t = TILE_SIZE as f64;
+                [lo.x as f64 * t, lo.z as f64 * t, (hi.x + 1) as f64 * t, (hi.z + 1) as f64 * t]
+            });
+            let dir = doc.path.as_ref().and_then(|p| p.parent()).map(|p| p.to_path_buf());
+            if references.update(ui.ctx(), &mut doc.world.meta.references, dir.as_deref(), map) {
+                doc.mark_changed();
+            }
+        }
 
         if self.should_fit(doc.generation, canvas.size()) {
             self.fit(doc, canvas);
@@ -1241,6 +1262,25 @@ impl MapView {
         if let Some((x, z)) = world_pointer.filter(|_| response.hovered()) {
             *hover = Some((x.floor() as i32, z.floor() as i32));
         }
+        // The handles of the reference image being placed take the press
+        // before the tool.
+        let mut placed = false;
+        let on_reference = self.stroke.is_none()
+            && !self.view3d_grab
+            && !panning
+            && references.interact(
+                ui,
+                &mut doc.world.meta.references,
+                pointer.filter(|_| response.hovered() || down[0]),
+                pressed[0] && response.is_pointer_button_down_on(),
+                down[0],
+                &|x, z| self.to_screen(canvas, x, z),
+                &|p| self.to_world(canvas, p),
+                &mut placed,
+            );
+        if placed {
+            doc.mark_changed();
+        }
         let button = if pressed[0] && !panning {
             Some(PointerButton::Primary)
         } else if pressed[1] {
@@ -1255,6 +1295,7 @@ impl MapView {
             && self.stroke.is_none()
             && self.water.is_none()
             && !self.view3d_grab
+            && !(on_reference && button == PointerButton::Primary)
             && let Some((x, z)) = world_pointer
         {
             let secondary = button == PointerButton::Secondary;
@@ -1540,6 +1581,10 @@ impl MapView {
                     ui.ctx().request_repaint();
                 }
             }
+            // Reference images under the relief, which fades over them.
+            let refs = &doc.world.meta.references;
+            references.draw(&painter, refs, false, &|x, z| self.to_screen(canvas, x, z));
+            let tint = Color32::WHITE.gamma_multiply(crate::references::References::map_alpha(refs));
             for key in &keys {
                 let (ox, oz) = key.origin();
                 let b = key.blocks() as f64;
@@ -1548,7 +1593,7 @@ impl MapView {
                     self.to_screen(canvas, ox as f64 + b, oz as f64 + b),
                 );
                 if let Some(tex) = cache.texture(style, *key) {
-                    painter.image(tex.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                    painter.image(tex.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint);
                     continue;
                 }
                 // Fall back on a coarser chunk while this one is built, as
@@ -1565,7 +1610,7 @@ impl MapView {
                         let u = (key.x as i64 - ((parent.x as i64) << up)) as f32 / n;
                         let v = (key.z as i64 - ((parent.z as i64) << up)) as f32 / n;
                         let uv = Rect::from_min_size(pos2(u, v), vec2(1.0 / n, 1.0 / n));
-                        painter.image(tex.id(), rect, uv, Color32::WHITE);
+                        painter.image(tex.id(), rect, uv, tint);
                         shown = true;
                         break;
                     }
@@ -1576,11 +1621,14 @@ impl MapView {
                         if let Some(tex) = cache.texture(style, child) {
                             let half = rect.size() * 0.5;
                             let r = Rect::from_min_size(rect.min + vec2(dx as f32 * half.x, dz as f32 * half.y), half);
-                            painter.image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                            painter.image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint);
                         }
                     }
                 }
             }
+            // Over the relief.
+            references.draw(&painter, refs, true, &|x, z| self.to_screen(canvas, x, z));
+            references.draw_handles(ui, &painter, refs, &|x, z| self.to_screen(canvas, x, z));
 
             if let Some((tex, r, opacity)) = guide {
                 let rect = Rect::from_min_max(self.to_screen(canvas, r[0] as f64, r[1] as f64), self.to_screen(canvas, r[2] as f64, r[3] as f64));

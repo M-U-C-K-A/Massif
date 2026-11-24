@@ -41,6 +41,8 @@ pub enum Command {
     AutoPaint,
     AutoRules,
     WholeMap(WholeOp),
+    /// Edit ▸ Add Reference Image…
+    AddReference,
     /// Edit ▸ Smooth terrain…: the top of the land in partial blocks.
     SmoothTerrain,
     Caves,
@@ -285,6 +287,7 @@ pub fn menus(state: &State) -> Vec<Menu> {
         tipped(Command::RealTerrain, Icon::Earth, tr!("Relief of a Real Place…"), map, tr!("The heights of a place on the Earth, into the selection or the whole map")),
         tipped(Command::Caves, Icon::Shovel, tr!("Caves…"), map, tr!("Tunnels, ravines and caverns carved into the rock, over the whole map or the selection")),
         tipped(Command::ImportMask, Icon::ImageUp, tr!("Import Mask…"), map, tr!("An image painted onto the map: annotations, a layer, a terrain, a biome, water or the height")),
+        tipped(Command::AddReference, Icon::ImagePlus, tr!("Add Reference Image…"), map, tr!("A picture over or under the map to trace over: shown only, never exported")),
         Entry::Separator,
         tipped(Command::Ores, Icon::Pickaxe, tr!("Ores…"), map, tr!("The ores the export lays in the rock: where, how many, how large")),
         tipped(
