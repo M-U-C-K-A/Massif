@@ -26,6 +26,7 @@
 //! [`WpReport`] says so, with what was approximated.
 
 use crate::javawrite::{GzipWriter, Writer};
+use crate::layers::{Bound, Mode};
 use crate::wp_classes::{LAYERS, LayerSpec, PLATFORMS, PlatformSpec};
 use massif_core::level::LevelKind;
 use massif_core::registry::{Mix, Registry, TerrainId};
@@ -329,6 +330,9 @@ enum WpLayer {
     TallPlant { name: String, color: [u8; 3], material: Mixed },
     /// A custom object layer.
     Objects { name: String, color: [u8; 3], objects: Vec<(u32, u16)>, density: i32, grid: i32, displacement: i32, rotate: bool, underwater: bool, sink: i16 },
+    /// A tunnel layer: a void between a floor and a roof, each set by its
+    /// mode (see [`Bound`]) — one of Massif's Carve levels.
+    Tunnel { name: String, color: [u8; 3], floor: Bound, roof: Bound, flood: Option<i32>, lava: bool },
     /// A layer of underground pockets.
     Pockets { name: String, color: [u8; 3], material: Mixed, frequency: i32, scale: i32, low: i32, high: i32 },
 }
@@ -337,7 +341,7 @@ impl WpLayer {
     fn name(&self) -> &str {
         match self {
             WpLayer::Own(s) => s.name,
-            WpLayer::Plants { name, .. } | WpLayer::Cover { name, .. } | WpLayer::TallPlant { name, .. } | WpLayer::Objects { name, .. } | WpLayer::Pockets { name, .. } => name,
+            WpLayer::Plants { name, .. } | WpLayer::Cover { name, .. } | WpLayer::TallPlant { name, .. } | WpLayer::Objects { name, .. } | WpLayer::Pockets { name, .. } | WpLayer::Tunnel { name, .. } => name,
         }
     }
 
@@ -386,6 +390,10 @@ struct Plan {
     subsurface: &'static str,
     /// The tiles each layer was written on, for the report.
     layer_tiles: Vec<AtomicUsize>,
+    /// The tunnel layer of each Carve level: dimension, level, layer.
+    tunnels: Vec<(usize, usize, usize)>,
+    /// WorldPainter's Caves layer, where caves were carved in 3D.
+    caves: Option<usize>,
     objects: Vec<Option<usize>>,
     pockets: Vec<Option<usize>>,
     /// Whether the world's fluid is lava.
@@ -705,6 +713,50 @@ impl Plan {
             });
         }
 
+        // Carve levels: a tunnel layer each, its floor and roof the modes
+        // of WorldPainter's that come nearest.
+        let mut tunnels = Vec::new();
+        for (di, dim) in world.dims.iter().enumerate() {
+            let (wp_min, wp_max) = heights(platform, dim.min_y, dim.max_y);
+            for (li, level) in dim.levels.iter().enumerate().skip(1) {
+                if level.kind != LevelKind::Carve || level.is_empty() {
+                    continue;
+                }
+                let samples = tunnel_samples(dim, li);
+                if samples.is_empty() {
+                    continue;
+                }
+                let (floor, floor_error) = fit_floor(&samples, wp_min, wp_max);
+                let floors: Vec<i32> = samples.iter().map(|s| floor.at(s.terrain, 0)).collect();
+                let (roof, roof_error) = fit_roof(&samples, &floors, wp_min, wp_max);
+                let wet: Vec<i32> = samples.iter().filter_map(|s| s.fluid).collect();
+                let flood = (wet.len() * 4 >= samples.len()).then(|| median(wet));
+                let lava = flood.is_some() && world.meta.lava;
+                let k = add(WpLayer::Tunnel { name: level.name.clone(), color: [150, 110, 70], floor, roof, flood, lava });
+                tunnels.push((di, li, k));
+                let describe = |b: &Bound| match b.mode {
+                    Mode::Fixed => format!("at Y {}", b.level),
+                    Mode::Depth => format!("{} blocks under the ground", b.level),
+                    Mode::Inverted => format!("mirrored about Y {}", b.level),
+                    Mode::AboveFloor => format!("{} blocks over the floor", b.level),
+                };
+                report.approximated.push(format!(
+                    "{}: Carve level \"{}\" became a tunnel layer, its floor {} (within {floor_error:.1} blocks of Massif's on average) and its roof {} (within {roof_error:.1})",
+                    dim.kind.label(),
+                    level.name,
+                    describe(&floor),
+                    describe(&roof)
+                ));
+            }
+        }
+        // Caves carved in 3D: WorldPainter's Caves layer over them, to dig
+        // its own there.
+        let carved: usize = world.dims.iter().map(|d| d.voxels.iter().filter(|(_, c)| c.solid_count() < massif_core::voxel::VOLUME).count()).sum();
+        let caves = (carved > 0).then(|| add(WpLayer::Own(own_layer("Caves")))).flatten();
+        if carved > 0 {
+            report.approximated.push(format!("{carved} chunks carved in 3D (caves): WorldPainter's Caves layer is painted where their hollows are, and WorldPainter digs caves of its own there"));
+        }
+
         if total.sizes > 0 {
             report.left_out.push(format!("the tree sizes painted on {} columns: WorldPainter picks among all of a layer's objects", total.sizes));
         }
@@ -751,6 +803,8 @@ impl Plan {
             soil,
             subsurface,
             layer_tiles: Vec::new(),
+            tunnels,
+            caves,
             objects,
             pockets,
             lava_world: world.meta.lava,
@@ -758,6 +812,72 @@ impl Plan {
             sea: world.meta.sea_level,
         }
     }
+}
+
+/// A column of a Carve level, as WorldPainter counts heights: the top block
+/// of the ground, the floor (the block under the void) and the roof (its
+/// top block), and the water in it.
+struct TunnelSample {
+    terrain: i32,
+    floor: i32,
+    roof: i32,
+    fluid: Option<i32>,
+}
+
+/// One column in 16 of each tile of level `li` of `dim` where it has a void.
+fn tunnel_samples(dim: &Dimension, li: usize) -> Vec<TunnelSample> {
+    let (level, ground) = (&dim.levels[li], dim.ground());
+    let positions: Vec<TilePos> = level.positions().collect();
+    positions
+        .par_iter()
+        .flat_map_iter(|&pos| {
+            let (Some(slab), Some(g)) = (level.view(pos), ground.view(pos)) else { return Vec::new() };
+            let Some(bottom) = slab.bottom.as_ref() else { return Vec::new() };
+            (0..TILE_AREA)
+                .step_by(16)
+                .filter_map(|i| {
+                    let (b, t) = (bottom.get(i), slab.top.get(i));
+                    (t > b).then(|| {
+                        let f = slab.fluid.get(i);
+                        TunnelSample { terrain: massif_core::compose::block_top(g.top.get(i)) - 1, floor: b as i32 - 1, roof: t as i32 - 1, fluid: (f != NO_FLUID).then_some(f as i32 - 1) }
+                    })
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn median(mut v: Vec<i32>) -> i32 {
+    v.sort_unstable();
+    v.get(v.len() / 2).copied().unwrap_or(0)
+}
+
+/// The mode and level of WorldPainter's that put a tunnel's floor nearest
+/// Massif's, and how far it is from it on average.
+fn fit_floor(samples: &[TunnelSample], min: i32, max: i32) -> (Bound, f32) {
+    let bound = |mode, level| Bound { mode, level, min, max: max - 1 };
+    let candidates = [
+        bound(Mode::Fixed, median(samples.iter().map(|s| s.floor).collect())),
+        bound(Mode::Depth, median(samples.iter().map(|s| s.terrain - s.floor).collect())),
+        bound(Mode::Inverted, median(samples.iter().map(|s| (s.floor + s.terrain).div_euclid(2)).collect())),
+    ];
+    best(candidates, |b| samples.iter().map(|s| (b.at(s.terrain, 0) - s.floor).abs() as f32).sum::<f32>() / samples.len() as f32)
+}
+
+/// Likewise for its roof, over the floors WorldPainter will have.
+fn fit_roof(samples: &[TunnelSample], floors: &[i32], min: i32, max: i32) -> (Bound, f32) {
+    let bound = |mode, level| Bound { mode, level, min, max: max - 1 };
+    let candidates = [
+        bound(Mode::AboveFloor, median(samples.iter().zip(floors).map(|(s, f)| s.roof - f).collect())),
+        bound(Mode::Fixed, median(samples.iter().map(|s| s.roof).collect())),
+        bound(Mode::Depth, median(samples.iter().map(|s| s.terrain - s.roof).collect())),
+        bound(Mode::Inverted, median(samples.iter().map(|s| (s.roof + s.terrain).div_euclid(2)).collect())),
+    ];
+    best(candidates, |b| samples.iter().zip(floors).map(|(s, &f)| (b.at(s.terrain, f).min(s.terrain) - s.roof).abs() as f32).sum::<f32>() / samples.len() as f32)
+}
+
+fn best<const N: usize>(candidates: [Bound; N], error: impl Fn(&Bound) -> f32) -> (Bound, f32) {
+    candidates.into_iter().map(|b| (b, error(&b))).min_by(|a, b| a.1.total_cmp(&b.1)).expect("candidates")
 }
 
 /// `Terrain.CUSTOM_n` for slot `k` (CUSTOM_1 is slot 0).
@@ -833,6 +953,8 @@ struct WpTile {
 
 struct DimPlan<'w> {
     dim: &'w Dimension,
+    /// All the world's dimensions, to tell which this is.
+    world_dims: &'w [Dimension],
     tiles: Vec<TilePos>,
     min: i32,
     max: i32,
@@ -880,6 +1002,44 @@ fn convert_tile(t: &Tile, pos: TilePos, d: &DimPlan, plan: &Plan, reg: &Registry
     let mut nibbles: BTreeMap<usize, Vec<u8>> = BTreeMap::new();
     let mut bit = |k: usize, i: usize| bits.entry(k).or_insert_with(|| vec![false; TILE_AREA])[i] = true;
     let (ox, oz) = pos.origin();
+    for &(di, li, k) in &plan.tunnels {
+        if !std::ptr::eq(d.dim, d.world_dims.get(di).map_or(std::ptr::null(), |x| x as *const Dimension)) {
+            continue;
+        }
+        if let Some(slab) = d.dim.levels[li].view(pos)
+            && let Some(bottom) = slab.bottom.as_ref()
+        {
+            for i in 0..TILE_AREA {
+                if slab.top.get(i) > bottom.get(i) {
+                    bit(k, i);
+                }
+            }
+        }
+    }
+    if let Some(k) = plan.caves
+        && d.dim.voxels.has_tile(pos)
+    {
+        // A column with a hollow under the ground.
+        let mut hollow = vec![false; TILE_AREA];
+        for (cp, chunk) in d.dim.voxels.in_tile(pos) {
+            if chunk.solid_count() == massif_core::voxel::VOLUME {
+                continue;
+            }
+            let (cx, cy, cz) = cp.origin();
+            for lz in 0..16 {
+                for lx in 0..16 {
+                    let i = ((cx - ox + lx) + (cz - oz + lz) * 128) as usize;
+                    let ground = top[i] as i32 - 1;
+                    if !hollow[i] && (0..16).any(|ly| cy + ly < ground && !chunk.solid(lx, ly, lz)) {
+                        hollow[i] = true;
+                    }
+                }
+            }
+        }
+        if hollow.iter().any(|&h| h) {
+            nibbles.insert(k, hollow.iter().map(|&h| if h { 8 } else { 0 }).collect());
+        }
+    }
     if plan.terrain_covers.iter().any(Option::is_some) {
         for (i, &v) in t.terrain.dense().iter().enumerate() {
             if let Some(Some(k)) = plan.terrain_covers.get(v as usize).copied() {
@@ -1191,6 +1351,36 @@ fn write_layer(w: &mut Writer<'_>, plan: &Plan, reg: &Registry, k: usize) -> io:
                         })
                         .map(drop)
                     });
+            })?
+        }
+        WpLayer::Tunnel { name, color, floor, roof, flood, lava } => {
+            let mode = |m: Mode| match m {
+                Mode::Fixed => "FIXED_HEIGHT",
+                Mode::Depth => "CONSTANT_DEPTH",
+                Mode::Inverted => "INVERTED_DEPTH",
+                Mode::AboveFloor => "FIXED_HEIGHT_ABOVE_FLOOR",
+            };
+            let named = plan.platform.capabilities.contains(&"NAME_BASED");
+            w.object("org.pepsoft.worldpainter.layers.tunnel.TunnelLayer", |o| {
+                custom_fields(o, name, name, "BIT", 22, *color);
+                o.enumeration("mode", "org.pepsoft.worldpainter.layers.tunnel.TunnelLayer$LayerMode", "CAVE")
+                    .enumeration("floorMode", "org.pepsoft.worldpainter.layers.tunnel.TunnelLayer$Mode", mode(floor.mode))
+                    .int("floorLevel", floor.level)
+                    .int("floorMin", floor.min)
+                    .int("floorMax", floor.max)
+                    .enumeration("roofMode", "org.pepsoft.worldpainter.layers.tunnel.TunnelLayer$Mode", mode(roof.mode))
+                    .int("roofLevel", roof.level)
+                    .int("roofMin", roof.min)
+                    .int("roofMax", roof.max)
+                    .int("floorWallDepth", 4)
+                    .int("roofWallDepth", 4)
+                    .int("floodLevel", flood.unwrap_or(i32::MIN))
+                    .bool("floodWithLava", *lava)
+                    .enumeration("fillMode", "org.pepsoft.worldpainter.layers.tunnel.TunnelLayer$FillMode", if named { "CAVE_AIR" } else { "AIR" })
+                    .int("fillLightLevel", 8)
+                    .enumeration("bottomEdgeShape", "org.pepsoft.worldpainter.layers.tunnel.TunnelLayer$EdgeShape", "SMOOTH")
+                    .int("biomeHeightAboveGround", 16)
+                    .set_in("org.pepsoft.worldpainter.layers.tunnel.TunnelLayer", "wpVersion", crate::javawrite::Value::Int(5));
             })?
         }
         WpLayer::Pockets { name, color, material, frequency, scale, low, high } => w.object("org.pepsoft.worldpainter.layers.pockets.UndergroundPocketsLayer", |o| {
@@ -1582,15 +1772,31 @@ fn left_out(world: &World, report: &mut WpReport) {
             if level.is_empty() {
                 continue;
             }
-            let what = match level.kind {
-                LevelKind::Solid => "land over the ground (floating islands, overhangs)",
-                LevelKind::Carve => "hollows under the ground (caves, tunnels dug by hand)",
-                LevelKind::Ground => "ground",
-            };
-            report.left_out.push(format!("{}: {} level \"{}\" ({} tiles), {what}: WorldPainter holds one height per column", dim.kind.label(), level.kind.label(), level.name, level.len()));
+            if level.kind == LevelKind::Solid {
+                report.left_out.push(format!(
+                    "{}: Solid level \"{}\" ({} tiles), land over the ground (floating islands, overhangs): WorldPainter's floating layers need a dimension of their own painted for each",
+                    dim.kind.label(),
+                    level.name,
+                    level.len()
+                ));
+            }
         }
-        if !dim.voxels.is_empty() {
-            report.left_out.push(format!("{}: {} sculpted 3D chunks: WorldPainter holds one height per column", dim.kind.label(), dim.voxels.len()));
+        // Matter sculpted in 3D over the ground: overhangs, arches.
+        let over: usize = dim
+            .voxels
+            .iter()
+            .filter(|(p, c)| {
+                let (_, cy, _) = p.origin();
+                c.solid_count() > 0 && dim.ground().view(p.tile()).is_some_and(|t| {
+                    let (ox, oz) = p.tile().origin();
+                    let (cx, _, cz) = p.origin();
+                    let i = ((cx - ox) + (cz - oz) * 128) as usize;
+                    cy + 15 >= t.top.get(i) as i32 + 1
+                })
+            })
+            .count();
+        if over > 0 {
+            report.left_out.push(format!("{}: {over} chunks sculpted in 3D at or over the ground (overhangs, arches, sculpted slopes): WorldPainter holds one height per column", dim.kind.label()));
         }
     }
     if world.meta.graph.is_some() {
@@ -1619,7 +1825,7 @@ pub fn export_world(world: &World, path: &Path, options: &WpOptions, progress: O
             let (min, max) = heights(plan.platform, dim.min_y, dim.max_y);
             let tiles = ground_tiles(dim);
             report.dimensions.push(format!("{} ({} tiles, Y {min} to {})", dim.kind.label(), tiles.len(), max - 1));
-            DimPlan { dim, tiles, min, max, tall: max - min > 256 }
+            DimPlan { dim, world_dims: &world.dims, tiles, min, max, tall: max - min > 256 }
         })
         .collect();
     report.tiles = dims.iter().map(|d| d.tiles.len()).sum();
