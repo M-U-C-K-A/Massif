@@ -32,6 +32,7 @@
 
 pub mod buildings;
 pub mod geometry;
+pub mod graph;
 pub mod lay;
 pub mod pack;
 pub mod plots;

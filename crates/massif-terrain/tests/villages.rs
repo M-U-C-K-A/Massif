@@ -50,7 +50,10 @@ fn the_village_generator_builds_a_village_of_the_pack() {
     // Roads of stone, cut at the walls, the walls with gates.
     let roads = e.geometry(&c, c.output("roads").unwrap(), &never).unwrap();
     let Geo::Splines(roads) = &*roads else { panic!("splines") };
-    assert!(roads.lines.iter().any(|l| l.kind == "main") && roads.lines.iter().all(|l| l.attrs.get("road") == Some(&3.0)));
+    let streets = || roads.lines.iter().filter(|l| matches!(l.kind.as_str(), "main" | "side" | "square"));
+    assert!(streets().any(|l| l.kind == "main") && streets().all(|l| l.attrs.get("road") == Some(&3.0)));
+    // The walls' lines ride with them, for the map.
+    assert!(roads.lines.iter().any(|l| l.kind == "wall" && l.closed) && roads.lines.iter().any(|l| l.kind == "wall_gates" && !l.points.is_empty()));
     let village = c.node("village__walls").unwrap();
     let towers = e.geometry(&c, (village, 1), &never).unwrap();
     assert!(towers.points().unwrap().items.iter().any(|p| p.kind == "gate"));

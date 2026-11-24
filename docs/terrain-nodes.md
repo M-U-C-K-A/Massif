@@ -2866,7 +2866,7 @@ Outputs:
 
 - `walls` (splines) — The wall's line, closed.
 - `towers` (points) — Its corners, towers and gates.
-- `roads` (splines) — The roads, side roads cut at the wall.
+- `roads` (splines) — The roads, side roads cut at the wall, and the wall's lines: what the Map Output's roads take.
 
 | Setting | Kind | Default | Range | What it does |
 |---|---|---|---|---|
@@ -2994,7 +2994,7 @@ Inputs:
 Outputs:
 
 - `props` (instances) — The props.
-- `all` (instances) — The buildings and the props.
+- `all` (instances) — The buildings, the props and the fields: what the Map Output's structures take.
 
 | Setting | Kind | Default | Range | What it does |
 |---|---|---|---|---|

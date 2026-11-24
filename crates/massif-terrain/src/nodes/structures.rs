@@ -303,7 +303,7 @@ pub static WALLS: NodeSpec = NodeSpec {
     outputs: &[
         PortSpec::new("walls", "Walls", PortKind::Splines, "The wall's line, closed."),
         PortSpec::new("towers", "Towers", PortKind::Points, "Its corners, towers and gates."),
-        PortSpec::new("roads", "Roads", PortKind::Splines, "The roads, side roads cut at the wall."),
+        PortSpec::new("roads", "Roads", PortKind::Splines, "The roads, side roads cut at the wall, and the wall's lines: what the Map Output's roads take."),
     ],
     params: &[ParamSpec::flag("on", "Walls", true, "Whether the village has walls."), PACK, THEME],
     kernel: Kernel::Geometry { cpu: walls },
@@ -330,6 +330,8 @@ fn walls(ctx: &Ctx, rasters: &[Option<&Grid>], _: &(dyn Fn() -> bool + Sync)) ->
     for l in &mut out.lines {
         l.attrs = attrs.clone();
     }
+    // With the walls' line, corners and gates, for the map to build them.
+    out.lines.extend(geo::wall_lines(&w, &land));
     Ok(vec![Geo::Splines(line), Geo::Points(towers), Geo::Splines(out)])
 }
 
@@ -434,7 +436,7 @@ pub static PROPS: NodeSpec = NodeSpec {
         PortSpec::new("buildings", "Buildings", PortKind::Instances, "The buildings, from Village buildings."),
         PortSpec::new("fields", "Fields", PortKind::Footprints, "The fields, from Village buildings.").optional(),
     ],
-    outputs: &[PortSpec::new("props", "Props", PortKind::Instances, "The props."), PortSpec::new("all", "Everything", PortKind::Instances, "The buildings and the props.")],
+    outputs: &[PortSpec::new("props", "Props", PortKind::Instances, "The props."), PortSpec::new("all", "Everything", PortKind::Instances, "The buildings, the props and the fields: what the Map Output's structures take.")],
     params: &[PACK, ParamSpec::float("props", "Props", Unit::Ratio, 0.5, 0.0, 1.0, "How many props: none (0) to many (1)."), THEME, ParamSpec::seed()],
     kernel: Kernel::Geometry { cpu: props },
     reads: Reads::Files,
@@ -457,6 +459,8 @@ fn props(ctx: &Ctx, rasters: &[Option<&Grid>], _: &(dyn Fn() -> bool + Sync)) ->
     let props = geo::prop_instances(&p, &theme);
     let mut all = built;
     all.items.extend(props.items.iter().cloned());
+    // The fields too, for the map to plant them.
+    all.items.extend(geo::field_instances(&b).items);
     Ok(vec![Geo::Instances(props), Geo::Instances(all)])
 }
 

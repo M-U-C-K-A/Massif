@@ -285,6 +285,40 @@ pub fn prop_instances(p: &Props, theme: &Theme) -> Instances {
     Instances { items }
 }
 
+/// The fields as instances (`massif:field`, kind `field:<crop>`), for the
+/// map: what the Map Output's structures carry of them.
+pub fn field_instances(b: &Buildings) -> Instances {
+    let items = b
+        .fields
+        .iter()
+        .map(|f| Instance {
+            asset: "massif:field".into(),
+            origin: [f.rect[0], f.floor, f.rect[1]],
+            turn: 0,
+            mirror: false,
+            bbox: ([f.rect[0], f.floor - 1, f.rect[1]], [f.rect[2], f.floor, f.rect[3]]),
+            kind: format!("field:{}", f.crop),
+            attrs: attrs(&[("floor", f.floor as f64), ("farm", f.farm as f64)]),
+        })
+        .collect();
+    Instances { items }
+}
+
+/// The walls as lines for the map: their line (`wall`, closed), and their
+/// corners and gates as two more of kind `wall_corners` and `wall_gates`
+/// (what the Map Output's roads carry of them).
+pub fn wall_lines(walls: &Walls, ground: &dyn Ground) -> Vec<Spline> {
+    let line = |pts: &[[i32; 2]], kind: &str, closed: bool| Spline { points: pts.iter().map(|&[x, z]| [x as f64, ground.floor(x, z) as f64, z as f64]).collect(), closed, width: 1.0, kind: kind.into(), attrs: Attrs::new() };
+    vec![line(&walls.line, "wall", true), line(&walls.corners, "wall_corners", false), line(&walls.gates, "wall_gates", false)]
+}
+
+/// The walls back from the lines of [`wall_lines`] (none without a line).
+pub fn walls_from_lines(lines: &Splines) -> Option<Walls> {
+    let of = |kind: &str| -> Vec<[i32; 2]> { lines.lines.iter().filter(|l| l.kind == kind).flat_map(|l| l.points.iter().map(|p| [p[0].round() as i32, p[2].round() as i32])).collect() };
+    let line = of("wall");
+    (!line.is_empty()).then(|| Walls { line, corners: of("wall_corners"), gates: of("wall_gates") })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
