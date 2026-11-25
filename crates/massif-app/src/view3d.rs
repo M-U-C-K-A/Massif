@@ -4640,6 +4640,9 @@ struct Builder {
     /// Tiles changed since it copied the map: what it brings of them is out
     /// of date, and they are built again here.
     edited: HashSet<TilePos>,
+    /// Where the camera looked when it started, loading around the view:
+    /// gone far from there, it stops for one around the new place.
+    around: Option<(f64, f64)>,
 }
 
 impl Drop for Builder {
@@ -5390,6 +5393,19 @@ impl View3d {
         self.tiles.len()
     }
 
+    /// Cells built for good, not only a first look; and whether the cell
+    /// holding block `(x, z)` is one.
+    #[cfg(test)]
+    pub fn cells_built(&self) -> usize {
+        self.tiles.values().filter(|c| !c.stale).count()
+    }
+
+    #[cfg(test)]
+    pub fn built_at(&self, x: i32, z: i32) -> bool {
+        let stride = self.grid.as_ref().map_or(1, |g| g.stride);
+        self.tiles.get(&grid_tile(TilePos::containing(x, z), stride)).is_some_and(|c| !c.stale)
+    }
+
     pub fn gpu_bytes(&self) -> u64 {
         self.renderer.as_ref().map_or(0, |r| r.bytes() + r.look_bytes())
     }
@@ -5965,6 +5981,18 @@ impl View3d {
         // builder brings.
         let (tx, tz) = (self.camera.target[0], self.camera.target[2]);
         let span = (TILE_SIZE * stride) as f64;
+        // Loading around the view: the cells within the view distance of
+        // the camera (a cell's middle within its half diagonal more), the
+        // rest at most a first look from the 2D map's summaries. A builder
+        // for a place left far behind stops.
+        let load = crate::graphics::loading();
+        let reach = (!load.whole).then_some(load.distance as f64 + span * 0.71);
+        // So does one for the whole map once the setting says around it.
+        if let (Some(reach), Some(b)) = (reach, &self.builder)
+            && b.around.is_none_or(|(x, z)| (x - tx).hypot(z - tz) > reach / 2.0)
+        {
+            self.builder = None;
+        }
         let cells = self.cells(doc.dimension(), doc.generation, stride);
         let mut todo: Vec<(f64, TilePos)> = cells
             .iter()
@@ -5973,6 +6001,13 @@ impl View3d {
             .map(|&t| (((t.x as f64 + 0.5) * span - tx).hypot((t.z as f64 + 0.5) * span - tz), t))
             .collect();
         todo.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let far: Vec<TilePos> = match reach {
+            Some(reach) => {
+                let k = todo.partition_point(|(d, _)| *d <= reach);
+                todo.split_off(k).into_iter().filter(|(_, t)| !self.tiles.contains_key(t)).map(|(_, t)| t).collect()
+            }
+            None => Vec::new(),
+        };
         // Many: away from the frames, once a stroke is over. A brush held
         // over the map changes the same tiles every frame: a builder for
         // them would copy the map and take every core but two again and
@@ -5980,7 +6015,7 @@ impl View3d {
         // brings them. Until it lets go, they are shown as they were.
         if todo.len() > BUILD_AWAY && self.builder.is_none() && !doc.history.is_recording() {
             let order: Vec<TilePos> = todo.drain(..).map(|(_, t)| t).collect();
-            self.start_builder(doc, order, style, stride, ctx);
+            self.start_builder(doc, order, far, style, stride, (tx, tz), ctx);
         }
         // A few: here, now (while a view moves, nothing: a tile takes
         // longer than a frame should).
@@ -6036,7 +6071,11 @@ impl View3d {
 
     /// Build `order`'s tiles away from the frames, from a cold copy of the
     /// map (see [`Builder`]).
-    fn start_builder(&mut self, doc: &mut Document, order: Vec<TilePos>, style: Style, stride: i32, ctx: &egui::Context) {
+    /// `far`, beyond the view distance, has only the first look the 2D
+    /// map's summaries give, if any (nothing decoded).
+    #[allow(clippy::too_many_arguments)]
+    fn start_builder(&mut self, doc: &mut Document, order: Vec<TilePos>, far: Vec<TilePos>, style: Style, stride: i32, at: (f64, f64), ctx: &egui::Context) {
+        let around_at = (!far.is_empty() || !crate::graphics::loading().whole).then_some(at);
         // A copy that encodes nothing here: the tiles changed since they
         // were last saved are encoded by the builder's thread (a map
         // edited at length took seconds of the frame to freeze).
@@ -6068,12 +6107,19 @@ impl View3d {
                 // every `ROUGH` places (see `build_rough`): the whole map
                 // stands at once rather than black or missing.
                 let first = rough_first && order.len() >= ROUGH_FROM;
-                let (seen, unseen): (Vec<TilePos>, Vec<TilePos>) = match glimpse.as_deref().filter(|_| first) {
+                let (mut seen, unseen): (Vec<TilePos>, Vec<TilePos>) = match glimpse.as_deref().filter(|_| first) {
                     Some(g) => order.iter().partition(|&&c| glimpsed(&dim, g, c, stride)),
                     None => (Vec::new(), order.clone()),
                 };
+                // Beyond the view distance: a first look where the 2D map
+                // read the tiles, after those within.
+                if let Some(g) = glimpse.as_deref() {
+                    seen.extend(far.iter().copied().filter(|&c| glimpsed(&dim, g, c, stride)));
+                }
+                let first = first || !seen.is_empty();
+                let rough_too = rough_first && order.len() >= ROUGH_FROM;
                 let passes: Vec<(Pass, &[TilePos])> = if first {
-                    vec![(Pass::Glimpse, &seen[..]), (Pass::Rough, &unseen[..]), (Pass::Fine, &order[..])]
+                    vec![(Pass::Glimpse, &seen[..]), (Pass::Rough, if rough_too { &unseen[..] } else { &[] }), (Pass::Fine, &order[..])]
                 } else {
                     vec![(Pass::Fine, &order[..])]
                 };
@@ -6132,6 +6178,7 @@ impl View3d {
                 given,
                 delivered: 0,
                 edited: HashSet::new(),
+                around: around_at,
             });
         }
     }

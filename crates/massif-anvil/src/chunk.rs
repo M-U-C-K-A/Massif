@@ -160,21 +160,13 @@ struct Pieces {
 }
 
 impl<'a> ExportContext<'a> {
-    /// Fails with a description if the registry or the build limits cannot be
-    /// exported.
-    pub fn new(world: &'a World, dim: &Dimension, target: &Target) -> Result<Self, String> {
-        Self::with_mods(world, dim, target, &HashMap::new(), massif_core::block_families::none())
-    }
-
-    /// [`Self::new`], knowing the blocks of the mods read (`mods`, by id)
-    /// and the shapes their recipes link to full blocks (`families`): the
-    /// layers, slabs and stairs that smooth the land are found among them
-    /// and the version's own.
-    pub fn with_mods(world: &'a World, dim: &Dimension, target: &Target, mods: &HashMap<String, Vec<String>>, families: &massif_core::block_families::BlockFamilies) -> Result<Self, String> {
+    /// The lowest and highest heights `dim` is exported with, or why it
+    /// cannot be: what [`Self::new`] checks first, without its tables (the
+    /// Diorama asks on the interface's thread, where they took a second on
+    /// a huge map).
+    pub fn heights(world: &World, dim: &Dimension, target: &Target) -> Result<(i32, i32), String> {
         let reg = &world.registry;
-        let era = target.era();
-        let (min_y, max_y) = target.heights(dim.min_y, dim.max_y);
-        if era == Era::Modern && (dim.min_y % 16 != 0 || dim.max_y % 16 != 0 || dim.max_y <= dim.min_y) {
+        if target.era() == Era::Modern && (dim.min_y % 16 != 0 || dim.max_y % 16 != 0 || dim.max_y <= dim.min_y) {
             return Err(format!(
                 "build limits {}..{} are not multiples of 16",
                 dim.min_y, dim.max_y
@@ -189,6 +181,23 @@ impl<'a> ExportContext<'a> {
         if reg.blocks.is_empty() || reg.blocks.len() >= UNSET as usize {
             return Err("the block registry is empty or too large".into());
         }
+        Ok(target.heights(dim.min_y, dim.max_y))
+    }
+
+    /// Fails with a description if the registry or the build limits cannot be
+    /// exported.
+    pub fn new(world: &'a World, dim: &Dimension, target: &Target) -> Result<Self, String> {
+        Self::with_mods(world, dim, target, &HashMap::new(), massif_core::block_families::none())
+    }
+
+    /// [`Self::new`], knowing the blocks of the mods read (`mods`, by id)
+    /// and the shapes their recipes link to full blocks (`families`): the
+    /// layers, slabs and stairs that smooth the land are found among them
+    /// and the version's own.
+    pub fn with_mods(world: &'a World, dim: &Dimension, target: &Target, mods: &HashMap<String, Vec<String>>, families: &massif_core::block_families::BlockFamilies) -> Result<Self, String> {
+        let reg = &world.registry;
+        let era = target.era();
+        let (min_y, max_y) = Self::heights(world, dim, target)?;
         let n = reg.blocks.len();
         let wk = reg.well_known;
         for id in [wk.stone, wk.deepslate, wk.bedrock, wk.water, wk.lava] {

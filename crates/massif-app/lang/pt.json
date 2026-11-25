@@ -3863,5 +3863,9 @@
   "one": "{kinds} tipos, {n} criado para os blocos que os terrenos do mapa não tinham",
   "other": "{kinds} tipos, {n} criados para os blocos que os terrenos do mapa não tinham"
  },
- "Buildings, trees and overhangs are kept block for block in sculpted chunks; a map holds at most 80,000 of them, which an area this large may pass: what stands on the rest is left out.": "Edifícios, árvores e saliências são mantidos bloco a bloco em chunks esculpidos; um mapa aceita no máximo 80 000, o que uma zona tão grande pode ultrapassar: o que está no resto fica de fora."
+ "Buildings, trees and overhangs are kept block for block in sculpted chunks; a map holds at most 80,000 of them, which an area this large may pass: what stands on the rest is left out.": "Edifícios, árvores e saliências são mantidos bloco a bloco em chunks esculpidos; um mapa aceita no máximo 80 000, o que uma zona tão grande pode ultrapassar: o que está no resto fica de fora.",
+ "Loading": "Carregamento",
+ "Load": "Carregar",
+ "View distance": "Distância de visão",
+ "Around the view, the 3D views and the Render build the map within the view distance of their camera, the Diorama what it shows: on a huge map they are ready sooner and rest once they are. The whole map builds all of it and keeps it, for flying over it at length.": "Em torno da vista, as vistas 3D e o Render constroem o mapa dentro da distância de visão da câmera, o Diorama o que mostra: num mapa enorme ficam prontos mais cedo e depois descansam. O mapa inteiro constrói tudo e o guarda, para sobrevoá-lo longamente."
 }

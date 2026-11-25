@@ -79,6 +79,10 @@ struct Settings {
     /// Memory for what is kept decoded (the map's tiles and its images),
     /// in megabytes; 0: as much as it takes.
     memory_mb: u32,
+    /// The views of the map load the whole map, not only around what they
+    /// show; and how far a 3D view builds, in blocks.
+    load_whole: bool,
+    view_distance: u32,
     /// How the dots of the loaders light while Massif works.
     loader: crate::loader::Pattern,
     /// The tools' icons: Line (Lucide's style) or Classic.
@@ -196,6 +200,8 @@ impl Default for Settings {
             volume: 0.6,
             notify: crate::notify::NotifyWhen::Background,
             memory_mb: 0,
+            load_whole: false,
+            view_distance: crate::graphics::DEFAULT_VIEW_DISTANCE,
             loader: crate::loader::Pattern::Orbit,
             tool_icons: crate::icons::IconStyle::Line,
             animate_backdrop: true,
@@ -2111,6 +2117,28 @@ impl MassifApp {
             });
         });
         ui.add_space(12.0);
+        ui.label(RichText::new(tr!("Loading")).size(13.0).medium());
+        ui.add_space(4.0);
+        crate::widgets::well(ui, |ui| {
+            crate::widgets::row(ui, tr!("Load"), |ui| {
+                let on = [!self.settings.load_whole, self.settings.load_whole];
+                if let Some(k) = crate::widgets::button_group(ui, "load", &[tr!("Around the view"), tr!("The whole map")], &on) {
+                    self.settings.load_whole = k == 1;
+                }
+            });
+            if !self.settings.load_whole {
+                crate::widgets::row(ui, tr!("View distance"), |ui| {
+                    let distances = crate::graphics::VIEW_DISTANCES;
+                    let labels = distances.map(|d| tr!("{n} blocks", n = d));
+                    let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+                    let on = distances.map(|d| d == self.settings.view_distance);
+                    if let Some(k) = crate::widgets::button_group(ui, "view distance", &labels, &on) {
+                        self.settings.view_distance = distances[k];
+                    }
+                });
+            }
+        });
+        ui.add_space(12.0);
         ui.label(RichText::new(tr!("Map and window")).size(13.0).medium());
         ui.add_space(4.0);
         crate::widgets::well(ui, |ui| {
@@ -2136,6 +2164,7 @@ impl MassifApp {
             (tr!("Render scale"), tr!("The 3D views drawn smaller and stretched to fit: what saves the most time in them. While a view moves it is drawn smaller still.")),
             (tr!("Map kept on the graphics card"), tr!("A map larger than this is drawn in 3D with a column every 2, 4 or 8 blocks: all of it, coarser, and much faster on a huge map.")),
             (tr!("Clouds"), tr!("What costs the most in the Terrain viewport. Saved images keep them.")),
+            (tr!("Load"), tr!("Around the view, the 3D views and the Render build the map within the view distance of their camera, the Diorama what it shows: on a huge map they are ready sooner and rest once they are. The whole map builds all of it and keeps it, for flying over it at length.")),
             (tr!("Frames a second when idle"), tr!("While nothing is touched but something moves on screen (a loader, the 3D view building), the window draws at most this often.")),
         ] {
             ui.horizontal_top(|ui| {
@@ -2394,6 +2423,7 @@ impl MassifApp {
                 crate::backdrop::Style::Prism => format!("Prism, {:?}, {:?}, {:?}, {:?}, speed {:.0}%", s.backdrop.prism.palette, s.backdrop.prism.shape, s.backdrop.prism.direction, s.backdrop.prism.motion, s.backdrop.prism.speed * 100.0),
             }),
             ("Memory for decoded tiles".to_owned(), if s.memory_mb == 0 { "as much as it takes".to_owned() } else { format!("{} MB", s.memory_mb) }),
+            ("Load".to_owned(), if s.load_whole { "the whole map".to_owned() } else { format!("around the view, {} blocks", s.view_distance) }),
             ("Autosave".to_owned(), if s.autosave { format!("every {} min", s.autosave_minutes) } else { "off".to_owned() }),
             ("Developer mode".to_owned(), if s.developer { "on" } else { "off" }.to_owned()),
             ("Frames a second".to_owned(), format!("{:?}{}", s.frame_limit, if s.draw_always { ", every frame" } else { "" })),
@@ -7407,6 +7437,7 @@ impl MassifApp {
         }
         let now = ctx.input(|i| i.time);
         self.apply_memory_limit(now);
+        crate::graphics::set_loading(crate::graphics::Loading { whole: self.settings.load_whole, distance: self.settings.view_distance });
         // Walking in 3D Sculpt held the mouse, and its view is gone.
         self.sculpt3d.release_if_hidden(&ctx);
         // A 3D view the workspace no longer shows builds nothing, and gives
@@ -8687,6 +8718,9 @@ mod ideas_tests;
 #[cfg(test)]
 #[path = "perf_tests.rs"]
 mod perf_tests;
+#[cfg(test)]
+#[path = "views_loading_tests.rs"]
+mod views_loading_tests;
 
 #[cfg(test)]
 mod tests {

@@ -70,6 +70,12 @@ struct Scene {
     /// The tiles last asked for, in view.
     last_wanted: Vec<TilePos>,
     frame: u64,
+    /// Every tile of the map asked for (Settings ▸ Graphics ▸ Load: the
+    /// whole map); else those around the view, and the tiles of the
+    /// region last asked for and how many tiles it holds.
+    queued_whole: bool,
+    around: Option<(i32, i32, i32, i32)>,
+    wanted: usize,
 }
 
 /// The least time between two starts of a scene's builder on the edits of
@@ -134,13 +140,14 @@ impl Diorama {
     /// How far the building is.
     pub fn progress(&self) -> Progress {
         let Some(s) = &self.scene else { return Progress::default() };
-        Progress { built: s.built, tiles: s.tiles.len(), first: s.first, whole: s.whole, per_tile: if s.built > 0 { s.build_time / s.built as f64 } else { 0.0 } }
+        let tiles = if s.queued_whole { s.tiles.len() } else { s.wanted };
+        Progress { built: s.built, tiles, first: s.first, whole: s.whole, per_tile: if s.built > 0 { s.build_time / s.built as f64 } else { 0.0 } }
     }
 
     /// Whether every tile asked for is built and drawn.
     #[cfg(test)]
     pub fn settled(&self) -> bool {
-        self.scene.as_ref().is_some_and(|s| s.builder.pending() == 0 && s.asked.is_empty() && s.stale.is_empty() && s.far.len() >= s.tiles.len())
+        self.scene.as_ref().is_some_and(|s| s.builder.pending() == 0 && s.asked.is_empty() && s.stale.is_empty() && (s.far.len() >= s.tiles.len() || !s.queued_whole))
     }
 
     /// The header's commands: what is shown and how it is turned.
@@ -307,7 +314,7 @@ impl Diorama {
             }
             scene.bytes += built.floors.bytes();
         }
-        if scene.asked.is_empty() && scene.builder.pending() == 0 && scene.whole.is_none() && scene.far.len() >= scene.tiles.len() {
+        if scene.asked.is_empty() && scene.builder.pending() == 0 && scene.whole.is_none() && (scene.far.len() >= scene.tiles.len() || !scene.queued_whole) {
             scene.whole = Some(scene.started.elapsed());
         }
 
@@ -367,6 +374,52 @@ impl Diorama {
             x * x + z * z
         };
         in_view.sort_by(|a, b| near_of(a).total_cmp(&near_of(b)));
+        // What to build: the whole map once (Settings ▸ Graphics ▸ Load),
+        // or the tiles in view and a quarter of it around, within the view
+        // distance of its middle, nearest first; asked for again as the
+        // view moves to other tiles, what was asked before and not begun
+        // dropped. Zoomed out on a huge map, the middle builds and the
+        // rest waits to be looked at closer.
+        let load = crate::graphics::loading();
+        if load.whole {
+            if !scene.queued_whole {
+                let rest: Vec<TilePos> = sorted_from(&scene.tiles, center).into_iter().filter(|t| !scene.far.contains(t)).collect();
+                scene.builder.want(&rest, true);
+                scene.asked = rest.into_iter().collect();
+                scene.queued_whole = true;
+                scene.around = None;
+                scene.whole = None;
+                scene.last_wanted.clear();
+            }
+        } else {
+            scene.queued_whole = false;
+            let (mx, mz) = ((x1 - x0) * 0.25, (z1 - z0) * 0.25);
+            let r = load.distance as f64;
+            let region = (
+                tile((x0 - mx).max(center[0] - r)),
+                tile((z0 - mz).max(center[1] - r)),
+                tile((x1 + mx).min(center[0] + r)),
+                tile((z1 + mz).min(center[1] + r)),
+            );
+            if scene.around != Some(region) {
+                scene.around = Some(region);
+                let mut list = Vec::new();
+                for tz in region.1..=region.3 {
+                    for tx in region.0..=region.2 {
+                        let t = TilePos::new(tx, tz);
+                        if scene.map.contains(&t) {
+                            list.push(t);
+                        }
+                    }
+                }
+                scene.wanted = list.len();
+                let list: Vec<TilePos> = sorted_from(&list, center).into_iter().filter(|t| !scene.far.contains(t)).collect();
+                scene.builder.want(&list, true);
+                scene.asked = list.into_iter().collect();
+                scene.whole = None;
+                scene.last_wanted.clear();
+            }
+        }
         let near = blocks_per_px <= 1.0 && in_view.len() <= DioramaGpu::near_capacity();
         let mut missing = Vec::new();
         if near {
@@ -502,6 +555,17 @@ impl Diorama {
     }
 }
 
+/// `tiles` nearest `center` (in blocks) first.
+fn sorted_from(tiles: &[TilePos], center: [f64; 2]) -> Vec<TilePos> {
+    let near = |p: &TilePos| {
+        let (x, z) = ((p.x as f64 + 0.5) * 128.0 - center[0], (p.z as f64 + 0.5) * 128.0 - center[1]);
+        x * x + z * z
+    };
+    let mut list = tiles.to_vec();
+    list.sort_by(|a, b| near(a).total_cmp(&near(b)));
+    list
+}
+
 /// The screen's axes as the world's, for `turn` quarter turns: how a step
 /// right (`c`) and down (`s`) on screen move in x and z.
 fn turn_basis(turn: u8) -> ((f32, f32), (f32, f32)) {
@@ -542,7 +606,13 @@ fn make_scene(device: &wgpu::Device, queue: &wgpu::Queue, doc: &mut Document, ca
         x * x + z * z
     };
     order.sort_by(|a, b| key(a).total_cmp(&key(b)));
-    builder.want(&order, true);
+    // Around the view, the first frame asks for what it shows.
+    let whole = crate::graphics::loading().whole;
+    if whole {
+        builder.want(&order, true);
+    } else {
+        order.clear();
+    }
     let (min_y, max_y) = (builder.min_y, builder.max_y);
     Ok(Some(Scene {
         gpu,
@@ -569,5 +639,8 @@ fn make_scene(device: &wgpu::Device, queue: &wgpu::Queue, doc: &mut Document, ca
         max_y,
         last_wanted: Vec::new(),
         frame: 0,
+        queued_whole: whole,
+        around: None,
+        wanted: 0,
     }))
 }

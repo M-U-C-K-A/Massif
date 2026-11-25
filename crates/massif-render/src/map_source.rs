@@ -41,7 +41,9 @@ impl Extent {
     /// The chunks of a dimension of the map, as exported for `target`.
     pub fn of_map(world: &World, dim: usize, target: &Target) -> Option<Extent> {
         let d = world.dims.get(dim)?;
-        let ctx = ExportContext::new(world, d, target).ok()?;
+        // The heights alone: the export's tables took a second of the
+        // interface's thread on a huge map.
+        let (min_y, max_y) = ExportContext::heights(world, d, target).ok()?;
         let mut tiles = d.ground().positions();
         let first = tiles.next()?;
         let (mut lo, mut hi) = ((first.x, first.z), (first.x, first.z));
@@ -54,9 +56,20 @@ impl Extent {
             z0: lo.1 * TILE_CHUNKS,
             width: ((hi.0 - lo.0 + 1) * TILE_CHUNKS) as u32,
             depth: ((hi.1 - lo.1 + 1) * TILE_CHUNKS) as u32,
-            min_y: ctx.min_y,
-            sections: ((ctx.max_y - ctx.min_y) / 16) as u32,
+            min_y,
+            sections: ((max_y - min_y) / 16) as u32,
         })
+    }
+
+    /// The part of this extent within `reach` blocks of block `(x, z)`
+    /// either way (whole tiles), or None when they do not meet.
+    pub fn around(&self, x: f64, z: f64, reach: f64) -> Option<Extent> {
+        let tile = (TILE_CHUNKS * 16) as f64;
+        let (t0x, t0z) = (((x - reach) / tile).floor() as i32 * TILE_CHUNKS, ((z - reach) / tile).floor() as i32 * TILE_CHUNKS);
+        let (t1x, t1z) = ((((x + reach) / tile).floor() as i32 + 1) * TILE_CHUNKS, (((z + reach) / tile).floor() as i32 + 1) * TILE_CHUNKS);
+        let (x0, z0) = (t0x.max(self.x0), t0z.max(self.z0));
+        let (x1, z1) = (t1x.min(self.x0 + self.width as i32), t1z.min(self.z0 + self.depth as i32));
+        (x1 > x0 && z1 > z0).then_some(Extent { x0, z0, width: (x1 - x0) as u32, depth: (z1 - z0) as u32, ..*self })
     }
 
     /// Height in blocks.

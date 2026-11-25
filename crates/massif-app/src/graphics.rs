@@ -207,6 +207,51 @@ pub fn set(g: Graphics) {
     }
 }
 
+/// What the views of the map load: around what they show (the default),
+/// or the whole map, all of it built and kept warm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Loading {
+    pub whole: bool,
+    /// How far from its camera a 3D view builds the map, in blocks, and
+    /// how far around what it shows the Diorama builds.
+    pub distance: u32,
+}
+
+/// The view distances the settings offer, in blocks.
+pub const VIEW_DISTANCES: [u32; 4] = [1024, 2048, 4096, 8192];
+/// The view distance a new installation has.
+pub const DEFAULT_VIEW_DISTANCE: u32 = 4096;
+
+#[cfg(not(test))]
+static LOAD_WHOLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(not(test))]
+static VIEW_DISTANCE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(DEFAULT_VIEW_DISTANCE);
+// Each test on its own thread loads as it set.
+#[cfg(test)]
+thread_local! {
+    static LOADING: std::cell::Cell<Loading> = const { std::cell::Cell::new(Loading { whole: false, distance: DEFAULT_VIEW_DISTANCE }) };
+}
+
+/// What the views load now.
+pub fn loading() -> Loading {
+    #[cfg(test)]
+    return LOADING.with(|c| c.get());
+    #[cfg(not(test))]
+    Loading { whole: LOAD_WHOLE.load(Ordering::Relaxed), distance: VIEW_DISTANCE.load(Ordering::Relaxed) }
+}
+
+/// Load `l` from the next frame on.
+pub fn set_loading(l: Loading) {
+    let l = Loading { distance: l.distance.clamp(256, 65536), ..l };
+    #[cfg(test)]
+    LOADING.with(|c| c.set(l));
+    #[cfg(not(test))]
+    {
+        LOAD_WHOLE.store(l.whole, Ordering::Relaxed);
+        VIEW_DISTANCE.store(l.distance, Ordering::Relaxed);
+    }
+}
+
 static DREW_3D: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// A 3D view drew this frame (for the watch on slow frames).

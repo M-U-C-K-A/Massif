@@ -125,6 +125,11 @@ struct Scene {
     took: Option<Duration>,
     /// The map is larger than the graphics card's buffers.
     full: bool,
+    /// The whole map's chunks; the scene holds them all, or, loading
+    /// around the view, those within the reach of a point (the middle, the
+    /// reach): see [`render_reach`].
+    map: Extent,
+    around: Option<([f64; 2], f64)>,
     generation: u64,
     catalogue: Option<usize>,
     dim: usize,
@@ -225,6 +230,12 @@ impl RenderSide {
         self.scene.as_ref().is_none_or(|s| s.builder.is_some())
     }
 
+    /// Tiles on the graphics card, and those the scene holds once built.
+    #[cfg(test)]
+    pub fn tiles_built(&self) -> (usize, usize) {
+        self.scene.as_ref().map_or((0, 0), |s| (s.built.len(), s.tiles))
+    }
+
     /// Samples a pixel added up in the image.
     #[cfg(test)]
     pub fn samples(&self) -> u32 {
@@ -311,9 +322,24 @@ impl RenderSide {
             self.orbit = None;
             self.playback = Playback::default();
         }
+        // Loading around the view: the camera gone far from the part of the
+        // map the scene holds (or the setting changed), a scene around it
+        // now, not while an image is drawn or saved.
+        let reach = render_reach();
+        if let (Some(s), Some(orbit)) = (&self.scene, &self.orbit)
+            && self.still.is_none()
+            && self.writing.is_none()
+            && match (s.around, reach) {
+                (Some((c, r)), Some(reach)) => r != reach || (c[0] - orbit.target[0]).hypot(c[1] - orbit.target[2]) > reach / 2.0,
+                (None, None) => false,
+                _ => true,
+            }
+        {
+            self.scene = None;
+        }
         if self.scene.is_none() {
             let target = target_for(catalogue.as_ref().map(|c| c.version.as_str()));
-            let Some(extent) = Extent::of_map(&doc.world, doc.dim, &target) else {
+            let Some(map) = Extent::of_map(&doc.world, doc.dim, &target) else {
                 ui.painter().text(view.center(), Align2::CENTER_CENTER, tr!("Nothing to render: the map is empty"), FontId::proportional(13.0), pal.weak);
                 return;
             };
@@ -322,9 +348,19 @@ impl RenderSide {
                 self.put(&pose);
                 self.playback.applied = Some(0.0);
             }
-            let orbit = *self.orbit.get_or_insert_with(|| framing(&extent, doc.world.meta.sea_level as f64));
+            let orbit = *self.orbit.get_or_insert_with(|| framing(&map, reach, doc.world.meta.sea_level as f64));
+            let around = reach.map(|r| ([orbit.target[0], orbit.target[2]], r));
+            // Around a point off the map: the map's nearest part.
+            let extent = match around {
+                Some(([x, z], r)) => map.around(x, z, r).or_else(|| {
+                    let c = map.center();
+                    map.around(c[0], c[2], r)
+                }),
+                None => Some(map),
+            }
+            .unwrap_or(map);
             let materials = Arc::new(Materials::new(catalogue.clone(), device.limits().max_texture_array_layers as usize));
-            let tiles = tiles_by_distance(&doc.world, doc.dim, orbit.target[0], orbit.target[2]);
+            let tiles = wanted(doc, &extent, orbit.target);
             let count = tiles.len();
             let builder = MapBuilder::start(doc.world.copy_unfrozen(), doc.dim, target, materials.clone(), tiles);
             self.scene = Some(Scene {
@@ -336,6 +372,8 @@ impl RenderSide {
                 started: Instant::now(),
                 took: None,
                 full: false,
+                map,
+                around,
                 generation: doc.generation,
                 catalogue: cat_key,
                 dim: doc.dim,
@@ -349,7 +387,7 @@ impl RenderSide {
         }
         let scene = self.scene.as_mut().expect("made above");
         scene.renderer.sea_level = doc.world.meta.sea_level as f64;
-        let orbit = self.orbit.get_or_insert_with(|| framing(&scene.renderer.extent(), doc.world.meta.sea_level as f64));
+        let orbit = self.orbit.get_or_insert_with(|| framing(&scene.map, reach, doc.world.meta.sea_level as f64));
 
         // Edits since: their tiles first, then those not built yet, from a
         // snapshot of the map as it is now.
@@ -364,7 +402,7 @@ impl RenderSide {
             };
             first.sort_by(|a, b| near(a).total_cmp(&near(b)));
             let again: HashSet<TilePos> = first.iter().copied().collect();
-            let rest: Vec<TilePos> = tiles_by_distance(&doc.world, doc.dim, orbit.target[0], orbit.target[2]).into_iter().filter(|p| !scene.built.contains(p) && !again.contains(p)).collect();
+            let rest: Vec<TilePos> = wanted(doc, &scene.renderer.extent(), orbit.target).into_iter().filter(|p| !scene.built.contains(p) && !again.contains(p)).collect();
             for p in &first {
                 scene.built.remove(p);
             }
@@ -403,8 +441,8 @@ impl RenderSide {
         let sense = if self.still.is_some() { Sense::hover() } else { Sense::click_and_drag() };
         let response = ui.interact(view, egui::Id::unique(("massif render view", area)), sense);
         let now = ui.input(|i| i.time);
-        let extent = scene.renderer.extent();
-        let span = extent.width.max(extent.depth) as f64 * 16.0;
+        let map = scene.map;
+        let span = map.width.max(map.depth) as f64 * 16.0;
         if response.dragged_by(PointerButton::Primary) {
             let d = response.drag_delta();
             orbit.yaw += d.x * 0.006;
@@ -424,7 +462,7 @@ impl RenderSide {
             }
         }
         if response.double_clicked() {
-            *orbit = framing(&extent, doc.world.meta.sea_level as f64);
+            *orbit = framing(&map, reach, doc.world.meta.sea_level as f64);
         }
         // Shift-click: in focus there.
         if response.clicked()
@@ -678,7 +716,7 @@ impl RenderSide {
             });
         });
         title(ui, tr!("Position"));
-        let extent = self.scene.as_ref().map(|s| s.renderer.extent());
+        let extent = self.scene.as_ref().map(|s| s.map);
         match (&mut self.orbit, extent) {
             (Some(orbit), Some(extent)) => {
                 let span = extent.width.max(extent.depth) as f64 * 16.0;
@@ -711,7 +749,7 @@ impl RenderSide {
                     });
                 });
                 if ui.button(theme::with_icon(Icon::Focus, tr!("Frame the whole map"))).clicked() {
-                    *orbit = framing(&extent, doc.world.meta.sea_level as f64);
+                    *orbit = framing(&extent, render_reach(), doc.world.meta.sea_level as f64);
                 }
             }
             _ => {
@@ -1012,9 +1050,27 @@ impl RenderSide {
     }
 }
 
-/// The whole map, seen from above its south-east, a little high.
-fn framing(extent: &Extent, sea: f64) -> Orbit {
-    let c = extent.center();
+/// How far from the point the camera looks at the Render builds the map,
+/// loading around the view (the views' view distance), in blocks; None
+/// with the whole map.
+fn render_reach() -> Option<f64> {
+    let load = crate::graphics::loading();
+    (!load.whole).then_some(load.distance as f64)
+}
+
+/// The tiles of the map in `extent`, nearest `target` first.
+fn wanted(doc: &Document, extent: &Extent, target: [f64; 3]) -> Vec<TilePos> {
+    let n = massif_render::map_source::TILE_CHUNKS;
+    let (x0, z0) = (extent.x0.div_euclid(n), extent.z0.div_euclid(n));
+    let (x1, z1) = (x0 + extent.width as i32 / n, z0 + extent.depth as i32 / n);
+    tiles_by_distance(&doc.world, doc.dim, target[0], target[2]).into_iter().filter(|p| (x0..x1).contains(&p.x) && (z0..z1).contains(&p.z)).collect()
+}
+
+/// The whole map, seen from above its south-east, a little high; loading
+/// around the view, its middle within `reach`.
+fn framing(map: &Extent, reach: Option<f64>, sea: f64) -> Orbit {
+    let c = map.center();
+    let extent = reach.and_then(|r| map.around(c[0], c[2], r)).unwrap_or(*map);
     let span = extent.width.max(extent.depth) as f64 * 16.0;
     Orbit { target: [c[0], sea, c[2]], yaw: 0.65, pitch: -0.55, distance: span * 0.8 }
 }

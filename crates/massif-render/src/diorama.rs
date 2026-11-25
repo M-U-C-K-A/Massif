@@ -340,11 +340,7 @@ impl Builder {
     /// builder keeps) for `target`, their small images `size` across, as
     /// tiles are asked for (see [`Builder::want`]).
     pub fn start(world: World, dim: usize, target: Target, materials: Arc<Materials>, size: usize) -> Result<Self, String> {
-        let (min_y, max_y) = {
-            let d = world.dims.get(dim).ok_or("no such dimension")?;
-            let ctx = ExportContext::new(&world, d, &target)?;
-            (ctx.min_y, ctx.max_y)
-        };
+        let (min_y, max_y) = ExportContext::heights(&world, world.dims.get(dim).ok_or("no such dimension")?, &target)?;
         let (tx, rx) = channel();
         let queue: Arc<(Mutex<Queue>, Condvar)> = Arc::default();
         let cancel = Arc::new(AtomicBool::new(false));

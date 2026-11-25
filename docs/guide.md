@@ -374,6 +374,19 @@ their own:
   land farther off as before; the status line says so (every block near
   the eyes). Water there is drawn as on a smaller map, clearer over the
   shallows, where farther off it is a plain surface.
+  **Load**: **Around the view** (the default) or **The whole map**. Around
+  the view, a 3D view builds the land within the **View distance** of its
+  camera (1,024, 2,048, 4,096 or 8,192 blocks), the nearest first, and
+  shows the rest at most as the first look the 2D map's summaries give,
+  nothing decoded; the Diorama builds the tiles in view and a quarter of the
+  view around them, within the view distance of its middle; the Render
+  holds and builds only the part of the map within the view distance of the
+  point its camera looks at, and makes it again around the new place once
+  the camera has gone half the distance away (for a camera path that flies
+  far, choose the whole map). Once what they show is built they rest, and
+  moving builds the new place. On a huge map
+  they are ready far sooner, and the processor rests. The whole map builds
+  every tile, as before 1.2, for flying over all of it at length.
   The Terrain viewport: its **Light and shadows** (the steps of its
   shadows, clouds and sky light; saved images always take the most) and its
   **Clouds**, what costs the most there. Then the map view's images kept on

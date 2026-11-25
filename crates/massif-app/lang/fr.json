@@ -3927,5 +3927,9 @@
   "one": "{kinds} sortes, {n} créé pour les blocs que les terrains de la carte n'avaient pas",
   "other": "{kinds} sortes, {n} créés pour les blocs que les terrains de la carte n'avaient pas"
  },
- "Buildings, trees and overhangs are kept block for block in sculpted chunks; a map holds at most 80,000 of them, which an area this large may pass: what stands on the rest is left out.": "Bâtiments, arbres et surplombs sont gardés bloc pour bloc dans des chunks sculptés ; une carte en contient au plus 80 000, ce qu'une zone aussi grande peut dépasser : ce qui se dresse sur le reste est laissé de côté."
+ "Buildings, trees and overhangs are kept block for block in sculpted chunks; a map holds at most 80,000 of them, which an area this large may pass: what stands on the rest is left out.": "Bâtiments, arbres et surplombs sont gardés bloc pour bloc dans des chunks sculptés ; une carte en contient au plus 80 000, ce qu'une zone aussi grande peut dépasser : ce qui se dresse sur le reste est laissé de côté.",
+ "Loading": "Chargement",
+ "Load": "Charger",
+ "View distance": "Distance de vue",
+ "Around the view, the 3D views and the Render build the map within the view distance of their camera, the Diorama what it shows: on a huge map they are ready sooner and rest once they are. The whole map builds all of it and keeps it, for flying over it at length.": "Autour de la vue, les vues 3D et le Render construisent la carte à la distance de vue de leur caméra, le Diorama ce qu'il montre : sur une carte immense ils sont prêts plus tôt et se reposent ensuite. Toute la carte la construit entière et la garde, pour la survoler longuement."
 }

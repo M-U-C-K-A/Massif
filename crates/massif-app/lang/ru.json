@@ -3851,5 +3851,9 @@
   "one": "{kinds} видов, {n} создано для блоков, которых не было у покрытий карты",
   "other": "{kinds} видов, {n} создано для блоков, которых не было у покрытий карты"
  },
- "Buildings, trees and overhangs are kept block for block in sculpted chunks; a map holds at most 80,000 of them, which an area this large may pass: what stands on the rest is left out.": "Постройки, деревья и навесы сохраняются блок в блок в скульптурных чанках; карта вмещает не более 80 000 таких чанков, и столь большая область может превысить предел: то, что стоит на остальной части, не переносится."
+ "Buildings, trees and overhangs are kept block for block in sculpted chunks; a map holds at most 80,000 of them, which an area this large may pass: what stands on the rest is left out.": "Постройки, деревья и навесы сохраняются блок в блок в скульптурных чанках; карта вмещает не более 80 000 таких чанков, и столь большая область может превысить предел: то, что стоит на остальной части, не переносится.",
+ "Loading": "Загрузка",
+ "Load": "Загружать",
+ "View distance": "Дальность обзора",
+ "Around the view, the 3D views and the Render build the map within the view distance of their camera, the Diorama what it shows: on a huge map they are ready sooner and rest once they are. The whole map builds all of it and keeps it, for flying over it at length.": "Вокруг вида: 3D-виды и Рендер строят карту в пределах дальности обзора камеры, Диорама — то, что показывает; на огромной карте они готовы быстрее и затем отдыхают. Вся карта строит её целиком и хранит, чтобы долго летать над ней."
 }
