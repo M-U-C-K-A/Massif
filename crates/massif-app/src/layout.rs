@@ -99,13 +99,22 @@ impl EditorKind {
         &[(tn!("Paint"), &[EditorKind::Terrain, EditorKind::Layers, EditorKind::Packs, EditorKind::Blocks, EditorKind::Biomes, EditorKind::Levels])],
         &[(
             tn!("Terrain"),
-            &[EditorKind::GenGraph, EditorKind::GenViewer, EditorKind::GenLibrary, EditorKind::GenProps, EditorKind::Graph, EditorKind::GraphView, EditorKind::GraphProps, EditorKind::RenderSettings],
+            &[EditorKind::GenGraph, EditorKind::GenViewer, EditorKind::GenLibrary, EditorKind::GenProps],
         )],
         &[(
             tn!("Render"),
             &[EditorKind::RenderView, EditorKind::RenderSky, EditorKind::RenderCamera, EditorKind::RenderOutput, EditorKind::Timeline],
         )],
     ];
+
+    /// The classic graph's panels, under the Terrain side's, offered only
+    /// for a map made with that graph (see `picker::page`).
+    pub const CLASSIC: Section = (tn!("Classic generator"), &[EditorKind::Graph, EditorKind::GraphView, EditorKind::GraphProps, EditorKind::RenderSettings]);
+
+    /// One of the classic graph's panels.
+    pub const fn classic(self) -> bool {
+        matches!(self, EditorKind::Graph | EditorKind::GraphView | EditorKind::GraphProps | EditorKind::RenderSettings)
+    }
 
     /// Developer's section, after the others.
     pub const DEVELOPER: Section = (tn!("Developer"), &[EditorKind::Developer]);

@@ -3760,6 +3760,7 @@
  "Density: the land coloured by how many objects its layers will place, from few (blue) to many (red); the objects step aside meanwhile": "Dichte: das Land gefärbt danach, wie viele Objekte seine Ebenen setzen werden, von wenigen (blau) bis vielen (rot); die Objekte treten so lange zurück",
  "Objects per 100 blocks²": "Objekte je 100 Blöcke²",
  "Generator": "Generator",
+ "Classic generator": "Klassischer Generator",
  "Classic graph": "Klassischer Graph",
  "The terrain generator of earlier versions, for older maps": "Der Geländegenerator früherer Versionen, für ältere Karten",
  "Imported {display_name} in {secs:.1} s: {summary}. See File ▸ Import Report…": "{display_name} in {secs:.1} s importiert: {summary}. Siehe Datei ▸ Importbericht…",

@@ -5240,7 +5240,7 @@ impl MassifApp {
         // What the area shows: every editor on one page, in columns.
         hui.menu_button(format!("{} {}", theme::glyph(editor.icon()), theme::glyph(Icon::ChevronDown)), |ui| {
             let columns = crate::picker::columns_for(ui.ctx().content_rect().width() - 32.0);
-            if let Some(kind) = crate::picker::page(ui, Some(editor), shown, self.settings.developer, columns) {
+            if let Some(kind) = crate::picker::page(ui, Some(editor), shown, self.settings.developer, self.doc.world.meta.graph.is_some(), columns) {
                 self.layout.set_editor(id, kind);
                 ui.close();
             }
@@ -5626,7 +5626,8 @@ impl MassifApp {
             EditorKind::Empty => {
                 let mut picked = None;
                 let developer = self.settings.developer;
-                scrolled(&mut cui, &mut |ui| picked = panels::empty_area(ui, shown, developer));
+                let classic = self.doc.world.meta.graph.is_some();
+                scrolled(&mut cui, &mut |ui| picked = panels::empty_area(ui, shown, developer, classic));
                 if let Some(kind) = picked {
                     self.layout.set_editor(id, kind);
                 }
@@ -11576,6 +11577,12 @@ mod tests {
             let mut h = harness(choice);
             h.state_mut().settings.developer = true;
             h.run_steps(5);
+            // A map made with the classic graph offers its panels.
+            {
+                let app = h.state_mut();
+                assert!(app.doc.world.meta.graph.is_none(), "a new map has no classic graph");
+                app.doc.world.meta.graph = Some(massif_core::graph::Graph::default());
+            }
             let mut areas = Vec::new();
             h.state().layout.current().root.areas(&mut areas);
             let map = areas.iter().find(|a| a.1 == EditorKind::Map).expect("a map area").0;

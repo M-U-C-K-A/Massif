@@ -3778,6 +3778,7 @@
  "Density: the land coloured by how many objects its layers will place, from few (blue) to many (red); the objects step aside meanwhile": "Плотность: земля окрашена по числу объектов, которые поставят её слои, от малого (синий) до большого (красный); объекты пока скрыты",
  "Objects per 100 blocks²": "Объектов на 100 блоков²",
  "Generator": "Генератор",
+ "Classic generator": "Классический генератор",
  "Classic graph": "Классический граф",
  "The terrain generator of earlier versions, for older maps": "Генератор рельефа прежних версий, для старых карт",
  "Imported {display_name} in {secs:.1} s: {summary}. See File ▸ Import Report…": "{display_name} импортирован за {secs:.1} с: {summary}. См. Файл ▸ Отчёт об импорте…",
