@@ -734,7 +734,7 @@ fn village_details(ui: &mut Ui, summary: bool, id: &str, doc: &Document, theme: 
             // Read from the map once for each change of it, not each frame
             // (thousands of columns of compressed tiles).
             type Key = (u64, usize, u64, [i32; 4]);
-            let (id, key): (egui::Id, Key) = (egui::Id::new("village site check"), (doc.generation, doc.dim, doc.revision, [r.x0, r.z0, r.x1, r.z1]));
+            let (id, key): (egui::Id, Key) = (egui::Id::unique("village site check"), (doc.generation, doc.dim, doc.revision, [r.x0, r.z0, r.x1, r.z1]));
             let (steep, wet, fits) = match ui.ctx().memory(|m| m.data.get_temp::<(Key, (f32, f32, u32))>(id)).filter(|c| c.0 == key) {
                 Some(c) => c.1,
                 None => {
