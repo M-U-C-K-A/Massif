@@ -1,3 +1,0 @@
-**Show or hide a whole palette at once**
-
-Each palette in the Layers panel has an eye on its title, as in WorldPainter: a click hides or shows every layer in it at once, ground covers and tree and object layers alike, on the 2D map and in the 3D views, just as each layer's own eye does. When some of its layers are hidden and others shown, the eye is drawn half, and a click shows them all. Alt-click the eye, or choose Show only this palette in its menu, to show that palette alone, as WorldPainter's solo; do it again and every layer comes back. A WorldPainter world keeps its palettes hidden or soloed as they were. Asked for by Jack (Fornad).

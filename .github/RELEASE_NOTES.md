@@ -1,6 +1,30 @@
 Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, with a node-based terrain generator in the spirit of Gaea, written in Rust.
 
-## New in 1.2.0
+## New in 1.1.1
+
+**Show or hide a whole palette at once**
+
+Each palette in the Layers panel has an eye on its title, as in WorldPainter: a click hides or shows every layer in it at once, ground covers and tree and object layers alike, on the 2D map and in the 3D views, just as each layer's own eye does. When some of its layers are hidden and others shown, the eye is drawn half, and a click shows them all. Alt-click the eye, or choose Show only this palette in its menu, to show that palette alone, as WorldPainter's solo; do it again and every layer comes back. A WorldPainter world keeps its palettes hidden or soloed as they were. Asked for by Jack (Fornad).
+
+
+**The Eyedropper tool works as WorldPainter's**
+
+The Eyedropper tool (⌥Y) now picks what you want to paint with. Click the 2D map or a 3D view and a small list by the pointer shows what is there: its terrain, its biome, and every layer painted there (ground cover, trees, under the trees, tree size, pockets, annotation, combined layer). Click one and its tool is chosen with it, ready to paint: Paint terrain, Paint biome or the layer's own tool. Where there is only a terrain, it is picked at once. Shift-click does what the Eyedropper did before: it takes the terrain, height and water at once and goes back to your tool. Alt-click while painting works as before. Asked for by Jack (Fornad).
+
+
+**Smoother on maps of many imported objects**
+
+A map holding many objects imported from WorldPainter (schematics with their own rules) no longer spends several milliseconds of every frame checking whether its layers changed: on Jack's ArdaCraft recording that was 5.8 ms a frame, a third of a frame's time at 60 fps, even with nothing moving.
+
+
+**Paint terrain: pick the terrain in place, and paint by zones**
+
+The terrain Paint terrain lays, at the top of its Tool Settings, is now a button: a click opens a list to search every terrain and block, the ones picked lately first, without going to the Blocks panel (the map's terrain under Right button picks the same way). A new way to paint, **Zones**, lays each column with the terrain its height, its slope and the water over it call for, from presets — Classic, Plains, Mountain (grass, gravel and stone on slopes, snow on the peaks), Mesa (red sand and bands of terracotta), Desert, Taiga, Coast — or from zones of your own, listed and edited in Tool Settings, kept with the map and saved under a name for other maps. The right button's By height paints the same zones. Grass, snow and the like are never painted under water any more, a lake above the sea included: sand, clay, dirt and gravel by depth, as in the game.
+
+
+**The game is found beside your modpack's instance, whatever the launcher**
+
+On a PC whose launcher keeps Minecraft somewhere Massif did not look, the Blocks panel listed the modpack's instances but said "No Minecraft installation was found", and Use read nothing. Massif now looks for the game beside each instance it finds and wherever the launchers keep it: the official launcher, CurseForge on any drive or folder, the Modrinth App (which keeps the game under the loader's name, such as 1.20.1-fabric-0.16.10), Prism, MultiMC, ATLauncher and GDLauncher. Use reads the instance over the version of the game it plays; when that version is not on the computer, the panel says which one to start once in the launcher or to choose with Choose…. Reported by Jack (Fornad).
 
 ## New in 1.1.0
 
