@@ -172,8 +172,27 @@ pub fn export(
         return Err(ExportError::Empty);
     }
     let total: usize = regions.values().map(Vec::len).sum();
+    // The water of the tiles that need it settled, so that the game leaves
+    // it as it is, the tiles agreeing along their seams: of the whole map,
+    // or, for a part of it, of the tiles it writes and those around them
+    // that their water depends on (a test of a few tiles of a huge map
+    // starts at once, and writes them as the whole map's export would).
+    let steady = !world.meta.lava && std::env::var_os("MASSIF_NO_STEADY").is_none();
+    let part = options.area.is_some() || options.regions.is_some() || selected.is_some();
+    let around: Vec<TilePos> = if !steady {
+        Vec::new()
+    } else if part {
+        let reach = massif_core::water::SEAM_ROUNDS;
+        let ground = dim.ground();
+        let near: HashSet<TilePos> = regions.values().flatten().flat_map(|p| (-reach..=reach).flat_map(move |dz| (-reach..=reach).map(move |dx| p.offset(dx, dz)))).filter(|&p| ground.contains(p)).collect();
+        near.into_iter().collect()
+    } else {
+        dim.ground().positions().collect()
+    };
+    // The water counts in the progress, tile for tile, so that it moves
+    // from the start.
     progress.done.store(0, Ordering::Relaxed);
-    progress.total.store(total, Ordering::Relaxed);
+    progress.total.store(total + around.len(), Ordering::Relaxed);
 
     if !dir_is_empty(dir)? && !options.overwrite {
         return Err(ExportError::Exists(dir.to_owned()));
@@ -207,10 +226,22 @@ pub fn export(
     let level = options.compression.clamp(1, 9);
 
     let regions: Vec<((i32, i32), Vec<TilePos>)> = regions.into_iter().collect();
-    // The water of the tiles that need it settled, so that the game leaves
-    // it as it is, the tiles agreeing along their seams.
-    let planner = (!world.meta.lava && std::env::var_os("MASSIF_NO_STEADY").is_none()).then(|| massif_core::water::Planner::new(dim));
-    let settled = planner.as_ref().map(|p| massif_core::water::steady_all(dim, p)).unwrap_or_default();
+    let settled = if steady {
+        let planner = if part { massif_core::water::Planner::within(dim, &around) } else { massif_core::water::Planner::new(dim) };
+        // Each tile counted once its water is worked out, or passed over.
+        let counted = AtomicUsize::new(0);
+        let step = || {
+            if counted.fetch_add(1, Ordering::Relaxed) < around.len() {
+                progress.done.fetch_add(1, Ordering::Relaxed);
+            }
+            !progress.cancel.load(Ordering::Relaxed)
+        };
+        let settled = massif_core::water::steady_of(dim, &planner, &around, &step).ok_or(ExportError::Cancelled)?;
+        progress.done.store(around.len(), Ordering::Relaxed);
+        settled
+    } else {
+        HashMap::new()
+    };
     regions
         .par_iter()
         .try_for_each(|((rx, rz), tiles)| -> Result<(), ExportError> {

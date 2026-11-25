@@ -820,7 +820,7 @@ fn seams_of(dim: &Dimension, tiles: impl Iterator<Item = TilePos>) -> Vec<(TileP
     for p in tiles {
         for (dx, dz) in [(1, 0), (0, 1), (-1, 0), (0, -1)] {
             let q = p.offset(dx, dz);
-            if dim.ground().view(q).is_some() {
+            if dim.ground().contains(q) {
                 seams.insert(if dx + dz > 0 { ((p.x, p.z), (q.x, q.z)) } else { ((q.x, q.z), (p.x, p.z)) });
             }
         }
@@ -840,15 +840,31 @@ fn seams_of(dim: &Dimension, tiles: impl Iterator<Item = TilePos>) -> Vec<(TileP
 /// blocks written otherwise than the map holds them, by column then
 /// height; a tile not there is written as the map holds it.
 pub fn steady_all(dim: &Dimension, planner: &Planner) -> std::collections::HashMap<TilePos, Vec<Steady>> {
+    let tiles: Vec<TilePos> = dim.ground().positions().collect();
+    steady_of(dim, planner, &tiles, &|| true).unwrap_or_default()
+}
+
+/// How many rounds along the seams [`steady_all`] runs: what a round
+/// changes reaches one tile further, so the water of a tile depends on
+/// the tiles this far around it alone.
+pub const SEAM_ROUNDS: i32 = 4;
+
+/// [`steady_all`] for the tiles of `tiles` (those of the map among them),
+/// worked out as for the whole map within [`SEAM_ROUNDS`] tiles of the
+/// edge of the tiles given: an export of a part of the map settles the
+/// tiles around what it writes, not the whole map. `step` is called as
+/// each tile's water is worked out and each seam run; `None` once it
+/// says to stop.
+pub fn steady_of(dim: &Dimension, planner: &Planner, tiles: &[TilePos], step: &(dyn Fn() -> bool + Sync)) -> Option<std::collections::HashMap<TilePos, Vec<Steady>>> {
     use std::collections::{BTreeMap, HashMap, HashSet};
-    let tiles: Vec<TilePos> = dim.ground().positions().filter(|&p| planner.needs(p)).collect();
-    let mut steady: HashMap<TilePos, Vec<Steady>> = tiles.par_iter().map(|&p| (p, steady_tile(dim, p, Some(planner)))).collect();
+    let tiles: Vec<TilePos> = tiles.iter().copied().filter(|&p| planner.needs(p)).collect();
+    let mut steady: HashMap<TilePos, Vec<Steady>> = tiles.par_iter().map(|&p| step().then(|| (p, steady_tile(dim, p, Some(planner))))).collect::<Option<_>>()?;
     let mut seams = seams_of(dim, tiles.iter().copied());
-    for _ in 0..4 {
-        if seams.is_empty() {
+    for _ in 0..SEAM_ROUNDS {
+        if seams.is_empty() || !step() {
             break;
         }
-        let runs: Vec<_> = seams.par_iter().map(|&(a, b)| seam_run(dim, a, b, &steady).1).collect();
+        let runs: Vec<_> = seams.par_iter().map(|&(a, b)| step().then(|| seam_run(dim, a, b, &steady).1)).collect::<Option<_>>()?;
         // What the game changed, by tile: what is written there instead.
         // By column and height: what the map holds there, what it becomes.
         type Edits = BTreeMap<(u16, i32), (crate::flow::Block, crate::flow::Block)>;
@@ -874,7 +890,7 @@ pub fn steady_all(dim: &Dimension, planner: &Planner) -> std::collections::HashM
         }
         seams = seams_of(dim, touched.into_iter());
     }
-    steady
+    step().then_some(steady)
 }
 
 /// The water the export writes along the seams between its tiles
@@ -961,9 +977,21 @@ fn ring_index(cell: usize) -> usize {
 
 impl Planner {
     pub fn new(dim: &Dimension) -> Self {
+        Self::of(dim, dim.ground().positions().collect())
+    }
+
+    /// The planner of the tiles of `tiles` (those of the map among them),
+    /// as [`Planner::new`] makes it for the whole map: to know which of
+    /// them [`Planner::needs`], it reads the tiles beside them too.
+    pub fn within(dim: &Dimension, tiles: &[TilePos]) -> Self {
+        let ground = dim.ground();
+        let near: std::collections::HashSet<TilePos> = tiles.iter().flat_map(|p| (-1..=1).flat_map(move |dz| (-1..=1).map(move |dx| p.offset(dx, dz)))).filter(|&p| ground.contains(p)).collect();
+        Self::of(dim, near.into_iter().collect())
+    }
+
+    fn of(dim: &Dimension, tiles: Vec<TilePos>) -> Self {
         use crate::compose::block_top;
         use crate::tile::NO_FLUID;
-        let tiles: Vec<TilePos> = dim.ground().positions().collect();
         let kinds = tiles
             .par_iter()
             .map(|&p| {

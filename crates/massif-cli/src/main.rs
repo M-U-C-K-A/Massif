@@ -16,7 +16,7 @@ USAGE
   massif-cli new <out.massif> [--size WxD] [--landform NAME] [--seed N] [--name TEXT] [--limits MIN..MAX] [--relief BLOCKS]
   massif-cli info <world.massif>
   massif-cli verify <world.massif>
-  massif-cli export <world.massif> <folder> [--version V] [--void] [--survival] [--no-ores] [--overwrite] [--rules frozen|survival-safe|vanilla|map]
+  massif-cli export <world.massif> <folder> [--version V] [--void] [--survival] [--no-ores] [--overwrite] [--rules frozen|survival-safe|vanilla|map] [--regions x,z:x,z]
   massif-cli rules <frozen|survival-safe|vanilla> [--version V]
   massif-cli import <old.world> <out.massif>
   massif-cli probe <world.massif> [<x> <z>…] [--random N]
@@ -278,6 +278,15 @@ fn cmd_export(mut args: Args) -> Res<()> {
         ..ExportOptions::default()
     };
     let no_ores = args.flag("--no-ores");
+    // A test export: only these region files, "x,z:x,z".
+    if let Some(list) = args.option("--regions")? {
+        let mut only = std::collections::BTreeSet::new();
+        for pair in list.split([':', ' ']).filter(|p| !p.is_empty()) {
+            let parsed = pair.split_once(',').and_then(|(x, z)| Some((x.parse::<i32>().ok()?, z.parse::<i32>().ok()?)));
+            only.insert(parsed.ok_or_else(|| format!("bad region {pair}: x,z"))?);
+        }
+        options.regions = Some(only);
+    }
     let [path, dir] = args.positional(["<world.massif>", "<folder>"])?;
     let t = Instant::now();
     let mut world = massif_format::load(&path).map_err(|e| e.to_string())?;
@@ -294,8 +303,35 @@ fn cmd_export(mut args: Args) -> Res<()> {
         world.meta.ores.on = false;
     }
     let loaded = t.elapsed();
-    let stats = massif_anvil::export(&world, &dir, &options, &Progress::default())
-        .map_err(|e| e.to_string())?;
+    // When the first tile is done, as the app's progress shows it.
+    let progress = Progress::default();
+    let started = Instant::now();
+    let first = std::sync::Mutex::new(None);
+    let stats = std::thread::scope(|s| {
+        s.spawn(|| {
+            // And how far it is, every ten seconds, until it ends.
+            let mut said = Instant::now();
+            while !progress.cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                let done = progress.done.load(std::sync::atomic::Ordering::Relaxed);
+                if done > 0 && first.lock().unwrap().is_none() {
+                    *first.lock().unwrap() = Some(started.elapsed());
+                }
+                if said.elapsed().as_secs() >= 10 {
+                    eprintln!("{:.0?}: {done} of {}", started.elapsed(), progress.total.load(std::sync::atomic::Ordering::Relaxed));
+                    said = Instant::now();
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        });
+        let r = massif_anvil::export(&world, &dir, &options, &progress);
+        first.lock().unwrap().get_or_insert(started.elapsed());
+        progress.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        r
+    })
+    .map_err(|e| e.to_string())?;
+    if let Some(first) = *first.lock().unwrap() {
+        println!("first tile done after {first:.2?}");
+    }
     println!(
         "{}: {} chunks in {} region files, {}",
         dir.display(),

@@ -223,7 +223,8 @@ fn exported_blocks_match_the_world_model() {
 
     // 2×2 tiles around the origin: four regions of 8×8 chunks each.
     assert_eq!((stats.regions, stats.chunks), (4, 256));
-    assert_eq!(progress.done.load(Ordering::Relaxed), 4);
+    // Each tile's water, then each tile.
+    assert_eq!(progress.done.load(Ordering::Relaxed), 8);
     assert_eq!(progress.fraction(), 1.0);
     for name in ["r.-1.-1.mca", "r.0.-1.mca", "r.-1.0.mca", "r.0.0.mca"] {
         assert!(dir.join("region").join(name).is_file(), "{name}");
@@ -2253,4 +2254,55 @@ fn structures_are_written_with_their_chests_and_villagers() {
     let chunk = raw_chunk(&dir, "region", 14, -35).unwrap();
     assert_eq!(list(&chunk, &["Level", "Entities"]).len(), 1);
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A Test Export of one region file of a map with coasts settles the
+/// water of the tiles around it alone, not of the whole map (Jack's test
+/// of a few tiles of a huge map stayed at 0 % for as long as the whole
+/// map's water took), and writes the region file byte for byte as the
+/// whole map's export does. The water counts in the progress.
+#[test]
+fn a_test_export_writes_its_regions_as_the_whole_export() {
+    let mut world = generate(&GenParams { tiles_x: 16, tiles_z: 16, landform: Landform::Islands, seed: 3, ..GenParams::default() });
+    world.meta.ores.on = false;
+    let dim = &world.dims[0];
+    let planner = massif_core::water::Planner::new(dim);
+    // The region of the map with the most tiles whose water is settled.
+    let mut wet: HashMap<(i32, i32), usize> = HashMap::new();
+    for p in dim.ground().positions().filter(|&p| planner.needs(p)) {
+        *wet.entry((p.x.div_euclid(4), p.z.div_euclid(4))).or_default() += 1;
+    }
+    let (&key, &count) = wet.iter().max_by_key(|&(k, n)| (*n, *k)).unwrap();
+    assert!(count >= 4, "{wet:?}");
+
+    let whole = temp_dir("test-whole");
+    let whole_progress = Progress::default();
+    export(&world, &whole, &ExportOptions::default(), &whole_progress).unwrap();
+    let tiles = dim.ground().positions().count();
+    assert_eq!(whole_progress.total.load(Ordering::Relaxed), 2 * tiles, "every tile's water, then every tile");
+    assert_eq!(whole_progress.done.load(Ordering::Relaxed), 2 * tiles);
+
+    let part = temp_dir("test-part");
+    let progress = Progress::default();
+    let options = ExportOptions { regions: Some([key].into_iter().collect()), ..ExportOptions::default() };
+    let stats = export(&world, &part, &options, &progress).unwrap();
+    assert_eq!(stats.regions, 1);
+    // The 16 tiles written, and their water worked out within 4 tiles of
+    // them: 12 × 12 tiles at most, of the map's 256.
+    let total = progress.total.load(Ordering::Relaxed);
+    assert!(total > 16 && total <= 16 + 144, "{total}");
+    assert_eq!(progress.done.load(Ordering::Relaxed), total);
+    let name = format!("r.{}.{}.mca", key.0, key.1);
+    assert!(region_bytes(&region_dir(&part).join(&name)) == region_bytes(&region_dir(&whole).join(&name)), "{name} differs from the whole map's");
+    assert_eq!(std::fs::read_dir(region_dir(&part)).unwrap().count(), 1);
+
+    // Cancelled while the water is worked out.
+    let cancelled = Progress::default();
+    cancelled.cancel.store(true, Ordering::Relaxed);
+    let err = export(&world, &temp_dir("test-cancel"), &options, &cancelled).unwrap_err();
+    assert!(matches!(err, ExportError::Cancelled), "{err}");
+
+    let _ = std::fs::remove_dir_all(&whole);
+    let _ = std::fs::remove_dir_all(&part);
+    let _ = std::fs::remove_dir_all(temp_dir("test-cancel"));
 }
