@@ -11011,9 +11011,10 @@ mod tests {
         let header = format!("{} {}", theme::glyph(Icon::SunMedium), theme::glyph(Icon::ChevronDown));
         h.query_all_by_label(&header).find(|n| rect.contains(n.rect().center())).expect("the picker of the area").click();
         h.run_steps(3);
-        for name in ["Render Viewport", "Sun and Sky", "Camera", "Render Output", "Timeline", "Classic graph", "Map"] {
+        for name in ["Render Viewport", "Sun and Sky", "Camera", "Render Output", "Timeline", "Generator Graph", "Map"] {
             assert!(h.query_all_by_label(name).next().is_some(), "{name} offered");
         }
+        assert!(h.query_all_by_label("Classic graph").next().is_none(), "the classic graph only for a map made with it");
         if let Some(dir) = &dir {
             for (theme, name) in [(ThemeChoice::Light, "light"), (ThemeChoice::Dark, "dark")] {
                 h.state_mut().settings.theme = theme;
