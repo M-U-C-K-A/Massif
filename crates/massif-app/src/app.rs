@@ -12820,6 +12820,7 @@ mod tests {
             let s = h.state_mut();
             s.tools.structure.rt.set_library(std::sync::Arc::new(massif_structures::testing::village()));
             s.tools.select(Tool::Structure);
+            s.tools.structure.village = false;
             s.tools.structure.kind = "village_plains".into();
         }
         h.run_steps(3);
@@ -12902,6 +12903,7 @@ mod tests {
             let s = h.state_mut();
             s.tools.structure.rt.set_library(lib);
             s.tools.select(Tool::Structure);
+            s.tools.structure.village = false;
             s.tools.structure.kind = "village_plains".into();
             s.tools.structure.seed = 4;
         }
