@@ -1426,48 +1426,7 @@ fn draw_objects(key: ChunkKey, sources: &Sources, colorizer: &Colorizer, pixels:
     }
     let lod = key.lod as i64;
     let (x0, z0) = key.origin();
-    let span = key.blocks();
-    let reach = massif_core::objects::max_reach(reg) as i64;
-    let seed = colorizer.style.seed as u64;
-    let mut placed = Vec::new();
-    for (k, layer) in reg.object_layers.iter().enumerate() {
-        if layer.removed || layer.hidden || layer.objects.is_empty() {
-            continue;
-        }
-        let n = k as u16 + 1;
-        let classes = layer.size_classes(reg);
-        let s = layer.spacing.max(1) as i64;
-        for j in (z0 - reach).div_euclid(s)..=(z0 + span + reach).div_euclid(s) {
-            for i in (x0 - reach).div_euclid(s)..=(x0 + span + reach).div_euclid(s) {
-                let Some(c) = layer.candidate(seed, n, i as i32, j as i32) else { continue };
-                let Some(def) = reg.objects.get(c.object as usize) else { continue };
-                let r = def.reach() as i64;
-                if (c.x as i64) + r < x0 || (c.x as i64) - r >= x0 + span || (c.z as i64) + r < z0 || (c.z as i64) - r >= z0 + span {
-                    continue;
-                }
-                let at = sources.sample(0, c.x, c.z);
-                // On the base plane, or under the canopy.
-                let under = at.understory == n;
-                if at.is_empty() || (at.objects != n && !under) {
-                    continue;
-                }
-                let wet = at.water_depth() > 0.0;
-                if wet != layer.underwater || (wet && colorizer.style.lava) || (layer.soil_only && !colorizer.soil.get(at.terrain as usize).copied().unwrap_or(false)) {
-                    continue;
-                }
-                let object = match at.size {
-                    0 => c.object,
-                    size => match layer.pick(c.pick, size as u16, &classes) {
-                        Some(o) if reg.objects.get(o as usize).is_some() => o,
-                        _ => continue,
-                    },
-                };
-                placed.push(massif_core::objects::Placement { layer: n, object, x: c.x, y: 0, z: c.z, turn: c.turn, mirror: c.mirror, under });
-            }
-        }
-    }
-    // The sub-canopy first: the canopy hides it from above.
-    placed.sort_unstable_by_key(|p| (!p.under, p.layer, p.x, p.z));
+    let placed = chunk_objects(key, sources, colorizer);
     let mut views: HashMap<u32, Vec<(u16, u16)>> = HashMap::new();
     // The texels of each object's top, its shadow a block to the south-east.
     let texels = |p: &massif_core::objects::Placement, views: &mut HashMap<u32, Vec<(u16, u16)>>, shift: i64| -> Vec<(usize, u16, u16)> {
@@ -1524,6 +1483,97 @@ fn draw_objects(key: ChunkKey, sources: &Sources, colorizer: &Colorizer, pixels:
             });
         }
     }
+}
+
+/// The objects standing on the chunk at `key` (reaching over it), as
+/// [`draw_objects`] draws them: the sub-canopy first, then by layer and
+/// place.
+fn chunk_objects(key: ChunkKey, sources: &Sources, colorizer: &Colorizer) -> Vec<massif_core::objects::Placement> {
+    let reg = colorizer.reg;
+    let (x0, z0) = key.origin();
+    let span = key.blocks();
+    let reach = massif_core::objects::max_reach(reg) as i64;
+    let seed = colorizer.style.seed as u64;
+    // The tiles each layer is painted in around the chunk (on the base
+    // plane or under the canopy): its squares are looked at there only. A
+    // forest of a layer spaced a few blocks apart, with large objects
+    // reaching far, took a quarter of a second an image of the map going
+    // through every square of every layer.
+    let mut tiles_of: HashMap<u16, Vec<TilePos>> = HashMap::new();
+    let (t0, t1) = (TilePos::containing((x0 - reach) as i32, (z0 - reach) as i32), TilePos::containing((x0 + span + reach) as i32, (z0 + span + reach) as i32));
+    for tz in t0.z..=t1.z {
+        for tx in t0.x..=t1.x {
+            let pos = TilePos::new(tx, tz);
+            let Some(grid) = sources.grids.get(&pos).and_then(|g| g.grid.as_ref()) else { continue };
+            let mut here: Vec<u16> = Vec::new();
+            for c in &grid.0 {
+                for v in [c.objects, c.understory] {
+                    if v != 0 && !here.contains(&v) {
+                        here.push(v);
+                    }
+                }
+            }
+            for v in here {
+                tiles_of.entry(v).or_default().push(pos);
+            }
+        }
+    }
+    let mut placed = Vec::new();
+    for (k, layer) in reg.object_layers.iter().enumerate() {
+        if layer.removed || layer.hidden || layer.objects.is_empty() {
+            continue;
+        }
+        let n = k as u16 + 1;
+        let Some(tiles) = tiles_of.get(&n) else { continue };
+        let classes = layer.size_classes(reg);
+        let running = layer.running_weights();
+        let s = layer.spacing.max(1) as i64;
+        let (i0, i1) = ((x0 - reach).div_euclid(s), (x0 + span + reach).div_euclid(s));
+        let (j0, j1) = ((z0 - reach).div_euclid(s), (z0 + span + reach).div_euclid(s));
+        for &tile in tiles {
+            let (ox, oz) = (tile.x as i64 * 128, tile.z as i64 * 128);
+            // The squares whose spot may stand in the tile, each spot
+            // counted in its own tile only.
+            for j in oz.div_euclid(s).max(j0)..=(oz + 127).div_euclid(s).min(j1) {
+                for i in ox.div_euclid(s).max(i0)..=(ox + 127).div_euclid(s).min(i1) {
+                    let Some((x, z)) = layer.spot(seed, n, i as i32, j as i32) else { continue };
+                    if TilePos::containing(x, z) != tile {
+                        continue;
+                    }
+                    if (x as i64) + reach < x0 || (x as i64) - reach >= x0 + span || (z as i64) + reach < z0 || (z as i64) - reach >= z0 + span {
+                        continue;
+                    }
+                    let at = sources.sample(0, x, z);
+                    // On the base plane, or under the canopy.
+                    let under = at.understory == n;
+                    if at.is_empty() || (at.objects != n && !under) {
+                        continue;
+                    }
+                    let Some(c) = layer.candidate_with(&running, seed, n, i as i32, j as i32) else { continue };
+                    let Some(def) = reg.objects.get(c.object as usize) else { continue };
+                    let r = def.reach() as i64;
+                    if (c.x as i64) + r < x0 || (c.x as i64) - r >= x0 + span || (c.z as i64) + r < z0 || (c.z as i64) - r >= z0 + span {
+                        continue;
+                    }
+                    let wet = at.water_depth() > 0.0;
+                    if wet != layer.underwater || (wet && colorizer.style.lava) || (layer.soil_only && !colorizer.soil.get(at.terrain as usize).copied().unwrap_or(false)) {
+                        continue;
+                    }
+                    let object = match at.size {
+                        0 => c.object,
+                        size => match layer.pick(c.pick, size as u16, &classes) {
+                            Some(o) if reg.objects.get(o as usize).is_some() => o,
+                            _ => continue,
+                        },
+                    };
+                    placed.push(massif_core::objects::Placement { layer: n, object, x: c.x, y: 0, z: c.z, turn: c.turn, mirror: c.mirror, under });
+                }
+            }
+        }
+    }
+    // The sub-canopy first: the canopy hides it from above.
+    placed.sort_unstable_by_key(|p| (!p.under, p.layer, p.x, p.z));
+    placed
 }
 
 /// The structures placed over the chunk at `key`, seen from above: their
@@ -2782,6 +2832,17 @@ mod tests {
                 })
                 .fold(f64::MAX, f64::min);
             eprintln!("chunk at lod {lod}{}: {best:.3} ms", if smooth { ", smooth" } else { "" });
+            let part = |f: &dyn Fn(&mut [Color32])| {
+                (0..5)
+                    .map(|_| {
+                        let mut pixels = vec![Color32::BLACK; CHUNK_PX * CHUNK_PX];
+                        let t = Instant::now();
+                        f(&mut pixels);
+                        t.elapsed().as_secs_f64() * 1000.0
+                    })
+                    .fold(f64::MAX, f64::min)
+            };
+            eprintln!("  of which the objects {:.3} ms, the structures {:.3} ms", part(&|p| draw_objects(key, &sources, &colorizer, p)), part(&|p| draw_structures(key, &sources, &colorizer, p)));
             if !smooth && (1..=STEP_LODS).contains(&lod) {
                 let best = (0..20)
                     .map(|_| {
@@ -2814,6 +2875,105 @@ mod tests {
                 save(&format!("huge-{mode:?}-lod{lod}.png"), &image);
             }
         }
+    }
+
+    /// The objects of an image of the map, found from the tiles each layer
+    /// is painted in, are the very ones of every square of every layer: a
+    /// layer of 120 objects, a sub-canopy one, one painted nowhere, and an
+    /// object wide enough to reach over its neighbours, at the levels the
+    /// map draws objects at.
+    #[test]
+    fn objects_found_by_tile_are_those_of_every_square() {
+        use massif_core::objects::{ObjectDef, ObjectLayerDef, Placement};
+        let mut w = generate(&GenParams { tiles_x: 4, tiles_z: 4, seed: 9, ..GenParams::default() });
+        for h in 0..120u16 {
+            w.registry.objects.push(ObjectDef::new(&format!("pole {h}"), [1, 2 + h % 9, 1], vec!["minecraft:air".into(), "minecraft:oak_log[axis=y]".into()], vec![1; (2 + h % 9) as usize]));
+        }
+        let wide = w.registry.objects.len() as u32;
+        w.registry.objects.push(ObjectDef::new("wide", [41, 1, 41], vec!["minecraft:air".into(), "minecraft:oak_leaves".into()], vec![1; 41 * 41]));
+        let mut forest = ObjectLayerDef::new("Forest", &(0..120).collect::<Vec<u32>>(), &w.registry);
+        (forest.soil_only, forest.density, forest.spacing) = (false, 0.7, 3);
+        forest.objects.push((wide, 1));
+        let forest = w.registry.add_object_layer(forest);
+        let mut hazel = ObjectLayerDef::new("Hazel", &[1, 2], &w.registry);
+        (hazel.soil_only, hazel.density, hazel.spacing, hazel.understory) = (false, 1.0, 2, true);
+        let hazel = w.registry.add_object_layer(hazel);
+        let mut none = ObjectLayerDef::new("Nowhere", &[3], &w.registry);
+        none.soil_only = false;
+        w.registry.add_object_layer(none);
+        let mut h = History::default();
+        h.begin("forest", 0);
+        {
+            let mut e = h.edit(&mut w, 0);
+            let brush = |r: f32| Brush { radius: r, profile: Profile::Constant, strength: 1.0, ..Brush::default() };
+            ops::paint_objects(&mut e, &brush(150.0), -80.0, -60.0, forest, 1);
+            ops::paint_understory(&mut e, &brush(90.0), 70.0, 50.0, hazel, 2);
+        }
+        h.commit();
+        let dim = &w.dims[0];
+        let grids: HashMap<TilePos, GridEntry> = dim.ground().positions().map(|t| (t, GridEntry { grid: SurfaceGrid::build(dim, t).map(Arc::new), used: 0 })).collect();
+        let summaries = HashMap::new();
+        let sources = Sources { grids: &grids, summaries: &summaries };
+        let colorizer = Colorizer::new(&w.registry, MapStyle::default(), w.meta.sea_level as f32);
+        // Every square of every layer, as the map went before.
+        let every_square = |key: ChunkKey| -> Vec<Placement> {
+            let reg = &w.registry;
+            let (x0, z0) = key.origin();
+            let span = key.blocks();
+            let reach = massif_core::objects::max_reach(reg) as i64;
+            let seed = colorizer.style.seed as u64;
+            let mut placed = Vec::new();
+            for (k, layer) in reg.object_layers.iter().enumerate() {
+                if layer.removed || layer.hidden || layer.objects.is_empty() {
+                    continue;
+                }
+                let n = k as u16 + 1;
+                let classes = layer.size_classes(reg);
+                let s = layer.spacing.max(1) as i64;
+                for j in (z0 - reach).div_euclid(s)..=(z0 + span + reach).div_euclid(s) {
+                    for i in (x0 - reach).div_euclid(s)..=(x0 + span + reach).div_euclid(s) {
+                        let Some(c) = layer.candidate(seed, n, i as i32, j as i32) else { continue };
+                        let Some(def) = reg.objects.get(c.object as usize) else { continue };
+                        let r = def.reach() as i64;
+                        if (c.x as i64) + r < x0 || (c.x as i64) - r >= x0 + span || (c.z as i64) + r < z0 || (c.z as i64) - r >= z0 + span {
+                            continue;
+                        }
+                        let at = sources.sample(0, c.x, c.z);
+                        let under = at.understory == n;
+                        if at.is_empty() || (at.objects != n && !under) {
+                            continue;
+                        }
+                        let wet = at.water_depth() > 0.0;
+                        if wet != layer.underwater || (wet && colorizer.style.lava) || (layer.soil_only && !colorizer.soil.get(at.terrain as usize).copied().unwrap_or(false)) {
+                            continue;
+                        }
+                        let object = match at.size {
+                            0 => c.object,
+                            size => match layer.pick(c.pick, size as u16, &classes) {
+                                Some(o) if reg.objects.get(o as usize).is_some() => o,
+                                _ => continue,
+                            },
+                        };
+                        placed.push(Placement { layer: n, object, x: c.x, y: 0, z: c.z, turn: c.turn, mirror: c.mirror, under });
+                    }
+                }
+            }
+            placed.sort_unstable_by_key(|p| (!p.under, p.layer, p.x, p.z));
+            placed
+        };
+        let (lo, hi) = dim.bounds().unwrap();
+        let mut seen = (0, 0);
+        for lod in 0..=2u8 {
+            let mut keys: Vec<ChunkKey> = (lo.z..=hi.z).flat_map(|z| (lo.x..=hi.x).map(move |x| ChunkKey::of_tile(TilePos::new(x, z), lod))).collect();
+            keys.dedup();
+            for key in keys {
+                let quick = chunk_objects(key, &sources, &colorizer);
+                assert_eq!(quick, every_square(key), "lod {lod}, chunk {key:?}");
+                seen.0 += quick.iter().filter(|p| !p.under).count();
+                seen.1 += quick.iter().filter(|p| p.under).count();
+            }
+        }
+        assert!(seen.0 > 1000 && seen.1 > 100, "objects drawn: {seen:?}");
     }
 
     /// A brush held in place redraws every part of the map under it, not

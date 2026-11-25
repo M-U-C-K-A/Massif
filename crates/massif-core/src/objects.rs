@@ -905,30 +905,78 @@ impl ObjectLayerDef {
         self.candidate_in(seed, number, 0, self.spacing.max(1) as i32, self.density, i, j)
     }
 
+    /// The spot of [`ObjectLayerDef::candidate`] alone, without choosing its
+    /// object: to ask the land there first, much quicker than choosing
+    /// among a layer of hundreds of objects. `None` exactly when the
+    /// square stays empty for its share of the squares (or the layer is
+    /// removed); the candidate may still be `None` when no object weighs.
+    pub fn spot(&self, seed: u64, number: u16, i: i32, j: i32) -> Option<(i32, i32)> {
+        self.spot_in(seed, number, 0, self.spacing.max(1) as i32, self.density, i, j)
+    }
+
+    /// The weights of its objects added up, one after the other: to choose
+    /// among them by halves (see [`ObjectLayerDef::candidate_with`]).
+    pub fn running_weights(&self) -> Vec<u32> {
+        let mut total = 0u32;
+        self.objects.iter().map(|o| {
+            total += o.1 as u32;
+            total
+        }).collect()
+    }
+
+    /// [`ObjectLayerDef::candidate`], the object chosen from `running`
+    /// ([`ObjectLayerDef::running_weights`]): the same, the time of a
+    /// layer's every object saved for each square.
+    pub fn candidate_with(&self, running: &[u32], seed: u64, number: u16, i: i32, j: i32) -> Option<Candidate> {
+        self.candidate_from(seed, number, 0, self.spacing.max(1) as i32, self.density, i, j, |r| {
+            let total = running.last().copied().unwrap_or(0);
+            if total == 0 {
+                return None;
+            }
+            let r = r % total;
+            self.objects.get(running.partition_point(|&c| c <= r)).map(|o| o.0)
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn spot_in(&self, seed: u64, number: u16, size: u16, spacing: i32, density: f32, i: i32, j: i32) -> Option<(i32, i32)> {
+        if self.removed {
+            return None;
+        }
+        let s = spacing.max(1);
+        let h = |k: u64| hash2(i, j, Self::salt(seed, number, size).wrapping_add(k.wrapping_mul(0x5851_f42d_4c95_7f2d)));
+        let density = density.clamp(0.0, 1.0);
+        if density < 1.0 && h(0) as f32 >= density * u32::MAX as f32 {
+            return None;
+        }
+        // Kept off the edges of the square: two objects are never closer
+        // than a third of the spacing.
+        let margin = s / 6;
+        let room = (s - 2 * margin).max(1) as u32;
+        Some((i * s + margin + (h(2) % room) as i32, j * s + margin + (h(3) % room) as i32))
+    }
+
+    fn salt(seed: u64, number: u16, size: u16) -> u64 {
+        seed ^ (number as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ 0x6f62_6a65_6374 ^ (size as u64).wrapping_mul(0xa076_1d64_78bd_642f)
+    }
+
     /// [`ObjectLayerDef::candidate`] in a grid of its own (`size`, 0 for
     /// the layer's), of squares `spacing` blocks wide, standing in a share
     /// `density` of them.
     #[allow(clippy::too_many_arguments)]
     pub fn candidate_in(&self, seed: u64, number: u16, size: u16, spacing: i32, density: f32, i: i32, j: i32) -> Option<Candidate> {
-        if self.removed {
-            return None;
-        }
-        let s = spacing.max(1);
-        let salt = seed ^ (number as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ 0x6f62_6a65_6374 ^ (size as u64).wrapping_mul(0xa076_1d64_78bd_642f);
-        let h = |k: u64| hash2(i, j, salt.wrapping_add(k.wrapping_mul(0x5851_f42d_4c95_7f2d)));
-        let density = density.clamp(0.0, 1.0);
-        if density < 1.0 && h(0) as f32 >= density * u32::MAX as f32 {
-            return None;
-        }
+        self.candidate_from(seed, number, size, spacing, density, i, j, |r| self.pick(r, 0, &[]))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn candidate_from(&self, seed: u64, number: u16, size: u16, spacing: i32, density: f32, i: i32, j: i32, choose: impl Fn(u32) -> Option<u32>) -> Option<Candidate> {
+        let (x, z) = self.spot_in(seed, number, size, spacing, density, i, j)?;
+        let h = |k: u64| hash2(i, j, Self::salt(seed, number, size).wrapping_add(k.wrapping_mul(0x5851_f42d_4c95_7f2d)));
         let pick = h(1);
-        let object = self.pick(pick, 0, &[])?;
-        // Kept off the edges of the square: two objects are never closer
-        // than a third of the spacing.
-        let margin = s / 6;
-        let room = (s - 2 * margin).max(1) as u32;
+        let object = choose(pick)?;
         Some(Candidate {
-            x: i * s + margin + (h(2) % room) as i32,
-            z: j * s + margin + (h(3) % room) as i32,
+            x,
+            z,
             object,
             pick,
             turn: if self.rotate { (h(4) % 4) as u8 } else { 0 },
@@ -1200,9 +1248,12 @@ pub fn tile_placements(reg: &Registry, mat: &Materializer, seed: u64, lava: bool
                 let s = layer.spacing.max(1) as i32;
                 let (i0, i1) = (ox.div_euclid(s), (ox + 127).div_euclid(s));
                 let (j0, j1) = (oz.div_euclid(s), (oz + 127).div_euclid(s));
+                // Chosen by halves: the same objects, without going through
+                // a layer of hundreds of them for every square.
+                let running = layer.running_weights();
                 for j in j0..=j1 {
                     for i in i0..=i1 {
-                        let Some(c) = layer.candidate(seed, n, i, j) else { continue };
+                        let Some(c) = layer.candidate_with(&running, seed, n, i, j) else { continue };
                         if TilePos::containing(c.x, c.z) != pos || reg.objects.get(c.object as usize).is_none() {
                             continue;
                         }
@@ -1413,6 +1464,37 @@ mod tests {
     use super::*;
     use crate::generate::{GenParams, generate};
     use crate::history::History;
+
+    /// The spot alone and the choice by halves give the very candidates of
+    /// `candidate`, weights of 0 and a layer of hundreds of objects
+    /// included.
+    #[test]
+    fn quick_candidates_are_the_same() {
+        let reg = Registry::vanilla();
+        for (count, spacing, density) in [(1usize, 4u16, 1.0f32), (7, 9, 0.6), (300, 5, 0.35), (3, 1, 1.0)] {
+            let mut layer = ObjectLayerDef::new("test", &[], &reg);
+            layer.spacing = spacing;
+            layer.density = density;
+            layer.objects = (0..count).map(|k| (k as u32 * 3, [0u16, 1, 5, 40, 0, 2][k % 6])).collect();
+            let running = layer.running_weights();
+            for seed in [0u64, 7, 0xdead_beef] {
+                for j in -40..40 {
+                    for i in -40..40 {
+                        let c = layer.candidate(seed, 3, i, j);
+                        assert_eq!(layer.candidate_with(&running, seed, 3, i, j), c);
+                        match layer.spot(seed, 3, i, j) {
+                            Some(at) => assert!(c.is_none_or(|c| (c.x, c.z) == at)),
+                            None => assert!(c.is_none()),
+                        }
+                    }
+                }
+            }
+        }
+        // No object weighs: never one.
+        let mut layer = ObjectLayerDef::new("none", &[], &reg);
+        layer.objects = vec![(1, 0), (2, 0)];
+        assert!(layer.candidate_with(&layer.running_weights(), 1, 1, 0, 0).is_none());
+    }
 
     /// A small tree: a trunk three high on a block of dirt, leaves around
     /// its top, a vine on its east side.
