@@ -6888,8 +6888,12 @@ impl MassifApp {
                 let Some(release) = self.update_offer().cloned() else { return };
                 let version = release.tag_name.trim_start_matches('v').to_owned();
                 let (mut open, mut skip) = (false, false);
+                // Sized to the window: the notes read as a page, not in a
+                // slot (over the home screen as over the map).
+                let window = ctx.content_rect();
+                let width = (window.width() - 160.0).clamp(480.0, 820.0);
                 let response = modal(ctx, "update").show(ctx, |ui| {
-                    ui.set_width(520.0);
+                    ui.set_width(width);
                     let pal = Palette::of(ui);
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(theme::glyph(Icon::CircleArrowUp).to_string()).size(17.0).color(pal.accent));
@@ -6900,9 +6904,9 @@ impl MassifApp {
                     ui.add_space(10.0);
                     let notes = crate::help::blocks(&release.notes_since(crate::update::RUNNING));
                     if !notes.is_empty() {
-                        let height = (ctx.content_rect().height() - 260.0).clamp(120.0, 420.0);
+                        let height = (window.height() - 300.0).clamp(120.0, 720.0);
                         crate::widgets::well(ui, |ui| {
-                            egui::ScrollArea::vertical().id_salt("update notes").max_height(height).auto_shrink([false, true]).show(ui, |ui| {
+                            egui::ScrollArea::vertical().id_salt("update notes").max_height(height).min_scrolled_height(height).auto_shrink([false, false]).show(ui, |ui| {
                                 ui.set_width(ui.available_width() - 10.0);
                                 crate::help::blocks_ui(ui, &notes);
                             });
@@ -9003,6 +9007,9 @@ mod tests {
         h.get_by_label("Massif 9.1.0 is out").click();
         h.run_steps(3);
         assert!(matches!(h.state().dialog, Some(Dialog::Update)));
+        if let Some(dir) = &out {
+            h.render().unwrap().save(dir.join("update-dialog-home.png")).unwrap();
+        }
         h.get_by_label("Skip this version").click();
         h.run_steps(3);
         assert_eq!(h.state().settings.skipped_version.as_deref(), Some("9.1.0"));

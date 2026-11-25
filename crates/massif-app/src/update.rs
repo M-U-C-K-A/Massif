@@ -412,6 +412,18 @@ pub mod tests {
     }
 
     #[test]
+    fn a_build_as_new_as_the_release_is_told_of_nothing() {
+        let release = |tag: &str| Release { tag_name: tag.to_owned(), ..fixture() };
+        // A build of main named after the next version, or the release
+        // itself: nothing is out for it.
+        for running in ["1.2.0", "1.1.1", "1.2.0-beta.1", "1.1.2"] {
+            assert!(!release("v1.1.1").is_newer_than(running), "{running}");
+        }
+        assert!(release("v1.1.1").is_newer_than("1.1.0"));
+        assert!(release("v1.1.1").is_newer_than("1.1.1-beta.3"), "a beta tester is told of the release");
+    }
+
+    #[test]
     fn betas_come_in_semver_order() {
         let v = |s| Version::parse(s).unwrap_or_else(|| panic!("{s}"));
         assert!(v("1.0.0-beta.1") < v("1.0.0-beta.2") && v("1.0.0-beta.2") < v("1.0.0"));
