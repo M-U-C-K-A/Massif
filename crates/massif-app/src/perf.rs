@@ -417,7 +417,9 @@ impl Recording {
         let mut parts: Vec<(String, f32)> = Vec::new();
         let mut busy_until = at_ns(ended);
         let mut open: Vec<(u64, u64)> = Vec::new(); // id, end: of the counted ones enclosing
-        let mut mine: Vec<&Span> = self.spans.iter().rev().take_while(|s| s.start >= from.saturating_sub(1_000_000_000)).filter(|s| s.thread == self.thread && s.start >= from && s.start < to).collect();
+        // This thread's spans only before the cut: another thread's long scope,
+        // pushed when it ends, starts long before this frame and would stop it.
+        let mut mine: Vec<&Span> = self.spans.iter().rev().filter(|s| s.thread == self.thread).take_while(|s| s.start >= from.saturating_sub(1_000_000_000)).filter(|s| s.start >= from && s.start < to).collect();
         mine.sort_by_key(|s| (s.start, std::cmp::Reverse(s.dur)));
         for s in mine {
             busy_until = busy_until.max(s.start + s.dur);
