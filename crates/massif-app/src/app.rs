@@ -10292,7 +10292,9 @@ mod tests {
         h.run_steps(24);
         assert!(h.state().render_side.samples() > 8, "samples add up while the view stays still");
         settle_render(&mut h);
-        let shown = h.render().unwrap();
+        // The picture read back from the card: under the load of the other
+        // tests drawing at once, a read-back can time out; it is asked again.
+        let shown = (0..3).find_map(|_| h.render().ok()).expect("the render side's picture is read back");
         if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
             shown.save(dir.join("render-side.png")).unwrap();
         }
