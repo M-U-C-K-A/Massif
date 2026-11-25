@@ -1,13 +1,19 @@
-# The terrain generator's panel (1.3)
+# The terrain generator (1.2, experimental)
 
 [← Back to the README](../README.md) · [Terrain graphs](terrain-graphs.md) · [Every node](terrain-nodes.md)
 
-The **Terrain Generator** area holds the generator of 1.3 in one place:
-the **Library** on the left, the **Viewer** over the **Graph** in the
-middle, the selected node's **settings** on the right, and a status line
-at the foot (what is computing, how long the last picture took, the
-graphics card, the cache). Choose it from any area's header, in the
-Terrain section. The graph is saved with the world.
+The terrain generator of Massif 1.2 is the Terrain side's default: the
+side opens on its **Generator** workspace, whose **Terrain Generator** area
+is marked **Experimental** while it finds its way. The samples and
+templates of the home screen open there, with their graph and its preview,
+and the World side only when you go to it (Apply, or the side switch). It
+holds the generator in one place: the **Library** on the left, the
+**Viewer** over the **Graph** in the middle, the selected node's
+**settings** on the right, and a status line at the foot (what is
+computing, how long the last picture took, the graphics card, the cache).
+The area can also be chosen from any area's header, in the Terrain
+section. The graph editor of earlier versions stays in that list as
+**Classic graph**, for older maps. The graph is saved with the world.
 
 - [The graph](#the-graph)
 - [Composites](#composites)

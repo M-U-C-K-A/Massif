@@ -1,6 +1,6 @@
 //! The panel's texts in the user's language. The panel keeps its own
 //! catalogues, `lang/<code>.json` beside this file, in the app's format
-//! (`"English": "translation"`): the node set of 1.3 is new, and keeping
+//! (`"English": "translation"`): the node set of 1.2 is new, and keeping
 //! its words apart lets it grow without touching the app's files while
 //! sessions work side by side. A text a catalogue lacks falls back on the
 //! app's catalogue, then on the English.

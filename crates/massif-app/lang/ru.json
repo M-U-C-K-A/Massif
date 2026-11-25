@@ -2045,7 +2045,6 @@
  "Terraced hill": "Террасный холм",
  "Terraces": "Террасы",
  "Terrain": "Местность",
- "Terrain Graph": "Граф местности",
  "Terrain Tiles": "Terrain Tiles",
  "Terrain graph": "Граф местности",
  "Terrain mixes": "Смеси местностей",
@@ -2114,7 +2113,6 @@
  "The map, compressed": "Карта, сжатая",
  "The map, {side} blocks across, {read}. Its paint, its levels and what was sculpted in 3D stay; one step to undo.": "Карта, {side} блоков в поперечнике, {read}. Её раскраска, уровни и вылепленное в 3D остаются; один шаг для отмены.",
  "The maps you make or open show up here.": "Здесь появятся созданные или открытые вами карты.",
- "The nodes the terrain is generated from": "Узлы, из которых генерируется местность",
  "The open map's surface, water and colours.": "Поверхность, вода и цвета открытой карты.",
  "The open map: surface, water, colours": "Открытая карта: поверхность, вода, цвета",
  "The options of the tool in hand": "Параметры инструмента в руке",
@@ -3783,5 +3781,8 @@
  },
  "Objects: the trees, bushes and rocks of the layers, shown or hidden": "Объекты: деревья, кусты и камни слоёв, показаны или скрыты",
  "Density: the land coloured by how many objects its layers will place, from few (blue) to many (red); the objects step aside meanwhile": "Плотность: земля окрашена по числу объектов, которые поставят её слои, от малого (синий) до большого (красный); объекты пока скрыты",
- "Objects per 100 blocks²": "Объектов на 100 блоков²"
+ "Objects per 100 blocks²": "Объектов на 100 блоков²",
+ "Generator": "Генератор",
+ "Classic graph": "Классический граф",
+ "The terrain generator of earlier versions, for older maps": "Генератор рельефа прежних версий, для старых карт"
 }

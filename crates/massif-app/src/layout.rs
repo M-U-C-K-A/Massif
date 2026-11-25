@@ -45,7 +45,7 @@ pub enum EditorKind {
     GraphProps,
     /// Sun, clouds and the rest of how the graph's viewport renders.
     RenderSettings,
-    /// The terrain generator of 1.3: library, lit viewer, node graph and
+    /// The terrain generator of 1.2: library, lit viewer, node graph and
     /// settings in one area (`crate::terrain`).
     TerrainGraph,
     /// How Massif runs, live (with Settings ▸ Developer on).
@@ -121,7 +121,7 @@ impl EditorKind {
             EditorKind::Packs => tr!("Ready-made trees, plants and mixes of blocks to paint"),
             EditorKind::Levels => tr!("Levels that add rock over the ground or carve it away"),
             EditorKind::Info => tr!("What is under the cursor: height, water, terrain, biome and every layer painted there"),
-            EditorKind::Graph => tr!("The nodes the terrain is generated from"),
+            EditorKind::Graph => tr!("The terrain generator of earlier versions, for older maps"),
             EditorKind::GraphView => tr!("The graph's terrain in relief, under its sky"),
             EditorKind::GraphProps => tr!("The settings of the selected node"),
             EditorKind::RenderSettings => tr!("Sun, clouds and haze, and images saved from the viewport"),
@@ -155,7 +155,7 @@ impl EditorKind {
             EditorKind::Packs => tr!("Packs"),
             EditorKind::Levels => tr!("Levels"),
             EditorKind::Info => tr!("Info"),
-            EditorKind::Graph => tr!("Terrain Graph"),
+            EditorKind::Graph => tr!("Classic graph"),
             EditorKind::GraphView => tr!("Graph Viewport"),
             EditorKind::GraphProps => tr!("Node Properties"),
             EditorKind::RenderSettings => tr!("Render Settings"),
@@ -580,7 +580,7 @@ pub enum Side {
 
 /// The workspaces a layout saved by an older version lacks are added to it
 /// once: this is the version they come with.
-const LAYOUT_VERSION: u32 = 8;
+const LAYOUT_VERSION: u32 = 9;
 
 /// The share of the window's width the column of the tools takes on the
 /// left of the Layout, Sculpting and Painting workspaces: the same in all
@@ -692,6 +692,9 @@ fn worldpainter_workspace(b: &mut Builder) -> Node {
 /// The name of the WorldPainter workspace.
 pub const WORLDPAINTER: &str = tn!("WorldPainter");
 
+/// The Terrain side's first workspace: the terrain generator of 1.2.
+pub const GENERATOR: &str = tn!("Generator");
+
 /// Give every area of `node` a new id, from `next` on, so that no view
 /// state is shared with the areas it was copied from.
 fn renumber(node: &mut Node, next: &mut AreaId) {
@@ -796,8 +799,11 @@ impl Default for Layout {
         let (tools, map) = (b.area(Tools), b.area(Map));
         add(tn!("Minimal"), b.row(0.12, tools, map));
 
-        // The terrain generator. Graph: as in Gaea, the viewport above the
-        // graph, the selected node's settings on the right.
+        // The terrain generator of 1.2, the Terrain side's first: its
+        // library, viewer, graph and settings in one area.
+        add(GENERATOR, b.area(TerrainGraph));
+        // The classic graph (older maps'). Graph: as in Gaea, the viewport
+        // above the graph, the selected node's settings on the right.
         let (view, graph) = (b.area(GraphView), b.area(Graph));
         let left = b.column(0.58, view, graph);
         let props = b.area(GraphProps);
@@ -807,7 +813,7 @@ impl Default for Layout {
         let (settings, props) = (b.area(RenderSettings), b.area(GraphProps));
         let side = b.column(0.7, settings, props);
         add(tn!("Render"), b.row(0.79, view, side));
-        for w in workspaces.iter_mut().rev().take(2) {
+        for w in workspaces.iter_mut().rev().take(3) {
             w.terrain = true;
         }
         // WorldPainter: laid out as WorldPainter is. Last in the list, so
@@ -931,6 +937,19 @@ impl Layout {
             self.last_render = self.workspaces.len();
             let added = render_workspaces(&mut Builder(&mut self.next_id));
             self.workspaces.extend(added);
+        }
+        // Version 9: the terrain generator of 1.2 is the Terrain side's
+        // first workspace, and the one it opens on.
+        if self.version < 9 && !self.workspaces.iter().any(|w| w.terrain && w.root.shows(EditorKind::TerrainGraph)) {
+            let at = self.workspaces.iter().position(|w| w.terrain).unwrap_or(self.workspaces.len());
+            let root = Builder(&mut self.next_id).area(EditorKind::TerrainGraph);
+            self.workspaces.insert(at, Workspace { name: GENERATOR.into(), root, maximized: None, terrain: true, render: false, floating: Vec::new() });
+            for k in [&mut self.active, &mut self.last_render].into_iter().chain(self.last.iter_mut()) {
+                if *k >= at && self.workspaces.len() > at + 1 {
+                    *k += 1;
+                }
+            }
+            self.last[1] = at;
         }
         // A floating panel whose id an area has too: a new id.
         for k in 0..self.workspaces.len() {
@@ -1094,6 +1113,15 @@ impl Layout {
                 Side::Terrain => self.last[1] = index,
                 Side::World => self.last[0] = index,
             }
+        }
+    }
+
+    /// The Terrain side, on the terrain generator's workspace (the first
+    /// that shows it).
+    pub fn show_generator(&mut self) {
+        match self.workspaces.iter().position(|w| w.terrain && w.root.shows(EditorKind::TerrainGraph)) {
+            Some(k) => self.activate(k),
+            None => self.show_side(Side::Terrain),
         }
     }
 
@@ -1332,10 +1360,12 @@ mod tests {
     #[test]
     fn default_layout_is_well_formed() {
         let layout = Layout::default();
-        assert_eq!(layout.workspaces.len(), 12);
+        assert_eq!(layout.workspaces.len(), 13);
         // Three sides: eight workspaces to edit the map (the WorldPainter
-        // workspace last), two to generate terrain, two to render.
-        assert_eq!(layout.workspaces.iter().filter(|w| w.terrain).count(), 2);
+        // workspace last), three to generate terrain (the generator first,
+        // then the classic graph's two), two to render.
+        assert_eq!(layout.workspaces.iter().filter(|w| w.terrain).count(), 3);
+        assert!(layout.workspaces.iter().find(|w| w.terrain).is_some_and(|w| w.name == GENERATOR && w.root.shows(EditorKind::TerrainGraph)));
         assert_eq!(layout.workspaces.iter().filter(|w| w.render).count(), 2);
         let mut seen = std::collections::HashSet::new();
         for ws in &layout.workspaces {
@@ -1508,12 +1538,34 @@ mod tests {
         layout.activate(2);
         layout.switch_side(true);
         assert!(layout.terrain());
-        assert_eq!(layout.current().name, "Graph");
-        layout.activate(8);
+        assert_eq!(layout.current().name, GENERATOR, "the Terrain side opens on the generator");
+        let render = layout.workspaces.iter().position(|w| w.terrain && w.name == "Render").unwrap();
+        layout.activate(render);
         layout.switch_side(false);
         assert_eq!(layout.active, 2, "back where the map editor was left");
         layout.switch_side(true);
         assert_eq!(layout.current().name, "Render");
+    }
+
+    /// A layout of 1.1 gets the terrain generator's workspace, once, first
+    /// on the Terrain side, which then opens on it.
+    #[test]
+    fn old_layouts_get_the_generator() {
+        let mut old = Layout::default();
+        old.workspaces.retain(|w| w.name != GENERATOR);
+        old.version = 8;
+        old.last = [0, 0];
+        old.last[1] = old.workspaces.iter().position(|w| w.terrain && w.name == "Graph").unwrap();
+        old.activate(1);
+        let back = serde_json::from_str::<Layout>(&serde_json::to_string(&old).unwrap()).unwrap().sanitize();
+        let names: Vec<&str> = back.workspaces.iter().map(|w| w.name.as_str()).collect();
+        assert_eq!(names, Layout::default().workspaces.iter().map(|w| w.name.as_str()).collect::<Vec<_>>());
+        assert_eq!(back.current().name, "Sculpting", "the same workspace shown");
+        let mut back = back;
+        back.switch_side(true);
+        assert_eq!(back.current().name, GENERATOR);
+        let again = serde_json::from_str::<Layout>(&serde_json::to_string(&back).unwrap()).unwrap().sanitize();
+        assert_eq!(again.workspaces.len(), back.workspaces.len(), "once");
     }
 
     /// A layout saved before the 3D Sculpt editor gets its workspace, once,
@@ -1618,19 +1670,25 @@ mod tests {
     fn each_side_keeps_a_workspace() {
         let mut layout = Layout::default();
         let n = layout.workspaces.len();
-        layout.activate(8);
-        layout.remove_workspace(8);
+        let at = |l: &Layout, name: &str| l.workspaces.iter().position(|w| w.terrain && w.name == name).unwrap();
+        let render = at(&layout, "Render");
+        layout.activate(render);
+        layout.remove_workspace(render);
         assert_eq!(layout.workspaces.len(), n - 1);
         assert!(layout.terrain(), "still on the terrain side");
         assert_eq!(layout.current().name, "Graph");
-        layout.remove_workspace(7);
-        assert_eq!(layout.workspaces.len(), n - 1, "the last terrain workspace stays");
+        let graph = at(&layout, "Graph");
+        layout.remove_workspace(graph);
+        assert_eq!(layout.workspaces.len(), n - 2);
+        let generator = at(&layout, GENERATOR);
+        layout.remove_workspace(generator);
+        assert_eq!(layout.workspaces.len(), n - 2, "the last terrain workspace stays");
         layout.switch_side(false);
         layout.activate(1);
         layout.remove_workspace(0);
         assert_eq!(layout.current().name, "Sculpting", "the active workspace stays shown");
         layout.switch_side(true);
-        assert_eq!(layout.current().name, "Graph");
+        assert_eq!(layout.current().name, GENERATOR);
     }
 
     #[test]

@@ -2044,7 +2044,6 @@
  "Terraced hill": "Colina em terraços",
  "Terraces": "Terraços",
  "Terrain": "Terreno",
- "Terrain Graph": "Grafo de terreno",
  "Terrain Tiles": "Terrain Tiles",
  "Terrain graph": "Grafo de terreno",
  "Terrain mixes": "Misturas de terreno",
@@ -2113,7 +2112,6 @@
  "The map, compressed": "O mapa, comprimido",
  "The map, {side} blocks across, {read}. Its paint, its levels and what was sculpted in 3D stay; one step to undo.": "O mapa, {side} blocos de lado, {read}. Sua pintura, seus níveis e o que foi esculpido em 3D ficam; um passo para desfazer.",
  "The maps you make or open show up here.": "Os mapas que você cria ou abre aparecem aqui.",
- "The nodes the terrain is generated from": "Os nós dos quais o terreno é gerado",
  "The open map's surface, water and colours.": "A superfície, a água e as cores do mapa aberto.",
  "The open map: surface, water, colours": "O mapa aberto: superfície, água, cores",
  "The options of the tool in hand": "As opções da ferramenta em uso",
@@ -3763,5 +3761,8 @@
  "{name} selected: drag it to move it, its corners to resize it": "{name} selecionado: arraste para mover, os cantos para redimensionar",
  "Objects: the trees, bushes and rocks of the layers, shown or hidden": "Objetos: as árvores, arbustos e rochas das camadas, mostrados ou ocultos",
  "Density: the land coloured by how many objects its layers will place, from few (blue) to many (red); the objects step aside meanwhile": "Densidade: o terreno colorido segundo quantos objetos as suas camadas vão colocar, de poucos (azul) a muitos (vermelho); os objetos afastam-se entretanto",
- "Objects per 100 blocks²": "Objetos por 100 blocos²"
+ "Objects per 100 blocks²": "Objetos por 100 blocos²",
+ "Generator": "Gerador",
+ "Classic graph": "Grafo clássico",
+ "The terrain generator of earlier versions, for older maps": "O gerador de terreno de versões anteriores, para mapas mais antigos"
 }

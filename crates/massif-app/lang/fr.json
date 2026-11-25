@@ -2046,7 +2046,6 @@
  "Terraced hill": "Colline en terrasses",
  "Terraces": "Terrasses",
  "Terrain": "Terrain",
- "Terrain Graph": "Graphe de terrain",
  "Terrain Tiles": "Terrain Tiles",
  "Terrain graph": "Graphe de terrain",
  "Terrain mixes": "Mélanges de terrains",
@@ -2116,7 +2115,6 @@
  "The map, compressed": "La carte, compressée",
  "The map, {side} blocks across, {read}. Its paint, its levels and what was sculpted in 3D stay; one step to undo.": "La carte, {side} blocs de côté, {read}. Sa peinture, ses niveaux et ce qui a été sculpté en 3D restent ; une étape à annuler.",
  "The maps you make or open show up here.": "Les cartes que vous créez ou ouvrez s'affichent ici.",
- "The nodes the terrain is generated from": "Les nœuds dont le terrain est généré",
  "The open map's surface, water and colours.": "La surface, l'eau et les couleurs de la carte ouverte.",
  "The open map: surface, water, colours": "La carte ouverte : surface, eau, couleurs",
  "The options of the tool in hand": "Les options de l'outil en main",
@@ -3827,5 +3825,8 @@
  "{name} selected: drag it to move it, its corners to resize it": "{name} sélectionné : glissez-le pour le déplacer, ses coins pour le redimensionner",
  "Objects: the trees, bushes and rocks of the layers, shown or hidden": "Objets : les arbres, buissons et rochers des calques, affichés ou masqués",
  "Density: the land coloured by how many objects its layers will place, from few (blue) to many (red); the objects step aside meanwhile": "Densité : le terrain coloré selon le nombre d'objets que ses calques poseront, de peu (bleu) à beaucoup (rouge) ; les objets s'effacent pendant ce temps",
- "Objects per 100 blocks²": "Objets pour 100 blocs²"
+ "Objects per 100 blocks²": "Objets pour 100 blocs²",
+ "Generator": "Générateur",
+ "Classic graph": "Graphe classique",
+ "The terrain generator of earlier versions, for older maps": "Le générateur de terrain des versions précédentes, pour les cartes plus anciennes"
 }

@@ -1,4 +1,4 @@
-//! The Terrain side's node panel of 1.3: a graph of `massif_terrain`
+//! The Terrain side's node panel of 1.2 (the Terrain Generator): a graph of `massif_terrain`
 //! nodes edited on a canvas (typed, colour-coded sockets, frames, reroutes,
 //! a minimap, search to add), its nodes' settings drawn from the registry,
 //! one Map Output with an input for everything the map takes, and previews

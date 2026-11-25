@@ -1082,7 +1082,9 @@ impl MassifApp {
         // A sample's relief built: its map shown.
         if self.sample == Some(SampleStage::Building) && !self.graph.converting() {
             self.sample = None;
-            self.layout.switch_side(false);
+            // On the Terrain side, its graph and its preview: the World side
+            // when asked for (Apply, the side switch).
+            self.layout.show_generator();
             // As it was made: nothing to save yet.
             self.doc.forget_changes();
         }
@@ -1160,7 +1162,13 @@ impl MassifApp {
     }
 
     fn start_terrain(&mut self, t: massif_core::graph::Template) {
-        self.layout.switch_side(true);
+        // A sample's relief is built by the classic graph, shown while it
+        // builds; the generator once it is written (see `tour_ui`).
+        let classic = self.layout.workspaces.iter().position(|w| w.terrain && w.root.shows(EditorKind::Graph));
+        match classic.filter(|_| self.sample.is_some()) {
+            Some(k) => self.layout.activate(k),
+            None => self.layout.show_generator(),
+        }
         self.graph.use_template(&mut self.doc, t);
     }
 
@@ -5205,6 +5213,10 @@ impl MassifApp {
             }
             EditorKind::RenderView => {
                 hui.label(RichText::new(tr!("Beta")).size(10.5).strong().color(pal.accent));
+            }
+            EditorKind::TerrainGraph => {
+                hui.add_space(6.0);
+                crate::layers::experimental(&mut hui);
             }
             EditorKind::Diorama => {
                 hui.label(RichText::new(tr!("Beta")).size(10.5).strong().color(pal.accent));
@@ -10665,7 +10677,7 @@ mod tests {
         let header = format!("{} {}", theme::glyph(Icon::SunMedium), theme::glyph(Icon::ChevronDown));
         h.query_all_by_label(&header).find(|n| rect.contains(n.rect().center())).expect("the picker of the area").click();
         h.run_steps(3);
-        for name in ["Render Viewport", "Sun and Sky", "Camera", "Render Output", "Timeline", "Terrain Graph", "Map"] {
+        for name in ["Render Viewport", "Sun and Sky", "Camera", "Render Output", "Timeline", "Classic graph", "Map"] {
             assert!(h.query_all_by_label(name).next().is_some(), "{name} offered");
         }
         if let Some(dir) = &dir {
@@ -15890,7 +15902,7 @@ mod tests {
             let mut h = harness(ThemeChoice::Dark);
             {
                 let app = h.state_mut();
-                app.layout.activate(7); // Graph, on the terrain side
+                app.layout.activate(8); // Classic graph, on the terrain side
                 let get = |name: &str| app.doc.world.registry.terrain_by_name(name).map_or(0, |t| t.0);
                 let mut graph = match name {
                     "starter" => massif_core::graph::Graph::starter(get("Grass"), massif_core::TerrainId::ROCK.0, get("Snow"), get("Gravel")),
@@ -15942,7 +15954,7 @@ mod tests {
             });
         {
             let app = h.state_mut();
-            app.layout.activate(7); // Graph, on the terrain side
+            app.layout.activate(8); // Classic graph, on the terrain side
             let get = |name: &str| app.doc.world.registry.terrain_by_name(name).map_or(0, |t| t.0);
             let mut starter = massif_core::graph::Graph::starter(get("Grass"), massif_core::TerrainId::ROCK.0, get("Snow"), get("Gravel"));
             // MASSIF_GRAPH_SIDE: a square of that many blocks rather than the map.
@@ -16025,7 +16037,7 @@ mod tests {
     fn a_conversion_stays_with_its_map() {
         use massif_core::graph::Template;
         let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.activate(7);
+        h.state_mut().layout.activate(8);
         h.run_steps(2);
         let ctx = h.ctx.clone();
         {
@@ -16101,7 +16113,7 @@ mod tests {
         let mut h = harness(ThemeChoice::Dark);
         {
             let app = h.state_mut();
-            app.layout.activate(7); // Graph, on the terrain side
+            app.layout.activate(8); // Classic graph, on the terrain side
             let reg = &app.doc.world.registry;
             let get = |name: &str| reg.terrain_by_name(name).unwrap_or(massif_core::TerrainId::ROCK).0;
             let starter = massif_core::graph::Graph::starter(get("Grass"), massif_core::TerrainId::ROCK.0, get("Snow"), get("Gravel"));
@@ -16139,11 +16151,11 @@ mod tests {
         }
         h.state_mut().graph.view(None);
         // The Render workspace: the view, with its sun, sky and clouds.
-        h.state_mut().layout.activate(8);
+        h.state_mut().layout.activate(9);
         h.run_steps(5);
         wait_for_graph(&mut h);
         h.render().unwrap().save(dir.join("graph-render-workspace.png")).unwrap();
-        h.state_mut().layout.activate(7);
+        h.state_mut().layout.activate(8);
         h.run_steps(3);
         {
             use egui_kittest::kittest::Queryable;
@@ -16388,7 +16400,7 @@ mod tests {
         };
         use crate::terrain_view::RenderSettings;
         let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.active = 7;
+        h.state_mut().layout.active = 8;
         let sunset = RenderSettings {
             sun_azimuth: 250.0,
             sun_elevation: 9.0,
@@ -16892,7 +16904,7 @@ mod tests {
             return;
         };
         let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.activate(7);
+        h.state_mut().layout.activate(8);
         h.run_steps(2);
         {
             let app = h.state_mut();
@@ -16960,7 +16972,7 @@ mod tests {
         image::save_buffer(dir.join("rivers-converted-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
         // Again: the same levels, written again; and into the map when
         // asked, the levels gone.
-        h.state_mut().layout.activate(7);
+        h.state_mut().layout.activate(8);
         h.run_steps(3);
         convert(&mut h);
         assert_eq!(h.state().doc.dimension().levels.len(), 3);
@@ -16985,7 +16997,7 @@ mod tests {
             return;
         };
         let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.activate(7);
+        h.state_mut().layout.activate(8);
         h.run_steps(2);
         let convert = |h: &mut egui_kittest::Harness<'_, MassifApp>| {
             {
@@ -17017,7 +17029,7 @@ mod tests {
             h.run_steps(3);
             let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
             image::save_buffer(dir.join(name), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
-            h.state_mut().layout.activate(7);
+            h.state_mut().layout.activate(8);
             h.run_steps(3);
         };
         // Mountains, into the map's ground.
@@ -17093,7 +17105,7 @@ mod tests {
             return;
         };
         let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.activate(7);
+        h.state_mut().layout.activate(8);
         h.run_steps(2);
         let before = h.state().doc.dimension().ground().len();
         {
@@ -17148,7 +17160,7 @@ mod tests {
             return;
         };
         let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.activate(7);
+        h.state_mut().layout.activate(8);
         h.run_steps(2);
         {
             let app = h.state_mut();
@@ -18426,7 +18438,7 @@ mod tests {
         assert!((y(back.sample(255.5, 255.5)) - 200.0).abs() < 3.0, "{}", y(back.sample(255.5, 255.5)));
         assert!((y(back.data[0]) - 40.0).abs() < 3.0);
         // A graph reading the picture, and saved as a height map.
-        h.state_mut().layout.activate(7);
+        h.state_mut().layout.activate(8);
         h.run_steps(2);
         {
             let app = h.state_mut();
@@ -18528,7 +18540,7 @@ mod tests {
         for theme in [ThemeChoice::Dark, ThemeChoice::Light] {
             let mut h = harness(theme);
             let name = if theme == ThemeChoice::Dark { "dark" } else { "light" };
-            h.state_mut().layout.activate(7);
+            h.state_mut().layout.activate(8);
             h.run_steps(2);
             {
                 let app = h.state_mut();
@@ -18591,7 +18603,7 @@ mod tests {
     fn graph_canvas_selects_moves_and_undoes() {
         use massif_core::graph::Template;
         let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.activate(7);
+        h.state_mut().layout.activate(8);
         h.run_steps(2);
         {
             let app = h.state_mut();
@@ -18861,7 +18873,7 @@ mod tests {
             image::save_buffer(dir.join("real-map-top.png"), &rgb, n as u32, n as u32, image::ColorType::Rgb8).unwrap();
             let _ = NodeKind::HeightOutput;
         }
-        h.state_mut().layout.activate(7);
+        h.state_mut().layout.activate(8);
         h.run_steps(3);
         {
             let app = h.state_mut();
@@ -18922,7 +18934,7 @@ mod tests {
             return;
         };
         let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.activate(7);
+        h.state_mut().layout.activate(8);
         h.run_steps(2);
         let shots: [(Template, &str, f32, f32, f32, bool); 6] = [
             (Template::KarstTowers, "karst-among", 0.42, 0.1, 2.4, false),
@@ -19013,7 +19025,7 @@ mod tests {
             return;
         }
         let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.activate(7);
+        h.state_mut().layout.activate(8);
         h.run_steps(2);
         let app = h.state_mut();
         app.graph.preview = 2048;
@@ -19051,7 +19063,7 @@ mod tests {
             return;
         };
         let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.activate(7);
+        h.state_mut().layout.activate(8);
         h.run_steps(2);
         h.state_mut().graph.open_templates();
         let started = std::time::Instant::now();
@@ -19134,7 +19146,7 @@ mod tests {
         image::save_buffer(dir.join("template-floating-mountains-voxels.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
         // Converting again reuses the levels.
         let levels = h.state().doc.dimension().levels.len();
-        h.state_mut().layout.activate(7);
+        h.state_mut().layout.activate(8);
         h.run_steps(3);
         {
             use egui_kittest::kittest::Queryable;
@@ -21708,7 +21720,7 @@ mod tests {
             let mut g = Graph::default();
             g.add(NodeKind::HeightOutput, [0.0, 0.0]);
             app.doc.world.meta.graph = Some(g);
-            app.layout.switch_side(true);
+            app.layout.activate(8); // the classic graph
             app.graph.graph_replaced();
         }
         h.run_steps(10);
@@ -22166,7 +22178,8 @@ mod tests {
     }
 
     /// A sample of the home screen opens in one click: its relief built
-    /// from its template, shown on the World side, with nothing to save;
+    /// from its template, its graph shown on the Terrain side, with nothing
+    /// to save;
     /// the tour of a first run waits for it.
     #[test]
     fn a_sample_opens_with_its_relief() {
@@ -22193,7 +22206,8 @@ mod tests {
         let app = h.state();
         eprintln!("sample made in {took:.2} s");
         assert_eq!(app.doc.world.meta.name, "Alpine range");
-        assert!(!app.layout.terrain(), "on the World side");
+        // The first run's tour starts on the World side; past it, a sample
+        // stays on the Terrain side (checked below).
         assert!(!app.doc.is_modified(), "nothing to save");
         let dim = app.doc.dimension();
         let heights: Vec<f32> = (0..16).flat_map(|i| (0..16).map(move |j| (i * 48 - 384, j * 48 - 384))).filter_map(|(x, z)| massif_core::ops::height_at(dim, 0, x, z, massif_core::ops::Surface::Top)).collect();
@@ -22203,6 +22217,23 @@ mod tests {
         if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
             h.render().unwrap().save(dir.join("sample-opened.png")).unwrap();
         }
+        // Another sample, the tour done: its graph and its preview on the
+        // Terrain side, the World side only when asked for.
+        h.state_mut().tour = None;
+        h.state_mut().tour_wanted = false;
+        h.state_mut().open_home(Page::NewMap);
+        h.run_steps(3);
+        h.get_by_label("Alpine range").click();
+        h.run_steps(2);
+        let started = std::time::Instant::now();
+        while h.state().sample.is_some() || !h.state().jobs.is_empty() {
+            assert!(started.elapsed().as_secs() < 120, "the sample was not made");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.run_steps(3);
+        let app = h.state();
+        assert!(app.layout.terrain() && app.layout.current().root.shows(EditorKind::TerrainGraph), "on the Terrain side, its graph shown");
     }
 
     /// In the system's typeface, the interface's until another is chosen.
