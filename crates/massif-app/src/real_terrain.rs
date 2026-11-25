@@ -1247,7 +1247,15 @@ pub mod tests {
     /// share of the map across and down.
     const MASSIF_CLOSE: (f32, f32) = (0.115, 0.36);
 
+    /// The processor time of this process, in seconds (0 where the system
+    /// does not say: Windows).
+    #[cfg(not(unix))]
+    fn cpu_time() -> f64 {
+        0.0
+    }
+
     /// The processor time of this process, in seconds.
+    #[cfg(unix)]
     fn cpu_time() -> f64 {
         let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
         unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
