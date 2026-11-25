@@ -5494,6 +5494,7 @@ impl MassifApp {
             }
             EditorKind::Terrain => {
                 let (mut solo_changed, mut edited) = (false, false);
+                let solo_before = self.doc.world.registry.solo.clone();
                 scrolled(&mut cui, &mut |ui| {
                     let (solo, sorted) = panels::terrain_panel(
                         ui,
@@ -5506,6 +5507,9 @@ impl MassifApp {
                     (solo_changed, edited) = (solo_changed | solo, edited | sorted);
                 });
                 let _ = solo_changed; // the solo style is part of the cache key
+                // Its Solo hides the layers: the map's visibility, as the
+                // Layers panel's solo.
+                edited |= self.doc.world.registry.solo != solo_before;
                 if let Some(t) = self.tools.replace_terrain.take() {
                     let ctx = ui.ctx().clone();
                     self.command(&ctx, Command::ReplaceTerrain(Some(t)));

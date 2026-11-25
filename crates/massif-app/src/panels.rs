@@ -4458,6 +4458,10 @@ fn swatch(ui: &mut Ui, color: Color32) {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TerrainDrag(u16);
 
+/// The name of the Terrain panel's solo (see [`Registry::solo`]): the
+/// ground alone.
+pub const TERRAIN_SOLO: &str = "Terrain only";
+
 /// What the Terrain panel's categories were asked to do.
 enum GroupAction {
     Move(u16, String),
@@ -4480,9 +4484,25 @@ pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &mut Registry, sol
     let pal = Palette::of(ui);
     let mut sorted_imported = false;
     hint(ui, tr!("The map's terrains: what each part of the ground is made of. Click one to paint it; the blocks of your game and mods are below, each a terrain once you paint with it."));
-    let solo_changed = crate::widgets::checkbox(ui, solo, tr!("Solo"))
-        .on_hover_text(tr!("Fade every other terrain on the map"))
-        .changed();
+    // Solo, as WorldPainter's: the ground alone, every layer hidden (and
+    // shown again as before when it ends, see `Registry::solo`).
+    let mut only = reg.solo.as_ref().is_some_and(|s| s.name == TERRAIN_SOLO);
+    let mut soloed = false;
+    ui.horizontal(|ui| {
+        if crate::widgets::checkbox(ui, &mut only, tr!("Solo")).on_hover_text(tr!("Show only the ground: every ground cover and object layer hidden on the map and in 3D, as WorldPainter's solo")).changed() {
+            if only {
+                reg.solo(TERRAIN_SOLO, &[], &[]);
+            } else {
+                reg.unsolo();
+            }
+            soloed = true;
+        }
+        ui.add_space(10.0);
+        if crate::widgets::checkbox(ui, solo, tr!("Isolate this terrain")).on_hover_text(tr!("Fade every terrain but the one in hand, to see where it is painted")).changed() {
+            soloed = true;
+        }
+    });
+    let solo_changed = soloed;
     ui.horizontal(|ui| {
         crate::widgets::search(ui, search, tr!("Search terrain"), (ui.available_width() - 34.0).max(80.0));
     });

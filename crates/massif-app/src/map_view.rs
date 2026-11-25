@@ -466,7 +466,7 @@ impl Overlays {
 pub fn solo_chip(ui: &mut Ui, reg: &massif_core::registry::Registry) -> bool {
     let Some(solo) = &reg.solo else { return false };
     let pal = Palette::of(ui);
-    let text = egui::RichText::new(format!("{}  {}  {}", theme::glyph(Icon::ScanEye), tr!("Solo: {name}", name = solo.name), theme::glyph(Icon::X))).size(11.5).color(pal.accent);
+    let text = egui::RichText::new(format!("{}  {}  {}", theme::glyph(Icon::ScanEye), tr!("Solo: {name}", name = crate::i18n::tr_name(&solo.name)), theme::glyph(Icon::X))).size(11.5).color(pal.accent);
     ui.add(egui::Button::new(text).stroke(Line::new(1.0, pal.accent)).fill(pal.accent_soft).corner_radius(theme::PILL).truncate())
         .on_hover_text(tr!("Layers shown alone. Click to show every layer as before"))
         .clicked()
