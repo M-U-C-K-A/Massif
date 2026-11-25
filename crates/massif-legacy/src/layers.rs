@@ -237,6 +237,13 @@ impl Converter {
         let Some(short) = class.strip_prefix(LAYERS) else { return Vec::new() };
         let name = arena.field(key, "name").and_then(|v| arena.string(v)).unwrap_or(short).to_owned();
         let int = |n: &str, default: i64| arena.field(key, n).and_then(|v| arena.int(v)).unwrap_or(default);
+        // A custom layer WorldPainter never exports ("Don't export"): a
+        // placeholder, marking where something goes. It is kept as an
+        // annotation layer, never exported either, rather than painting
+        // what it holds.
+        if depth == 0 && arena.field(key, "export").and_then(|v| arena.bool(v)) == Some(false) {
+            return vec![(note_layer(arena, key, &mut mapper.registry), 1.0)];
+        }
         match short {
             "Caverns" => vec![(Conv::Caves(CaveKind::Caverns), 1.0)],
             "Chasms" => vec![(Conv::Caves(CaveKind::Chasms), 1.0)],
@@ -525,22 +532,26 @@ fn convert_layer(arena: &Arena, key: Value, class: &str, reg: &mut Registry) -> 
             }
         }
         "plants.PlantLayer" => plant_cover(arena, key, reg).map(Conv::Cover),
-        "CustomAnnotationLayer" => {
-            let rgb = arena.field(key, "colour").and_then(|c| arena.int(c)).map_or([230, 60, 40], |c| [(c >> 16) as u8, (c >> 8) as u8, c as u8]);
-            // An annotation layer of the map's, by the layer's name.
-            let name = string("name").unwrap_or_else(|| "Annotations".to_owned());
-            let palette = &mut reg.annotations;
-            let k = match palette.custom.iter().position(|c| c.name == name) {
-                Some(k) => k,
-                None => {
-                    palette.custom.push(massif_core::annotations::CustomColor { name: name.clone(), ..massif_core::annotations::CustomColor::new(rgb) });
-                    palette.custom.len() - 1
-                }
-            };
-            Some(Conv::Note((massif_core::annotations::PRESETS as usize + 1 + k) as u16))
-        }
+        "CustomAnnotationLayer" => Some(note_layer(arena, key, reg)),
         _ => None,
     }
+}
+
+/// A custom layer as an annotation layer of the map's, by its name and in
+/// its colour: WorldPainter's custom annotation layers, and the layers it
+/// never exports (placeholders marking where something goes).
+fn note_layer(arena: &Arena, key: Value, reg: &mut Registry) -> Conv {
+    let rgb = arena.field(key, "colour").and_then(|c| arena.int(c)).map_or([230, 60, 40], |c| [(c >> 16) as u8, (c >> 8) as u8, c as u8]);
+    let name = arena.field(key, "name").and_then(|v| arena.string(v)).map_or_else(|| "Annotations".to_owned(), str::to_owned);
+    let palette = &mut reg.annotations;
+    let k = match palette.custom.iter().position(|c| c.name == name) {
+        Some(k) => k,
+        None => {
+            palette.custom.push(massif_core::annotations::CustomColor { name, ..massif_core::annotations::CustomColor::new(rgb) });
+            palette.custom.len() - 1
+        }
+    };
+    Conv::Note((massif_core::annotations::PRESETS as usize + 1 + k) as u16)
 }
 
 /// The tree chance of one of WorldPainter's forests (its class, after

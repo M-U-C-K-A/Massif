@@ -1871,7 +1871,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
                     dabs.push((x, z, stroke.salt));
                 }
             }
-            Tool::Annotate => ops::paint_annotation(&mut edit, brush, x, z, if invert { 0 } else { tools.annotation.clamp(1, 15) }, stroke.salt),
+            Tool::Annotate => ops::paint_annotation(&mut edit, brush, x, z, if invert { 0 } else { tools.annotation.max(1) }, stroke.salt),
             Tool::AutoBiome => match &reader {
                 Some(reader) if !invert => {
                     let classes = stroke.classes.get_or_insert_with(|| massif_core::auto::Classes::new(true));
@@ -2881,6 +2881,28 @@ mod tests {
         }
         let bed = ["Sand", "Clay"].map(|n| d.world.registry.terrain_by_name(n).unwrap().0);
         assert!(bed.contains(&probe(&d, 20, 20).unwrap().terrain), "the game's bed, 3 blocks deep: sand, or clay where the edge is ragged");
+    }
+
+    /// The Annotations brush paints a colour of the map's own (an
+    /// annotation layer, as WorldPainter's custom ones) in that colour, not
+    /// in the last of WorldPainter's fifteen (black).
+    #[test]
+    fn the_annotation_brush_paints_the_maps_own_colours() {
+        let mut d = doc();
+        let own = d.world.registry.annotations.number_of([40, 120, 255]).unwrap();
+        assert!(own > massif_core::annotations::PRESETS);
+        let mut tools = ToolState::default();
+        tools.select(Tool::Annotate);
+        tools.annotation = own;
+        tools.brush.strength = 1.0;
+        tools.brush.radius = 4.0;
+        tools.brush.profile = massif_core::Profile::Constant;
+        let (stroke, _) = begin_stroke(&mut d, &tools, (20.5, 20.5), false, false);
+        let mut stroke = stroke.unwrap();
+        continue_stroke(&mut d, &tools, &mut stroke, (20.5, 20.5), 0.1);
+        end_stroke(&mut d, stroke);
+        let tile = d.dimension().ground().view(massif_core::TilePos::containing(20, 20)).unwrap();
+        assert_eq!(tile.annotations.get(massif_core::coords::local_index(20, 20)), own);
     }
 
     /// Paint terrain's right button puts back the map's own terrain: on a

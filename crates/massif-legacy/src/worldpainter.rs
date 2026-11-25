@@ -1485,6 +1485,12 @@ mod tests {
     /// [`layered_world`] with overlay images on the surface, each `(path,
     /// offset x, offset z, scale, transparency, enabled)`.
     fn layered_world_with(covers: &[(&str, i32, &str, std::ops::Range<usize>)], overlays: &[(&str, i32, i32, f32, f32, bool)]) -> Vec<u8> {
+        layered_world_exporting(covers, overlays, &[])
+    }
+
+    /// [`layered_world_with`] where the covers named in `kept_back` are set
+    /// not to be exported ("Don't export").
+    fn layered_world_exporting(covers: &[(&str, i32, &str, std::ops::Range<usize>)], overlays: &[(&str, i32, i32, f32, f32, bool)], kept_back: &[&str]) -> Vec<u8> {
         let mut w = StreamWriter::new();
         let null = |w: &mut StreamWriter| {
             w.u8(TC_NULL);
@@ -1592,7 +1598,7 @@ mod tests {
                     w.u8(TC_OBJECT).class(
                         "org.pepsoft.worldpainter.layers.groundcover.GroundCoverLayer",
                         SC_SERIALIZABLE,
-                        &[(b'I', "thickness", None), (b'L', "material", Some("Lorg/pepsoft/minecraft/Material;")), (b'L', "name", Some("Ljava/lang/String;"))],
+                        &[(b'I', "thickness", None), (b'Z', "export", None), (b'L', "material", Some("Lorg/pepsoft/minecraft/Material;")), (b'L', "name", Some("Ljava/lang/String;"))],
                         null,
                     );
                 }
@@ -1601,7 +1607,7 @@ mod tests {
                 }
             }
             w.handle();
-            w.i32(*thickness);
+            w.i32(*thickness).u8(!kept_back.contains(name) as u8);
             match material_desc {
                 None => {
                     material_desc = Some(w.next);
@@ -1791,6 +1797,26 @@ mod tests {
         assert_eq!(tile.top.get(5 * 128), 70.0, "the ground goes down under water laid into it");
         assert_eq!(tile.top.get(100 * 128), 71.0, "and stays under other covers");
         assert_eq!(world.dims[0].ground().stats().hot_tiles, 0, "every tile stored, none decoded");
+    }
+
+    /// A layer WorldPainter never exports ("Don't export", a placeholder
+    /// marking where something goes) imports as an annotation layer of its
+    /// name, marked where it was painted, rather than as what it holds.
+    #[test]
+    fn layers_never_exported_become_annotation_layers() {
+        let covers = [("Moss", 1, "minecraft:moss_carpet", 0..64), ("L/M Trees", 1, "minecraft:fern", 64..128)];
+        let bytes = layered_world_exporting(&covers, &[], &["L/M Trees"]);
+        let progress = ImportProgress::default();
+        let (world, _) = import_stream(&bytes[..], &progress).unwrap();
+        let reg = &world.registry;
+        assert!(reg.covers.iter().any(|c| c.name == "Moss"));
+        assert!(!reg.covers.iter().any(|c| c.name == "L/M Trees"), "the placeholder is no cover");
+        let k = reg.annotations.custom.iter().position(|c| c.name == "L/M Trees").expect("an annotation layer of its name");
+        let note = massif_core::annotations::PRESETS + 1 + k as u16;
+        let tile = world.dims[0].ground().view(TilePos::new(0, 0)).unwrap();
+        assert_eq!(tile.annotations.get(100 * 128 + 7), note, "marked where it was painted");
+        assert_eq!(tile.annotations.get(10 * 128 + 7), 0);
+        assert_eq!(tile.cover.get(100 * 128 + 7), 0, "nothing of it grows there");
     }
 
     /// The memory a large imported map holds: as stored now, and with every
