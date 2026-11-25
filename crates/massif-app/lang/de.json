@@ -878,7 +878,7 @@
  "Facing": "Ausrichtung",
  "Fade": "Übergang",
  "Fade every terrain but the one in hand, to see where it is painted": "Alle Terrains außer dem gewählten ausblenden, um zu sehen, wo es gemalt ist",
- "Show only the ground: every ground cover and object layer hidden on the map and in 3D, as WorldPainter's solo": "Nur den Boden zeigen: alle Bodenbedeckungen und Objektebenen auf der Karte und in 3D ausgeblendet, wie WorldPainters Solo",
+ "Show only the ground: every ground cover, object and annotation layer hidden on the map and in 3D, as WorldPainter's solo": "Nur den Boden zeigen: alle Bodenbedeckungen und Objektebenen auf der Karte und in 3D ausgeblendet, wie WorldPainters Solo",
  "Terrain only": "Nur Terrain",
  "Isolate this terrain": "Dieses Terrain isolieren",
  "Fall ends": "Abfall endet",

@@ -4489,9 +4489,9 @@ pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &mut Registry, sol
     let mut only = reg.solo.as_ref().is_some_and(|s| s.name == TERRAIN_SOLO);
     let mut soloed = false;
     {
-        if crate::widgets::checkbox(ui, &mut only, tr!("Solo")).on_hover_text(tr!("Show only the ground: every ground cover and object layer hidden on the map and in 3D, as WorldPainter's solo")).changed() {
+        if crate::widgets::checkbox(ui, &mut only, tr!("Solo")).on_hover_text(tr!("Show only the ground: every ground cover, object and annotation layer hidden on the map and in 3D, as WorldPainter's solo")).changed() {
             if only {
-                reg.solo(TERRAIN_SOLO, &[], &[]);
+                reg.solo(TERRAIN_SOLO, &[], &[], &[]);
             } else {
                 reg.unsolo();
             }
