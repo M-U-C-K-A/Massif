@@ -269,6 +269,12 @@ pub struct CoverDef {
     /// stays in its section).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub palette: String,
+    /// Laid smooth, as WorldPainter's smooth ground covers: as many
+    /// blocks thick as it is from the ground's precise height, its blocks
+    /// of layers ending in that height's eighths (the rest whole), so
+    /// that it follows slopes rather than stepping a block at a time.
+    #[serde(default, skip_serializing_if = "crate::registry::is_false")]
+    pub smooth: bool,
 }
 
 /// For `skip_serializing_if`: a flag left off is not written.
@@ -451,6 +457,7 @@ impl CoverDef {
             removed: false,
             hidden: false,
             palette: String::new(),
+            smooth: false,
         }
     }
 

@@ -265,8 +265,10 @@ impl Converter {
                 // precise height, `thickness` blocks over it, whatever
                 // `layers` its blocks say: kept whole (8), the eighths are
                 // the land's (see massif_core::surface_layers).
-                let smooth = arena.field(key, "smooth").and_then(|v| arena.bool(v)).unwrap_or(false);
-                let blocks = if smooth && thickness > 0 { blocks.into_iter().map(|(state, n)| (whole_layers(&state), n)).collect() } else { blocks };
+                // WorldPainter lays a cover of snow layers alone smooth too.
+                let snow = matches!(&blocks[..], [(s, _)] if s == "minecraft:snow[layers=8]");
+                let smooth = (arena.field(key, "smooth").and_then(|v| arena.bool(v)).unwrap_or(false) || snow) && thickness > 0;
+                let blocks = if smooth { blocks.into_iter().map(|(state, n)| (whole_layers(&state), n)).collect() } else { blocks };
                 let cover = GroundCover { name, blocks, thickness };
                 if self.lay_covers {
                     let mut def = cover_def(&cover);
@@ -277,6 +279,7 @@ impl Converter {
                         def.opacity = (o as f32).clamp(0.0, 1.0);
                     }
                     def.palette = palette_of(arena, key, &mut mapper.registry);
+                    def.smooth = smooth;
                     let sink = if thickness < 0 { def.height[0] } else { 0 };
                     self.ground_covers.push(cover);
                     let n = mapper.registry.add_cover(def);

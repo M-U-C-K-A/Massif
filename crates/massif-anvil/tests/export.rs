@@ -2435,3 +2435,96 @@ fn plants_sit_on_the_layers_under_them() {
     assert_eq!(r.block(ox + 10, 64, oz + 100), "minecraft:air", "no fern floating over the layers");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// A smooth ground cover of WorldPainter's (Jack's Conquest Reforged
+/// "Forest Floor": a mix of layers and small stones, one block thick) on a
+/// slope is laid as WorldPainter lays it: from the top block, the precise
+/// height plus its thickness in eighths, its layers ending in them and its
+/// stones whole, the ground under it whole, so that the slope is a ramp
+/// of eighths rather than steps of whole blocks. The same cover not smooth
+/// stays whole blocks, as before.
+#[test]
+fn smooth_covers_follow_the_slope_by_eighths() {
+    let mut world = generate(&GenParams { tiles_x: 1, tiles_z: 1, landform: Landform::Hills, seed: 3, ..GenParams::default() });
+    world.meta.ores.on = false;
+    world.meta.smooth.on = true;
+    let grass = world.registry.terrain_by_name("Grass").unwrap();
+    let mut c = CoverDef::new("Forest Floor", [60, 120, 40], &[("conquest:grass_block_layer[layers=8]", 3), ("conquest:small_stones", 1)], 1.0);
+    (c.soil_only, c.height, c.smooth) = (false, [1, 1], true);
+    let floor = world.registry.add_cover(c);
+    let mut c = CoverDef::new("Shrubs", [40, 90, 30], &[("minecraft:fern", 1)], 0.3);
+    c.soil_only = false;
+    let shrubs = world.registry.add_cover(c);
+    let pos = world.dims[0].ground().positions().next().unwrap();
+    let (ox, oz) = pos.origin();
+    // A slope of 0.37 of a block a column, from 60.2.
+    let height = |x: i32| 60.2 + 0.37 * (x - ox) as f32;
+    let tile = world.dims[0].ground_mut().tile_mut(pos).unwrap();
+    for i in 0..massif_core::TILE_AREA {
+        tile.top.set(i, height(ox + (i % 128) as i32));
+        tile.fluid.set(i, massif_core::NO_FLUID);
+        tile.terrain.set(i, grass.0);
+        // Past row 64, under shrubs: the floor stacked under another cover.
+        if i / 128 < 64 {
+            tile.cover.set(i, floor);
+        } else {
+            tile.cover.set(i, shrubs);
+            tile.stacked.set(i, &[massif_core::layer_stack::Entry::new(massif_core::layer_stack::Kind::Cover, floor, 255)]);
+        }
+        tile.objects.set(i, 0);
+    }
+    let mods: HashMap<String, Vec<String>> = [("conquest:grass_block_layer", vec!["layers".to_owned()]), ("conquest:small_stones", vec![])].into_iter().map(|(k, v)| (k.to_owned(), v)).collect();
+    let options = ExportOptions { target: Target::release("1.20.1").unwrap(), mod_blocks: std::sync::Arc::new(mods), ..ExportOptions::default() };
+    let dir = temp_dir("smooth-cover");
+    export(&world.snapshot(), &dir, &options, &Progress::default()).unwrap();
+    let mut r = Reader::new(&dir);
+    let def = world.registry.cover(floor).unwrap().clone();
+    let (mut layered, mut stones) = (0, 0);
+    let mut seen = std::collections::BTreeSet::new();
+    for z in [oz + 10, oz + 77] {
+        for x in ox + 1..ox + 127 {
+            let h = height(x);
+            let y1 = massif_core::compose::block_top(h);
+            // WorldPainter: round((height + thickness − intHeight) / ⅛) eighths
+            // from intHeight + 1, at least one.
+            let eighths = (((h + 1.0 - y1 as f32) * 8.0).round() as i32).max(1);
+            let blocks = (eighths + 7) / 8;
+            assert_eq!(r.block(x, y1 - 1, z), "minecraft:grass_block", "the ground whole under the cover at {x}");
+            let plant = def.growth(x, z, world.meta.seed as u64).unwrap().plant;
+            for k in 0..blocks {
+                let s = r.state(x, y1 + k, z);
+                if plant == 1 {
+                    assert!(s.starts_with("conquest:small_stones"), "stones whole at {x} {}: {s}", y1 + k);
+                    stones += 1;
+                } else {
+                    let want = if k + 1 < blocks || eighths % 8 == 0 { 8 } else { eighths % 8 };
+                    assert!(s.starts_with("conquest:grass_block_layer") && s.contains(&format!("layers={want}")), "at {x} {}: {eighths} eighths, {s}", y1 + k);
+                    seen.insert(want);
+                    layered += 1;
+                }
+            }
+            if z < oz + 64 {
+                assert_eq!(r.block(x, y1 + blocks, z), "minecraft:air", "nothing over the cover at {x}");
+            }
+        }
+    }
+    assert!(layered > 100 && stones > 20, "{layered} {stones}");
+    assert_eq!(seen.len(), 8, "every height of layers on the slope: {seen:?}");
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    // Not smooth (nor the terrain): whole blocks, a block thick.
+    world.registry.covers[floor as usize - 1].smooth = false;
+    world.meta.smooth.on = false;
+    let dir = temp_dir("whole-cover");
+    export(&world.snapshot(), &dir, &options, &Progress::default()).unwrap();
+    let mut r = Reader::new(&dir);
+    for x in ox + 1..ox + 127 {
+        let y1 = massif_core::compose::block_top(height(x));
+        if def.growth(x, oz + 10, world.meta.seed as u64).unwrap().plant == 0 {
+            let s = r.state(x, y1, oz + 10);
+            assert!(s.starts_with("conquest:grass_block_layer") && s.contains("layers=8"), "{s}");
+            assert_eq!(r.block(x, y1 + 1, oz + 10), "minecraft:air");
+        }
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}

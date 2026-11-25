@@ -96,6 +96,13 @@ pub struct ExportContext<'a> {
     /// that many eighths high, on the layers under them): of each of their
     /// states, the same with `layers` 1 to 8.
     plant_layers: HashMap<u16, [u16; 8]>,
+    /// The blocks of layers of smooth covers (see
+    /// [`massif_core::registry::CoverDef::smooth`]): of each of their
+    /// states, the same with `layers` 1 to 8.
+    cover_layers: HashMap<u16, [u16; 8]>,
+    /// Every state a smooth cover lays: the ground under it stays whole,
+    /// its height in the cover's eighths.
+    smooth_covers: std::collections::HashSet<u16>,
     /// How many eighths high each state is when it is a block of layers or
     /// a bottom slab (snow's, a mod's `*_layer[layers=3]`); 0 for a whole
     /// block or anything else.
@@ -237,6 +244,8 @@ impl<'a> ExportContext<'a> {
         let mut frosted = Vec::new();
         let mut snowy = Vec::new();
         let mut plant_layers: HashMap<u16, [u16; 8]> = HashMap::new();
+        let mut cover_layers: HashMap<u16, [u16; 8]> = HashMap::new();
+        let mut smooth_covers = std::collections::HashSet::new();
         for def in &reg.covers {
             // A cover of blocks laid on the ground (a custom ground cover)
             // is solid, its own colour on the map.
@@ -293,6 +302,27 @@ impl<'a> ExportContext<'a> {
                         });
                         plant_layers.insert(state, heights);
                     }
+                }
+                // A block of layers of a smooth cover: each height, for the
+                // eighths of the ground's precise height (a slab's, bottom).
+                let by_eighths = short.ends_with("_layer") || short.ends_with("_layers") || short == "snow" || short.ends_with("_slab") && props.iter().any(|(k, v)| k == "type" && v == "bottom");
+                if def.smooth && era != Era::Numbered && !tall && by_eighths && props.iter().any(|(k, _)| k == "layers") {
+                    let heights = std::array::from_fn(|n| {
+                        let layers = (n + 1).to_string();
+                        if props.iter().any(|(k, v)| k == "layers" && *v == layers) {
+                            return lower;
+                        }
+                        let p: Vec<(String, String)> = props.iter().map(|(k, v)| (k.clone(), if k == "layers" { layers.clone() } else { v.clone() })).collect();
+                        states.push((name.to_owned(), p));
+                        (states.len() - 1) as u16
+                    });
+                    frosted.resize(states.len() - first_plant, Frosted::Over);
+                    snowy.resize(states.len() - first_plant, short == "snow");
+                    cover_layers.insert(lower, heights);
+                    smooth_covers.extend(heights);
+                }
+                if def.smooth {
+                    smooth_covers.insert(lower);
                 }
                 plants.push(Some(Plant { lower, upper }));
             }
@@ -667,6 +697,8 @@ impl<'a> ExportContext<'a> {
             frosted,
             snowy,
             plant_layers,
+            cover_layers,
+            smooth_covers,
             objects,
             shaped,
             first_extra: reg.blocks.len() as u16,
@@ -807,9 +839,11 @@ struct Plant {
 /// Grow the cover numbered `cover` on the column whose topmost block is at
 /// `y - 1`: in the air above it, or in the water for a cover that grows
 /// under water. Nothing grows where the whole plant has no room.
-/// Grow the plant of `cover` on the top of a column, at `y`. Returns the
-/// height above the last block it put (`y` if none).
-fn grow(ctx: &ExportContext, cover: u16, x: i32, y: i32, z: i32, blocks: &mut [u16], column: usize) -> i32 {
+/// Grow the plant of `cover` on the top of a column, at `y`, the ground's
+/// precise height being `precise`. Returns the height above the last block
+/// it put (`y` if none).
+#[allow(clippy::too_many_arguments)]
+fn grow(ctx: &ExportContext, cover: u16, x: i32, y: i32, z: i32, precise: f32, blocks: &mut [u16], column: usize) -> i32 {
     let (min_y, max_y) = (ctx.min_y, ctx.max_y);
     let (Some(def), Some(plants)) = (ctx.reg.cover(cover), ctx.covers.get(cover as usize - 1)) else { return y };
     if y <= min_y || y >= max_y {
@@ -833,7 +867,7 @@ fn grow(ctx: &ExportContext, cover: u16, x: i32, y: i32, z: i32, blocks: &mut [u
         return t + 1;
     }
     let Some(growth) = def.growth(x, z, ctx.seed) else { return y };
-    let Some(Some(plant)) = plants.get(growth.plant) else { return y };
+    let Some(&Some(mut plant)) = plants.get(growth.plant) else { return y };
     if def.soil_only && !ctx.soil.get(blocks[at(y - 1)] as usize).copied().unwrap_or(false) {
         return y;
     }
@@ -842,14 +876,26 @@ fn grow(ctx: &ExportContext, cover: u16, x: i32, y: i32, z: i32, blocks: &mut [u
         (true, false) => ctx.water,
         (true, true) => return y,
     };
-    let height = if plant.upper.is_some() { 2 } else { growth.height as i32 };
+    let mut height = if plant.upper.is_some() { 2 } else { growth.height as i32 };
+    // A smooth cover, as WorldPainter lays it: its thickness over the
+    // ground's precise height, in eighths from the top block; whole blocks
+    // under the last, which a block of layers ends with the eighths left
+    // (another block of a mix stays whole).
+    let mut last = None;
+    if def.smooth && plant.upper.is_none() && y == massif_core::compose::block_top(precise) {
+        let eighths = (((precise + growth.height as f32 - y as f32) * 8.0).round() as i32).max(1);
+        height = (eighths + 7) / 8;
+        if let Some(heights) = ctx.cover_layers.get(&plant.lower) {
+            last = Some(heights[((eighths - 1) % 8) as usize]);
+            plant.lower = heights[7];
+        }
+    }
     if y + height > max_y || (0..height).any(|k| blocks[at(y + k)] != medium) {
         return y;
     }
     // On a block of layers (a cover's, a terrain's): a plant that sits on
     // layers as high as they are; one that cannot does not grow there
     // (it would float). Blocks laid and snow lie on it as they are.
-    let mut plant = *plant;
     let below = ctx.eighths.get(blocks[at(y - 1)] as usize).copied().unwrap_or(0);
     if below > 0 {
         match ctx.plant_layers.get(&plant.lower) {
@@ -866,6 +912,9 @@ fn grow(ctx: &ExportContext, cover: u16, x: i32, y: i32, z: i32, blocks: &mut [u
             Some(upper) if k == 1 => upper,
             _ => plant.lower,
         };
+    }
+    if let Some(last) = last {
+        blocks[at(y + height - 1)] = last;
     }
     y + height
 }
@@ -898,7 +947,7 @@ fn state_eighths(name: &str, props: &[(String, String)]) -> u8 {
 /// buries them), not over other plants. Returns the height above the last
 /// block put.
 #[allow(clippy::too_many_arguments)]
-fn grow_stack(ctx: &ExportContext, under: &[u16], top: u16, x: i32, y: i32, z: i32, blocks: &mut [u16], column: usize) -> i32 {
+fn grow_stack(ctx: &ExportContext, under: &[u16], top: u16, x: i32, y: i32, z: i32, precise: f32, blocks: &mut [u16], column: usize) -> i32 {
     let changes_water = |c: u16| ctx.reg.cover(c).is_some_and(|d| d.changes_water());
     // Custom ground covers lie on the ground, each in the place of the one
     // under it (WorldPainter writes them at the same height, the last
@@ -910,7 +959,7 @@ fn grow_stack(ctx: &ExportContext, under: &[u16], top: u16, x: i32, y: i32, z: i
     let mut h = y;
     for solid in [true, false] {
         for &c in all.iter().rev().filter(|&&c| laid(c) && snow_cover(c) != solid) {
-            h = grow(ctx, c, x, y, z, blocks, column);
+            h = grow(ctx, c, x, y, z, precise, blocks, column);
             if h > y {
                 break;
             }
@@ -929,15 +978,15 @@ fn grow_stack(ctx: &ExportContext, under: &[u16], top: u16, x: i32, y: i32, z: i
         let snow = h == y + 1 && blocks[at(y)] >= ctx.first_extra && ctx.snowy.get((blocks[at(y)] - ctx.first_extra) as usize).copied().unwrap_or(false);
         if snow {
             blocks[at(y)] = 0;
-            h = grow(ctx, c, x, y, z, blocks, column).max(y);
+            h = grow(ctx, c, x, y, z, precise, blocks, column).max(y);
             // No plant could grow: the snow stays.
             if h == y
                 && let Some(&l) = all.iter().rev().find(|&&c| laid(c))
             {
-                h = grow(ctx, l, x, y, z, blocks, column);
+                h = grow(ctx, l, x, y, z, precise, blocks, column);
             }
         } else {
-            h = grow(ctx, c, x, h, z, blocks, column);
+            h = grow(ctx, c, x, h, z, precise, blocks, column);
         }
     }
     let at = |y: i32| (((y - ctx.min_y) as usize) << 8) | column;
@@ -958,7 +1007,7 @@ fn grow_stack(ctx: &ExportContext, under: &[u16], top: u16, x: i32, y: i32, z: i
                 _ => {}
             }
         }
-        h = h.max(grow(ctx, c, x, base, z, blocks, column));
+        h = h.max(grow(ctx, c, x, base, z, precise, blocks, column));
     }
     h
 }
@@ -1469,12 +1518,13 @@ fn fill_chunk(
             {
                 let cover = stack.surface_cover(cell, surface);
                 let under = stack.surface_under(cell, surface);
+                let precise = stack.surface_height(cell, surface);
                 if under.is_empty() {
                     if cover != 0 {
-                        top = top.max(grow(ctx, cover, x, surface.y1, z, blocks, column));
+                        top = top.max(grow(ctx, cover, x, surface.y1, z, precise, blocks, column));
                     }
                 } else {
-                    top = top.max(grow_stack(ctx, &under, cover, x, surface.y1, z, blocks, column));
+                    top = top.max(grow_stack(ctx, &under, cover, x, surface.y1, z, precise, blocks, column));
                 }
             }
             // The water as the game leaves it: flowing at the edges of its
@@ -1614,6 +1664,9 @@ fn fill_chunk(
             // Plants on the top: its height only, under them; under a plant
             // that cannot sit on layers (the game's), the top stays whole.
             let on_top = blocks[at(c.y1)];
+            if ctx.smooth_covers.contains(&on_top) {
+                continue;
+            }
             let plants = grown(on_top);
             if plants {
                 let fixed = !ctx.plant_layers.contains_key(&on_top) && ctx.frosted.get((on_top - ctx.first_extra) as usize) != Some(&Frosted::Over);

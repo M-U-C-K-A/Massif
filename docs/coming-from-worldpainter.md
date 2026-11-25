@@ -77,7 +77,10 @@ becomes a layer of the Layers panel, painted where it was:
 - **Custom ground covers** (a block of water, snow layers, Conquest
   Reforged's grass layers…) become ground covers of their blocks, as high as
   they are thick. One that takes the place of the top of the land lies on
-  the ground lowered under it.
+  the ground lowered under it. A cover set **Smooth** in WorldPainter is
+  exported as WorldPainter does: its thickness over the ground's precise
+  height, its blocks of layers ending in that height's eighths (other
+  blocks of its mix stay whole), so slopes are ramps rather than steps.
 - **Every layer of a block stays on it**, with its own intensity, as
   WorldPainter keeps them: a block with a forest at 50 %, bushes at 15 %
   and three ground covers keeps all of them. Covers lie over each other as

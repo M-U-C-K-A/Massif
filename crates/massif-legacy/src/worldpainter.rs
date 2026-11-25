@@ -1598,7 +1598,7 @@ mod tests {
                     w.u8(TC_OBJECT).class(
                         "org.pepsoft.worldpainter.layers.groundcover.GroundCoverLayer",
                         SC_SERIALIZABLE,
-                        &[(b'I', "thickness", None), (b'Z', "export", None), (b'L', "material", Some("Lorg/pepsoft/minecraft/Material;")), (b'L', "name", Some("Ljava/lang/String;"))],
+                        &[(b'I', "thickness", None), (b'Z', "export", None), (b'Z', "smooth", None), (b'L', "material", Some("Lorg/pepsoft/minecraft/Material;")), (b'L', "name", Some("Ljava/lang/String;"))],
                         null,
                     );
                 }
@@ -1607,7 +1607,8 @@ mod tests {
                 }
             }
             w.handle();
-            w.i32(*thickness).u8(!kept_back.contains(name) as u8);
+            // Smooth, as Conquest maps lay their layers.
+            w.i32(*thickness).u8(!kept_back.contains(name) as u8).u8(block.contains("layers=") as u8);
             match material_desc {
                 None => {
                     material_desc = Some(w.next);
@@ -1817,6 +1818,22 @@ mod tests {
         assert_eq!(tile.annotations.get(100 * 128 + 7), note, "marked where it was painted");
         assert_eq!(tile.annotations.get(10 * 128 + 7), 0);
         assert_eq!(tile.cover.get(100 * 128 + 7), 0, "nothing of it grows there");
+    }
+
+    /// A smooth cover of Conquest Reforged's layers is imported smooth, its
+    /// blocks whole (their eighths are the ground's, at the export); the
+    /// others are not.
+    #[test]
+    fn smooth_covers_stay_smooth() {
+        let covers = [("Forest floor", 1, "conquest:grass_block_layer[layers=3]", 0..60), ("Gravel", 2, "minecraft:gravel", 60..128)];
+        let bytes = layered_world(&covers);
+        let (world, report) = import_stream(&bytes[..], &ImportProgress::default()).unwrap();
+        let reg = &world.registry;
+        let get = |name: &str| reg.cover(report.ground_covers.iter().copied().find(|&n| reg.cover(n).unwrap().name == name).unwrap()).unwrap();
+        let floor = get("Forest floor");
+        assert!(floor.smooth && floor.is_laid());
+        assert_eq!(floor.plants[0].0, "conquest:grass_block_layer[layers=8]");
+        assert!(!get("Gravel").smooth);
     }
 
     /// The memory a large imported map holds: as stored now, and with every

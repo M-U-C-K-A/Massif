@@ -220,6 +220,14 @@ impl<'a> TileStack<'a> {
         self.layers.iter().find(|l| l.index == level).map_or(0, |l| l.tile.cover.get(cell))
     }
 
+    /// The precise height of the top of column `cell`, `top` being its
+    /// topmost span: that of the level whose surface it is, or the span's
+    /// top where the level's height is not it (a top sculpted in 3D).
+    pub fn surface_height(&self, cell: usize, top: &Span) -> f32 {
+        let h = self.surface_tile(cell, top).map_or(top.y1 as f32, |t| t.top.get(cell));
+        if block_top(h) == top.y1 { h } else { top.y1 as f32 }
+    }
+
     /// The topmost span of column `cell`, if it has any.
     pub fn spans_top(&self, cell: usize) -> Option<Span> {
         let mut spans = Vec::new();
