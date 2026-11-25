@@ -201,7 +201,13 @@ const LAKE_DEPTH: f32 = 12.0;
 /// elevation models give a lake's surface, flat to the centimetre, over
 /// the sea's level, with the shore higher all round. See [`dig_lakes`] for
 /// their floors.
-pub fn find_lakes(grid: &[f32], nx: usize, nz: usize, metres_per_sample: f64) -> Lakes {
+///
+/// `water`: a real height the map's water stands at, when the place's is
+/// not the sea's (a lake's shore, as the Great Lakes' 176 m): a wide flat
+/// within [`WATER_NEAR`] of it is water, whatever its rim (such a lake
+/// meets other data, its bathymetry or the edges of the area, as often as
+/// its shore).
+pub fn find_lakes(grid: &[f32], nx: usize, nz: usize, metres_per_sample: f64, water: Option<f32>) -> Lakes {
     let mut lakes = Lakes::default();
     if nx < 3 || nz < 3 {
         return lakes;
@@ -220,53 +226,190 @@ pub fn find_lakes(grid: &[f32], nx: usize, nz: usize, metres_per_sample: f64) ->
     if !flat.iter().any(|&f| f) {
         return lakes;
     }
-    let least = ((LAKE_AREA / (metres_per_sample * metres_per_sample)).ceil() as usize).max(16);
-    let mut of = vec![0u16; grid.len()];
-    let mut seen = vec![false; grid.len()];
+    // The flats, each at its own level: its flat samples and those at its
+    // shore at that level.
+    let mut flat_of = vec![0u32; grid.len()];
+    let mut levels: Vec<f32> = vec![f32::NAN];
     let mut stack = Vec::new();
-    let mut cells = Vec::new();
     for start in 0..grid.len() {
-        if !flat[start] || seen[start] {
+        if !flat[start] || flat_of[start] != 0 {
             continue;
         }
         let level = grid[start];
-        cells.clear();
+        let n = levels.len() as u32;
+        levels.push(level);
+        flat_of[start] = n;
         stack.push(start);
-        seen[start] = true;
-        let (mut rim, mut higher) = (0usize, 0usize);
         while let Some(k) = stack.pop() {
-            cells.push(k);
             let (i, j) = (k % nx, k / nx);
             for (ok, o) in [(i > 0, k.wrapping_sub(1)), (i + 1 < nx, k + 1), (j > 0, k.wrapping_sub(nx)), (j + 1 < nz, k + nx)] {
-                if !ok {
-                    continue;
-                }
-                // The lake's own level, flat or at its shore.
-                if (grid[o] - level).abs() <= 2.0 * FLAT {
-                    if !seen[o] {
-                        seen[o] = true;
-                        stack.push(o);
-                    }
-                } else {
-                    rim += 1;
-                    higher += (grid[o] > level) as usize;
+                if ok && flat_of[o] == 0 && (grid[o] - level).abs() <= 2.0 * FLAT {
+                    flat_of[o] = n;
+                    stack.push(o);
                 }
             }
         }
-        if cells.len() < least || rim == 0 || (higher as f32) < LAKE_RIM * rim as f32 || lakes.levels.len() >= u16::MAX as usize - 1 {
+    }
+    // One lake's surface often comes in rectangles of its sources, each flat
+    // at a level of its own, a step apart (the Great Lakes in tiles of 176
+    // to 177.4 m): flats that meet along a seam, side by side or across
+    // samples read between them, are one lake.
+    let mut contacts: std::collections::HashMap<(u32, u32), usize> = std::collections::HashMap::new();
+    let mut between: Vec<(usize, u32, u32)> = Vec::new();
+    for k in 0..grid.len() {
+        let (i, j) = (k % nx, k / nx);
+        let a = flat_of[k];
+        if a != 0 {
+            for (ok, o) in [(i + 1 < nx, k + 1), (j + 1 < nz, k + nx)] {
+                let b = if ok { flat_of[o] } else { 0 };
+                if b != 0 && b != a && (levels[a as usize] - levels[b as usize]).abs() <= LAKE_SEAM_STEP {
+                    *contacts.entry((a.min(b), a.max(b))).or_default() += 1;
+                }
+            }
             continue;
         }
-        lakes.levels.push(level);
-        let n = lakes.levels.len() as u16;
-        for &k in &cells {
-            of[k] = n;
+        // A sample read between two flats: across it, a flat on each side
+        // (one or two samples away), and its height about theirs.
+        let m = grid[k];
+        if !m.is_finite() {
+            continue;
+        }
+        let at = |di: isize, dj: isize| {
+            let (x, z) = (i as isize + di, j as isize + dj);
+            if x < 0 || z < 0 || x >= nx as isize || z >= nz as isize { 0 } else { flat_of[z as usize * nx + x as usize] }
+        };
+        for (d1, d2) in [((1, 0), (-1, 0)), ((0, 1), (0, -1))] {
+            let a = [at(d1.0, d1.1), at(2 * d1.0, 2 * d1.1)].into_iter().find(|&f| f != 0).unwrap_or(0);
+            let b = [at(d2.0, d2.1), at(2 * d2.0, 2 * d2.1)].into_iter().find(|&f| f != 0).unwrap_or(0);
+            if a == 0 || b == 0 || a == b {
+                continue;
+            }
+            let (la, lb) = (levels[a as usize], levels[b as usize]);
+            if (la - lb).abs() <= LAKE_SEAM_STEP && m >= la.min(lb) - SEAM_SLACK && m <= la.max(lb) + SEAM_SLACK {
+                *contacts.entry((a.min(b), a.max(b))).or_default() += 1;
+                between.push((k, a, b));
+            }
         }
     }
+    // A seam runs along a rectangle's edge; a river from one lake to
+    // another lower is narrower.
+    let seam = ((LAKE_SEAM / metres_per_sample).ceil() as usize).max(8);
+    let mut root: Vec<u32> = (0..levels.len() as u32).collect();
+    fn find(root: &mut [u32], mut a: u32) -> u32 {
+        while root[a as usize] != a {
+            root[a as usize] = root[root[a as usize] as usize];
+            a = root[a as usize];
+        }
+        a
+    }
+    for (&(a, b), &n) in &contacts {
+        if n >= seam {
+            let (ra, rb) = (find(&mut root, a), find(&mut root, b));
+            root[ra.max(rb) as usize] = ra.min(rb);
+        }
+    }
+    let group: Vec<u32> = (0..levels.len() as u32).map(|f| find(&mut root, f)).collect();
+    // The samples between two flats of one lake are the lake's.
+    let mut lake_of: Vec<u32> = flat_of.iter().map(|&f| group[f as usize]).collect();
+    for &(k, a, b) in &between {
+        if group[a as usize] == group[b as usize] {
+            lake_of[k] = group[a as usize];
+        }
+    }
+    // The finer data gives a lake's surface a few centimetres off flat here
+    // and there: the samples beside a lake within as much of its levels are
+    // the lake's, not its shore.
+    let mut range = vec![(f32::MAX, f32::MIN); levels.len()];
+    for f in 1..levels.len() {
+        let g = group[f] as usize;
+        range[g] = (range[g].0.min(levels[f]), range[g].1.max(levels[f]));
+    }
+    let mut stack: Vec<usize> = (0..grid.len()).filter(|&k| lake_of[k] != 0).collect();
+    while let Some(k) = stack.pop() {
+        let g = lake_of[k];
+        let (lo, hi) = range[g as usize];
+        let (i, j) = (k % nx, k / nx);
+        for (ok, o) in [(i > 0, k.wrapping_sub(1)), (i + 1 < nx, k + 1), (j > 0, k.wrapping_sub(nx)), (j + 1 < nz, k + nx)] {
+            if ok && lake_of[o] == 0 && (grid[o] - grid[k]).abs() <= LAKE_NEAR && grid[o] >= lo - LAKE_NEAR && grid[o] <= hi + LAKE_NEAR {
+                lake_of[o] = g;
+                stack.push(o);
+            }
+        }
+    }
+    // Each lake: its size, the share of its rim higher than the flat beside
+    // it, and its samples at each level (its level the one most of it has:
+    // water is flat).
+    let n = levels.len();
+    let (mut size, mut rim, mut higher) = (vec![0usize; n], vec![0usize; n], vec![0usize; n]);
+    let mut at_level = vec![0usize; n];
+    for k in 0..grid.len() {
+        let g = lake_of[k] as usize;
+        if g == 0 {
+            continue;
+        }
+        size[g] += 1;
+        let own = flat_of[k];
+        if own != 0 {
+            at_level[own as usize] += 1;
+        }
+        let level = if own != 0 { levels[own as usize] } else { grid[k] };
+        let (i, j) = (k % nx, k / nx);
+        for (ok, o) in [(i > 0, k.wrapping_sub(1)), (i + 1 < nx, k + 1), (j > 0, k.wrapping_sub(nx)), (j + 1 < nz, k + nx)] {
+            if ok && lake_of[o] as usize != g {
+                rim[g] += 1;
+                higher[g] += (grid[o] > level) as usize;
+            }
+        }
+    }
+    let mut level_of = vec![f32::NAN; n];
+    let mut most = vec![0usize; n];
+    for f in 1..n {
+        let g = group[f] as usize;
+        if at_level[f] > most[g] {
+            most[g] = at_level[f];
+            level_of[g] = levels[f];
+        }
+    }
+    let least = ((LAKE_AREA / (metres_per_sample * metres_per_sample)).ceil() as usize).max(16);
+    let wide = ((WATER_AREA / (metres_per_sample * metres_per_sample)).ceil() as usize).max(least);
+    let mut number = vec![0u16; n];
+    for g in 1..n {
+        let at_water = water.is_some_and(|w| (level_of[g] - w).abs() <= WATER_NEAR) && size[g] >= wide;
+        // A wide flat (flat to the millimetre over a square kilometre: water,
+        // never a terrace) needs only half its rim higher: a great lake meets
+        // its charted depths and the area's edges as often as its shore.
+        let share = if size[g] >= wide { WIDE_RIM } else { LAKE_RIM };
+        let held = rim[g] > 0 && (higher[g] as f32) >= share * rim[g] as f32;
+        if group[g] as usize != g || size[g] < least || !(held || at_water) || lakes.levels.len() >= u16::MAX as usize - 1 {
+            continue;
+        }
+        lakes.levels.push(level_of[g]);
+        number[g] = lakes.levels.len() as u16;
+    }
     if !lakes.levels.is_empty() {
-        lakes.of = of;
+        lakes.of = lake_of.iter().map(|&g| number[g as usize]).collect();
     }
     lakes
 }
+
+/// Flats that meet along a seam are one lake when their levels are no
+/// further apart than this, in metres.
+const LAKE_SEAM_STEP: f32 = 15.0;
+/// How long a seam between two flats is at least, in metres (and 8 samples).
+const LAKE_SEAM: f64 = 300.0;
+/// Samples beside a lake within this many metres of its levels are the
+/// lake's.
+const LAKE_NEAR: f32 = 0.1;
+/// A flat within this many metres of the height the map's water stands at
+/// is water (see [`find_lakes`]).
+pub const WATER_NEAR: f32 = 2.0;
+/// The least size of such a flat, in square metres; and of a flat that is a
+/// lake with [`WIDE_RIM`] of its rim higher.
+pub const WATER_AREA: f64 = 1_000_000.0;
+const WIDE_RIM: f32 = 0.5;
+/// How far a sample read across a seam between two flats may stray from
+/// their levels, in metres (the tiles' edges are cleaned and resampled).
+const SEAM_SLACK: f32 = 1.0;
 
 /// Give the lakes floors under their surfaces, deepening from their shores.
 pub fn dig_lakes(grid: &mut [f32], nx: usize, nz: usize, metres_per_sample: f64, lakes: &Lakes) {

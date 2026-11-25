@@ -142,6 +142,10 @@ pub(crate) fn whole_tiles(v: i32) -> i32 {
 }
 
 /// Samples a side of the preview.
+/// A real height at the map's sea level over this many metres is a lake's
+/// shore, the map's water standing at it (see
+/// [`massif_core::real::Samples::prepare_at`]).
+pub const WATER_DATUM: f32 = massif_core::coast::LAKE_LEVEL;
 const PREVIEW_N: usize = 160;
 /// The map of tiles and the preview, in points.
 const PICKER: egui::Vec2 = vec2(330.0, 230.0);
@@ -1127,6 +1131,128 @@ pub mod tests {
                 save(&format!("{mode:?}-middle"), &render_region(dim, &world.registry, 62.0, style, 0, mx - 512, mz - 384, 8, 6));
             }
         }
+    }
+
+    /// A real place written over a map as the job writes it, the map's size
+    /// kept and its land repainted, drawn on the 2D map to
+    /// MASSIF_SNAPSHOT_DIR: MASSIF_REAL_OVER is "name:lat,lon,blocks a
+    /// metre,width,depth,real height there,exaggeration,sea level", several
+    /// apart with `;`. The map is flat land a block over its sea before;
+    /// tiles as for [`a_real_place_drawn`]. Each map is drawn whole and close
+    /// up, its timings and how its water holds said on stderr;
+    /// MASSIF_REAL_DUMP also draws its samples (its lakes blue).
+    #[test]
+    fn a_real_place_written_over_a_map() {
+        use crate::map_render::{MapMode, MapStyle, render_region};
+        use massif_core::coords::BlockRect;
+        use massif_core::real::{Tiles, metres_per_px, spacing};
+        let (Some(spec), Some(out)) = (std::env::var("MASSIF_REAL_OVER").ok(), std::env::var_os("MASSIF_SNAPSHOT_DIR")) else { return };
+        let dir = std::env::var_os("MASSIF_REAL_TILES").map(PathBuf::from).or_else(crate::tiles::cache_dir).unwrap();
+        let store = TileStore::new(Some(dir), std::env::var_os("MASSIF_REAL_ONLINE").is_some());
+        for place in spec.split(';').filter(|p| !p.trim().is_empty()) {
+            let (name, nums) = place.trim().split_once(':').unwrap_or(("real", place.trim()));
+            let v: Vec<f64> = nums.split(',').map(|x| x.trim().parse().unwrap()).collect();
+            let area = Area { lat: v[0], lon: v[1], blocks_per_metre: v[2], width: v[3] as i32, depth: v[4] as i32 };
+            let sea = v[7] as i32;
+            let vertical = Vertical { datum: v[5] as f32, sea_level: sea, exaggeration: v[6] as f32, low: -64, high: 320, fit: true };
+            // The map: whole tiles about the origin, flat land over its sea.
+            let (tx, tz) = (area.width / massif_core::TILE_SIZE, area.depth / massif_core::TILE_SIZE);
+            let rect = BlockRect::new(-(tx / 2) * massif_core::TILE_SIZE, -(tz / 2) * massif_core::TILE_SIZE, (tx - tx / 2) * massif_core::TILE_SIZE, (tz - tz / 2) * massif_core::TILE_SIZE);
+            let mut world = massif_core::World::new(Default::default());
+            world.meta.sea_level = sea;
+            world.dims[0].resize(rect, || massif_core::tile::Tile::ground(sea as f32 + 1.0, 0, massif_core::tile::NO_FLUID));
+            let started = std::time::Instant::now();
+            let cpu = cpu_time();
+            let z = area.zoom(massif_core::real::MAX_TILES);
+            let keys = area.tiles(z);
+            let got = store.fetch(&keys, &Default::default(), &Default::default()).unwrap();
+            let source = Tiles::patched(z, got.tiles, &got.coarser);
+            let square = source.square_px() as f64 * metres_per_px(area.lat, z);
+            let fetched = started.elapsed().as_secs_f32();
+            let mut samples = Samples::read(&area, &source, spacing(&area, metres_per_px(area.lat, z)));
+            drop(source);
+            let prepared = samples.prepare_at(area.blocks_per_metre, Some(square), (vertical.datum > WATER_DATUM).then_some(vertical.datum));
+            eprintln!("{name}: z{z}, {} tiles, {} × {} samples {:.1} blocks apart; {prepared:?}", keys.len(), samples.nx, samples.nz, samples.spacing);
+            let fit = vertical.fit(samples.span().unwrap(), area.blocks_per_metre);
+            eprintln!("{name}: span {:?}, {fit:?}", samples.span());
+            if std::env::var_os("MASSIF_REAL_DUMP").is_some() {
+                // Every 4th sample: lakes in shades of blue by id, else by
+                // the metres off the datum, red over it, green under.
+                let (nx, nz, k) = (samples.nx, samples.nz, 4);
+                let mut rgba = Vec::new();
+                let mut hist = std::collections::BTreeMap::new();
+                for j in (0..nz).step_by(k) {
+                    for i in (0..nx).step_by(k) {
+                        let s = j * nx + i;
+                        let m = samples.metres[s];
+                        *hist.entry((m * 8.0).round() as i32).or_insert(0usize) += 1;
+                        let c = match samples.lakes.of.get(s).copied().unwrap_or(0) {
+                            0 => {
+                                let d = m - vertical.datum;
+                                if d.abs() < 0.01 { [255, 255, 0] } else if d > 0.0 { [(100.0 + d * 40.0).min(255.0) as u8, 60, 60] } else { [60, (100.0 - d * 4.0).min(255.0) as u8, 60] }
+                            }
+                            n => [0, (n as u32 * 37 % 128) as u8, 255],
+                        };
+                        rgba.extend_from_slice(&[c[0], c[1], c[2], 255]);
+                    }
+                }
+                let (w, h) = (nx.div_ceil(k), nz.div_ceil(k));
+                image::save_buffer(std::path::Path::new(&out).join(format!("{name}-samples.png")), &rgba, w as u32, h as u32, image::ColorType::Rgba8).unwrap();
+                let common: Vec<_> = hist.iter().filter(|&(_, &n)| n > 2000).map(|(m, n)| (*m as f32 / 8.0, *n)).collect();
+                eprintln!("{name}: common heights (1/8 m): {common:?}");
+                eprintln!("{name}: lakes {:?}", samples.lakes.levels.iter().take(40).collect::<Vec<_>>());
+            }
+            let theme = massif_core::generate::Theme::new(&world.registry);
+            let mut history = massif_core::history::History::new(1);
+            history.begin("real terrain", 0);
+            let written = massif_core::real::write_ground(&mut history.edit(&mut world, 0), &samples, &fit, rect, Some((&area, theme)), &Default::default());
+            drop(samples);
+            let rules = massif_core::real::rules_at(&massif_core::auto::AutoRules::default(), area.lat);
+            let base = massif_core::auto::base_terrain(&world.dims[0], &world.registry);
+            let reader = massif_core::auto::Reader::new(&rules, &world.registry, sea).with_base(base);
+            massif_core::auto::paint_over_the_map(&mut history.edit(&mut world, 0), &reader);
+            massif_core::auto::biomes_over_the_map(&mut history.edit(&mut world, 0), &reader);
+            drop(history);
+            eprintln!("{name}: {} columns in {} tiles; {:.1} s ({fetched:.1} s fetching), {:.1} s of processor", written.columns, written.tiles.len(), started.elapsed().as_secs_f32(), cpu_time() - cpu);
+            let dim = &world.dims[0];
+            let (mut wet, mut all) = (0usize, 0usize);
+            for z in (rect.z0..rect.z1).step_by(16) {
+                for x in (rect.x0..rect.x1).step_by(16) {
+                    let Some(t) = dim.ground().view(massif_core::TilePos::containing(x, z)) else { continue };
+                    let i = massif_core::coords::local_index(x, z);
+                    all += 1;
+                    wet += (t.fluid.get(i) != massif_core::tile::NO_FLUID && t.fluid.get(i) as f32 > t.top.get(i)) as usize;
+                }
+            }
+            eprintln!("{name}: {:.1} % of the map under water", 100.0 * wet as f64 / all.max(1) as f64);
+            let held = massif_core::water::check(dim);
+            eprintln!("{name}: water beside open land {}, over air {}, steps {}, falls {}", held.spills, held.floating, held.steps, held.falls);
+            let save = |file: &str, image: &ColorImage| {
+                let rgba: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
+                image::save_buffer(std::path::Path::new(&out).join(format!("{name}-{file}.png")), &rgba, image.width() as u32, image.height() as u32, image::ColorType::Rgba8).unwrap();
+            };
+            // Close up where three of the lake's rectangles meet.
+            let (cx, cz) = (rect.x0 + (rect.width() as f32 * MASSIF_CLOSE.0) as i32, rect.z0 + (rect.depth() as f32 * MASSIF_CLOSE.1) as i32);
+            save("close", &render_region(dim, &world.registry, sea as f32, MapStyle::default(), 0, cx - 512, cz - 384, 8, 6));
+            let lod = (0..8u8).find(|l| (rect.width().max(rect.depth()) >> l) <= 1024).unwrap_or(8);
+            let chunks = |n: i32| ((n >> lod) + 127) / 128;
+            for mode in [MapMode::Terrain, MapMode::Biome] {
+                let style = MapStyle { mode, ..MapStyle::default() };
+                save(&format!("{mode:?}"), &render_region(dim, &world.registry, sea as f32, style, lod, rect.x0, rect.z0, chunks(rect.width()), chunks(rect.depth())));
+            }
+        }
+    }
+
+    /// Where the close up of [`a_real_place_written_over_a_map`] looks, a
+    /// share of the map across and down.
+    const MASSIF_CLOSE: (f32, f32) = (0.115, 0.36);
+
+    /// The processor time of this process, in seconds.
+    fn cpu_time() -> f64 {
+        let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+        unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
+        let t = |v: libc::timeval| v.tv_sec as f64 + v.tv_usec as f64 / 1e6;
+        t(usage.ru_utime) + t(usage.ru_stime)
     }
 
     #[test]

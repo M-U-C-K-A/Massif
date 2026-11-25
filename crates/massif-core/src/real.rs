@@ -677,13 +677,20 @@ impl Samples {
     /// `square_metres`: the size of the squares the data comes in, when its
     /// source says (see [`Tiles::square_px`]).
     pub fn prepare(&mut self, blocks_per_metre: f64, square_metres: Option<f64>) -> Prepared {
+        self.prepare_at(blocks_per_metre, square_metres, None)
+    }
+
+    /// [`Samples::prepare`], the map's water standing at real height
+    /// `water` (the [`Vertical::datum`], when over the sea's): a wide flat
+    /// at that height is a lake (see [`crate::coast::find_lakes`]).
+    pub fn prepare_at(&mut self, blocks_per_metre: f64, square_metres: Option<f64>, water: Option<f32>) -> Prepared {
         let missing = self.missing();
         self.fill_gaps();
         let mps = self.spacing / blocks_per_metre.max(1e-9);
         let square = square_metres.map(|m| (m / mps) as f32);
         // Lakes found in the heights as they came, before the coasts are
         // shaped.
-        self.lakes = crate::coast::find_lakes(&self.metres, self.nx, self.nz, mps);
+        self.lakes = crate::coast::find_lakes(&self.metres, self.nx, self.nz, mps, water);
         let coast = crate::coast::shape(&mut self.metres, self.nx, self.nz, mps, square);
         crate::coast::dig_lakes(&mut self.metres, self.nx, self.nz, mps, &self.lakes);
         Prepared { missing, coast, lakes: self.lakes.levels.len() }
@@ -698,6 +705,20 @@ impl Samples {
         let i = ((bx / self.spacing).floor().max(0.0) as usize).min(self.nx - 1);
         let j = ((bz / self.spacing).floor().max(0.0) as usize).min(self.nz - 1);
         self.lakes.level(j * self.nx + i)
+    }
+
+    /// The highest level of the lakes among the four samples `(bx, bz)` is
+    /// read between, in metres: a column of the shore read between a lake
+    /// and the land, under the lake's water when lower than it.
+    pub fn lake_near(&self, bx: f64, bz: f64) -> Option<f32> {
+        if self.lakes.levels.is_empty() {
+            return None;
+        }
+        let u = (bx / self.spacing - 0.5).clamp(0.0, (self.nx - 1) as f64);
+        let v = (bz / self.spacing - 0.5).clamp(0.0, (self.nz - 1) as f64);
+        let (i, j) = (u.floor() as usize, v.floor() as usize);
+        let (i1, j1) = ((i + 1).min(self.nx - 1), (j + 1).min(self.nz - 1));
+        [(i, j), (i1, j), (i, j1), (i1, j1)].iter().filter_map(|&(i, j)| self.lakes.level(j * self.nx + i)).reduce(f32::max)
     }
 
     /// Samples without data.
@@ -932,6 +953,13 @@ impl<'a> Ground<'a> {
         Some(lake_level(self.fit, level))
     }
 
+    /// The water level of a lake beside column `(bx, bz)` (see
+    /// [`Samples::lake_near`]), in blocks.
+    fn lake_near(&self, bx: i32, bz: i32) -> Option<i16> {
+        let level = self.samples.lake_near((bx - self.origin.0) as f64 + 0.5, (bz - self.origin.1) as f64 + 0.5)?;
+        Some(lake_level(self.fit, level))
+    }
+
     fn near_water(&self, bx: i32, bz: i32) -> bool {
         let s = self.samples;
         let (i, j) = ((((bx - self.origin.0) as f64 + 0.5) / s.spacing) as usize, (((bz - self.origin.1) as f64 + 0.5) / s.spacing) as usize);
@@ -958,9 +986,10 @@ impl<'a> Ground<'a> {
     }
 }
 
-/// The surface of a lake `metres` high, in blocks: the water's level.
+/// The surface of a lake `metres` high, in blocks: the water's level, no
+/// higher than the lake (its shore is higher, and holds it).
 pub fn lake_level(fit: &Fit, metres: f32) -> i16 {
-    fit.height(metres).round().max(fit.sea) as i16
+    (fit.height(metres) + 1e-3).floor().max(fit.sea) as i16
 }
 
 /// A new world of the area: its ground at the heights `fit` gives, the sea
@@ -1018,7 +1047,7 @@ pub fn new_world(name: &str, samples: &Samples, fit: &Fit, area: &Area, sea_leve
                     let slope = (at(2, 1) - at(0, 1)).abs().max((at(1, 2) - at(1, 0)).abs()) * 0.5;
                     top[z * n + x] = snap_height(h);
                     terrain[z * n + x] = ground.terrain(ox + x as i32, oz + z as i32, metres, h, slope).0;
-                    if let Some(level) = ground.lake(ox + x as i32, oz + z as i32) {
+                    if let Some(level) = ground.lake(ox + x as i32, oz + z as i32).or_else(|| ground.lake_near(ox + x as i32, oz + z as i32).filter(|&l| h < l as f32)) {
                         fluid[z * n + x] = level;
                     }
                 }
@@ -1096,7 +1125,9 @@ pub fn write_ground(edit: &mut Edit, samples: &Samples, fit: &Fit, rect: BlockRe
                         continue;
                     }
                     let Some(metres) = samples.at((x - rect.x0) as f64 + 0.5, (z - rect.z0) as f64 + 0.5) else { continue };
-                    let lake = samples.lake_at((x - rect.x0) as f64 + 0.5, (z - rect.z0) as f64 + 0.5).map(|m| lake_level(fit, m));
+                    let (sx, sz) = ((x - rect.x0) as f64 + 0.5, (z - rect.z0) as f64 + 0.5);
+                    let lake = samples.lake_at(sx, sz).map(|m| lake_level(fit, m));
+                    let shore = samples.lake_near(sx, sz).map(|m| lake_level(fit, m));
                     let target = match lake {
                         Some(level) => fit.height(metres).min(level as f32 - 1.0),
                         None => fit.height(metres),
@@ -1112,6 +1143,9 @@ pub fn write_ground(edit: &mut Edit, samples: &Samples, fit: &Fit, rect: BlockRe
                     if crate::selection::lets(weight, x, z) {
                         let fluid = match lake {
                             Some(level) if new < level as f32 => level,
+                            // The shore read between the lake and the land,
+                            // under its level: the lake's.
+                            None if shore.is_some_and(|l| new < l as f32) => shore.unwrap_or(sea),
                             _ if new < fit.sea => sea,
                             _ => NO_FLUID,
                         };
@@ -1785,6 +1819,116 @@ mod tests {
             let shore = (-400..0).find(|&x| { let (top, fluid, _, _) = column(&world, x, z); fluid == NO_FLUID || fluid as f32 <= top }).unwrap();
             assert!((shore + 300).abs() <= 12, "at {s} m south the shore is at {shore}");
         }
+    }
+
+    /// A great lake as the tiles give it (Michigan and Huron about the
+    /// Straits of Mackinac): its surface in rectangles of its sources, each
+    /// flat at its own level, 176 to 177.4 m, and one 12 m lower; the real
+    /// height at the sea's level its own, 176 m, three times higher. Written
+    /// over a map of flat land, it is water all over, at one level, and
+    /// holds.
+    #[test]
+    fn a_lake_in_rectangles_of_its_sources_is_one_lake() {
+        let area = Area { lat: 45.77, lon: -84.94, blocks_per_metre: 0.2, width: 2048, depth: 1536 };
+        let lake = |e: f64, s: f64| (e / 4200.0).powi(2) + (s / 3000.0).powi(2) < 1.0;
+        let field = Field(move |e: f64, s: f64| {
+            if lake(e, s) {
+                let cell = ((e / 1600.0).floor() as i64, (s / 1200.0).floor() as i64);
+                Some(if cell == (1, 0) { 164.75 } else { [176.0, 176.75, 177.0, 177.375][(cell.0 + 2 * cell.1).rem_euclid(4) as usize] })
+            } else {
+                // The shore rising from 178 m, gently.
+                let out = ((e / 4200.0).powi(2) + (s / 3000.0).powi(2)).sqrt() - 1.0;
+                Some((178.0 + out * 400.0 + 0.3 * (e / 70.0).sin() * (s / 90.0).cos()) as f32)
+            }
+        });
+        let mut samples = Samples::read(&area, &field, 5.0);
+        samples.prepare(area.blocks_per_metre, None);
+        assert_eq!(samples.lakes.levels.len(), 1, "one lake: {:?}", samples.lakes.levels);
+        let fit = Vertical { datum: 176.0, sea_level: 63, exaggeration: 3.0, low: -64, high: 320, fit: true }.fit(samples.span().unwrap(), area.blocks_per_metre);
+        let rect = BlockRect::new(-1024, -768, 1024, 768);
+        let mut world = World::new(Default::default());
+        world.meta.sea_level = 63;
+        world.dims[0].resize(rect, || crate::tile::Tile::ground(70.0, 0, NO_FLUID));
+        let theme = crate::generate::Theme::new(&world.registry);
+        let mut history = crate::history::History::new(1);
+        history.begin("real", 0);
+        write_ground(&mut history.edit(&mut world, 0), &samples, &fit, rect, Some((&area, theme)), &Steps::default());
+        drop(history);
+        // Every column of the lake under water, at one level.
+        let (mut levels, mut dry, mut wet) = (std::collections::BTreeSet::new(), 0, 0);
+        for z in (rect.z0..rect.z1).step_by(4) {
+            for x in (rect.x0..rect.x1).step_by(4) {
+                let (e, s) = ((x - rect.x0) as f64 / 0.2 - 5120.0, (z - rect.z0) as f64 / 0.2 - 3840.0);
+                // Away from its shore, which the samples round.
+                if !lake(e * 1.03, s * 1.03) {
+                    continue;
+                }
+                let (top, fluid, _, _) = column(&world, x, z);
+                if fluid != NO_FLUID && fluid as f32 > top {
+                    wet += 1;
+                    levels.insert(fluid);
+                } else {
+                    dry += 1;
+                }
+            }
+        }
+        assert_eq!(dry, 0, "dry columns in the lake ({wet} wet)");
+        assert_eq!(levels.len(), 1, "the lake's levels {levels:?}");
+        let held = crate::water::check(&world.dims[0]);
+        assert_eq!((held.spills, held.floating), (0, 0), "{held:?}");
+    }
+
+    /// A great lake that meets other data as often as its shore: its flat
+    /// surface at 176.9 m runs off the area's east edge, and its middle is
+    /// a bathymetry 20 to 30 m lower (as the Straits of Mackinac in the
+    /// tiles). Its rim is not higher all round; at the real height the map's
+    /// water stands at, it is water, flat to the shore, the bathymetry under
+    /// it.
+    #[test]
+    fn a_lake_at_the_real_height_of_the_water_is_water() {
+        let area = Area { lat: 45.77, lon: -84.94, blocks_per_metre: 0.2, width: 2048, depth: 1536 };
+        let lake = |e: f64, s: f64| e > -3000.0 && (s / 3000.0).powi(2) + ((e + 3000.0).min(0.0) / 2000.0).powi(2) < 1.0;
+        let field = Field(move |e: f64, s: f64| {
+            if lake(e, s) {
+                let deep = ((e - 1000.0) / 1500.0).powi(2) + (s / 1200.0).powi(2);
+                Some(if deep < 1.0 { (150.0 + 20.0 * deep + 0.4 * (e / 50.0).sin()) as f32 } else { 176.9 })
+            } else {
+                let out = ((s / 3000.0).powi(2) + ((e + 3000.0).min(0.0) / 2000.0).powi(2)).sqrt() - 1.0;
+                Some((178.0 + out.abs() * 400.0 + 0.3 * (e / 70.0).sin() * (s / 90.0).cos()) as f32)
+            }
+        });
+        let mut samples = Samples::read(&area, &field, 5.0);
+        samples.prepare_at(area.blocks_per_metre, None, Some(176.0));
+        assert_eq!(samples.lakes.levels, vec![176.9]);
+        let fit = Vertical { datum: 176.0, sea_level: 63, exaggeration: 3.0, low: -64, high: 320, fit: true }.fit(samples.span().unwrap(), area.blocks_per_metre);
+        let rect = BlockRect::new(-1024, -768, 1024, 768);
+        let mut world = World::new(Default::default());
+        world.meta.sea_level = 63;
+        world.dims[0].resize(rect, || crate::tile::Tile::ground(70.0, 0, NO_FLUID));
+        let theme = crate::generate::Theme::new(&world.registry);
+        let mut history = crate::history::History::new(1);
+        history.begin("real", 0);
+        write_ground(&mut history.edit(&mut world, 0), &samples, &fit, rect, Some((&area, theme)), &Steps::default());
+        drop(history);
+        let (mut levels, mut dry) = (std::collections::BTreeSet::new(), 0);
+        for z in (rect.z0..rect.z1).step_by(4) {
+            for x in (rect.x0..rect.x1).step_by(4) {
+                let (e, s) = ((x - rect.x0) as f64 / 0.2 - 5120.0, (z - rect.z0) as f64 / 0.2 - 3840.0);
+                if !lake(e - 150.0, s * 1.05) {
+                    continue;
+                }
+                let (top, fluid, _, _) = column(&world, x, z);
+                if fluid != NO_FLUID && fluid as f32 > top {
+                    levels.insert(fluid);
+                } else {
+                    dry += 1;
+                }
+            }
+        }
+        assert_eq!(dry, 0, "dry columns in the lake");
+        assert_eq!(levels.into_iter().collect::<Vec<_>>(), vec![63], "water at the sea's level, over the bathymetry too");
+        let held = crate::water::check(&world.dims[0]);
+        assert_eq!((held.spills, held.floating), (0, 0), "{held:?}");
     }
 
     /// The water of a real place holds: the sea, a lagoon behind its low

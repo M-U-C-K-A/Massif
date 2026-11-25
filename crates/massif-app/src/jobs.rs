@@ -871,7 +871,10 @@ impl Job {
             drop(source);
             // Gaps in the data given the heights around them, and the coasts
             // shaped.
-            let prepared = samples.prepare(area.blocks_per_metre, square);
+            // The map's water at the real height the user gave it, over the
+            // sea's: a lake's (the Great Lakes' 176 m).
+            let water = (job.vertical.datum > crate::real_terrain::WATER_DATUM).then_some(job.vertical.datum);
+            let prepared = samples.prepare_at(area.blocks_per_metre, square, water);
             let note = real_note(&job.name, fetched, &prepared, samples.metres.len());
             let Some(span) = samples.span() else {
                 return Outcome::Failed(tr!("Relief of a real place: no heights over this area").to_owned());
