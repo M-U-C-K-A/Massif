@@ -706,29 +706,6 @@ fn folder_files(dir: &Path) -> Vec<FolderFile> {
     out
 }
 
-/// The files of a resource pack left as a folder that say something of
-/// colours (see [`true_color::wanted`]), by their names in it.
-fn color_files(dir: &Path) -> Vec<FolderFile> {
-    let mut out = Vec::new();
-    let mut stack = vec![dir.join("assets/minecraft")];
-    while let Some(d) = stack.pop() {
-        let Ok(read) = std::fs::read_dir(&d) else { continue };
-        for e in read.flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                stack.push(p);
-            } else if let Ok(rel) = p.strip_prefix(dir) {
-                let name = rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
-                if true_color::wanted(&name) && let Ok(bytes) = std::fs::read(&p) {
-                    out.push((name, bytes));
-                }
-            }
-        }
-    }
-    out.sort();
-    out
-}
-
 /// What a file read beside the game is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceKind {
@@ -1440,6 +1417,15 @@ fn mod_groups(archive: &zip::Archive, names: &[String], lang: &HashMap<String, S
         .collect()
 }
 
+/// Whether an archive read with the game's is a mod or a resource pack: a
+/// jar is a mod, and KubeJS's folder (it brings the blocks its scripts
+/// make); a zip or a folder is a resource pack, unless it says it is a mod.
+fn source_kind(a: &zip::Archive, p: &Path) -> SourceKind {
+    let says_mod = ["fabric.mod.json", "quilt.mod.json", "META-INF/mods.toml", "META-INF/neoforge.mods.toml", "mcmod.info"].iter().any(|f| a.contains(f));
+    let jar = p.extension().is_some_and(|e| e.eq_ignore_ascii_case("jar"));
+    if says_mod || jar || is_kubejs(p) { SourceKind::Mod } else { SourceKind::Pack }
+}
+
 /// Read every block of a client jar, and of the mods' jars beside it
 /// (Forge, NeoForge, Fabric or Quilt alike: their `assets/<namespace>/`),
 /// of resource packs (`.zip`) and of lists of blocks made for WorldPainter
@@ -1491,6 +1477,10 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
             Err(e) => skipped.push((m.clone(), e.to_string())),
         }
     }
+    // The game reads every resource pack over every mod, whatever the
+    // order they were added in: the mods first, in their order, then the
+    // packs in theirs, the last one winning.
+    archives[1..].sort_by_key(|(a, p)| p.as_deref().map(|p| source_kind(a, p)) == Some(SourceKind::Pack));
     let json = |a: &zip::Archive, name: &str| -> Option<Value> { serde_json::from_slice(&a.read(name)?.ok()?).ok() };
     // Where every model, state and texture is: the last archive's wins.
     let mut model_files: HashMap<String, (usize, String)> = HashMap::new();
@@ -1555,13 +1545,8 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
             }
         }
         if let Some(p) = mod_path {
-            // A jar is a mod; a zip is a resource pack, unless it says it is
-            // a mod.
-            let says_mod = ["fabric.mod.json", "quilt.mod.json", "META-INF/mods.toml", "META-INF/neoforge.mods.toml", "mcmod.info"].iter().any(|f| a.contains(f));
-            let jar = p.extension().is_some_and(|e| e.eq_ignore_ascii_case("jar"));
-            // KubeJS's folder brings the blocks its scripts make, as a mod.
             let kubejs = is_kubejs(p);
-            let kind = if says_mod || jar || kubejs { SourceKind::Mod } else { SourceKind::Pack };
+            let kind = source_kind(a, p);
             let name = if kubejs { "KubeJS".to_owned() } else if kind == SourceKind::Pack { p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default() } else { display_mod_name(&mod_meta(a), p) };
             mod_infos.push(ModInfo {
                 name,
@@ -1830,15 +1815,13 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
 
     // The biomes, the game's first, then each mod's and data pack's, the
     // last file of an id winning.
-    // The colour maps: the game's, then each resource pack's (or mod's) in
-    // order, the last word kept; packs left as folders too.
+    // The colour maps: the game's, then each mod's and resource pack's in
+    // the order read above (the packs last), the last word kept; packs left
+    // as folders too.
     let mut rules = true_color::Rules::default();
     for (k, (a, _)) in archives.iter().enumerate() {
         let name = if k == 0 { String::new() } else { mod_infos.get(k - 1).map_or_else(String::new, |m| m.name.clone()) };
         rules.read_archive(a, &name);
-    }
-    for m in mods.iter().filter(|m| m.is_dir() && m.join("assets").is_dir()) {
-        rules.read_files(&color_files(m), &m.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());
     }
     let source_of = |k: usize| if k == 0 { MINECRAFT.to_owned() } else { mod_infos.get(k - 1).map_or_else(String::new, |m| m.name.clone()) };
     let mut biomes: Vec<(usize, BiomeInfo)> = Vec::new();
@@ -2528,6 +2511,68 @@ mod tests {
         let stone = cat.block("minecraft:stone").unwrap();
         assert_eq!(stone.top.as_deref(), Some("block/stone"));
         assert!(!stone.translucent);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A resource pack goes over a mod's own look, as in the game, even
+    /// added before the mod's jar (ArdaCraft's over Conquest Reforged): its
+    /// texture for one of the mod's blocks and its OptiFine colour map for
+    /// another win over the jar's, zipped or left as a folder.
+    #[test]
+    fn packs_go_over_the_mods_blocks() {
+        let png = |c: [u8; 3]| {
+            let mut out = Vec::new();
+            image::RgbaImage::from_pixel(16, 16, image::Rgba([c[0], c[1], c[2], 255])).write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
+            out
+        };
+        let (red, blue, grey) = (png([200, 30, 30]), png([30, 30, 200]), png([128, 128, 128]));
+        let game: Vec<(&str, &[u8], bool)> = vec![("assets/minecraft/blockstates/stone.json", br#"{"variants":{"":{"model":"minecraft:block/stone"}}}"#, true)];
+        let cube = br##"{"textures":{"all":"conquest:block/old_bricks"},"elements":[{"from":[0,0,0],"to":[16,16,16],"faces":{"up":{"texture":"#all"},"north":{"texture":"#all"}}}]}"##;
+        let moss = br##"{"textures":{"all":"conquest:block/moss"},"elements":[{"from":[0,0,0],"to":[16,16,16],"faces":{"up":{"texture":"#all","tintindex":0},"north":{"texture":"#all"}}}]}"##;
+        let mod_files: Vec<(&str, &[u8], bool)> = vec![
+            ("META-INF/mods.toml", b"modLoader=\"javafml\"\n[[mods]]\nmodId=\"conquest\"\ndisplayName=\"Conquest Reforged\"\n", true),
+            ("assets/conquest/blockstates/old_bricks.json", br#"{"variants":{"":{"model":"conquest:block/old_bricks"}}}"#, true),
+            ("assets/conquest/blockstates/moss.json", br#"{"variants":{"":{"model":"conquest:block/moss"}}}"#, true),
+            ("assets/conquest/models/block/old_bricks.json", cube, true),
+            ("assets/conquest/models/block/moss.json", moss, true),
+            ("assets/conquest/textures/block/old_bricks.png", &red, false),
+            ("assets/conquest/textures/block/moss.png", &grey, false),
+            ("assets/minecraft/optifine/colormap/moss.properties", b"format=fixed\ncolor=00ff00\nblocks=conquest:moss\n", true),
+        ];
+        let pack_files: Vec<(&str, &[u8], bool)> = vec![
+            ("pack.mcmeta", br#"{"pack":{"pack_format":15}}"#, true),
+            ("assets/conquest/textures/block/old_bricks.png", &blue, false),
+            ("assets/minecraft/optifine/colormap/moss.properties", b"format=fixed\ncolor=ff00ff\nblocks=conquest:moss\n", true),
+        ];
+        let dir = std::env::temp_dir().join(format!("massif-assets-packs-over-mods-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (game_jar, mod_jar, pack_zip, pack_dir) = (dir.join("1.20.1.jar"), dir.join("conquest.jar"), dir.join("ArdaCraft.zip"), dir.join("ArdaCraft"));
+        std::fs::write(&game_jar, zip::tests_support::tiny_zip(&game)).unwrap();
+        std::fs::write(&mod_jar, zip::tests_support::tiny_zip(&mod_files)).unwrap();
+        std::fs::write(&pack_zip, zip::tests_support::tiny_zip(&pack_files)).unwrap();
+        for (n, bytes, _) in &pack_files {
+            std::fs::create_dir_all(pack_dir.join(n).parent().unwrap()).unwrap();
+            std::fs::write(pack_dir.join(n), bytes).unwrap();
+        }
+        // The mod alone: its own look.
+        let cat = load_with_mods(&game_jar, "1.20.1", std::slice::from_ref(&mod_jar)).unwrap();
+        assert_eq!(cat.block("conquest:old_bricks").unwrap().color, [200, 30, 30]);
+        assert_eq!(cat.tint_rgb("conquest:moss", Tint::Grass, None, 64), [0, 255, 0]);
+        for pack in [&pack_zip, &pack_dir] {
+            // The pack chosen first, the mod after it: the pack still wins.
+            let cat = load_with_mods(&game_jar, "1.20.1", &[pack.clone(), mod_jar.clone()]).unwrap();
+            let bricks = cat.block("conquest:old_bricks").unwrap();
+            assert_eq!((bricks.color, bricks.side_color), ([30, 30, 200], [30, 30, 200]), "the pack's texture: {}", pack.display());
+            assert_eq!(cat.true_top("conquest:old_bricks").unwrap().0, [30, 30, 200]);
+            let (_, kind) = cat.true_top("conquest:moss").unwrap();
+            assert!(kind.is_some(), "the moss's top is tinted");
+            assert_eq!(cat.tint_rgb("conquest:moss", Tint::Grass, None, 64), [255, 0, 255], "the pack's colour map: {}", pack.display());
+            assert_eq!(cat.colors.packs.last().map(String::as_str), Some("ArdaCraft"));
+            let kinds: Vec<SourceKind> = cat.mods.iter().map(|m| m.kind).collect();
+            assert_eq!(kinds, [SourceKind::Mod, SourceKind::Pack], "the mods read first, then the packs");
+            assert_eq!(cat.mods[0].blocks, 2);
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 

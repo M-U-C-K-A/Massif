@@ -2037,9 +2037,12 @@ blocks, from their textures. The 3D views have the same mode: their
 textures tinted the same way.
 
 The colours come from the blocks read in the **Blocks** panel: the game's,
-then each mod and resource pack added there, in their order, the last one
-winning as a pack higher in the game's list does (right-click a pack's chip
-to read it earlier or later). A pack's `colormap/grass.png` and
+then each mod, then each resource pack added there, in their order, the last
+pack winning as a pack higher in the game's list does (right-click a pack's
+chip to read it earlier or later). As in the game, every pack goes over every
+mod, whatever the order they were added in: a pack that retextures or
+recolours a mod's blocks (ArdaCraft's over Conquest Reforged's grasses and
+leaves) shows its own look, its textures, models and colour maps. A pack's `colormap/grass.png` and
 `foliage.png` replace the game's, and packs made for OptiFine (or MCPatcher)
 give blocks colour maps of their own: `optifine/colormap/*.properties` with
 their `blocks=`, read by temperature and downfall (`format=vanilla`), by
