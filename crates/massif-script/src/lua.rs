@@ -280,6 +280,17 @@ impl UserData for Map {
         methods.add_method("terrains", |lua, m, ()| lua.to_value(&call("terrains", serde_json::json!({ "world": m.w }))?));
         methods.add_method("biomes", |lua, m, ()| lua.to_value(&call("biomes", serde_json::json!({ "world": m.w }))?));
         methods.add_method("layers", |lua, m, ()| lua.to_value(&call("layers", serde_json::json!({ "world": m.w }))?));
+        // New terrains, ground covers and object layers, or redefined ones
+        // of the same name: what WorldPainter's custom terrains, plant
+        // layers and custom object layers are.
+        for (method, name) in [("add_terrain", "addTerrain"), ("add_cover", "addCover"), ("add_objects", "addObjects")] {
+            methods.add_method(method, move |lua, m, def: Value| {
+                let mut args: serde_json::Value = lua.from_value(def)?;
+                let Some(o) = args.as_object_mut() else { return Err(mlua::Error::runtime(format!("{method} takes a table"))) };
+                o.insert("world".into(), m.w.into());
+                lua.to_value(&call(name, args)?)
+            });
+        }
         methods.add_method("select", |_, m, args: MultiValue| {
             let rect = if args.front().is_none_or(|v| v.is_nil()) {
                 serde_json::Value::Null

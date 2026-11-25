@@ -13,6 +13,29 @@ fn world_of(args: &Value) -> R<usize> {
     int(args, "world").map(|w| w as usize).ok_or_else(|| "a world is needed: massif.open(…), massif.create(…) or the map open in Massif".into())
 }
 
+/// `"minecraft:podzol"`, `"podzol"` or `{"minecraft:podzol", 3}`: the block
+/// state and its weight.
+fn block_and_weight(v: &Value) -> R<(String, u16)> {
+    let (state, weight) = match v {
+        Value::String(s) => (s.as_str(), 1),
+        Value::Array(a) => (a.first().and_then(Value::as_str).ok_or("a block is \"minecraft:name[state]\" or {\"minecraft:name\", weight}")?, a.get(1).and_then(Value::as_u64).unwrap_or(1)),
+        _ => return Err("a block is \"minecraft:name[state]\" or {\"minecraft:name\", weight}".into()),
+    };
+    let state = state.trim();
+    if state.is_empty() {
+        return Err("an empty block name".into());
+    }
+    let state = if state.contains(':') { state.to_owned() } else { format!("minecraft:{state}") };
+    Ok((state, weight.clamp(1, u16::MAX as u64) as u16))
+}
+
+/// `color = {r, g, b}`, if given.
+fn color_of(args: &Value) -> Option<[u8; 3]> {
+    let c = args.get("color")?.as_array()?;
+    let n = |i: usize| c.get(i).and_then(Value::as_u64).map(|v| v.min(255) as u8);
+    Some([n(0)?, n(1)?, n(2)?])
+}
+
 fn text<'a>(args: &'a Value, key: &str) -> R<&'a str> {
     args.get(key).and_then(Value::as_str).ok_or_else(|| format!("{key} is needed"))
 }
@@ -166,6 +189,176 @@ pub fn call(s: &mut Session, name: &str, args: &Value) -> R<Value> {
             let reg = &s.slot(w)?.world.registry;
             let key = if n.contains(':') { n.to_owned() } else { format!("minecraft:{}", n.to_ascii_lowercase().replace(' ', "_")) };
             reg.biomes.iter().position(|b| b.id == key || b.name.eq_ignore_ascii_case(n)).map(|k| json!(k)).ok_or_else(|| format!("This map has no biome \"{n}\""))
+        }
+        "addTerrain" => {
+            let w = world_of(args)?;
+            let name = text(args, "name")?.trim().to_owned();
+            if name.is_empty() {
+                return Err("A terrain needs a name".into());
+            }
+            let layers = args.get("strata").and_then(Value::as_array).filter(|a| !a.is_empty()).ok_or(
+                "strata is needed: its layers from the surface down, each { blocks = { {\"minecraft:grass_block\", 3}, {\"minecraft:podzol\", 1} }, depth = {1, 1}, mix = \"grain\" | \"patches\" | \"beds\", size = 4 }",
+            )?;
+            let reg = &mut s.slot(w)?.world.registry;
+            let mut strata = Vec::new();
+            let mut colors = Vec::new();
+            for (k, layer) in layers.iter().enumerate() {
+                let at = |what: &str| format!("strata[{}]: {what}", k + 1);
+                let blocks = layer.get("blocks").and_then(Value::as_array).filter(|b| !b.is_empty()).ok_or_else(|| at("blocks is needed, a list of {block, weight}"))?;
+                let mut weighted = Vec::new();
+                for b in blocks {
+                    let (state, weight) = block_and_weight(b).map_err(|e| at(&e))?;
+                    let color = massif_core::objects::guess_color(&state);
+                    if k == 0 {
+                        colors.push((color, weight));
+                    }
+                    weighted.push((reg.intern_block(&state, color), weight));
+                }
+                let depth = match layer.get("depth") {
+                    None => (1, 1),
+                    Some(Value::Array(d)) => {
+                        let n = |i: usize| d.get(i).and_then(Value::as_u64).map(|v| v.clamp(0, 512) as u16);
+                        let lo = n(0).ok_or_else(|| at("depth is {least, most} or a number"))?;
+                        (lo, n(1).unwrap_or(lo).max(lo))
+                    }
+                    Some(v) => {
+                        let d = v.as_u64().ok_or_else(|| at("depth is {least, most} or a number"))?.clamp(0, 512) as u16;
+                        (d, d)
+                    }
+                };
+                let mix = match layer.get("mix").and_then(Value::as_str).unwrap_or("grain") {
+                    "grain" => massif_core::registry::Mix::Grain,
+                    "patches" | "blobs" => massif_core::registry::Mix::Patches { size: layer.get("size").and_then(Value::as_f64).unwrap_or(4.0).clamp(1.0, 256.0) as f32 },
+                    "beds" => massif_core::registry::Mix::Beds,
+                    other => return Err(at(&format!("mix \"{other}\": grain, patches or beds"))),
+                };
+                strata.push(massif_core::registry::Stratum { blocks: weighted, depth, mix });
+            }
+            let color = match color_of(args) {
+                Some(c) => c,
+                None => {
+                    let total: f32 = colors.iter().map(|c| c.1 as f32).sum();
+                    let mean = |i: usize| (colors.iter().map(|c| c.0[i] as f32 * c.1 as f32).sum::<f32>() / total.max(1.0)) as u8;
+                    [mean(0), mean(1), mean(2)]
+                }
+            };
+            let group = args.get("group").and_then(Value::as_str).unwrap_or("Custom").to_owned();
+            let def = massif_core::registry::TerrainDef { name: name.clone(), group, color, strata, submerged_top: None, biome_hint: None };
+            // One of the same name is redefined (the built-in Grass made a
+            // mix, say): what is painted with it changes with it.
+            let id = match reg.terrain_by_name(&name) {
+                Some(t) => {
+                    let old = &mut reg.terrains[t.0 as usize];
+                    let (submerged_top, biome_hint) = (old.submerged_top, old.biome_hint);
+                    *old = massif_core::registry::TerrainDef { submerged_top, biome_hint, ..def };
+                    t.0
+                }
+                None => {
+                    if reg.terrains.len() >= u16::MAX as usize {
+                        return Err("The map has as many terrains as it can hold".into());
+                    }
+                    reg.terrains.push(def);
+                    (reg.terrains.len() - 1) as u16
+                }
+            };
+            s.slot(w)?.changed = true;
+            Ok(json!(id))
+        }
+        "addCover" => {
+            let w = world_of(args)?;
+            let name = text(args, "name")?.trim().to_owned();
+            let plants = args.get("plants").and_then(Value::as_array).filter(|a| !a.is_empty()).ok_or("plants is needed: { {\"minecraft:short_grass\", 10}, {\"minecraft:fern\", 2} }")?;
+            let mut weighted = Vec::new();
+            for p in plants {
+                weighted.push(block_and_weight(p)?);
+            }
+            let total: f32 = weighted.iter().map(|p| p.1 as f32).sum();
+            let mean = |i: usize| (weighted.iter().map(|p| massif_core::objects::guess_color(&p.0)[i] as f32 * p.1 as f32).sum::<f32>() / total.max(1.0)) as u8;
+            let color = color_of(args).unwrap_or([mean(0), mean(1), mean(2)]);
+            let borrowed: Vec<(&str, u16)> = weighted.iter().map(|(s, w)| (s.as_str(), *w)).collect();
+            let density = args.get("density").and_then(Value::as_f64).unwrap_or(0.5).clamp(0.0, 1.0) as f32;
+            let mut def = massif_core::registry::CoverDef::new(&name, color, &borrowed, density);
+            if let Some(h) = args.get("height").and_then(Value::as_array) {
+                let n = |i: usize| h.get(i).and_then(Value::as_u64).map(|v| v.clamp(1, 16) as u8);
+                let lo = n(0).unwrap_or(1);
+                def.height = [lo, n(1).unwrap_or(lo).max(lo)];
+            }
+            if let Some(b) = args.get("soil_only").and_then(Value::as_bool) {
+                def.soil_only = b;
+            }
+            if let Some(b) = args.get("underwater").and_then(Value::as_bool) {
+                def.underwater = b;
+            }
+            let reg = &mut s.slot(w)?.world.registry;
+            let id = match reg.cover_by_name(&name) {
+                Some(n) => {
+                    reg.covers[n as usize - 1] = def;
+                    n
+                }
+                None => reg.add_cover(def),
+            };
+            s.slot(w)?.changed = true;
+            Ok(json!({ "kind": "cover", "id": id }))
+        }
+        "addObjects" => {
+            let w = world_of(args)?;
+            let name = text(args, "name")?.trim().to_owned();
+            let files = args.get("files").and_then(Value::as_array).filter(|a| !a.is_empty()).ok_or("files is needed: the schematics (.schem, .schematic, .nbt, .litematic, .bo2, .bo3, Axiom .bp) of the layer")?;
+            let mut read = Vec::new();
+            for f in files {
+                let f = f.as_str().ok_or("files: names of files")?;
+                let path = s.access.check(f, false)?;
+                let weight = 1;
+                let mut imported = massif_objects::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+                let o = &mut imported.object;
+                o.colors = o.palette.iter().map(|state| massif_core::objects::guess_color(state)).collect();
+                read.push((imported.object, weight));
+            }
+            let reg = &mut s.slot(w)?.world.registry;
+            let mut added = Vec::new();
+            for (o, _) in read {
+                reg.objects.push(o);
+                added.push((reg.objects.len() - 1) as u32);
+            }
+            let mut layer = massif_core::objects::ObjectLayerDef::new(&name, &added, reg);
+            layer.spacing_mode = massif_core::objects::Spacing::Canopy;
+            if let Some(c) = color_of(args) {
+                layer.color = c;
+            }
+            if let Some(d) = args.get("density").and_then(Value::as_f64) {
+                layer.density = d.clamp(0.0, 1.0) as f32;
+            }
+            match args.get("spacing") {
+                Some(Value::String(m)) if m == "canopy" => {}
+                Some(v) if v.as_u64().is_some() => {
+                    layer.spacing_mode = massif_core::objects::Spacing::Grid;
+                    layer.spacing = v.as_u64().unwrap_or(8).clamp(1, 256) as u16;
+                }
+                None => {}
+                Some(_) => return Err("spacing is \"canopy\" (by their crowns) or a number of blocks (a grid)".into()),
+            }
+            if let Some(g) = args.get("gap").and_then(Value::as_u64) {
+                layer.min_gap = g.clamp(0, 64) as u8;
+            }
+            for (key, slot) in [("rotate", &mut layer.rotate), ("mirror", &mut layer.mirror), ("soil_only", &mut layer.soil_only), ("replace", &mut layer.replace), ("understory", &mut layer.understory)] {
+                if let Some(b) = args.get(key).and_then(Value::as_bool) {
+                    *slot = b;
+                }
+            }
+            if let Some(k) = args.get("sink").and_then(Value::as_i64) {
+                layer.sink = k.clamp(-64, 64) as i16;
+            }
+            let understory = layer.understory;
+            let found = reg.object_layers.iter().position(|l| !l.removed && l.name.eq_ignore_ascii_case(&name));
+            let id = match found {
+                Some(k) => {
+                    reg.object_layers[k] = layer;
+                    k as u16 + 1
+                }
+                None => reg.add_object_layer(layer),
+            };
+            s.slot(w)?.changed = true;
+            Ok(json!({ "kind": if understory { "understory" } else { "trees" }, "id": id, "objects": added.len() }))
         }
         "layerId" => {
             let w = world_of(args)?;

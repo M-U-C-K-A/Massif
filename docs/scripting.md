@@ -190,6 +190,30 @@ without a loop in the script, `g:sum()`, `g:min()`, `g:max()`,
 
 `map:height(x, z)` and `map:set_height(x, z, h)` read and write one column.
 
+### Terrains, covers and objects of one's own
+
+What WorldPainter's custom terrains, plant layers and custom object layers
+are, a script makes: each call gives the new one's number (or `{ kind, id }`
+for a layer), to paint with `map:set`. One of the same name is redefined
+(`add_terrain{ name = "Grass", … }` turns every grass column into the mix).
+
+```lua
+local floor = map:add_terrain{ name = "Forest floor", group = "Alpine", strata = {
+    { blocks = { {"podzol", 5}, {"grass_block", 3}, {"coarse_dirt", 2}, {"moss_block", 2} }, mix = "patches", size = 3 },
+    { blocks = { "dirt", {"coarse_dirt", 1} }, depth = {3, 5} } } }
+local ferns = map:add_cover{ name = "Forest plants", density = 0.5, plants = { {"fern", 6}, {"short_grass", 4}, {"moss_carpet", 3} } }
+local spruces = map:add_objects{ name = "Spruces", density = 0.75, files = { "trees/spruce-1.schem", "trees/spruce-2.schem" } }
+map:set("terrain", x0, z0, x1, z1, floor)
+map:set("cover", x0, z0, x1, z1, ferns.id)
+map:set("trees", x0, z0, x1, z1, spruces.id)
+```
+
+| Call | Takes |
+|---|---|
+| `add_terrain` | `name`, `strata` from the surface down: each `blocks` (`"podzol"`, `"minecraft:moss_block"`, or `{block, weight}`), `depth` (`{least, most}` or a number, 1 by default) and `mix`: `"grain"` (each block by its weight), `"patches"` (blobs `size` blocks across) or `"beds"` (horizontal strata); `group`, `color` |
+| `add_cover` | `name`, `plants` (`{block, weight}`), `density` (0.5), `height` (`{least, most}`), `soil_only` (true), `underwater`, `color` |
+| `add_objects` | `name`, `files` (schematics: `.schem`, `.schematic`, `.nbt`, `.litematic`, `.bo2`, `.bo3`, Axiom `.bp`, files the script may touch), `density` (0.6), `spacing` (`"canopy"`, the default, or blocks of a grid), `gap`, `rotate`, `mirror`, `soil_only`, `sink`, `replace`, `understory`, `color` |
+
 ### Masks from images
 
 `map:import_mask(file, options)` paints what an image is on: what

@@ -2322,6 +2322,7 @@ dependencies = [
  "massif-core",
  "massif-format",
  "massif-legacy",
+ "massif-objects",
  "mlua",
  "png",
  "rayon",

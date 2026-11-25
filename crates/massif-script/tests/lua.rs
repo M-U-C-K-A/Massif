@@ -223,3 +223,87 @@ print(high > 0, high == frosted)
     assert!(outcome.changed);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// A Sponge schematic (version 2, uncompressed) of a 1 × 3 × 1 post: a log
+/// with leaves on top.
+fn post_schematic() -> Vec<u8> {
+    let mut b = vec![10u8];
+    let s = |b: &mut Vec<u8>, t: &str| {
+        b.extend((t.len() as u16).to_be_bytes());
+        b.extend(t.as_bytes());
+    };
+    let tag = |b: &mut Vec<u8>, kind: u8, name: &str| {
+        b.push(kind);
+        s(b, name);
+    };
+    s(&mut b, "Schematic");
+    tag(&mut b, 3, "Version");
+    b.extend(2i32.to_be_bytes());
+    tag(&mut b, 3, "DataVersion");
+    b.extend(3953i32.to_be_bytes());
+    for (name, v) in [("Width", 1i16), ("Height", 3), ("Length", 1)] {
+        tag(&mut b, 2, name);
+        b.extend(v.to_be_bytes());
+    }
+    tag(&mut b, 10, "Palette");
+    for (name, v) in [("minecraft:air", 0i32), ("minecraft:spruce_log[axis=y]", 1), ("minecraft:spruce_leaves[distance=1,persistent=true,waterlogged=false]", 2)] {
+        tag(&mut b, 3, name);
+        b.extend(v.to_be_bytes());
+    }
+    b.push(0);
+    tag(&mut b, 3, "PaletteMax");
+    b.extend(3i32.to_be_bytes());
+    tag(&mut b, 7, "BlockData");
+    b.extend(3i32.to_be_bytes());
+    b.extend([1u8, 1, 2]);
+    b.push(0);
+    b
+}
+
+/// Floors mixed from blocks, plant mixes and object layers made by a
+/// script, as WorldPainter's custom terrains, plant layers and custom object
+/// layers; one of the same name redefined; files outside the script's
+/// folder refused.
+#[test]
+fn terrains_covers_and_objects_made() {
+    let dir = temp("make");
+    std::fs::write(dir.join("post.schem"), post_schematic()).unwrap();
+    let src = r#"
+local map = massif.create{ width = 128, depth = 128 }
+local floor = map:add_terrain{ name = "Forest floor", strata = {
+    { blocks = { {"podzol", 5}, {"minecraft:grass_block", 3}, "moss_block" }, mix = "patches", size = 3 },
+    { blocks = { "dirt" }, depth = {3, 5} } } }
+print(floor == map:terrain_id("Forest floor"))
+local again = map:add_terrain{ name = "forest floor", strata = { { blocks = { "podzol" } } } }
+print(again == floor)
+local plants = map:add_cover{ name = "Ferns and moss", density = 0.4, plants = { {"fern", 3}, {"moss_carpet", 1} } }
+print(plants.kind, plants.id == map:layer("Ferns and moss").id)
+local posts = map:add_objects{ name = "Posts", files = { "post.schem" }, density = 0.5, spacing = 6 }
+print(posts.kind, posts.objects, posts.id == map:layer("Posts").id)
+local x0, z0, x1, z1 = map:bounds()
+map:set("terrain", x0, z0, x1, z1, floor)
+map:set("cover", x0, z0, x1, z1, plants.id)
+map:set("trees", x0, z0, x1, z1, posts.id)
+print(map:get("trees", x0, z0, x0 + 4, z0 + 4):count(posts.id))
+print(pcall(function() return map:add_terrain{ name = "Bad", strata = { { blocks = { "podzol" }, mix = "swirls" } } } end))
+print(pcall(function() return map:add_objects{ name = "Far", files = { "C:/Windows/win.ini" } } end))
+map:save("made.massif")
+"#;
+    let (ending, lines, _) = run(&dir, "make.lua", src, &[], None, Default::default());
+    assert_eq!(ending, Ending::Done, "{lines:?}");
+    let said = out(&lines);
+    assert_eq!(said[..5], ["true", "true", "cover\ttrue", "trees\t1\ttrue", "16"], "{said:?}");
+    assert!(said[5].starts_with("false") && said[5].contains("grain, patches or beds"), "{}", said[5]);
+    assert!(said[6].starts_with("false") && said[6].contains("may only use files"), "{}", said[6]);
+    let world = massif_format::load(&dir.join("made.massif")).unwrap();
+    let reg = &world.registry;
+    let t = &reg.terrains[reg.terrain_by_name("Forest floor").unwrap().0 as usize];
+    assert_eq!(t.strata.len(), 1, "redefined");
+    assert_eq!(reg.block(t.strata[0].blocks[0].0).state, "minecraft:podzol");
+    let c = &reg.covers[reg.cover_by_name("Ferns and moss").unwrap() as usize - 1];
+    assert_eq!((c.plants[0].0.as_str(), c.plants[0].1, c.density), ("minecraft:fern", 3, 0.4));
+    let l = reg.object_layers.iter().find(|l| l.name == "Posts").unwrap();
+    assert_eq!((l.spacing, l.objects.len(), l.spacing_mode), (6, 1, massif_core::objects::Spacing::Grid));
+    assert_eq!(reg.objects[l.objects[0].0 as usize].size, [1, 3, 1]);
+    std::fs::remove_dir_all(&dir).ok();
+}

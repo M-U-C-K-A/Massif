@@ -1,1 +1,5 @@
 **Other programs can change the open map.** An assistant running on this computer (Claude, through the massif-mcp server) reads the map open in Massif and changes it while you watch: each of its changes is one step to undo, and one made while you were painting is not written over your work. Only programs of your own session can reach it; `MASSIF_BRIDGE=0` turns it off.
+
+**Scripts make terrains, plant layers and object layers.** A Lua script makes a terrain of several blocks mixed in patches, grains or beds (`map:add_terrain`), a ground cover of several plants (`map:add_cover`) and an object layer of schematics (`map:add_objects`), or redefines one of the same name: what WorldPainter's custom terrains, plant layers and custom object layers are, ready to paint with `map:set`.
+
+**A busy graphics card no longer freezes Massif.** When the graphics card does not come idle in time for the window to be set up again (another program's long work on it), Massif skips that frame instead of stopping.
