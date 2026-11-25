@@ -3875,5 +3875,6 @@
  "Default": "Standard",
  "One row for each value, sharing the weight: the cover grows them mixed": "Eine Zeile je Wert, die sich das Gewicht teilen: die Bedeckung wächst sie gemischt",
  "This block has no properties the game's files or the lists of blocks name.": "Dieser Block hat keine Eigenschaften, die die Dateien des Spiels oder die Blocklisten nennen.",
- "{name}: its state": "{name}: sein Zustand"
+ "{name}: its state": "{name}: sein Zustand",
+ "{label} · about {mb} MB, slow": "{label} · etwa {mb} MB, langsam"
 }

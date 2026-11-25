@@ -208,6 +208,14 @@ pub struct TerrainPanel {
     pub split: f32,
     /// Fit the graph in view at the next frame (a graph just opened).
     pub fit_pending: bool,
+    /// Show the whole graph at the next frame, however small (the frame
+    /// button).
+    pub frame_all_pending: bool,
+    /// Where the canvas was drawn last, on screen.
+    pub canvas_rect: Rect,
+    /// While a wire is drawn: the node near the pointer and what the wire
+    /// carries (its groups that take it open).
+    pub magnet: Option<(String, PortKind)>,
     /// What the panel last read from or wrote into the document's
     /// `terrain_graph`: anything else there is another world's graph.
     written: Option<Option<serde_json::Value>>,
@@ -282,6 +290,9 @@ impl TerrainPanel {
             events: Vec::new(),
             split: 0.42,
             fit_pending: true,
+            frame_all_pending: false,
+            canvas_rect: Rect::NOTHING,
+            magnet: None,
             written: None,
             dirty: false,
             own_undo_keys: true,
@@ -369,7 +380,7 @@ impl TerrainPanel {
         self.revision += 1;
         match self.layout.view {
             Some([x, y, z]) => {
-                self.view = View { offset: vec2(x, y), zoom: z.clamp(0.25, 2.5) };
+                self.view = View { offset: vec2(x, y), zoom: z.clamp(super::canvas::ZOOM_MIN, super::canvas::ZOOM_MAX) };
                 self.fit_pending = false;
             }
             None => {

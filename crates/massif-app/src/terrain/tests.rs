@@ -831,3 +831,135 @@ fn the_script_pane_renders() {
         p.script.origin = super::script::Origin::Own;
     });
 }
+
+/// The canvas zooms around the pointer with a mouse wheel or a pinch, over
+/// a wide range, and slides with two fingers on a trackpad; ⌘+ and ⌘−
+/// zoom, F and a double-click on the ground show the whole graph; the
+/// minimap shows when the graph does not fit, follows the view, and a click
+/// in it centres the view there.
+#[test]
+fn the_canvas_zooms_and_its_minimap_moves_it() {
+    use egui::{Event, Modifiers, MouseWheelSource, MouseWheelUnit, TouchPhase, pos2, vec2};
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1600.0, 1000.0)).with_accessibility_check(false).build_ui_state(
+        |ui, p: &mut super::TerrainPanel| {
+            if ui.ctx().cumulative_pass_nr() == 0 {
+                crate::theme::install(ui.ctx());
+            }
+            p.ui(ui);
+        },
+        super::TerrainPanel::with_graph(Arc::new(Engine::new(Default::default())), example("m4-alpine-colors")),
+    );
+    h.run_steps(3);
+    let canvas = h.state().canvas_rect;
+    let at = canvas.center() + vec2(-120.0, 40.0);
+    let graph_at = |p: &super::TerrainPanel| (at - canvas.min - p.view.offset) / p.view.zoom;
+    h.input_mut().events.push(Event::PointerMoved(at));
+    h.run_steps(1);
+    let (z0, under) = (h.state().view.zoom, graph_at(h.state()));
+    // A mouse wheel: closer, the point under the pointer staying there.
+    for _ in 0..12 {
+        h.input_mut().events.push(Event::MouseWheel { unit: MouseWheelUnit::Line, delta: vec2(0.0, 3.0), phase: TouchPhase::Move, source: MouseWheelSource::Wheel, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+    }
+    let p = h.state();
+    assert!(p.view.zoom > z0 * 2.5 && p.view.zoom <= super::canvas::ZOOM_MAX, "{z0} → {}", p.view.zoom);
+    assert!((graph_at(p) - under).length() < 1.0, "the point under the pointer stays");
+    // Two fingers on a trackpad slide, never zoom.
+    let (z1, o1) = (p.view.zoom, p.view.offset);
+    h.input_mut().events.push(Event::MouseWheel { unit: MouseWheelUnit::Point, delta: vec2(30.0, -50.0), phase: TouchPhase::Move, source: MouseWheelSource::Trackpad, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    assert_eq!(h.state().view.zoom, z1);
+    assert_eq!(h.state().view.offset, o1 + vec2(30.0, -50.0));
+    // Close in, part of the graph is out of view: the minimap, whose click
+    // centres the view on what it shows there.
+    let mini = super::canvas::minimap_rect(h.state(), canvas).expect("the minimap shows");
+    assert!(mini.left() < canvas.center().x && mini.bottom() <= canvas.bottom(), "at the bottom left");
+    let before = h.state().view.offset;
+    h.input_mut().events.push(Event::PointerMoved(mini.center()));
+    h.input_mut().events.push(Event::PointerButton { pos: mini.center(), button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.input_mut().events.push(Event::PointerButton { pos: mini.center(), button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert_ne!(h.state().view.offset, before, "the view moved there");
+    assert_eq!(h.state().view.zoom, z1, "the click did not zoom");
+    // The wheel over the minimap zooms the canvas (around its middle).
+    h.input_mut().events.push(Event::MouseWheel { unit: MouseWheelUnit::Line, delta: vec2(0.0, -3.0), phase: TouchPhase::Move, source: MouseWheelSource::Wheel, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    assert!(h.state().view.zoom < z1);
+    // ⌘− from the keyboard; F shows it all, as far out as it takes, and the
+    // minimap goes.
+    h.input_mut().events.push(Event::PointerMoved(at));
+    h.run_steps(1);
+    let z2 = h.state().view.zoom;
+    h.input_mut().events.push(Event::Key { key: egui::Key::Minus, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::COMMAND });
+    h.run_steps(1);
+    assert!((h.state().view.zoom - z2 * 0.8).abs() < 1e-3, "{z2} → {}", h.state().view.zoom);
+    h.input_mut().events.push(Event::Key { key: egui::Key::F, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert!(super::canvas::minimap_rect(h.state(), canvas).is_none(), "all of it in view");
+    // Far out, a double-click on the ground frames it again.
+    for _ in 0..30 {
+        h.input_mut().events.push(Event::MouseWheel { unit: MouseWheelUnit::Line, delta: vec2(0.0, -3.0), phase: TouchPhase::Move, source: MouseWheelSource::Wheel, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+    }
+    assert!((h.state().view.zoom - super::canvas::ZOOM_MIN).abs() < 1e-4, "as far out as it goes: {}", h.state().view.zoom);
+    let ground = pos2(canvas.right() - 30.0, canvas.top() + 30.0);
+    for _ in 0..2 {
+        h.input_mut().events.push(Event::PointerButton { pos: ground, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.input_mut().events.push(Event::PointerButton { pos: ground, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    }
+    h.run_steps(2);
+    assert!(h.state().view.zoom > super::canvas::ZOOM_MIN * 2.0, "framed: {}", h.state().view.zoom);
+}
+
+/// The 3D viewer's camera keeps its distance as it turns: turning never
+/// comes closer nor goes away, only the wheel does.
+#[test]
+fn the_3d_viewer_keeps_its_distance_as_it_turns() {
+    let target = [600.0, 50.0, 400.0];
+    let dist = |yaw: f32, pitch: f32, d: f32| {
+        let (eye, ..) = super::shade::orbit(1200.0, 800.0, 0.0, 100.0, yaw, pitch, d, 1.6, 0.5);
+        ((eye[0] - target[0]).powi(2) + (eye[1] - target[1]).powi(2) + (eye[2] - target[2]).powi(2)).sqrt()
+    };
+    let d0 = dist(25.0, 34.0, 1.0);
+    for (yaw, pitch) in [(0.0, 34.0), (90.0, 34.0), (200.0, 15.0), (310.0, 70.0)] {
+        assert!((dist(yaw, pitch, 1.0) - d0).abs() < 1e-2 * d0, "{yaw}°, {pitch}°");
+    }
+    assert!((dist(90.0, 50.0, 0.5) - d0 * 0.5).abs() < 1e-2 * d0, "the wheel's distance alone");
+}
+
+/// While a wire is drawn near the Map Output, its folded groups holding an
+/// input that takes it open (Underground for caves), and fold again once it
+/// goes; folded, a group says how many inputs it holds.
+#[test]
+fn groups_open_for_a_wire_drawn_near() {
+    use super::canvas::Row;
+    let mut p = cpu_panel();
+    p.set_graph(super::TerrainPanel::starter());
+    let open = |p: &super::TerrainPanel, key: &str| super::canvas::rows(p, "out").iter().find_map(|r| match r {
+        Row::Group { key: k, open, total, .. } if *k == key => Some((*open, *total)),
+        _ => None,
+    });
+    let (folded, total) = open(&p, "underground").expect("an Underground group");
+    assert!(!folded && total >= 2, "folded, with its inputs counted: {total}");
+    p.magnet = Some(("out".into(), massif_terrain::registry::PortKind::Layer));
+    assert!(open(&p, "underground").unwrap().0, "a layer drawn near: Underground opens");
+    assert!(!open(&p, "climate").unwrap().0, "Climate takes no layer: it stays folded");
+    p.magnet = None;
+    assert!(!open(&p, "underground").unwrap().0, "folded again once the wire goes");
+}
+
+/// A graph with no Map Output gets one from the warning's button, its
+/// Height fed by the rightmost node making heights.
+#[test]
+fn a_map_output_is_added_when_missing() {
+    let mut p = cpu_panel();
+    let mut g = example("m4-alpine-colors");
+    g.nodes.remove("out");
+    g.ui.remove("out");
+    p.set_graph(g);
+    assert!(!p.graph.nodes.values().any(|n| n.kind.starts_with("output.map")));
+    let id = super::canvas::add_map_output(&mut p);
+    assert!(p.graph.nodes[&id].kind.starts_with("output.map"));
+    assert!(p.graph.nodes[&id].inputs.contains_key("height"), "its Height fed");
+    assert!(p.pos(&id)[0] > p.pos("alps")[0], "right of the graph");
+}

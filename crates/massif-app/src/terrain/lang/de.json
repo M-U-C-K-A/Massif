@@ -255,5 +255,12 @@
   "Experimental": "Experimentell",
   "MassifScript is new in 1.2: its language may still change": "MassifScript ist neu in 1.2: seine Sprache kann sich noch ändern",
   "A mistake: the graph is left as it is": "Ein Fehler: der Graph bleibt, wie er ist",
-  "a warning": "eine Warnung"
+  "a warning": "eine Warnung",
+  "Frame all nodes (F, or double-click the ground)": "Alle Knoten einpassen (F oder Doppelklick auf den Grund)",
+  "Background": "Hintergrund",
+  "Dark": "Dunkel",
+  "Sky": "Himmel",
+  "Resolution": "Auflösung",
+  "Auto": "Auto",
+  "{n} samples a side: about {mb} MB and several seconds a picture": "{n} Werte je Seite: etwa {mb} MB und mehrere Sekunden je Bild"
 }

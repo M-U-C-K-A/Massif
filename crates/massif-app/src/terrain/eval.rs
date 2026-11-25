@@ -53,11 +53,17 @@ pub struct ViewerLook {
     /// much of the terrain the shorter side shows.
     pub center: [f32; 2],
     pub span: f32,
+    /// In 3D, the sky beyond the terrain; else the plain `back`, as in Gaea.
+    pub sky: bool,
+    /// Samples a side the viewer's terrain is made with when sharp: 0 for
+    /// as many as its pixels need (at most 1024), else this many (up to
+    /// 8192, slow and heavy).
+    pub resolution: u32,
 }
 
 impl Default for ViewerLook {
     fn default() -> Self {
-        Self { three_d: false, surface: Surface::Colour, sun: [315.0, 40.0], yaw: 25.0, pitch: 34.0, distance: 1.0, relief: 1.0, contours: false, overlay: 0.85, size: [640, 400], back: [20, 20, 21], window: [0.0, 0.0, 1.0, 1.0], center: [0.5, 0.5], span: 1.0 }
+        Self { three_d: false, surface: Surface::Colour, sun: [315.0, 40.0], yaw: 25.0, pitch: 34.0, distance: 1.0, relief: 1.0, contours: false, overlay: 0.85, size: [640, 400], back: [20, 20, 21], window: [0.0, 0.0, 1.0, 1.0], center: [0.5, 0.5], span: 1.0, sky: false, resolution: 0 }
     }
 }
 
@@ -266,7 +272,11 @@ fn work(shared: &Shared, engine: &Engine, req: Request) {
         let (what, viewer, sharp, made) = match step {
             Step::Viewer { sharp } => {
                 let (what, look) = req.viewer.clone().expect("a viewer");
-                let samples = if sharp { (look.size[0].max(look.size[1]) as u32).clamp(256, 1024) } else { 160 };
+                let samples = match (sharp, look.resolution) {
+                    (false, _) => 160,
+                    (true, 0) => (look.size[0].max(look.size[1]) as u32).clamp(256, 1024),
+                    (true, r) => r.clamp(256, 8192),
+                };
                 shared.status.lock().expect("lock").doing = format!("{}{}", what.node, if sharp { "" } else { " (coarse)" });
                 (what.clone(), true, sharp, picture(engine, c, &what, samples, Some(&look), &req, &cancel))
             }
@@ -455,7 +465,7 @@ fn picture(engine: &Engine, c: &Compiled, what: &Shown, samples: u32, look: Opti
             let camera = if l.three_d { Camera::Orbit { yaw: l.yaw, pitch: l.pitch, distance: l.distance } } else { Camera::Top { view: view_of(&heights, rect, whole, window, c.space.samples(lod)) } };
             let exaggeration = if l.three_d { shade::auto_exaggeration_3d(&heights, sea) } else { shade::auto_exaggeration(&heights, sea) } * l.relief;
             let contours = if l.contours { contour_step(range) } else { 0.0 };
-            (l.size, Look { sun: l.sun, exaggeration, camera, contours, back: l.back, water: !field, ..Look::default() })
+            (l.size, Look { sun: l.sun, exaggeration, camera, contours, back: l.back, sky: l.sky, water: !field, ..Look::default() })
         }
     };
     let mut rgba = shade::shade(engine.gpu().map(|g| &**g), &relief, ov, surface, &shade_look, size);

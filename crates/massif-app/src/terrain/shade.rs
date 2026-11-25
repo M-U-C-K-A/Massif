@@ -46,13 +46,15 @@ pub struct Look {
     pub water: bool,
     /// Rock on steep slopes in the height tints.
     pub rock_on_slopes: bool,
-    /// Beyond the terrain in the 2D view (sRGB).
+    /// Beyond the terrain in the 2D view, and in 3D without the sky (sRGB).
     pub back: [u8; 3],
+    /// In 3D, the sky beyond the terrain (else `back`, plain).
+    pub sky: bool,
 }
 
 impl Default for Look {
     fn default() -> Self {
-        Self { sun: [315.0, 40.0], exaggeration: 1.0, camera: Camera::Top { view: [0.0, 0.0, 1.0, 1.0] }, contours: 0.0, water: true, rock_on_slopes: true, back: [0, 0, 0] }
+        Self { sun: [315.0, 40.0], exaggeration: 1.0, camera: Camera::Top { view: [0.0, 0.0, 1.0, 1.0] }, contours: 0.0, water: true, rock_on_slopes: true, back: [0, 0, 0], sky: true }
     }
 }
 
@@ -178,36 +180,8 @@ fn shade_gpu(gpu: &Gpu, relief: &Relief, overlay: Option<Overlay>, surface: Surf
             let side = sx.max(sz);
             let bottom = (lo.min(relief.sea) * exag) - side * 0.035;
             let top = hi.max(relief.sea) * exag;
-            let target = [sx * 0.5, (bottom + top) * 0.5, sz * 0.5];
-            let (yaw, pitch) = (yaw.to_radians(), pitch.to_radians().clamp(0.05, 1.5));
-            let back = [yaw.sin() * pitch.cos(), pitch.sin(), yaw.cos() * pitch.cos()];
             let fov = 0.5f32;
-            let aspect = size[0] as f32 / size[1] as f32;
-            // `distance` times the nearest the whole block shows from.
-            let corners: Vec<[f32; 3]> = (0..8).map(|k| [if k & 1 == 0 { 0.0 } else { sx }, if k & 2 == 0 { bottom } else { top }, if k & 4 == 0 { 0.0 } else { sz }]).collect();
-            let frame = |d: f32| {
-                let eye = [0, 1, 2].map(|k| target[k] + back[k] * d);
-                let fwd = normalize([0, 1, 2].map(|k| target[k] - eye[k]));
-                let right = normalize(cross(fwd, [0.0, 1.0, 0.0]));
-                let up = cross(right, fwd);
-                (eye, fwd, right, up)
-            };
-            let fits = |d: f32| {
-                let (eye, fwd, right, up) = frame(d);
-                corners.iter().all(|c| {
-                    let v = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
-                    let z = v[0] * fwd[0] + v[1] * fwd[1] + v[2] * fwd[2];
-                    let x = (v[0] * right[0] + v[1] * right[1] + v[2] * right[2]) / (z * fov * aspect);
-                    let y = (v[0] * up[0] + v[1] * up[1] + v[2] * up[2]) / (z * fov);
-                    z > 0.0 && x.abs() <= 0.9 && y.abs() <= 0.86
-                })
-            };
-            let (mut a, mut b) = (side * 0.05, side * 40.0);
-            for _ in 0..40 {
-                let m = (a + b) * 0.5;
-                if fits(m) { b = m } else { a = m }
-            }
-            let (eye, fwd, right, up) = frame(b * distance.max(0.05));
+            let (eye, fwd, right, up) = orbit(sx, sz, bottom, top, yaw, pitch, distance, size[0] as f32 / size[1] as f32, fov);
             cam = ([eye[0], eye[1], eye[2], 0.0], [fwd[0], fwd[1], fwd[2], 0.0], [right[0], right[1], right[2], bottom], [up[0], up[1], up[2], fov]);
         }
     }
@@ -222,6 +196,9 @@ fn shade_gpu(gpu: &Gpu, relief: &Relief, overlay: Option<Overlay>, surface: Surf
     }
     if look.rock_on_slopes {
         flags |= 16;
+    }
+    if !look.sky {
+        flags |= 32;
     }
     let (ocolor, opacity) = overlay.map_or(([0.0; 3], 0.0), |o| (o.color.map(linear), o.opacity));
     let u = Uniforms {
@@ -334,6 +311,51 @@ fn shade_cpu(relief: &Relief, overlay: Option<Overlay>, surface: Surface, look: 
         }
     }
     out
+}
+
+/// The 3D viewer's camera over a block `sx` × `sz` blocks wide, from
+/// `bottom` to `top`: its eye, and which ways are forward, right and up.
+/// `distance` times the distance the whole block shows from at the
+/// viewer's first angle (25° round, 34° up), kept as the view turns, so
+/// that turning never comes closer nor goes away; `fov` the tangent of half
+/// the vertical field.
+#[allow(clippy::too_many_arguments)]
+pub fn orbit(sx: f32, sz: f32, bottom: f32, top: f32, yaw: f32, pitch: f32, distance: f32, aspect: f32, fov: f32) -> ([f32; 3], [f32; 3], [f32; 3], [f32; 3]) {
+    let side = sx.max(sz);
+    let target = [sx * 0.5, (bottom + top) * 0.5, sz * 0.5];
+    let dir = |yaw: f32, pitch: f32| {
+        let (yaw, pitch) = (yaw.to_radians(), pitch.to_radians().clamp(0.05, 1.5));
+        [yaw.sin() * pitch.cos(), pitch.sin(), yaw.cos() * pitch.cos()]
+    };
+    let (back, reference) = (dir(yaw, pitch), dir(25.0, 34.0));
+    let corners: Vec<[f32; 3]> = (0..8).map(|k| [if k & 1 == 0 { 0.0 } else { sx }, if k & 2 == 0 { bottom } else { top }, if k & 4 == 0 { 0.0 } else { sz }]).collect();
+    let frame_from = |back: [f32; 3], d: f32| {
+        let eye = [0, 1, 2].map(|k| target[k] + back[k] * d);
+        let fwd = normalize([0, 1, 2].map(|k| target[k] - eye[k]));
+        let right = normalize(cross(fwd, [0.0, 1.0, 0.0]));
+        let up = cross(right, fwd);
+        (eye, fwd, right, up)
+    };
+    let fits = |d: f32| {
+        let (eye, fwd, right, up) = frame_from(reference, d);
+        corners.iter().all(|c| {
+            let v = [c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]];
+            let z = v[0] * fwd[0] + v[1] * fwd[1] + v[2] * fwd[2];
+            let x = (v[0] * right[0] + v[1] * right[1] + v[2] * right[2]) / (z * fov * aspect);
+            let y = (v[0] * up[0] + v[1] * up[1] + v[2] * up[2]) / (z * fov);
+            z > 0.0 && x.abs() <= 0.9 && y.abs() <= 0.86
+        })
+    };
+    let (mut a, mut b) = (side * 0.05, side * 40.0);
+    for _ in 0..40 {
+        let m = (a + b) * 0.5;
+        if fits(m) {
+            b = m
+        } else {
+            a = m
+        }
+    }
+    frame_from(back, b * distance.max(0.05))
 }
 
 /// The heights of a grid's rect at the same samples, for a grid whose

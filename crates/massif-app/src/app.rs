@@ -4139,14 +4139,18 @@ impl MassifApp {
         if ctx.options(|o| o.zoom_with_keyboard) {
             ctx.options_mut(|o| o.zoom_with_keyboard = false);
         }
-        if pressed(Action::UiZoomReset) {
-            ctx.set_zoom_factor(1.0);
-        }
-        if pressed(Action::UiZoomIn) {
-            egui::gui_zoom::zoom_in(ctx);
-        }
-        if pressed(Action::UiZoomOut) {
-            egui::gui_zoom::zoom_out(ctx);
+        // Over the terrain generator, ⌘+ and ⌘− zoom its graph (see
+        // `terrain::canvas`), not the interface.
+        if !self.over_editor(ctx, EditorKind::TerrainGraph) {
+            if pressed(Action::UiZoomReset) {
+                ctx.set_zoom_factor(1.0);
+            }
+            if pressed(Action::UiZoomIn) {
+                egui::gui_zoom::zoom_in(ctx);
+            }
+            if pressed(Action::UiZoomOut) {
+                egui::gui_zoom::zoom_out(ctx);
+            }
         }
         // Full screen and Quit, whatever is open (Quit asks first, as the
         // menu's does). On a Mac the app menu's ⌘Q quits.

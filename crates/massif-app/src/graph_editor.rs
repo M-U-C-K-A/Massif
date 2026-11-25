@@ -45,8 +45,8 @@ pub const SIZES: [u32; 6] = [1024, 2048, 4096, 8192, 16384, 32768];
 /// The most samples a side a conversion builds: a block each up to there,
 /// beyond it a little more than a block (finer would not fit in memory).
 pub const MAX_BUILD: usize = 16384;
-/// Preview resolutions offered.
-pub const PREVIEWS: [usize; 6] = [256, 384, 512, 768, 1024, 2048];
+/// Preview resolutions offered (the last two slow and heavy).
+pub const PREVIEWS: [usize; 8] = [256, 384, 512, 768, 1024, 2048, 4096, 8192];
 /// Sizes of the images the Render panel saves.
 pub const IMAGE_SIZES: [(&str, [u32; 2]); 5] = [
     ("HD", [1920, 1080]),
@@ -1765,7 +1765,13 @@ impl GraphEditor {
                 .width(64.0)
                 .show_ui(ui, |ui| {
                     for r in PREVIEWS {
-                        ui.selectable_value(&mut self.preview, r, format!("{r} × {r}"));
+                        let mut label = format!("{r} × {r}");
+                        if r >= 4096 {
+                            // Its heights and colours, and what the graph
+                            // works out on the way.
+                            label = tr!("{label} · about {mb} MB, slow", label, mb = ((r as u64).pow(2) * 4 * 6) >> 20);
+                        }
+                        ui.selectable_value(&mut self.preview, r, label);
                     }
                 });
             if self.preview != before_preview {

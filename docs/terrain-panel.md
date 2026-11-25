@@ -52,10 +52,15 @@ section. The graph editor of earlier versions stays in that list as
 - **Arrange**: the grid button lays the selected nodes (or all) out in
   columns, from their sources to their output; a node's menu also aligns
   the selected nodes' left edges or tops, and spaces them evenly.
-- **Move around**: scroll to pan (or drag with the middle button, or with
-  Space held), pinch or ⌘-scroll to zoom. **F** shows the whole graph. A
-  minimap shows at the bottom right when part of the graph is out of
-  view: click or drag in it to go there.
+- **Zoom and move**: a mouse wheel or a pinch zooms around the pointer,
+  from far enough out to see a big graph whole to close enough to read a
+  node's every word; **⌘+** and **⌘−** zoom too, **⌘0** back to full size.
+  Two fingers on a trackpad move the view, as dragging with the middle
+  button does (or with Space held). **F**, the frame button, or a
+  double-click on the empty ground shows the whole graph.
+- **Minimap**: at the bottom left when part of the graph is out of view,
+  the part in view outlined. Click in it to go there, drag the outline to
+  move the view; the wheel over it still zooms the graph.
 - **Undo** and **Redo** (⌘Z, ⌘⇧Z) take back the graph's changes while the
   pointer is over the area, inside composites too; a drag or a slider
   moved is one step.
@@ -151,6 +156,14 @@ Material Output: one node with an input for everything the map can take,
 in groups that fold (Ground and Surface open, and any group with an input
 connected):
 
+While a wire is drawn near it, the Map Output's folded groups that hold an
+input taking what the wire carries open by themselves (a layer opens
+Underground, for the caves), and fold again if the wire goes elsewhere; the
+inputs that take it glow, on every node. Folded, a group says how many
+inputs it holds, and how many are connected. A graph with no Map Output
+says so at the top of the canvas, with a button that adds one, its Height
+fed by the rightmost node making heights; Apply says so too.
+
 - **Ground**: Height, Water.
 - **Surface**: Albedo (the ground's colour), Terrain, Biome.
 - **Climate**: Temperature, Humidity. **Life**: Vegetation. **Underground**:
@@ -203,10 +216,15 @@ A picture comes coarse first, then sharp.
 
 - 2D: drag to move, scroll to zoom around the pointer, double-click to see
   the whole terrain again.
-- 3D: drag to turn around the terrain, scroll to come closer.
+- 3D: drag to turn around the terrain, scroll to come closer; turning
+  keeps the camera's distance, only the wheel changes it.
 - **Shift + drag** turns the sun, in both.
-- The sliders menu at the top right: how much the relief is exaggerated, contour lines, the mask's
-  opacity, the sun's height, and whether thumbnails are in clay or in
+- The sliders menu at the top right: how much the relief is exaggerated,
+  contour lines, the mask's opacity, the sun's height, the 3D view's
+  **Background** (plain **Dark**, as in Gaea, by default, or the **Sky**),
+  the **Resolution** (Auto: as many samples as the picture needs, at most
+  1024 a side; or 1024, 2048, 4096 or 8192, the last two heavy in memory
+  and slow, as the menu says), and whether thumbnails are in clay or in
   colours.
 - The selected node's points or line (a range's spine, peaks) show over the
   2D picture: drag them, double-click to add one, right-click to remove
@@ -255,6 +273,7 @@ as its cut a little under the sea's level, laid over the relief.
 | ⌘C, ⌘X, ⌘V | copy, cut, paste |
 | ⌘D | duplicate the selected nodes |
 | ⌘A | select every node |
-| Delete, Backspace, X | remove the selected nodes |
-| F, Home | show the whole graph |
+| Delete, Backspace, X | remove the selected nodes (a frame selected: the frame, its nodes staying) |
+| F, Home, double-click the ground | show the whole graph |
+| wheel, pinch, ⌘+ ⌘− ⌘0 | zoom (⌘0: full size) |
 | ⌘Z, ⌘⇧Z | undo, redo |

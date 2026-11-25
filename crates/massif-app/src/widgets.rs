@@ -178,7 +178,12 @@ impl Widget for Field<'_> {
         // move as it changes. A field too narrow for a track is its value
         // alone, in a pill, dragged sideways.
         let measure = |s: &str| ui.painter().layout_no_wrap(s.to_owned(), font.clone(), pal.text).size().x;
-        let widest = [self.format(*self.range.start()), self.format(*self.range.end()), self.format(value)].iter().map(|s| measure(s)).fold(0.0f32, f32::max);
+        // The widest of values along the whole range (with all their
+        // decimals), not only the one shown: the track then stays put while
+        // the value is dragged, and fields of a range line up.
+        let along = [0.0, 0.123_456, 0.555_555, 0.876_543, 1.0].map(|t| self.format(self.at(t)));
+        let past = (!self.range.contains(&value)).then(|| self.format(value));
+        let widest = along.iter().chain(past.iter()).map(|s| measure(s)).fold(0.0f32, f32::max);
         let named = self.text.is_some();
         let inner = if named { rect.shrink2(vec2(10.0, 0.0)) } else { rect };
         let name_w = self.text.as_ref().map_or(0.0, |n| measure(n) + 10.0);

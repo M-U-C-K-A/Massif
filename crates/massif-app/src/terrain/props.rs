@@ -901,6 +901,10 @@ fn param_row(p: &mut TerrainPanel, ui: &mut Ui, id: &str, q: &'static ParamSpec,
                 }
                 p.end_edit();
             }
+        } else {
+            // Its place kept, so that every row's slider starts at the same
+            // place.
+            ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
         }
         if let Some(src) = &driven {
             ui.label(egui::RichText::new(t!("from {node}", node = p.display_name(massif_terrain::model::Source::parse(src).node))).size(12.0).color(pal.accent));
@@ -916,7 +920,10 @@ fn param_row(p: &mut TerrainPanel, ui: &mut Ui, id: &str, q: &'static ParamSpec,
                 let _ = p.op(Op::Set { node: id.to_owned(), param: q.name.to_owned(), value: serde_json::Value::Null });
                 return;
             }
+        } else {
+            ui.allocate_exact_size(vec2(12.0, 18.0), Sense::hover());
         }
+        // As wide on every row of the well: the room the name column leaves.
         let width = (ui.available_width() - 70.0).clamp(90.0, 170.0);
         match (q.kind, v) {
             (ParamKind::Float { min, max, soft, unit, .. }, Value::Num(x)) => {

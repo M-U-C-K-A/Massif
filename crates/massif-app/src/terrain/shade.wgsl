@@ -232,6 +232,15 @@ fn sh_ground(p: vec2<f32>, y: f32, v: vec3<f32>) -> vec3<f32> {
     return c;
 }
 
+// Past the terrain in 3D: the sky, or (flag 32) the plain backdrop, which
+// `shade_main` writes as it is (a negative colour marks it).
+fn sh_backdrop(d: vec3<f32>) -> vec3<f32> {
+    if ((u.flags & 32u) != 0u) {
+        return vec3<f32>(-1.0);
+    }
+    return sh_sky(d);
+}
+
 // The sky without the sun, for reflections.
 fn sh_sky_dome(d: vec3<f32>) -> vec3<f32> {
     let t = clamp(d.y * 1.8 + 0.25, 0.0, 1.0);
@@ -277,7 +286,7 @@ fn sh_3d(px: vec2<f32>) -> vec3<f32> {
     let sea_y = u.sea * u.exag;
     let water = (u.flags & 8u) != 0u && u.sea > u.hmin;
     if (tn >= tf) {
-        return sh_sky(d);
+        return sh_backdrop(d);
     }
     var t = tn;
     var hit = false;
@@ -328,7 +337,7 @@ fn sh_3d(px: vec2<f32>) -> vec3<f32> {
                 return sh_haze(c, d, tw);
             }
         }
-        return sh_sky(d);
+        return sh_backdrop(d);
     }
     if (water && q.y < sea_y && d.y < 0.0) {
         // The sea's surface, when the ray meets it inside the block (a ray
@@ -382,6 +391,10 @@ fn sh_water(w: vec3<f32>, d: vec3<f32>) -> vec3<f32> {
 }
 
 fn sh_haze(c: vec3<f32>, d: vec3<f32>, t: f32) -> vec3<f32> {
+    // A plain backdrop: no sky to fade into.
+    if ((u.flags & 32u) != 0u) {
+        return c;
+    }
     let size = f32(max(u.w, u.h)) * u.spacing;
     let f = 1.0 - exp(-max(t - size * 0.6, 0.0) / (size * 6.0));
     return mix(c, sh_sky_dome(vec3<f32>(d.x, max(d.y, 0.02), d.z)) * 0.9, clamp(f, 0.0, 0.3));
@@ -396,6 +409,11 @@ fn shade_main(@builtin(global_invocation_id) id: vec3<u32>) {
     var c: vec3<f32>;
     if ((u.flags & 1u) != 0u) {
         c = sh_3d(px);
+        if (c.x < -0.5) {
+            let b = clamp(u.back.rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+            out_px[id.y * u.ow + id.x] = u32(b.x * 255.0 + 0.5) | (u32(b.y * 255.0 + 0.5) << 8u) | (u32(b.z * 255.0 + 0.5) << 16u) | (255u << 24u);
+            return;
+        }
     } else {
         let p = vec2<f32>(mix(u.view.x, u.view.z, (px.x + 0.5) / f32(u.ow)), mix(u.view.y, u.view.w, (px.y + 0.5) / f32(u.oh))) - vec2<f32>(0.5);
         if (p.x < -0.5 || p.y < -0.5 || p.x > f32(u.w) - 0.5 || p.y > f32(u.h) - 0.5) {

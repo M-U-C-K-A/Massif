@@ -72,7 +72,7 @@ pub enum Row {
     Input { name: String, label: String, kind: PortKind, form: Shape_, default: String },
     /// A Map Output's group: its key, its words, whether open, inputs
     /// connected in it.
-    Group { key: &'static str, label: &'static str, open: bool, used: usize },
+    Group { key: &'static str, label: &'static str, open: bool, used: usize, total: usize },
     AddMask,
 }
 
@@ -131,8 +131,11 @@ pub fn rows(p: &TerrainPanel, id: &str) -> Vec<Row> {
                 continue;
             }
             let used = inputs.iter().filter(|r| matches!(r, Row::Input { name, .. } if node.inputs.contains_key(name))).count();
-            let open = group_open(p, id, key, used);
-            out.push(Row::Group { key, label, open, used });
+            // A wire drawn near the node opens the groups holding an input
+            // that takes what it carries (and they fold again once it goes).
+            let drawn = p.magnet.as_ref().filter(|(n, _)| n == id).is_some_and(|(_, k)| inputs.iter().any(|r| matches!(r, Row::Input { kind, .. } if k.conversion(*kind).is_some())));
+            let open = group_open(p, id, key, used) || drawn;
+            out.push(Row::Group { key, label, open, used, total: inputs.len() });
             if open {
                 out.extend(inputs);
                 if *key == "masks" {
@@ -193,6 +196,41 @@ impl Placed {
         }
         self.rows.iter().find_map(|(r, rect)| matches!(r, Row::Output(j) if *j == k).then(|| pos2(self.rect.right(), rect.center().y)))
     }
+}
+
+/// How far the canvas zooms out (big graphs whole) and in (a node's every
+/// word large).
+pub const ZOOM_MIN: f32 = 0.1;
+pub const ZOOM_MAX: f32 = 4.0;
+
+/// Zooms the canvas by `factor`, the graph point under `at` staying there.
+pub fn zoom_at(p: &mut TerrainPanel, origin: Pos2, at: Pos2, factor: f32) {
+    let before = to_graph(p, origin, at);
+    p.view.zoom = (p.view.zoom * factor).clamp(ZOOM_MIN, ZOOM_MAX);
+    let after = to_screen(p, origin, before);
+    p.view.offset += at - after;
+}
+
+/// What the wheels did this frame: what zooms (a mouse wheel, or any wheel
+/// with ⌘ or Ctrl held) and what slides (two fingers on a trackpad).
+fn wheel_of(i: &egui::InputState) -> (Vec2, Vec2) {
+    let (mut wheel, mut slide) = (Vec2::ZERO, Vec2::ZERO);
+    for e in &i.events {
+        if let egui::Event::MouseWheel { unit, delta, source, modifiers, .. } = e {
+            let lines = match unit {
+                egui::MouseWheelUnit::Point => 1.0,
+                egui::MouseWheelUnit::Line => 40.0,
+                egui::MouseWheelUnit::Page => 400.0,
+            };
+            let zooms = modifiers.command || modifiers.ctrl || matches!(source, egui::MouseWheelSource::Wheel) || (*unit != egui::MouseWheelUnit::Point && !matches!(source, egui::MouseWheelSource::Trackpad | egui::MouseWheelSource::Momentum));
+            if zooms {
+                wheel += *delta * lines;
+            } else {
+                slide += *delta * lines;
+            }
+        }
+    }
+    (wheel, slide)
 }
 
 fn to_screen(p: &TerrainPanel, origin: Pos2, g: [f32; 2]) -> Pos2 {
@@ -373,27 +411,30 @@ pub fn ui(p: &mut TerrainPanel, ui: &mut Ui) {
         p.fit_pending = false;
         fit_view(p, canvas);
     }
+    p.canvas_rect = canvas;
+    if std::mem::take(&mut p.frame_all_pending) {
+        frame_all(p, canvas);
+    }
     let painter = ui.painter_at(canvas);
     let background = ui.interact(canvas, ui.scope_id().with("terrain canvas"), Sense::click_and_drag());
     let pointer = ui.input(|i| i.pointer.hover_pos());
-    let hovered = pointer.is_some_and(|q| canvas.contains(q)) && ui.ui_contains_pointer();
+    // Over the canvas, and no window or popup over it there.
+    let hovered = pointer.is_some_and(|q| canvas.contains(q)) && ui.rect_contains_pointer(canvas);
     let zoom = p.view.zoom;
     let read_only = p.read_only();
 
-    // Pan by scrolling or with the middle button; zoom by pinching or
-    // with ⌘ / Ctrl and the wheel, around the pointer.
+    // A mouse wheel or a pinch zooms around the pointer (around the view's
+    // middle over the minimap); two fingers on a trackpad move the view, as
+    // the middle button does.
+    let mini = minimap_rect(p, canvas);
     if hovered && p.search.is_none() {
-        let (scroll, zoom_delta) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta()));
-        if zoom_delta != 1.0
-            && let Some(q) = pointer
-        {
-            let before = to_graph(p, origin, q);
-            p.view.zoom = (p.view.zoom * zoom_delta).clamp(0.25, 2.5);
-            let after = to_screen(p, origin, before);
-            p.view.offset += q - after;
-        } else if scroll != Vec2::ZERO {
-            p.view.offset += scroll;
+        let ((wheel, slide), pinch) = ui.input(|i| (wheel_of(i), i.zoom_delta()));
+        let factor = if pinch != 1.0 { pinch } else { (wheel.y * 0.0035).exp() };
+        let anchor = pointer.filter(|q| !mini.is_some_and(|m| m.contains(*q))).unwrap_or(canvas.center());
+        if (factor - 1.0).abs() > 1e-4 {
+            zoom_at(p, origin, anchor, factor);
         }
+        p.view.offset += slide;
     }
     if background.dragged_by(egui::PointerButton::Middle) || (background.dragged_by(egui::PointerButton::Primary) && ui.input(|i| i.key_down(Key::Space))) {
         p.view.offset += background.drag_delta();
@@ -418,6 +459,16 @@ pub fn ui(p: &mut TerrainPanel, ui: &mut Ui) {
         }
     }
 
+    // A wire being drawn: the node near the pointer, whose groups holding
+    // an input that takes it open while it is there.
+    p.magnet = match (&p.wiring, pointer) {
+        (Some(Wiring::From { node, port }), Some(q)) => {
+            let kind = p.out_kind(node, *port);
+            let near = p.ids().into_iter().filter(|id| id != node).find(|id| Rect::from_min_size(to_screen(p, origin, p.pos(id)), node_size(p, id) * zoom).expand(60.0 * zoom).contains(q));
+            near.zip(kind)
+        }
+        _ => None,
+    };
     let placed = place(p, origin);
     let by_id: HashMap<&str, &Placed> = placed.iter().map(|n| (n.id.as_str(), n)).collect();
     let mut acts: Vec<Act> = Vec::new();
@@ -612,6 +663,9 @@ pub fn ui(p: &mut TerrainPanel, ui: &mut Ui) {
             p.marquee = None;
         }
     }
+    if background.double_clicked() && hot_wire.is_none() && !ui.input(|i| i.modifiers.any()) {
+        frame_all(p, canvas);
+    }
     if background.clicked() && hot_wire.is_none() {
         p.selected.clear();
         p.selected_frame = None;
@@ -637,6 +691,7 @@ pub fn ui(p: &mut TerrainPanel, ui: &mut Ui) {
     }
 
     apply(p, ui, acts, origin, now);
+    no_output_ui(p, ui, canvas, &pal);
     rename_mask_ui(p, ui, origin);
     rename_frame_ui(p, ui, origin);
     minimap(p, ui, canvas, &pal);
@@ -664,6 +719,24 @@ fn keys(p: &mut TerrainPanel, ui: &mut Ui, pointer: Option<Pos2>, canvas: Rect, 
             i.key_pressed(Key::Escape),
         )
     });
+    // ⌘+ and ⌘− zoom around the view's middle, ⌘0 back to full size.
+    let (zin, zout, zreset) = ui.input_mut(|i| {
+        (
+            i.consume_key(egui::Modifiers::COMMAND, Key::Plus) || i.consume_key(egui::Modifiers::COMMAND, Key::Equals) || i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::Equals),
+            i.consume_key(egui::Modifiers::COMMAND, Key::Minus),
+            i.consume_key(egui::Modifiers::COMMAND, Key::Num0),
+        )
+    });
+    if zin {
+        zoom_at(p, canvas.min, canvas.center(), 1.25);
+    }
+    if zout {
+        zoom_at(p, canvas.min, canvas.center(), 0.8);
+    }
+    if zreset {
+        let z = p.view.zoom;
+        zoom_at(p, canvas.min, canvas.center(), 1.0 / z);
+    }
     // ⌘C, ⌘X, ⌘V come as the clipboard's events.
     let (copy, cut, paste) = ui.input(|i| {
         let mut out = (false, false, None);
@@ -679,6 +752,12 @@ fn keys(p: &mut TerrainPanel, ui: &mut Ui, pointer: Option<Pos2>, canvas: Rect, 
     });
     if del {
         acts.push(Act::Remove);
+        // A frame selected (no node): the frame goes, its nodes stay.
+        if p.selected.is_empty()
+            && let Some(f) = p.selected_frame.clone()
+        {
+            acts.push(Act::RemoveFrame(f));
+        }
     }
     if dup {
         acts.push(Act::Duplicate);
@@ -697,7 +776,7 @@ fn keys(p: &mut TerrainPanel, ui: &mut Ui, pointer: Option<Pos2>, canvas: Rect, 
         acts.push(Act::OpenSearch(q, None, None));
     }
     if fit {
-        fit_view(p, canvas);
+        frame_all(p, canvas);
     }
     if view && let Some(id) = p.selected.last().cloned() {
         acts.push(Act::View(id));
@@ -739,6 +818,47 @@ fn keys(p: &mut TerrainPanel, ui: &mut Ui, pointer: Option<Pos2>, canvas: Rect, 
             p.say(t!("The clipboard holds no nodes."), 0.0);
         }
     }
+}
+
+/// A graph with no Map Output writes nothing into the map: said at the
+/// canvas's top, with a button that adds one, wired to the last height made.
+fn no_output_ui(p: &mut TerrainPanel, ui: &mut Ui, canvas: Rect, pal: &Palette) {
+    if !p.outer.is_empty() || p.graph.nodes.is_empty() || p.graph.nodes.values().any(|n| n.kind.starts_with("output.map")) {
+        return;
+    }
+    let text = t!("This graph has no Map Output: Apply has nothing to write into the map.");
+    let g = ui.painter().layout_no_wrap(text.to_owned(), FontId::proportional(12.0), pal.text);
+    let button_w = ui.painter().layout_no_wrap(t!("Add a Map Output").to_owned(), FontId::proportional(12.0), pal.text).size().x + 28.0;
+    let w = (g.size().x + button_w + 40.0).min(canvas.width() - 20.0);
+    let r = Rect::from_center_size(pos2(canvas.center().x, canvas.top() + 26.0), vec2(w, 32.0));
+    ui.painter().rect(r, theme::PILL, theme::mix(pal.panel, pal.danger, 0.12), Stroke::new(1.0, pal.danger.gamma_multiply(0.6)), StrokeKind::Inside);
+    ui.painter().with_clip_rect(r).galley(pos2(r.left() + 14.0, r.center().y - g.size().y / 2.0), g, pal.text);
+    let b = Rect::from_min_size(pos2(r.right() - button_w - 6.0, r.top() + 5.0), vec2(button_w, 22.0));
+    if ui.put(b, egui::Button::new(egui::RichText::new(t!("Add a Map Output")).size(12.0)).wrap_mode(egui::TextWrapMode::Extend).corner_radius(theme::PILL)).clicked() {
+        add_map_output(p);
+    }
+}
+
+/// Adds a Map Output right of the graph, its Height fed by the last node
+/// that makes heights (the rightmost).
+pub fn add_map_output(p: &mut TerrainPanel) -> String {
+    let (_, hi) = bounds(p);
+    let (lo, _) = bounds(p);
+    let feed = p
+        .graph
+        .nodes
+        .keys()
+        .filter(|id| p.shape(id).is_some_and(|s| s.outputs.first().is_some_and(|o| o.kind == PortKind::Height)))
+        .max_by(|a, b| p.pos(a)[0].total_cmp(&p.pos(b)[0]))
+        .cloned();
+    let id = p.add_node("output.map", [hi[0] + 80.0, lo[1]]);
+    if let Some(f) = feed
+        && !id.is_empty()
+    {
+        p.connect(&f, 0, &id, "height");
+    }
+    p.end_edit();
+    id
 }
 
 /// A box of words beside the pointer: why something cannot be done.
@@ -1103,6 +1223,10 @@ fn draw_node(p: &TerrainPanel, ui: &mut Ui, painter: &Painter, n: &Placed, pal: 
 
     let reach = 10.0 * z.max(0.7);
     let thumb_key = p.thumb_key(&n.id).cloned();
+    let wiring_kind = match &p.wiring {
+        Some(Wiring::From { node, port }) if *node != n.id => p.out_kind(node, *port),
+        _ => None,
+    };
     for (row, rr) in &n.rows {
         match row {
             Row::Output(k) => {
@@ -1175,15 +1299,18 @@ fn draw_node(p: &TerrainPanel, ui: &mut Ui, painter: &Painter, n: &Placed, pal: 
                     painter.galley(chip.center() - g.size() / 2.0, g, pal.text);
                 }
             }
-            Row::Group { key, label, open, used } => {
+            Row::Group { key, label, open, used, total } => {
                 let r = ui.interact(*rr, ui.scope_id().with(("group", &n.id, *key)), Sense::click());
                 if text_on {
                     let chevron = if *open { Icon::ChevronDown } else { Icon::ChevronRight };
                     let ink = if r.hovered() { pal.text } else { pal.weak };
                     painter.text(pos2(rect.left() + 12.0 * z, rr.center().y), Align2::LEFT_CENTER, theme::glyph(chevron).to_string(), FontId::proportional(10.0 * z), ink);
                     painter.text(pos2(rect.left() + 26.0 * z, rr.center().y), Align2::LEFT_CENTER, t_upper(label), FontId::proportional(10.0 * z), ink);
-                    if *used > 0 && !*open {
-                        painter.text(pos2(rect.right() - 12.0 * z, rr.center().y), Align2::RIGHT_CENTER, used.to_string(), FontId::proportional(10.0 * z), pal.weak);
+                    // Folded: how many inputs it holds, and how many are
+                    // connected.
+                    if !*open && *total > 0 {
+                        let count = if *used > 0 { format!("{used} / {total}") } else { total.to_string() };
+                        painter.text(pos2(rect.right() - 12.0 * z, rr.center().y), Align2::RIGHT_CENTER, count, FontId::proportional(10.0 * z), if *used > 0 { pal.text } else { pal.weak });
                     }
                 }
                 if r.clicked() {
@@ -1211,6 +1338,14 @@ fn draw_node(p: &TerrainPanel, ui: &mut Ui, painter: &Painter, n: &Placed, pal: 
                 }
                 if refused_here {
                     painter.rect_filled(rr.shrink2(vec2(2.0, 1.0)), 4.0, pal.danger.gamma_multiply(0.15));
+                }
+                // While a wire is drawn, the inputs that take it glow.
+                if !target
+                    && !refused_here
+                    && let Some(k) = wiring_kind
+                    && k.conversion(*kind).is_some()
+                {
+                    painter.circle_filled(at, SOCKET_R * 2.2 * z.max(0.7), sockets::color_on(*kind, pal).gamma_multiply(0.25));
                 }
                 sockets::draw(painter, at, SOCKET_R * z.max(0.7), *kind, *form, connected, pal);
                 if text_on {
@@ -1623,12 +1758,8 @@ fn header_commands(p: &mut TerrainPanel, ui: &mut Ui) {
     if icon_button(ui, Icon::FileCode, if p.script.open { t!("Hide the script") } else { t!("Show the graph as a script (MassifScript), to read, edit or ask an AI") }, true) {
         p.script.open = !p.script.open;
     }
-    if icon_button(ui, Icon::Maximize2, t!("Frame all nodes (F)"), !p.graph.nodes.is_empty()) {
-        let canvas = ui.max_rect();
-        p.view.zoom = 1.0;
-        let (lo, _) = bounds(p);
-        p.view.offset = vec2(40.0 - lo[0], 30.0 - lo[1]);
-        let _ = canvas;
+    if icon_button(ui, Icon::Maximize2, t!("Frame all nodes (F, or double-click the ground)"), !p.graph.nodes.is_empty()) {
+        p.frame_all_pending = true;
     }
     let snap = !p.layout.no_snap;
     let r = ui.add(egui::Button::new(egui::RichText::new(theme::glyph(Icon::Magnet).to_string()).size(13.0).color(if snap { Palette::of(ui).accent } else { Palette::of(ui).weak })).frame(false).min_size(vec2(24.0, 24.0)));
@@ -1681,14 +1812,25 @@ fn bounds(p: &TerrainPanel) -> ([f32; 2], [f32; 2]) {
 
 /// Zooms and moves the view so that every node shows in `canvas`.
 pub fn fit_view(p: &mut TerrainPanel, canvas: Rect) {
+    fit(p, canvas, 0.6);
+}
+
+/// Shows the whole graph, however small (F, a double-click on the ground,
+/// the frame button).
+pub fn frame_all(p: &mut TerrainPanel, canvas: Rect) {
+    fit(p, canvas, ZOOM_MIN);
+}
+
+fn fit(p: &mut TerrainPanel, canvas: Rect, least: f32) {
     if p.graph.nodes.is_empty() && p.outer.is_empty() {
         return;
     }
     let (lo, hi) = bounds(p);
     let (w, h) = (hi[0] - lo[0] + 60.0, hi[1] - lo[1] + 60.0);
-    // Not so small that the nodes' words cannot be read: past that, the
-    // graph's end (where its Map Output is) shows, and the minimap the rest.
-    p.view.zoom = (canvas.width() / w).min(canvas.height() / h).clamp(0.6, 1.15);
+    // At most `least` small: opening a graph keeps the nodes' words
+    // readable (its end, where its Map Output is, shows, and the minimap the
+    // rest); framing it all goes as small as it takes.
+    p.view.zoom = (canvas.width() / w).min(canvas.height() / h).clamp(least, 1.15);
     let size = vec2(hi[0] - lo[0], hi[1] - lo[1]) * p.view.zoom;
     p.view.offset = (canvas.size() - size) / 2.0 - vec2(lo[0], lo[1]) * p.view.zoom;
     if size.x > canvas.width() - 40.0 {
@@ -1704,43 +1846,43 @@ pub fn frame_selection(p: &mut TerrainPanel) {
     p.frame_selection();
 }
 
-/// The whole graph small, at the canvas's bottom right: a click or a drag
-/// moves the view there.
-fn minimap(p: &mut TerrainPanel, ui: &mut Ui, canvas: Rect, pal: &Palette) {
+/// Where the minimap stands: at the canvas's bottom left, when part of the
+/// graph is out of view and the canvas has room for it; `None` otherwise.
+pub fn minimap_rect(p: &TerrainPanel, canvas: Rect) -> Option<Rect> {
     if p.graph.nodes.len() < 2 || canvas.width() < 420.0 || canvas.height() < 220.0 {
-        return;
+        return None;
     }
-    // Only when some of the graph is out of view.
-    {
-        let (lo, hi) = bounds(p);
-        let a = pos2(lo[0], lo[1]) * p.view.zoom + p.view.offset;
-        let b = pos2(hi[0], hi[1]) * p.view.zoom + p.view.offset;
-        if a.x >= 0.0 && a.y >= 0.0 && b.x <= canvas.width() && b.y <= canvas.height() {
-            return;
-        }
+    let (lo, hi) = bounds(p);
+    let a = pos2(lo[0], lo[1]) * p.view.zoom + p.view.offset;
+    let b = pos2(hi[0], hi[1]) * p.view.zoom + p.view.offset;
+    if a.x >= 0.0 && a.y >= 0.0 && b.x <= canvas.width() && b.y <= canvas.height() {
+        return None;
     }
-    let size = vec2(168.0, 104.0);
-    // At the bottom right, or at the bottom left when a node is there.
-    let right = Rect::from_min_size(canvas.right_bottom() - size - vec2(10.0, 10.0), size);
-    let left = Rect::from_min_size(pos2(canvas.left() + 10.0, canvas.bottom() - size.y - 10.0), size);
-    let covers = |r: Rect| {
-        p.graph.nodes.keys().any(|id| {
-            let pos = p.pos(id);
-            let at = canvas.min + p.view.offset + vec2(pos[0], pos[1]) * p.view.zoom;
-            Rect::from_min_size(at, node_size(p, id) * p.view.zoom).intersects(r)
-        })
-    };
-    let rect = if covers(right) && !covers(left) { left } else { right };
+    let size = vec2(176.0, 112.0);
+    Some(Rect::from_min_size(pos2(canvas.left() + 10.0, canvas.bottom() - size.y - 10.0), size))
+}
+
+/// The whole graph small, at the canvas's bottom left, with the part in
+/// view outlined: a click centres the view there, a drag of the outline
+/// moves it (elsewhere, the view follows the pointer). The wheel still
+/// zooms the canvas over it, around the view's middle.
+fn minimap(p: &mut TerrainPanel, ui: &mut Ui, canvas: Rect, pal: &Palette) {
+    let Some(rect) = minimap_rect(p, canvas) else { return };
     let painter = ui.painter_at(rect.expand(1.0));
     painter.rect(rect, theme::TILE_RADIUS, theme::mix(pal.panel, pal.app_bg, 0.5).gamma_multiply(0.96), Stroke::new(1.0, pal.border), StrokeKind::Inside);
     let (lo, hi) = bounds(p);
-    // The view's rectangle, in graph units.
-    let v0 = [(-p.view.offset.x) / p.view.zoom, (-p.view.offset.y) / p.view.zoom];
+    // The view's rectangle, in graph units: the canvas seen through the
+    // view, from the canvas's own corner.
+    let v0 = [-p.view.offset.x / p.view.zoom, -p.view.offset.y / p.view.zoom];
     let v1 = [v0[0] + canvas.width() / p.view.zoom, v0[1] + canvas.height() / p.view.zoom];
     let (lo, hi) = ([lo[0].min(v0[0]), lo[1].min(v0[1])], [hi[0].max(v1[0]), hi[1].max(v1[1])]);
     let inner = rect.shrink(8.0);
     let s = (inner.width() / (hi[0] - lo[0]).max(1.0)).min(inner.height() / (hi[1] - lo[1]).max(1.0));
-    let at = |g: [f32; 2]| inner.min + vec2((g[0] - lo[0]) * s, (g[1] - lo[1]) * s);
+    // Centred in the minimap.
+    let used = vec2((hi[0] - lo[0]) * s, (hi[1] - lo[1]) * s);
+    let corner = inner.min + (inner.size() - used) / 2.0;
+    let at = |g: [f32; 2]| corner + vec2((g[0] - lo[0]) * s, (g[1] - lo[1]) * s);
+    let to_graph_at = |q: Pos2| [lo[0] + (q.x - corner.x) / s, lo[1] + (q.y - corner.y) / s];
     for id in p.graph.frames.keys() {
         if p.frame_hidden(id) {
             continue;
@@ -1748,24 +1890,43 @@ fn minimap(p: &mut TerrainPanel, ui: &mut Ui, canvas: Rect, pal: &Palette) {
         let f = p.frame_rect(id);
         painter.rect_stroke(Rect::from_min_max(at([f[0], f[1]]), at([f[0] + f[2], f[1] + f[3]])), 2.0, Stroke::new(1.0, pal.weak.gamma_multiply(0.5)), StrokeKind::Inside);
     }
-    for id in p.graph.nodes.keys() {
-        if p.hidden_in(id).is_some() {
+    for id in p.ids() {
+        if p.hidden_in(&id).is_some() {
             continue;
         }
-        let pos = p.pos(id);
-        let sz = node_size(p, id);
+        let pos = p.pos(&id);
+        let sz = node_size(p, &id);
         let r = Rect::from_min_max(at(pos), at([pos[0] + sz.x, pos[1] + sz.y]));
-        let family = p.shape(id).map_or(Family::Internal, |s| s.family);
+        let family = p.shape(&id).map_or(Family::Internal, |s| s.family);
         let c = sockets::family(family);
-        painter.rect_filled(r, 1.5, if p.selected.contains(id) { c } else { c.gamma_multiply(0.6) });
+        painter.rect_filled(r, 1.5, if p.selected.contains(&id) { c } else { c.gamma_multiply(0.6) });
     }
-    painter.rect_stroke(Rect::from_min_max(at(v0), at(v1)), 2.0, Stroke::new(1.2, pal.accent), StrokeKind::Inside);
+    let view = Rect::from_min_max(at(v0), at(v1));
+    painter.rect(view, 2.0, pal.accent.gamma_multiply(0.08), Stroke::new(1.2, pal.accent), StrokeKind::Inside);
     let r = ui.interact(rect, ui.scope_id().with("terrain minimap"), Sense::click_and_drag());
-    if (r.clicked() || r.dragged())
+    if r.hovered() {
+        ui.ctx().set_cursor_icon(if r.dragged() { CursorIcon::Grabbing } else { CursorIcon::Grab });
+    }
+    // Where in the view the drag took it, kept for the drag.
+    let grab_key = ui.scope_id().with("terrain minimap grab");
+    if r.drag_started()
         && let Some(q) = r.interact_pointer_pos()
     {
-        let g = [lo[0] + (q.x - inner.min.x) / s, lo[1] + (q.y - inner.min.y) / s];
+        let grab = if view.contains(q) { q - view.center() } else { Vec2::ZERO };
+        ui.data_mut(|d| d.insert_temp(grab_key, grab));
+    }
+    let centre_on = |p: &mut TerrainPanel, g: [f32; 2]| {
         p.view.offset = canvas.size() / 2.0 - vec2(g[0], g[1]) * p.view.zoom;
+    };
+    if r.dragged()
+        && let Some(q) = r.interact_pointer_pos()
+    {
+        let grab: Vec2 = ui.data(|d| d.get_temp(grab_key)).unwrap_or_default();
+        centre_on(p, to_graph_at(q - grab));
+    } else if r.clicked()
+        && let Some(q) = r.interact_pointer_pos()
+    {
+        centre_on(p, to_graph_at(q));
     }
 }
 

@@ -3860,5 +3860,6 @@
  "Default": "По умолчанию",
  "One row for each value, sharing the weight: the cover grows them mixed": "По строке на каждое значение, вес делится: покров выращивает их вперемешку",
  "This block has no properties the game's files or the lists of blocks name.": "У этого блока нет свойств, которые называют файлы игры или списки блоков.",
- "{name}: its state": "{name}: его состояние"
+ "{name}: its state": "{name}: его состояние",
+ "{label} · about {mb} MB, slow": "{label} · около {mb} МБ, медленно"
 }

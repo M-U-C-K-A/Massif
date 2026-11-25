@@ -120,7 +120,7 @@ impl Applying {
         if let Some(d) = diags.iter().find(|d| d.severity == massif_terrain::compile::Severity::Error) {
             return Err(d.to_string());
         }
-        let Some(_) = c.map_output() else { return Err(t!("The graph has no active Map Output to apply").to_owned()) };
+        let Some(_) = c.map_output() else { return Err(t!("The graph has no Map Output: add one (the button over the graph) for Apply to write into the map").to_owned()) };
         let compiled = Arc::new(c);
         let heights = compiled.output("height").is_some();
         let folder = doc.path.as_ref().and_then(|p| p.parent().map(|d| d.to_path_buf())).unwrap_or_default();

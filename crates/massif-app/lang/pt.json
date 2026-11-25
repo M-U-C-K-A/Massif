@@ -3872,5 +3872,6 @@
  "Default": "Predefinido",
  "One row for each value, sharing the weight: the cover grows them mixed": "Uma linha por valor, partilhando o peso: a cobertura fá-las crescer misturadas",
  "This block has no properties the game's files or the lists of blocks name.": "Este bloco não tem propriedades que os ficheiros do jogo ou as listas de blocos nomeiem.",
- "{name}: its state": "{name}: o seu estado"
+ "{name}: its state": "{name}: o seu estado",
+ "{label} · about {mb} MB, slow": "{label} · cerca de {mb} MB, lento"
 }

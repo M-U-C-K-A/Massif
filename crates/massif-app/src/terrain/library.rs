@@ -56,7 +56,7 @@ pub fn ui(p: &mut TerrainPanel, ui: &mut Ui, graph_rect: Rect) {
                 continue;
             }
             let open = p.library_open.contains(label);
-            let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
+            let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::click());
             if resp.hovered() {
                 ui.painter().rect_filled(r, theme::TILE_RADIUS, pal.accent_soft);
             }
@@ -65,7 +65,11 @@ pub fn ui(p: &mut TerrainPanel, ui: &mut Ui, graph_rect: Rect) {
             let icon = if label == "Composites" { Icon::Boxes } else { sockets::family_icon(family) };
             ui.painter().text(r.left_center() + vec2(22.0, 0.0), Align2::LEFT_CENTER, theme::glyph(icon).to_string(), FontId::proportional(12.0), sockets::family(family));
             ui.painter().text(r.left_center() + vec2(40.0, 0.0), Align2::LEFT_CENTER, super::text::name(label), FontId::proportional(12.5), pal.text);
-            ui.painter().text(r.right_center() - vec2(8.0, 0.0), Align2::RIGHT_CENTER, specs.len().to_string(), FontId::proportional(11.0), pal.weak);
+            // How many it holds, in a pill.
+            let g = ui.painter().layout_no_wrap(specs.len().to_string(), FontId::proportional(10.5), pal.weak);
+            let pill = Rect::from_center_size(r.right_center() - vec2(8.0 + (g.size().x + 12.0) / 2.0, 0.0), vec2(g.size().x + 12.0, 17.0));
+            ui.painter().rect_filled(pill, theme::PILL, pal.well());
+            ui.painter().galley(pill.center() - g.size() / 2.0, g, pal.weak);
             if resp.clicked() {
                 if open {
                     p.library_open.remove(label);
@@ -128,7 +132,7 @@ pub fn load_example(p: &mut TerrainPanel, g: Graph) {
 }
 
 fn entry(p: &mut TerrainPanel, ui: &mut Ui, e: &Entry, graph_rect: Rect, pal: &Palette) {
-    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click_and_drag());
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click_and_drag());
     if resp.hovered() || resp.dragged() {
         ui.painter().rect_filled(r, theme::TILE_RADIUS, pal.accent_soft);
     }

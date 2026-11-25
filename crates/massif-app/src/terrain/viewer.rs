@@ -61,7 +61,7 @@ pub fn ui(p: &mut TerrainPanel, ui: &mut Ui) {
         if scroll != 0.0 {
             let f = (-scroll * 0.002).exp();
             if p.look.three_d {
-                p.look.distance = (p.look.distance * f).clamp(0.3, 3.0);
+                p.look.distance = (p.look.distance * f).clamp(0.05, 4.0);
             } else {
                 // Zoom around the pointer.
                 if let Some(q) = resp.hover_pos() {
@@ -152,6 +152,10 @@ fn legend(_ui: &Ui, painter: &egui::Painter, pic: Rect, picture: &super::eval::P
     painter.galley(r.min + vec2(19.0, 3.0), g, Color32::WHITE);
     let _ = StrokeKind::Inside;
 }
+
+/// The viewer's resolutions: as its pixels need, or as many samples a
+/// side.
+pub const RESOLUTIONS: [u32; 5] = [0, 1024, 2048, 4096, 8192];
 
 fn controls(p: &mut TerrainPanel, ui: &mut Ui) {
     let pal = Palette::of(ui);
@@ -250,6 +254,25 @@ fn controls(p: &mut TerrainPanel, ui: &mut Ui) {
                         p.look.sun[1] = v as f32;
                     }
                 });
+                widgets::row(ui, t!("Background"), |ui| {
+                    if let Some(k) = widgets::button_group(ui, "terrain viewer background", &[t!("Dark"), t!("Sky")], &[!p.look.sky, p.look.sky]) {
+                        p.look.sky = k == 1;
+                    }
+                });
+                widgets::row(ui, t!("Resolution"), |ui| {
+                    let label = |r: u32| if r == 0 { t!("Auto").to_owned() } else { r.to_string() };
+                    widgets::combo("terrain viewer resolution").width(110.0).selected_text(label(p.look.resolution)).show_ui(ui, |ui| {
+                        for r in RESOLUTIONS {
+                            ui.selectable_value(&mut p.look.resolution, r, label(r));
+                        }
+                    });
+                });
+                if p.look.resolution >= 4096 {
+                    ui.add_space(2.0);
+                    let mb = ((p.look.resolution as u64).pow(2) * 4 * 5) >> 20;
+                    ui.add(egui::Label::new(egui::RichText::new(t!("{n} samples a side: about {mb} MB and several seconds a picture", n = p.look.resolution, mb = mb)).size(11.0).color(Palette::of(ui).weak)).wrap());
+                    ui.add_space(4.0);
+                }
                 widgets::row(ui, t!("Thumbnails"), |ui| {
                     let colour = p.thumb_surface == Surface::Colour;
                     if let Some(k) = widgets::button_group(ui, "terrain thumbs surface", &[t!("Clay"), t!("Colours")], &[!colour, colour]) {
