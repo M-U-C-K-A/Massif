@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
 
+mod mscript;
 mod terrain;
 
 const USAGE: &str = "\
@@ -34,6 +35,10 @@ USAGE
   massif-cli terrain stream <graph.json> [--size BLOCKS] [--window BLOCKS] [--cache MB] [--cpu]
   massif-cli terrain migrate <world.massif> [--out FILE]
   massif-cli terrain build <world.massif> <out.massif> [--graph FILE] [--samples N] [--cpu]
+  massif-cli mscript guide [--graph <graph.json|script.mscript>] [--reference]
+  massif-cli mscript build <in.mscript> <out.json>
+  massif-cli mscript check <in.mscript>
+  massif-cli mscript decompile <graph.json> [--title TEXT]
   massif-cli caves <world.massif> <out.massif> [--biomes] [--seed N] [--keep]
   massif-cli cut <world.massif> <y> <out.png> [--rect X0,Z0,X1,Z1]
   massif-cli structure <world.massif> <out.massif> <kind> <x> <z> [--y Y] [--seed N] [--turn T] [--jar PATH] [--keep-land]
@@ -71,6 +76,12 @@ USAGE
   unlink, remove, rename, or a JSON Patch), render a shaded picture, migrate
   the graph a world of 1.2 keeps, build a graph into a world (its own, or one
   given) as Convert does.
+
+  mscript works on MassifScript, the terrain graph as text: guide prints what to
+  paste into an AI chat before asking it for a script (the language, every node,
+  examples; with --graph, that graph as a script), build makes a script into a
+  graph, check says what is wrong in one (line:column), decompile writes a graph
+  as a script.
 
   analyse prints the survival check of Edit ▸ Analyse the map as Markdown: every
   block counted as the export writes it, what breaks survival, what is missing.
@@ -1397,6 +1408,7 @@ fn main() -> ExitCode {
         "village-pack-from-world" => cmd_village_pack_from_world(args),
         "analyse" | "analyze" => cmd_analyse(args),
         "terrain" => terrain::cmd(args),
+        "mscript" => mscript::cmd(args),
         other => Err(format!("unknown command \"{other}\"\n\n{USAGE}")),
     };
     match result {

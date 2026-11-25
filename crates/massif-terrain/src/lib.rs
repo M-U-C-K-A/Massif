@@ -35,6 +35,7 @@ pub mod live;
 pub mod lower;
 pub mod migrate;
 pub mod model;
+pub mod mscript;
 pub mod noise;
 mod nodes;
 pub mod params;
