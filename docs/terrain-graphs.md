@@ -2,32 +2,403 @@
 
 [← Back to the README](../README.md)
 
-The Terrain side of Massif: a node-based terrain generator in the manner of
-Gaea, its viewport and renderer, its templates, and how a graph becomes
-blocks.
+The **Terrain** side of Massif makes landscapes from nodes, in the spirit of Gaea and World Machine: shapes, erosion, rivers, climate, caves and villages wired into a graph, seen lit in a viewer, then written into the map. Switch to it at the top left of the window.
 
-- [The Graph workspace](#the-graph-workspace)
-- [The Render workspace](#the-render-workspace)
-- [Templates](#templates)
-- [Editing a graph](#editing-a-graph)
-- [Nodes](#nodes)
-- [Rock over the void](#rock-over-the-void)
-- [Working on a map that exists](#working-on-a-map-that-exists)
-- [Rivers](#rivers)
-- [Climate](#climate)
-- [Tectonic plates](#tectonic-plates)
-- [Over the map, not into it](#over-the-map-not-into-it)
-- [Size](#size)
-- [Convert to voxels](#convert-to-voxels)
-- [The new terrain generator (beta)](#the-new-terrain-generator-beta)
+Its **Generator** workspace holds the **Terrain Generator** of 1.2, four panels that work together: the **Node Library**, the **Generator Viewer**, the **Generator Graph** and **Node Properties**. The first pages below are about it. A graph can also be written as text, in [MassifScript](massifscript.md).
+
+Maps made with the generator of earlier versions keep it, as the **classic graph**: its panels (**Classic graph**, **Graph Viewport**, **Classic properties**, **Render Settings**) and its **Graph** and **Render** workspaces are offered for those maps only. Its pages come after the generator's, from [The classic graph](#the-classic-graph) on. A classic graph opens in the new generator migrated, node by node.
+
+Every node and every setting is listed in [terrain-nodes.md](terrain-nodes.md).
+
+## The Terrain Generator
+
+The Terrain side opens on the **Generator** workspace, its panels marked **Experimental** while the generator finds its way. The samples and templates of the home screen open there, with their graph and its preview, and the World side only when you go to it (Apply, or the side switch).
+
+[![Annotated generator with an alpine preview above the connected terrain nodes.](assets/workspaces/terrain-generator.webp)](assets/workspaces/terrain-generator.webp)
+
+Follow the connections beneath the preview to see how each node contributes to the alpine terrain. [View full size](assets/workspaces/terrain-generator.webp).
+
+The four panels are laid out as one, and like every panel of Massif each can be moved, swapped, put in tabs, floated in a window of its own or closed, and chosen again from any area's panel chooser, in its **Terrain** section:
+
+- **Node Library**, on the left: the generator's nodes by category, to search and add. A node clicked lands in the middle of the graph's view; dragged, where it is dropped. Composites are listed under **Composites**.
+- **Generator Viewer**, top middle: the selected node's terrain, or the Map Output's, lit, in 2D or 3D, with **Live** and **Apply to map** (see [The Generator Viewer](#the-generator-viewer)).
+- **Generator Graph**, below it: the nodes and their wires, with the **Script** pane (MassifScript) and a status line at its foot: what is computing, how long the last picture took, the graphics card, the cache (see [The generator graph](#the-generator-graph)).
+- **Node Properties**, on the right: the selected node's settings, or the graph's own when no node is selected (see [Node settings](#node-settings)).
+
+They work together wherever they are: selecting a node in the graph shows its settings and its terrain, and undo over any of them undoes the graph's last change. The graph is saved with the world.
+
+> 📷 **Screenshot:** the Terrain side's **Generator** workspace with the Alpine range sample open (home screen ▸ Samples ▸ Alpine range, then the Terrain side): the Node Library, the Viewer in 3D, the graph and Node Properties with the Alpine Range composite selected.
+
+### What a graph makes
+
+A graph ends in one **Map Output**, like Blender's
+Material Output: one node with an input for each thing the map can take —
+Height, Water, Albedo (the colour of the ground), Terrain, Biome,
+Temperature and Humidity, Vegetation, Caves, four layers of rock (with their
+colours) and any mask (`mask.snow`, `mask.flow`, `mask.<name>`). Each input is
+optional and says what it stands for when left empty. Sockets have types, in
+colours: heights, masks (0 to 1), colours, vectors (wind), terrains and
+biomes; a height and a mask feed each other, a colour feeds a number by its
+brightness, a number a colour as a grey.
+
+### Nodes
+
+Shapes a mountain map is made of (ranges along a drawn crest,
+peaks placed by hand, alpine and rounded massifs, volcanoes, mesas, canyons,
+glacial valleys, fault scarps, dunes, karst, craters, islands, archipelagos
+along a chain, coastlines), adjustments (levels, curves, terraces, strata,
+folds, warps, sharpening, transforms), simulations (thermal and stream
+erosion, water flow), climate (temperature, wind, rainfall with rain shadows,
+humidity, the game's biomes), masks of what the relief is (slope, height,
+curvature, facing, sunlight, openness, snow, wetness, distance), colours
+(gradients from nature, mixes) and terrains (layers by masks). Positions are
+fractions of the terrain, distances and heights blocks. Every node and
+setting is listed in [terrain-nodes.md](terrain-nodes.md).
+
+### Underground
+
+A **Cave layer** node is one of the map's cave layers
+made by the graph (chambers, tunnels, noodles and ravines with their
+densities, sizes and heights, the roof, the surface entrances, sealed
+aquifers and the lava floor), and its mask says where its caves go; a
+**Cave biome** node paints lush caves, dripstone caves or the deep dark
+between two heights where a mask says. **Merge cave layers** takes the
+stronger of two, or, with **Both**, stacks cave biomes at their own heights
+in the same columns. The composite **Cave System** puts them together over a
+relief: the game's caves, lush caves under wet ground, the deep dark far
+under the mountains, dripstone caves between, with its densities, depths,
+water and lava and biomes as settings; open it to change its rules. They go
+to the Map Output's **Caves** and **Cave biomes**: Apply adds or updates the
+graph's own cave layer (marked as the graph's, removed when its node is),
+leaves the layers painted by hand where the graph puts no caves, and the
+caves are carved, sealed and decorated on export as painted ones are.
+**Volumes** are for what cave layers cannot do: a **Tube** along a drawn
+line or a river's or road's splines, a **Sphere** (a hall, or one at each
+point Scatter places), a **Box**, **Cave noise** (the game's noise caves as a
+volume), a **Noise volume**, combined by **Combine volumes** (union,
+subtract, intersect, with a smooth seam), roughened by **Shape volume** and
+kept to a band of heights, a mask or under the ground by **Limit volume**.
+The Map Output's **Volume carve** cuts its volume out of the ground, **Volume
+add** fills its volume with rock: Apply writes them into the map's sculpted
+blocks, where only the volume reaches.
+
+### Examples
+
+Five graphs to start from: an alpine chain with a glacial
+valley, chalk cliffs over coves, desert mesas over dunes, a volcanic
+archipelago, a canyon in a high plateau.
+
+### Graphs of earlier versions
+
+A world whose graph was made with the generator above
+opens with it migrated: each node becomes the node (or the few nodes) doing
+the same, with its settings, links, place and seed. What the new generator
+has no node for yet (floating islands, overhangs, tectonic plates, 1.2's
+water erosion, rivers and lakes) is kept as nodes marked 1.2, which run the
+old code. The noises are new, so a migrated graph keeps its shapes and
+heights, not its exact patterns.
+
+### For models and scripts
+
+A graph is a readable JSON document (named
+nodes, inputs naming what feeds them). [terrain-graph.schema.json](terrain-graph.schema.json)
+is its JSON Schema and [terrain-nodes.md](terrain-nodes.md) its catalogue,
+both written from the generator itself. From the command line:
+`massif-cli terrain validate` names each mistake by its path and the name
+probably meant; `terrain patch` applies edits a step at a time (add, set,
+link, unlink, remove, rename) or a JSON Patch; `terrain render` draws a
+graph; `terrain migrate` prints a world's graph, migrated; `terrain build`
+builds a graph into a world.
+
+## The generator graph
+
+- **Add a node**: right-click the graph, press **Tab** (or Shift A), or use
+  the **+** at the graph's top right, and type a few letters of its name:
+  the start of a word (`therm` finds Thermal erosion), or its letters in
+  order (`mtnrange` finds Mountain range). Arrows choose, Enter adds. A
+  node can also be clicked or dragged from the Library.
+- **Select** a node by clicking it (Shift or ⌘ adds to the selection), or
+  drag a box around nodes on the empty graph. Drag a node to move it with
+  the rest of the selection; let go, it snaps to the grid (the magnet at
+  the graph's top right places nodes freely instead).
+- **View** a node in the viewer: press **V**, or double-click it (a
+  composite opens instead). The eye on a node says it is the one viewed.
+  With none viewed, the viewer shows the active Map Output.
+- **Name** a node: its settings' **Name** gives it a name to show. Its id,
+  by which wires and scripts name it, never changes.
+- **Bypass** a node (**B**, or its menu): it is left out, and what it feeds
+  takes its first input instead. It shows dimmed, struck through, its
+  thumbnail that of what passes through.
+- **Fold** a node to its title with the chevron at its left, or **H**.
+- **Copy and paste** nodes (⌘C, ⌘X, ⌘V): they go through the clipboard as
+  JSON, with the wires among them, their frames and the composites they are
+  made of, so that they paste into another world too. **⌘D** duplicates
+  beside them.
+- **Arrange**: the grid button lays the selected nodes (or all) out in
+  columns, from their sources to their output; a node's menu also aligns
+  the selected nodes' left edges or tops, and spaces them evenly.
+- **Zoom and move**: a mouse wheel or a pinch zooms around the pointer,
+  from far enough out to see a big graph whole to close enough to read a
+  node's every word; **⌘+** and **⌘−** zoom too, **⌘0** back to full size.
+  Two fingers on a trackpad move the view, as dragging with the middle
+  button does (or with Space held). **F**, the frame button, or a
+  double-click on the empty ground shows the whole graph.
+- **Minimap**: at the bottom left when part of the graph is out of view,
+  the part in view outlined. Click in it to go there, drag the outline to
+  move the view; the wheel over it still zooms the graph.
+- **Undo** and **Redo** (⌘Z, ⌘⇧Z) take back the graph's changes while the
+  pointer is over the area, inside composites too; a drag or a slider
+  moved is one step.
+
+Every change to what the graph makes goes through the graph's own editing
+steps (add, set, link, rename, bypass, frame, group, expose…), the same a
+script or a model uses: see [For models and scripts](#for-models-and-scripts).
+
+Each node shows its result as a thumbnail, lit as the viewer lights it,
+with the range of its values (in blocks for a height, from 0 to 1 for a
+mask) when the graph is zoomed in.
+
+> 📷 **Screenshot:** the Generator Graph with the add-node search open (Tab) after typing `therm`, the matching nodes listed.
+
+### Composites
+
+A composite is a node that holds a graph of its own, with inputs, outputs
+and settings it exposes. Massif ships **Alpine Range** (a chain along a drawn crest, its rivers
+cutting valleys up every flank, snow above a line), **Cave System** and
+**Village Generator**; any nodes can be made into one of the world's own.
+
+- **Make a composite**: select nodes and press **⌘G** (or the composite
+  button). They go inside a new composite, one node of it in their place;
+  the wires that crossed into them become its inputs, those that left them
+  its outputs. **⌘⇧G** (or **Ungroup**) puts a composite's nodes back.
+- **Open** a composite: double-click it, click the stack at its top right,
+  or **Open** in its settings. The graph shows what it holds, a breadcrumb
+  at the top (`Graph › Alpine Range`) leads back, as **Esc** does. Its inputs
+  and outputs are two columns at the graph's edges: wire from the inputs'
+  column, and into the outputs' column to say what each output gives.
+- **Massif's composites** open read only. **Edit a copy** makes the world's
+  own copy, under a new name, which the node then is; its settings are
+  kept.
+- **Expose a setting**: inside a composite of the world, the **⤴** beside a
+  node's setting shows it on the composite, under a label, in a group,
+  with its range, folded away as advanced if you like. Every node of the
+  composite then shows it in its settings, as a node's own.
+- With nothing selected inside, the settings show the composite itself:
+  its name, its group in the library, its inputs and outputs (add or
+  remove them) and its exposed settings.
+
+Composites are listed in the library under **Composites** and found by the
+search like any node. They are saved with the world.
+
+> 📷 **Screenshot:** the Alpine Range composite opened (double-click it): the breadcrumb `Graph › Alpine Range` at the top, its inputs and outputs as columns at the graph's edges.
+
+### Frames
+
+Frames gather nodes under a title, a colour and a note; frames sit in
+frames. Select nodes and press **⌘J** (or the frame button) to frame them,
+in the frame they all sit in. Drag a frame by its title to move it with
+everything it holds; a node dropped inside a frame joins it, dragged out it
+leaves it; a frame dropped in another sits in it. The chevron folds a frame
+to its title bar, its wires ending on it. Click its title to show its
+settings (title, colour, note, folded); double-click to rename it;
+right-click it for its colour, or to remove it (the nodes stay).
+
+### Sockets and wires
+
+What a socket carries shows in its colour and shape:
+
+| Socket | Carries | Colour |
+|---|---|---|
+| ● | a height, in blocks | slate grey |
+| ● | a mask, from 0 to 1 | amber |
+| ● | a colour | pink |
+| ● | a vector (wind, the way water flows) | indigo |
+| ■ | a terrain (the block material), one per column | green |
+| ■ | a biome of the game, one per column | teal |
+| ■ | a painted layer (its number and strength) | olive |
+| ▶ | points (where things stand) | cyan |
+| ▶ | lines (roads, rivers, walls) | orange |
+| ▶ | footprints (the ground things take) | tan |
+| ▶ | instances (what stands there) | sky blue |
+| ⬢ | a volume (caves, arches, overhangs) | violet |
+| ◆ | a setting driven by a field (see [Settings](#node-settings)) | amber |
+
+Circles carry values that vary smoothly, squares categories, triangles
+geometry made whole, hexagons volumes, diamonds settings that vary over the
+map. A filled socket is connected; an empty
+ring is an input left empty, which takes the default its node says.
+
+Drag from an output to an input to connect them; let go on an empty part
+of the graph to add a node that takes what the wire carries, connected.
+Drag from a connected input to take its wire elsewhere. A wire between
+two different types (a height into a colour, a colour into a mask) is
+converted on its way, and a dot on the wire says so; categories are never
+made from numbers on a wire: a node says how. An input that cannot take
+what the wire carries turns red under it, and says why and which node to
+put between them (points into a mask: **Points to mask**). Right-click (or Alt-click) a
+wire to cut it; double-click it to add a reroute point, which drags, and
+which a right-click removes.
+
+## The Map Output
+
+A graph ends in one **Map Output**, as a Blender material ends in its
+Material Output: one node with an input for everything the map can take,
+in groups that fold (Ground and Surface open, and any group with an input
+connected):
+
+While a wire is drawn near it, the Map Output's folded groups that hold an
+input taking what the wire carries open by themselves (a layer opens
+Underground, for the caves), and fold again if the wire goes elsewhere; the
+inputs that take it glow, on every node. Folded, a group says how many
+inputs it holds, and how many are connected. A graph with no Map Output
+says so at the top of the canvas, with a button that adds one, its Height
+fed by the rightmost node making heights; Apply says so too.
+
+- **Ground**: Height, Water.
+- **Surface**: Albedo (the ground's colour), Terrain, Biome.
+- **Climate**: Temperature, Humidity. **Life**: Vegetation. **Underground**:
+  Caves.
+- **Rock over the void**: the top and underside of layers of rock over the
+  ground (floating islands, arches).
+- **Masks**: Flow, Wear, Deposition, Snow, and masks of one's own: **+ Mask**
+  adds one (double-click its name on the node to rename it), written to the
+  map under its name.
+
+Every input is optional. A connected one shows a small picture of what
+arrives and where from; an empty one shows in grey what stands for it
+("the map's ground as it is", "none"). A graph can hold several Map
+Outputs to compare variants: the one marked **Active** is the one the map
+takes; click **Inactive** on another (or use its menu) to make it the
+active one.
+
+## Node settings
+
+The selected node's settings are made from the node's own description, in
+groups: its main settings, **Shape**, **Detail**, and **Advanced** on demand.
+Every setting has its editor: a slider with its unit for a number (the
+slider covers the usual range; a value beyond it can be typed), a switch, a
+choice, a colour, a seed with a die for another one, a file, points and
+lines (placed on the viewer, or typed in a table), a curve from 0 to 1
+(drag its points, double-click to add one, right-click to remove one), and
+a gradient (drag its stops, click one to colour it, double-click the bar to
+add one). A dot beside a setting changed from its default puts it back.
+The foot of the panel says what the setting under the pointer does.
+
+**◇ — settings driven by a field.** A number marked ◇ can vary over the
+map: click the ◇ and the node gets a diamond socket for it; connect a mask
+there and the setting takes, at each place, the mask's value there
+(a mountain higher in the north, an erosion stronger on soft rock).
+
+With no node selected, the panel shows the whole graph's settings: the
+terrain's size, its seed, the sea level and the resolution simulations run
+at in the previews.
+
+> 📷 **Screenshot:** Node Properties of a Mountain range node, its groups (main, Shape, Detail) and a ◇ setting driven by a mask wired into its diamond socket.
+
+## The Generator Viewer
+
+The viewer shows the node viewed, or the active Map Output, lit as a
+render: a sun from the north-west, soft shadows, light from the sky in
+the hollows. **2D** shows it from above; **3D** from a camera turning
+around it. **Clay** shows the shape alone, in neutral grey, as Gaea does;
+**Colours** shows the ground's colours (the Albedo reaching it, or tints
+by height when there is none). A mask shows in amber over the relief it
+comes from; a colour, a terrain or a biome as its colours on that relief.
+A picture comes coarse first, then sharp.
+
+- 2D: drag to move, scroll to zoom around the pointer, double-click to see
+  the whole terrain again.
+- 3D: drag to turn around the terrain, scroll to come closer; turning
+  keeps the camera's distance, only the wheel changes it.
+- **Shift + drag** turns the sun, in both.
+- The sliders menu at the top right: how much the relief is exaggerated,
+  contour lines, the mask's opacity, the sun's height, the 3D view's
+  **Background** (plain **Dark**, as in Gaea, by default, or the **Sky**),
+  the **Resolution** (Auto: as many samples as the picture needs, at most
+  1024 a side; or 1024, 2048, 4096 or 8192, the last two heavy in memory
+  and slow, as the menu says), and whether thumbnails are in clay or in
+  colours.
+- The selected node's points or line (a range's spine, peaks) show over the
+  2D picture: drag them, double-click to add one, right-click to remove
+  one.
+- **Live** shows the graph's result on the World map as it is edited,
+  without writing it; **Apply to map** writes it, in one step that can be
+  undone (see [Apply](#live-and-apply)).
+
+In **3D**, the viewer draws with the same renderer as the classic Graph Viewport: the generator's output under a sky with soft light, clouds, the sea at the world's sea level and the sides of the terrain, with a camera you turn, move and zoom freely. Its bar at the foot opens the render settings (sun, clouds, haze, exposure), turns the clouds and the sea on and off, frames the relief and saves the view as an image. The **Dark** background shows a plain dark backdrop in place of the sky.
+
+> 📷 **Screenshot:** the Generator Viewer in 3D over an alpine graph, with its bar at the foot (Render, Clouds, Sea, frame, save an image) and the settings menu open at the top right.
+
+## Live and Apply
+
+With Live on, the World side's map shows the graph as it is
+edited, without writing it: the area in view first, sharp within a few
+milliseconds on the graphics card, the rest of the map behind; simulations
+run quick first and exact once the graph rests. **Apply** writes it to the
+map in one undoable step, as Convert does.
+
+**Apply to map** writes everything the active Map Output carries into the
+map, as one step that ⌘Z takes back whole:
+
+- the ground (heights, water, terrains, colours as blocks, layers of rock,
+  biomes of the climate), made window after window of 1024 blocks, so that
+  a large map is written without ever holding all of it;
+- what goes underground: the cave layers of its Cave Layer nodes (marked as
+  the graph's, updated on the next Apply, never mixed with those painted by
+  hand), the cave biomes, and the volumes carved out of the ground or added
+  to it;
+- its villages: the Map Output's structures and roads, laid on the ground
+  as written. The villages an earlier Apply laid are replaced; structures
+  placed by hand stay.
+
+A dialog shows how far it is (the terrain window by window, then the
+caves, then the villages); **Cancel** stops it and leaves the map as it
+was. A map of 2048 blocks a side with a mountain and its erosion is
+written in about a second.
+
+Thumbnails and the viewer show every kind of output: points, lines,
+footprints and instances drawn over the relief they stand on, and a volume
+as its cut a little under the sea's level, laid over the relief.
+
+> 📷 **Screenshot:** the World side's map with **Live** on, the graph's result drawn over the map before Apply, and the Apply progress dialog.
+
+## MassifScript
+
+A graph can be written as text, and text made into a graph: the **script** button at the top right of the Generator Graph (a page with `<>`) shows the **Script** pane. **Apply** builds the graph from the script (one step to undo), **From graph** writes the graph open as a script, and **Copy for AI** copies a guide to paste into any AI chat (ChatGPT, Claude, Mistral…): the language, every node, examples and the graph open now. Paste the script it answers into the pane, and Apply. See [MassifScript](massifscript.md) and [its reference](massifscript-reference.md). An MCP server, so that an AI assistant could work on the graph in Massif directly, is planned, not shipped.
+
+> 📷 **Screenshot:** the Script pane beside the Generator Graph, a short script in it and the graph it built, with the **Copy for AI** button (the sparkles) highlighted.
+
+## Generator keys
+
+| Key | Over the graph |
+|---|---|
+| Tab, Shift A, right-click | add a node |
+| V | view the node |
+| double-click | open a composite, view another node |
+| Esc | leave the composite open |
+| B | bypass the selected nodes, or stop |
+| H | fold or unfold the selected nodes |
+| ⌘G, ⌘⇧G | make a composite, ungroup |
+| ⌘J | frame the selected nodes |
+| ⌘C, ⌘X, ⌘V | copy, cut, paste |
+| ⌘D | duplicate the selected nodes |
+| ⌘A | select every node |
+| Delete, Backspace, X | remove the selected nodes (a frame selected: the frame, its nodes staying) |
+| F, Home, double-click the ground | show the whole graph |
+| wheel, pinch, ⌘+ ⌘− ⌘0 | zoom (⌘0: full size) |
+| ⌘Z, ⌘⇧Z | undo, redo |
+
+## The classic graph
+
+The generator of earlier versions stays for the maps made with it. Its panels show in the panel chooser's **Classic generator** section only for such a map (or while one of them is on screen), and its workspaces are **Graph** and **Render** on the Terrain side. The pages below describe it. A classic graph also opens in the Terrain Generator, migrated node by node (see [Graphs of earlier versions](#graphs-of-earlier-versions)).
 
 ## The Graph workspace
 
-The Terrain side holds the generator. A graph makes its relief from
+The classic graph makes its relief from
 nothing — or starts from the map as it is, painted or imported from
 WorldPainter, with the **Map** node (see below). Its **Graph** workspace is laid out
-like Gaea: the **Graph Viewport** above, the **Terrain Graph** below, the
-**Node Properties** on the right. The viewport shows the graph's output;
+like Gaea: the **Graph Viewport** above, the **Classic graph** below, the
+**Classic properties** on the right. The viewport shows the graph's output;
 select a node and press **V** (or double-click it) to see the graph up to
 that node — heights as a relief, masks in white over the relief they come
 from, colours on it — and V again to go back to the output.
@@ -249,104 +620,4 @@ starter graph builds at 16,384 × 16,384 in about 25 seconds and writes to a
 16k map in about 2 more, in about 5.5 GB of memory; 8,192 × 8,192 takes
 about 12 seconds and 2 GB. The floating mountains, with their two layers,
 take about 55 seconds and 8 GB at 16,384 × 16,384.
-
-## The Terrain Generator (1.2, experimental)
-
-Massif 1.2 brings a new terrain generator. Its area, **Terrain Generator**,
-is what the Terrain side opens; its header says it is experimental. The
-graph editor described above stays in the area picker as **Classic graph**,
-for maps made with it; a graph of the classic editor opens in the new one
-migrated, node by node. A world keeps both graphs; an older Massif opens it
-with its own.
-
-**Composites.** A composite is a node that holds a graph of its own: double
-click it to open it (the path at the top of the graph takes you back), its
-inputs and outputs shown as two columns at its edges. Its settings are the
-ones its author exposed, each standing for settings of the nodes inside.
-Massif ships **Alpine Range** (a chain along a drawn crest, its rivers
-cutting valleys up every flank, snow above a line), **Cave System** and
-**Village Generator**; select nodes and choose **Make a composite** to gather
-them into one of your own, **Edit a copy** to change one of Massif's.
-Frames gather nodes under a title and a colour, and nest; a node can be
-bypassed, and renamed without its links changing.
-
-**Apply.** Apply writes what the Map Output carries into the map, window
-by window, as one step to undo: the ground, then caves and volumes, then
-villages and structures. It replaces what the graph covers: what was edited
-by hand there since the last Apply is written over (undo brings it back).
-
-**What it makes.** A graph ends in one **Map Output**, like Blender's
-Material Output: one node with an input for each thing the map can take —
-Height, Water, Albedo (the colour of the ground), Terrain, Biome,
-Temperature and Humidity, Vegetation, Caves, four layers of rock (with their
-colours) and any mask (`mask.snow`, `mask.flow`, `mask.<name>`). Each input is
-optional and says what it stands for when left empty. Sockets have types, in
-colours: heights, masks (0 to 1), colours, vectors (wind), terrains and
-biomes; a height and a mask feed each other, a colour feeds a number by its
-brightness, a number a colour as a grey.
-
-**Nodes.** Shapes a mountain map is made of (ranges along a drawn crest,
-peaks placed by hand, alpine and rounded massifs, volcanoes, mesas, canyons,
-glacial valleys, fault scarps, dunes, karst, craters, islands, archipelagos
-along a chain, coastlines), adjustments (levels, curves, terraces, strata,
-folds, warps, sharpening, transforms), simulations (thermal and stream
-erosion, water flow), climate (temperature, wind, rainfall with rain shadows,
-humidity, the game's biomes), masks of what the relief is (slope, height,
-curvature, facing, sunlight, openness, snow, wetness, distance), colours
-(gradients from nature, mixes) and terrains (layers by masks). Positions are
-fractions of the terrain, distances and heights blocks. Every node and
-setting is listed in [terrain-nodes.md](terrain-nodes.md).
-
-**Underground.** A **Cave layer** node is one of the map's cave layers
-made by the graph (chambers, tunnels, noodles and ravines with their
-densities, sizes and heights, the roof, the surface entrances, sealed
-aquifers and the lava floor), and its mask says where its caves go; a
-**Cave biome** node paints lush caves, dripstone caves or the deep dark
-between two heights where a mask says. **Merge cave layers** takes the
-stronger of two, or, with **Both**, stacks cave biomes at their own heights
-in the same columns. The composite **Cave System** puts them together over a
-relief: the game's caves, lush caves under wet ground, the deep dark far
-under the mountains, dripstone caves between, with its densities, depths,
-water and lava and biomes as settings; open it to change its rules. They go
-to the Map Output's **Caves** and **Cave biomes**: Apply adds or updates the
-graph's own cave layer (marked as the graph's, removed when its node is),
-leaves the layers painted by hand where the graph puts no caves, and the
-caves are carved, sealed and decorated on export as painted ones are.
-**Volumes** are for what cave layers cannot do: a **Tube** along a drawn
-line or a river's or road's splines, a **Sphere** (a hall, or one at each
-point Scatter places), a **Box**, **Cave noise** (the game's noise caves as a
-volume), a **Noise volume**, combined by **Combine volumes** (union,
-subtract, intersect, with a smooth seam), roughened by **Shape volume** and
-kept to a band of heights, a mask or under the ground by **Limit volume**.
-The Map Output's **Volume carve** cuts its volume out of the ground, **Volume
-add** fills its volume with rock: Apply writes them into the map's sculpted
-blocks, where only the volume reaches.
-
-**Live.** With Live on, the World side's map shows the graph as it is
-edited, without writing it: the area in view first, sharp within a few
-milliseconds on the graphics card, the rest of the map behind; simulations
-run quick first and exact once the graph rests. **Apply** writes it to the
-map in one undoable step, as Convert does.
-
-**Graphs of 1.2.** A world whose graph was made with the generator above
-opens with it migrated: each node becomes the node (or the few nodes) doing
-the same, with its settings, links, place and seed. What the new generator
-has no node for yet (floating islands, overhangs, tectonic plates, 1.2's
-water erosion, rivers and lakes) is kept as nodes marked 1.2, which run the
-old code. The noises are new, so a migrated graph keeps its shapes and
-heights, not its exact patterns.
-
-**Examples.** Five graphs to start from: an alpine chain with a glacial
-valley, chalk cliffs over coves, desert mesas over dunes, a volcanic
-archipelago, a canyon in a high plateau.
-
-**For models and scripts.** A graph is a readable JSON document (named
-nodes, inputs naming what feeds them). [terrain-graph.schema.json](terrain-graph.schema.json)
-is its JSON Schema and [terrain-nodes.md](terrain-nodes.md) its catalogue,
-both written from the generator itself. From the command line:
-`massif-cli terrain validate` names each mistake by its path and the name
-probably meant; `terrain patch` applies edits a step at a time (add, set,
-link, unlink, remove, rename) or a JSON Patch; `terrain render` draws a
-graph; `terrain migrate` prints a world's graph, migrated; `terrain build`
-builds a graph into a world.
 

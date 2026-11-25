@@ -184,7 +184,7 @@ massif-cli mscript decompile graph.json         # a graph written as a script
 
 ## For tools
 
-`massif_terrain::mscript` is built to be called by other programs, as a future MCP server will:
+`massif_terrain::mscript` is built to be called by other programs. An **MCP server** that would let an AI assistant read, build and change the open graph in Massif directly is planned, not shipped: for now, **Copy for AI** and pasting the answer into the Script pane is the way, and `massif-cli mscript` serves tools on the command line. What such a server will call is here already:
 
 - `compile` gives the graph, the steps it is made of, and the errors with their line and column.
 - `decompile` gives a graph's text.

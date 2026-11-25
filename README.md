@@ -231,12 +231,16 @@ cargo run --release -p massif-cli -- export world.massif ~/Library/Application\ 
 
 ## Documentation
 
-- **[Using Massif](docs/guide.md)**: the home screen, the window and its
-  areas, brushes and their options, painting, ground covers and objects,
-  rivers, height maps, 3D Sculpt, the controls.
-- **[Terrain graphs](docs/terrain-graphs.md)**: the generator, its viewport
-  and render, templates, nodes, rivers, climate, plates, and the conversion to
-  voxels.
+- **[Using Massif](docs/guide.md)**: the whole app, a page an area: getting
+  started, the window, every tool of the map, layers, water, caves, villages,
+  the 3D views, mods, importing, exporting, versions, scripting, the command
+  line and the settings.
+- **[Terrain graphs](docs/terrain-graphs.md)**: the Terrain Generator's four
+  panels, composites, the Map Output, Live and Apply, MassifScript, and the
+  classic graph of older maps.
+- **[Scripting](docs/scripting.md)** and **[MassifScript](docs/massifscript.md)**:
+  WorldPainter's JavaScript scripts, Massif's Lua API, and the terrain graph
+  written as text.
 - **[How it works](docs/internals.md)**: the world model, sculpted volumes,
   the `.massif` format, WorldPainter import, Minecraft export, the 3D view,
   very large maps.

@@ -10,6 +10,7 @@ is exported, or makes a map from nothing — what one does by hand, repeated.
 - [Running a script](#running-a-script)
 - [WorldPainter scripts](#worldpainter-scripts)
 - [Massif's own API, in Lua](#massifs-own-api-in-lua)
+- [Examples](#examples)
 - [What a script may touch](#what-a-script-may-touch)
 - [Speed](#speed)
 - [How Massif checks it gives WorldPainter's map](#how-massif-checks-it-gives-worldpainters-map)
@@ -243,6 +244,75 @@ local above = massif.params.above
 Lua scripts run in a sandbox: no `io`, no `os.execute`, no `require` of
 files, the global environment read-only; files only through Massif, and
 only those a script may touch.
+
+### Examples
+
+Sand along the sea, three blocks over it at most:
+
+```lua
+local map = massif.map
+local sand = map:terrain_id("Sand")
+local sea = map.sea_level
+for x0, z0, x1, z1 in map:tiles() do
+    local h = map:get("height", x0, z0, x1, z1)
+    local t = map:get("terrain", x0, z0, x1, z1)
+    for i = 1, #h do
+        if h[i] and h[i] >= sea - 2 and h[i] <= sea + 3 then t[i] = sand end
+    end
+    map:set("terrain", x0, z0, x1, z1, t)
+end
+```
+
+How much of the map stands above a height, given as a parameter:
+
+```lua
+-- script.name=Land above
+-- script.param.above.type=integer
+-- script.param.above.default=200
+local map, above = massif.map, massif.params.above
+local high, all = 0, 0
+for x0, z0, x1, z1 in map:tiles() do
+    local h = map:get("height", x0, z0, x1, z1)
+    for i = 1, #h do
+        if h[i] then
+            all += 1
+            if h[i] > above then high += 1 end
+        end
+    end
+end
+print(string.format("%.1f %% of the land is above y %d", 100 * high / all, above))
+```
+
+A map made, eroded, saved and exported from the command line (`massif-cli script make.lua`):
+
+```lua
+local map = massif.create{ width = 2048, depth = 2048, landform = "mountains", seed = 42 }
+map.name = "Eroded range"
+map:whole_map("erosion", { rain = 1.5 })
+map:whole_map("rivers", {})
+map:save("eroded.massif")
+map:export(".", { version = "1.21.11" })
+```
+
+The columns marked with one annotation colour made into rock, then rubbed out (colours are numbered 1 to 15, in the order of WorldPainter's list):
+
+```lua
+local map = massif.map
+local rock = map:terrain_id("Rock")
+local MARK = 1
+for x0, z0, x1, z1 in map:tiles() do
+    local a = map:get("annotations", x0, z0, x1, z1)
+    local t = map:get("terrain", x0, z0, x1, z1)
+    local changed = false
+    for i = 1, #a do
+        if a[i] == MARK then t[i] = rock; a[i] = 0; changed = true end
+    end
+    if changed then
+        map:set("terrain", x0, z0, x1, z1, t)
+        map:set("annotations", x0, z0, x1, z1, a)
+    end
+end
+```
 
 ## What a script may touch
 
