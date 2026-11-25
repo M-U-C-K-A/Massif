@@ -4111,11 +4111,13 @@ fn typed_block(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &
     }
 }
 
-pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary, jar: &mut Option<std::path::PathBuf>, mods: &mut Vec<std::path::PathBuf>) -> Option<String> {
+/// File ▸ Game & mods…: where the Blocks panel's blocks come from — the
+/// version of the game installed here, the mods with blocks, the resource
+/// packs and lists of blocks read with them, and the modpack instances
+/// found here to read at once.
+pub fn game_and_mods(ui: &mut Ui, blocks: &mut BlockLibrary, jar: &mut Option<std::path::PathBuf>, mods: &mut Vec<std::path::PathBuf>) {
     let pal = Palette::of(ui);
     let ctx = ui.ctx().clone();
-    let mut feedback = None;
-
     // Where the blocks come from: a version of the game installed here.
     ui.horizontal_wrapped(|ui| {
         let current = blocks.catalogue.as_ref().map(|c| (c.version.clone(), c.source.clone()));
@@ -4240,18 +4242,50 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     if let Some(notice) = &blocks.notice {
         ui.label(RichText::new(notice).color(pal.weak).size(11.5));
     }
-    hint(
-        ui,
-        tr!("Your game's real blocks. Click one to paint with it."),
-    );
     if let Some(e) = &blocks.error {
         ui.label(RichText::new(e).color(pal.danger).size(11.5));
     }
-    let Some(cat) = blocks.catalogue.clone() else { return feedback };
-    for (path, why) in &cat.skipped {
-        let file = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-        ui.label(RichText::new(tr!("{file} could not be read: {why}", file, why)).color(pal.danger).size(11.5));
+    if let Some(cat) = blocks.catalogue.clone() {
+        for (path, why) in &cat.skipped {
+            let file = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            ui.label(RichText::new(tr!("{file} could not be read: {why}", file, why)).color(pal.danger).size(11.5));
+        }
     }
+}
+
+pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary) -> Option<String> {
+    let pal = Palette::of(ui);
+    let ctx = ui.ctx().clone();
+    let mut feedback = None;
+
+    hint(ui, tr!("Every block of your game and its mods: click one to paint with it, as a terrain (a whole block) or a ground cover (a plant)."));
+    // Which game and mods: set up in File ▸ Game & mods….
+    ui.horizontal_wrapped(|ui| {
+        let read = blocks.catalogue.as_ref().map(|c| (c.version.clone(), c.mods.iter().filter(|m| m.kind == massif_assets::SourceKind::Mod).count()));
+        let found = read.is_some();
+        let text = match read {
+            Some((v, 0)) => tr!("Minecraft {v}", v),
+            Some((v, n)) => trn!("Minecraft {v} · {n} mod", "Minecraft {v} · {n} mods", n = n, v),
+            None if blocks.is_loading() => tr!("Reading the game…").to_owned(),
+            None => tr!("No game found").to_owned(),
+        };
+        ui.label(RichText::new(text).color(if !found && !blocks.is_loading() { pal.danger } else { pal.text }));
+        if blocks.is_loading() {
+            crate::loader::loader(ui, 16.0);
+        }
+        if ui.add(egui::Button::new(theme::with_icon(Icon::Puzzle, tr!("Game & mods…"))).small().truncate()).on_hover_text(tr!("The version of the game, the mods, the modpack instances and the resource packs whose blocks are read (also File ▸ Game & mods…)")).clicked() {
+            blocks.open_setup = true;
+        }
+    });
+    if blocks.catalogue.is_none() && !blocks.is_loading() {
+        if let Some(e) = &blocks.error {
+            ui.label(RichText::new(e).color(pal.danger).size(11.5));
+        }
+        if !blocks.instances.is_empty() {
+            ui.label(RichText::new(trn!("{n} modpack instance found here: Game & mods… reads it.", "{n} modpack instances found here: Game & mods… reads one.", n = blocks.instances.len())).color(pal.weak).size(11.5));
+        }
+    }
+    let Some(cat) = blocks.catalogue.clone() else { return feedback };
 
     ui.add_space(4.0);
     crate::widgets::search(ui, &mut blocks.search, &tr!("Search {n} blocks", n = cat.blocks.len()), f32::INFINITY);
@@ -4339,7 +4373,7 @@ fn swatch(ui: &mut Ui, color: Color32) {
 /// Returns true when the solo setting changed.
 pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &Registry, solo: &mut bool, search: &mut String, blocks: &mut BlockLibrary) -> bool {
     let pal = Palette::of(ui);
-    hint(ui, tr!("The block on top of the ground."));
+    hint(ui, tr!("The map's terrains: what each part of the ground is made of, its top block and the layers under it. Click one to paint it; a block of the Blocks panel becomes a terrain when you paint with it."));
     let solo_changed = crate::widgets::checkbox(ui, solo, tr!("Solo"))
         .on_hover_text(tr!("Fade every other terrain on the map"))
         .changed();

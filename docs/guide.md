@@ -2445,10 +2445,19 @@ Reforged's 17,000 blocks, Chipped, Macaw's and the like, made for Forge,
 NeoForge, Fabric or Quilt. No mod is treated apart: what Massif reads of
 one (its jar, its instance, its list for WorldPainter) it reads of all.
 
+**Game & mods.** The Blocks panel lists the blocks to paint with; which
+game and mods they come from is set in **File ▸ Game & mods…**, also opened
+by the button at the top of the Blocks panel: the version of Minecraft
+(found beside each instance and wherever the official launcher, CurseForge
+on any drive, the Modrinth App, Prism, MultiMC, ATLauncher or GDLauncher
+keep it; **Choose…** for another jar), the mods and the instances. The
+Terrain panel is the map's own terrains.
+
 **In one step, from the modpack's instance.** Massif looks through the
 instances installed here (CurseForge, Prism, MultiMC, Modrinth or the
 official launcher, on any drive) for mods with blocks, whatever the mods.
-Those whose blocks are not read yet are listed in the Blocks panel under
+Those whose blocks are not read yet are listed in **File ▸ Game & mods…**
+(also the button at the top of the Blocks panel) under
 **Mods with blocks in your Minecraft instances**: each instance on a row,
 with its loader, the version of the game it plays and how many mods with
 blocks it has, and **Use** reads it. Click a row to unfold its mods, one a

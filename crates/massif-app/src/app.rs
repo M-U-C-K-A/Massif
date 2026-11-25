@@ -481,6 +481,9 @@ enum Dialog {
     LayerImport(Vec<crate::layers::LayerImport>),
     /// File ▸ World Information…: the world's settings, size and memory.
     WorldInfo,
+    /// File ▸ Game & mods…: the game, mods and instances the blocks are
+    /// read from.
+    GameAndMods,
     /// The block palettes window.
     Palettes(Box<crate::palettes::PaletteEditor>),
     /// Edit ▸ Smooth terrain…: the map's switch and each terrain's shapes.
@@ -4491,6 +4494,7 @@ impl MassifApp {
             Command::HomeScreen => self.open_home(Page::NewMap),
             Command::About => self.dialog = Some(Dialog::About),
             Command::WorldInfo => self.dialog = Some(Dialog::WorldInfo),
+            Command::GameAndMods => self.dialog = Some(Dialog::GameAndMods),
             Command::CheckUpdates => {
                 // Asked for: whatever the setting and the day's answer.
                 if let Some(cache) = crate::update::default_cache() {
@@ -5366,7 +5370,10 @@ impl MassifApp {
             EditorKind::Blocks => {
                 let mut feedback = None;
                 scrolled(&mut cui, &mut |ui| {
-                    feedback = panels::blocks_panel(ui, &mut self.tools, &mut self.doc, &mut self.blocks, &mut self.settings.minecraft_jar, &mut self.settings.mod_jars);
+                    feedback = panels::blocks_panel(ui, &mut self.tools, &mut self.doc, &mut self.blocks);
+                    if std::mem::take(&mut self.blocks.open_setup) {
+                        self.dialog = Some(Dialog::GameAndMods);
+                    }
                 });
                 if feedback.is_some() {
                     self.feedback = feedback;
@@ -7171,6 +7178,29 @@ impl MassifApp {
                 }
                 if keep {
                     self.dialog = Some(Dialog::Update);
+                }
+            }
+            Dialog::GameAndMods => {
+                let response = modal(ctx, "game and mods").show(ctx, |ui| {
+                    ui.set_width(460.0);
+                    ui.label(RichText::new(tr!("Game & mods")).bold().size(15.0));
+                    ui.label(RichText::new(tr!("Where the Blocks panel's blocks come from: the version of Minecraft installed here, and the mods, modpack instances and resource packs read with it. The terrains of the map are in the Terrain panel.")).color(Palette::of(ui).weak).size(11.5));
+                    ui.add_space(8.0);
+                    egui::ScrollArea::vertical().max_height(ctx.content_rect().height() * 0.6).show(ui, |ui| {
+                        panels::game_and_mods(ui, &mut self.blocks, &mut self.settings.minecraft_jar, &mut self.settings.mod_jars);
+                    });
+                    ui.add_space(10.0);
+                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                        if ui.add(theme::primary_button(ui, tr!("Close"))).clicked() {
+                            keep = false;
+                        }
+                    });
+                });
+                if response.should_close() {
+                    keep = false;
+                }
+                if keep && self.dialog.is_none() {
+                    self.dialog = Some(Dialog::GameAndMods);
                 }
             }
             Dialog::WorldInfo => {
@@ -19272,7 +19302,12 @@ mod tests {
         h.state_mut().blocks.catalogue = Some(std::sync::Arc::new(cat.clone()));
         h.run_steps(5);
         h.get_by_label_contains("CONQUEST REFORGED");
-        h.get_by_label_contains("Conquest Reforged");
+        // Its chip, in File ▸ Game & mods….
+        h.state_mut().command(&ctx, Command::GameAndMods);
+        h.run_steps(3);
+        assert!(h.query_by_label_contains("Conquest Reforged").is_some(), "its chip");
+        h.state_mut().dialog = None;
+        h.run_steps(2);
         let bricks = cat.block("conquest:old_red_bricks").unwrap().clone();
         let app = h.state_mut();
         let terrain = massif_assets::block_terrain(&mut app.doc.world.registry, &bricks);

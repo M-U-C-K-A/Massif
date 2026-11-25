@@ -36,6 +36,8 @@ pub struct BlockLibrary {
     /// What reading an instance left to say (the version of the game it
     /// plays is not installed…).
     pub notice: Option<String>,
+    /// Game & mods… asked for from the Blocks panel: the window opens it.
+    pub open_setup: bool,
     /// A block id typed by hand (`mod:block[property=value]`), for a block
     /// nothing in the panel finds.
     pub typed: String,

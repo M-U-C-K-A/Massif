@@ -2070,7 +2070,6 @@
  "The biome of each kind of land": "O bioma de cada tipo de terreno",
  "The biome of each kind of land, the terrains of each biome": "O bioma de cada tipo de terreno, os terrenos de cada bioma",
  "The block on top of the ground, to paint": "O bloco em cima do solo, para pintar",
- "The block on top of the ground.": "O bloco em cima do solo.",
  "The border Minecraft shows around the world.": "A borda que o Minecraft mostra ao redor do mundo.",
  "The brush filters choose where its surface is painted.": "Os filtros do pincel escolhem onde a superfície é pintada.",
  "The brush sets the shape, its intensity the speed.": "O pincel dá a forma, a intensidade dá a velocidade.",
@@ -2339,7 +2338,6 @@
  "Your .world files": "Seus arquivos .world",
  "Your brushes": "Seus pincéis",
  "Your changes will be lost if you don't save them.": "Suas mudanças serão perdidas se você não salvá-las.",
- "Your game's real blocks. Click one to paint with it.": "Os blocos reais do seu jogo. Clique em um para pintar com ele.",
  "Your home folder is written ~ and other accounts' names are left out.": "Sua pasta pessoal aparece como ~ e os nomes de outras contas ficam de fora.",
  "Your map has no unsaved changes. You can carry on, or quit and start Massif again.": "Seu mapa não tem alterações não salvas. Você pode continuar, ou sair e abrir o Massif novamente.",
  "Your map was not lost: a copy of it with every change was written. Save it under a name of your own now, then carry on or quit. If you quit, Massif offers the copy back when it starts again.": "Seu mapa não se perdeu: uma cópia com todas as alterações foi gravada. Salve-o agora com um nome seu e depois continue ou saia. Se sair, o Massif oferece a cópia de volta ao iniciar novamente.",
@@ -3820,5 +3818,20 @@
  "mill": "moinho",
  "well": "poço",
  "market stall": "banca de mercado",
- "The game's structures…": "As estruturas do jogo…"
+ "The game's structures…": "As estruturas do jogo…",
+ "Every block of your game and its mods: click one to paint with it, as a terrain (a whole block) or a ground cover (a plant).": "Todos os blocos do seu jogo e dos mods: clique num para pintar com ele, como terreno (um bloco inteiro) ou como cobertura do solo (uma planta).",
+ "Minecraft {v} · {n} mods": {
+  "one": "Minecraft {v} · {n} mod",
+  "other": "Minecraft {v} · {n} mods"
+ },
+ "Game & mods…": "Jogo e mods…",
+ "Game & mods": "Jogo e mods",
+ "The version of the game, the mods, the modpack instances and the resource packs whose blocks are read (also File ▸ Game & mods…)": "A versão do jogo, os mods, as instâncias de modpacks e os pacotes de recursos cujos blocos são lidos (também Arquivo ▸ Jogo e mods…)",
+ "{n} modpack instances found here: Game & mods… reads one.": {
+  "one": "{n} instância de modpack encontrada aqui: Jogo e mods… a lê.",
+  "other": "{n} instâncias de modpacks encontradas aqui: Jogo e mods… lê uma."
+ },
+ "Where the Blocks panel's blocks come from: the version of Minecraft installed here, and the mods, modpack instances and resource packs read with it. The terrains of the map are in the Terrain panel.": "De onde vêm os blocos do painel Blocos: a versão do Minecraft instalada aqui e os mods, instâncias de modpacks e pacotes de recursos lidos com ela. Os terrenos do mapa estão no painel Terreno.",
+ "The version of Minecraft, the mods, the modpack instances and the resource packs whose blocks you paint with": "A versão do Minecraft, os mods, as instâncias de modpacks e os pacotes de recursos com cujos blocos você pinta",
+ "The map's terrains: what each part of the ground is made of, its top block and the layers under it. Click one to paint it; a block of the Blocks panel becomes a terrain when you paint with it.": "Os terrenos do mapa: de que cada parte do solo é feita, o bloco de cima e as camadas abaixo. Clique num para pintá-lo; um bloco do painel Blocos vira terreno quando você pinta com ele."
 }

@@ -638,3 +638,49 @@ fn the_eyedropper_tool_paints_with_what_it_picks() {
         }
     }
 }
+
+// ------------------------------------------------------------ Game & mods --
+
+/// Jack: "I don't really understand the difference between the Terrain and
+/// Blocks menus." The game and mods are set up in File ▸ Game & mods…,
+/// which the Blocks panel's button opens too; the panel keeps the blocks
+/// to paint with (rendered at 1× and 2×).
+#[test]
+fn the_game_and_mods_are_set_up_in_their_window() {
+    use egui_kittest::kittest::Queryable;
+    for ppp in densities() {
+        let mut h = app(ppp, Tool::PaintTerrain);
+        let ctx = h.ctx.clone();
+        h.state_mut().command(&ctx, Command::GameAndMods);
+        h.run_steps(3);
+        assert!(matches!(h.state().dialog, Some(Dialog::GameAndMods)));
+        for label in ["Add mods…", "Instance…", "Choose…"] {
+            assert!(h.query_by_label_contains(label).is_some(), "{label}");
+        }
+        save(&mut h, "game-and-mods", ppp);
+        h.get_by_label("Close").click();
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none());
+    }
+}
+
+/// The Blocks panel: what it is for, the game read, and the button to set
+/// it up; no setup rows in it any more.
+#[test]
+fn the_blocks_panel_says_what_it_is_for() {
+    use egui_kittest::kittest::Queryable;
+    let mut lib = crate::blocks::BlockLibrary::default();
+    let mut tools = crate::tools::ToolState::default();
+    let mut doc = crate::doc::Document::new(painted_world(), None, 1);
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(300.0, 400.0)).build_ui(|ui| {
+        crate::theme::install(ui.ctx());
+        crate::panels::blocks_panel(ui, &mut tools, &mut doc, &mut lib);
+    });
+    h.run_steps(2);
+    assert!(h.query_by_label_contains("Every block of your game").is_some());
+    assert!(h.query_by_label_contains("Add mods…").is_none(), "set up in its window");
+    h.get_by_label_contains("Game & mods…").click();
+    h.run_steps(2);
+    drop(h);
+    assert!(lib.open_setup);
+}
