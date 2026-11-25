@@ -209,6 +209,11 @@ enum Action {
     ShowPalette(String),
     /// Show only the palette's layers; again, every layer.
     SoloPalette(String),
+    /// Show only this layer (WorldPainter's solo); again, the layers as
+    /// they were.
+    Solo(Kind, usize),
+    /// The layers shown as they were before the solo.
+    Unsolo,
     Find(massif_core::filter::Match),
 }
 
@@ -230,6 +235,8 @@ struct Entry {
     selected: bool,
     /// Its palette, "" for none.
     palette: String,
+    /// Shown alone (solo).
+    solo: bool,
 }
 
 
@@ -286,6 +293,7 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                     find: None,
                     selected: tools.tool == Tool::Combined && tools.combined as usize == k + 1,
                     palette: c.palette.clone(),
+                    solo: false,
                 },
             )
         })
@@ -314,6 +322,7 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                 find: None,
                 selected: current.as_deref() == Some(p.name.as_str()),
                 palette: p.palette.clone(),
+                solo: false,
             }
         })
         .collect();
@@ -338,6 +347,7 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                     find: Some(massif_core::filter::Match::Layer(massif_core::filter::Painted::Cover, (k + 1) as u16)),
                     selected: tools.tool == Tool::Cover && tools.cover as usize == k + 1,
                     palette: c.palette.clone(),
+                    solo: false,
                 },
             )
         })
@@ -369,6 +379,7 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                     find: Some(massif_core::filter::Match::Layer(if l.understory { massif_core::filter::Painted::Understory } else { massif_core::filter::Painted::Objects }, (k + 1) as u16)),
                     selected: tools.tool == Tool::Objects && tools.object_layer as usize == k + 1,
                     palette: l.palette.clone(),
+                    solo: false,
                 },
             )
         })
@@ -397,6 +408,7 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                     find: Some(massif_core::filter::Match::Layer(massif_core::filter::Painted::Pockets, (k + 1) as u16)),
                     selected: tools.tool == Tool::Pockets && tools.pocket_layer as usize == k + 1,
                     palette: p.palette.clone(),
+                    solo: false,
                 },
             )
         })
@@ -407,6 +419,15 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     // Each section's list, and what of it each palette holds, in the order
     // of the sections: a layer moves up and down among its neighbours of
     // the same list.
+    // The layer shown alone, if one is.
+    let soloed = doc.world.registry.solo.as_ref().map(|s| s.name.clone());
+    let mark = |mut v: Vec<Entry>| {
+        for e in &mut v {
+            e.solo = (e.shown.is_some() || e.kind == Kind::Combined) && soloed.as_deref() == Some(e.name.as_str());
+        }
+        v
+    };
+    let (combined, covers, base, under) = (mark(combined), mark(covers), mark(base), mark(under));
     let sections = [(Kind::Combined, false, combined), (Kind::Mix, false, mixes), (Kind::Cover, false, covers), (Kind::Objects, false, base), (Kind::Objects, true, under), (Kind::Pockets, false, pockets)];
     let names = palette_names(&doc.world.registry, &tools.pattern.saved);
     let mut lists: Vec<(Kind, bool, Vec<Entry>)> = Vec::new();
@@ -769,7 +790,7 @@ fn palette_group(ui: &mut Ui, name: &str, place: usize, count: usize, members: &
                 actions.push(Action::ShowPalette(name.to_owned()));
                 ui.close();
             }
-            if crate::widgets::button(ui, theme::with_icon(Icon::ScanEye, tr!("Show only this palette"))).on_hover_text(tr!("Alt-click its eye does the same; again, every layer is shown")).clicked() {
+            if crate::widgets::button(ui, theme::with_icon(Icon::ScanEye, tr!("Show only this palette"))).on_hover_text(tr!("Alt-click its eye does the same; again, the layers are shown as they were")).clicked() {
                 actions.push(Action::SoloPalette(name.to_owned()));
                 ui.close();
             }
@@ -846,9 +867,13 @@ fn row(ui: &mut Ui, e: &Entry, state: &mut LayersUi, names: &[String], actions: 
     let eye = Rect::from_center_size(rect.left_center() + vec2(13.0, -2.0), vec2(20.0, 20.0));
     let shown = e.shown.unwrap_or(true);
     if let Some(on) = e.shown {
-        let r = ui.put(eye, egui::Button::new(RichText::new(theme::glyph(if on { Icon::Eye } else { Icon::EyeOff }).to_string()).color(if on { pal.text } else { pal.weak })).frame(false));
-        if r.on_hover_text(if on { tr!("Hide it on the map") } else { tr!("Show it on the map") }).clicked() {
-            actions.push(Action::ToggleShown(e.kind, e.id));
+        let r = ui.put(eye, egui::Button::new(RichText::new(theme::glyph(if on { Icon::Eye } else { Icon::EyeOff }).to_string()).color(if e.solo { pal.accent } else if on { pal.text } else { pal.weak })).frame(false));
+        let what = if e.solo { tr!("Shown alone") } else if on { tr!("Hide it on the map") } else { tr!("Show it on the map") };
+        r.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, on, what));
+        if r.on_hover_text(tr!("{what}. Alt-click: show only this layer", what)).clicked() {
+            // Alt as the button was let go (or held now): the layer alone.
+            let alt = ui.input(|i| i.modifiers.alt || i.events.iter().any(|e| matches!(e, egui::Event::PointerButton { pressed: false, modifiers, .. } if modifiers.alt)));
+            actions.push(if alt { Action::Solo(e.kind, e.id) } else { Action::ToggleShown(e.kind, e.id) });
         }
     }
     let dot = Rect::from_center_size(rect.left_center() + vec2(34.0, 0.0), vec2(11.0, 11.0));
@@ -940,6 +965,15 @@ fn row(ui: &mut Ui, e: &Entry, state: &mut LayersUi, names: &[String], actions: 
             && crate::widgets::button(ui, theme::with_icon(if on { Icon::EyeOff } else { Icon::Eye }, if on { tr!("Hide on the map") } else { tr!("Show on the map") })).clicked()
         {
             actions.push(Action::ToggleShown(e.kind, e.id));
+            ui.close();
+        }
+        if e.solo {
+            if crate::widgets::button(ui, theme::with_icon(Icon::Eye, tr!("Show all layers"))).on_hover_text(tr!("As they were before the solo")).clicked() {
+                actions.push(Action::Unsolo);
+                ui.close();
+            }
+        } else if (e.shown.is_some() || e.kind == Kind::Combined) && crate::widgets::button(ui, theme::with_icon(Icon::ScanEye, tr!("Solo"))).on_hover_text(tr!("Show only this layer on the map and in 3D; Alt-click its eye does the same")).clicked() {
+            actions.push(Action::Solo(e.kind, e.id));
             ui.close();
         }
         if let Some(locked) = e.locked
@@ -1089,10 +1123,35 @@ fn apply(action: Action, tools: &mut ToolState, doc: &mut Document, state: &mut 
             set_shown(reg, |palette| (palette == name).then_some(!all));
         }
         Action::SoloPalette(name) => {
-            // Already alone: every layer comes back.
-            let alone = reg.covers.iter().filter(|c| !c.removed).map(|c| (c.palette == name, !c.hidden)).chain(reg.object_layers.iter().filter(|l| !l.removed).map(|l| (l.palette == name, !l.hidden))).all(|(own, shown)| own == shown);
-            set_shown(reg, |palette| Some(alone || palette == name));
+            // Already alone: the layers come back as they were.
+            if reg.solo.as_ref().is_some_and(|s| s.name == name) {
+                reg.unsolo();
+            } else {
+                let covers: Vec<u16> = reg.covers.iter().enumerate().filter(|(_, c)| !c.removed && c.palette == name).map(|(k, _)| k as u16 + 1).collect();
+                let objects: Vec<u16> = reg.object_layers.iter().enumerate().filter(|(_, l)| !l.removed && l.palette == name).map(|(k, _)| k as u16 + 1).collect();
+                reg.solo(&name, &covers, &objects);
+            }
         }
+        Action::Solo(kind, id) => {
+            let (name, covers, objects): (String, Vec<u16>, Vec<u16>) = match kind {
+                Kind::Cover => (reg.covers.get(id - 1).map(|c| c.name.clone()).unwrap_or_default(), vec![id as u16], Vec::new()),
+                Kind::Objects => (reg.object_layers.get(id - 1).map(|l| l.name.clone()).unwrap_or_default(), Vec::new(), vec![id as u16]),
+                // A combined layer: the cover and trees it paints.
+                Kind::Combined => {
+                    use massif_core::combined::Part;
+                    let Some(c) = reg.combined.get(id - 1) else { return };
+                    let of = |parts: &[Part]| c.parts.iter().filter(|p| parts.contains(&p.part)).map(|p| p.layer).collect::<Vec<u16>>();
+                    (c.name.clone(), of(&[Part::Cover]), of(&[Part::Trees, Part::Under]))
+                }
+                Kind::Mix | Kind::Pockets => return,
+            };
+            if reg.solo.as_ref().is_some_and(|s| s.name == name) {
+                reg.unsolo();
+            } else {
+                reg.solo(&name, &covers, &objects);
+            }
+        }
+        Action::Unsolo => reg.unsolo(),
         Action::Find(what) => state.find = Some(what),
         Action::Settings(kind, n) => {
             apply(Action::Paint(kind, n), tools, doc, state, lists);
@@ -1450,7 +1509,7 @@ mod tests {
     }
 
     fn entry(kind: Kind, id: usize, name: &str) -> Entry {
-        Entry { kind, id, name: name.to_owned(), color: [0; 3], detail: String::new(), tip: String::new(), shown: None, locked: None, find: None, selected: false, palette: String::new() }
+        Entry { kind, id, name: name.to_owned(), color: [0; 3], detail: String::new(), tip: String::new(), shown: None, locked: None, find: None, selected: false, palette: String::new(), solo: false }
     }
 
     /// Palettes: made, filled from a layer's menu and by dragging a row
@@ -1564,6 +1623,109 @@ mod tests {
         apply(Action::SetPalette(Kind::Mix, 0, "Paths".into()), &mut s.tools, &mut s.doc, &mut s.ui, &[]);
         h.run_steps(2);
         assert_eq!(h.query_all_by_label_contains("the palette on the map").count(), 1);
+    }
+
+    /// Solo, as WorldPainter's: a layer's menu ▸ Solo or Alt-click on its
+    /// eye shows it alone on the map and in 3D, and again brings every
+    /// layer back exactly as it was (one hidden before stays hidden); a
+    /// palette's solo and then a layer's still come back to the first
+    /// state; a combined layer shows its cover and trees; the map's chip
+    /// ends it. Rendered with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn a_layer_is_shown_alone_and_back() {
+        let mut s = state();
+        let reg = &mut s.doc.world.registry;
+        let tall = reg.cover_by_name("Tall grass").unwrap() as usize - 1;
+        let flowers = reg.cover_by_name("Flowers").unwrap();
+        reg.covers[tall].hidden = true;
+        let mut forest = massif_core::combined::CombinedDef::new("Oak forest", [74, 116, 52]);
+        forest.set(massif_core::combined::Part::Cover, Some((flowers, 0.6)));
+        forest.set(massif_core::combined::Part::Trees, Some((1, 1.0)));
+        reg.add_combined(forest);
+        let before: Vec<bool> = reg.covers.iter().map(|c| c.hidden).chain(reg.object_layers.iter().map(|l| l.hidden)).collect();
+        let visibility = |s: &State| -> Vec<bool> { s.doc.world.registry.covers.iter().map(|c| c.hidden).chain(s.doc.world.registry.object_layers.iter().map(|l| l.hidden)).collect() };
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(320.0, 1400.0)).build_ui_state(draw, s);
+        h.run_steps(2);
+        h.get_by_label("Oaks").click_secondary();
+        h.run_steps(2);
+        h.get_by_label_contains("Solo").click();
+        h.run_steps(2);
+        let reg = &h.state().doc.world.registry;
+        assert_eq!(reg.solo.as_ref().map(|s| s.name.as_str()), Some("Oaks"));
+        assert!(reg.covers.iter().all(|c| c.hidden) && !reg.object_layers[0].hidden, "only the trees");
+        // Alt-click on its eye (shown alone): every layer as before.
+        h.get_by_label("Shown alone").click_modifiers(egui::Modifiers::ALT);
+        h.run_steps(2);
+        assert_eq!((visibility(h.state()), h.state().doc.world.registry.solo.is_none()), (before.clone(), true), "back exactly");
+        // A palette alone, then a layer alone: still the first state back.
+        let s = h.state_mut();
+        s.doc.world.registry.palettes = vec!["Meadow".into()];
+        s.doc.world.registry.covers[flowers as usize - 1].palette = "Meadow".into();
+        apply(Action::SoloPalette("Meadow".into()), &mut s.tools, &mut s.doc, &mut s.ui, &[]);
+        assert!(!s.doc.world.registry.covers[flowers as usize - 1].hidden && s.doc.world.registry.object_layers[0].hidden);
+        apply(Action::Solo(Kind::Objects, 1), &mut s.tools, &mut s.doc, &mut s.ui, &[]);
+        assert!(s.doc.world.registry.covers[flowers as usize - 1].hidden && !s.doc.world.registry.object_layers[0].hidden);
+        apply(Action::Unsolo, &mut s.tools, &mut s.doc, &mut s.ui, &[]);
+        assert_eq!(visibility(s), before);
+        // A combined layer: its cover and its trees.
+        apply(Action::Solo(Kind::Combined, 1), &mut s.tools, &mut s.doc, &mut s.ui, &[]);
+        let reg = &s.doc.world.registry;
+        assert_eq!(reg.covers.iter().enumerate().filter(|(_, c)| !c.hidden).map(|(k, _)| k as u16 + 1).collect::<Vec<_>>(), [flowers]);
+        assert!(!reg.object_layers[0].hidden);
+        // Saved and read again, the solo is kept, and ends as it should.
+        let back: massif_core::registry::Registry = serde_json::from_str(&serde_json::to_string(reg).unwrap()).unwrap();
+        assert_eq!(back.solo, reg.solo);
+        h.run_steps(2);
+        // The map's chip ends it.
+        let mut chip = egui_kittest::Harness::builder().with_size(vec2(320.0, 40.0)).build_ui_state(
+            |ui, s: &mut State| {
+                theme::install(ui.ctx());
+                if crate::map_view::solo_chip(ui, &s.doc.world.registry) {
+                    s.doc.world.registry.unsolo();
+                }
+            },
+            std::mem::replace(h.state_mut(), state()),
+        );
+        chip.run_steps(2);
+        chip.get_by_label_contains("Solo: Oak forest").click();
+        chip.run_steps(2);
+        assert_eq!(visibility(chip.state()), before);
+        assert!(chip.query_by_label_contains("Solo:").is_none());
+    }
+
+    /// A layer shown alone, in the panel and the map's chip, in both
+    /// themes. Needs a GPU: runs with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn solo_renders() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from) else {
+            return;
+        };
+        let ppp = std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(2.0);
+        for dark in [true, false] {
+            let mut s = state();
+            let mut pines = s.doc.world.registry.object_layers[0].clone();
+            (pines.name, pines.color) = ("Scots pine".into(), [40, 90, 60]);
+            s.doc.world.registry.add_object_layer(pines);
+            let s_ = &mut s;
+            apply(Action::Solo(Kind::Objects, 2), &mut s_.tools, &mut s_.doc, &mut s_.ui, &[]);
+            let mut h = egui_kittest::Harness::builder()
+                .with_size(vec2(320.0, 900.0))
+                .with_pixels_per_point(ppp)
+                .with_accessibility_check(false)
+                .wgpu()
+                .build_ui_state(
+                    move |ui, s: &mut State| {
+                        ui.ctx().set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
+                        theme::install(ui.ctx());
+                        ui.horizontal(|ui| crate::map_view::solo_chip(ui, &s.doc.world.registry));
+                        draw(ui, s);
+                    },
+                    s,
+                );
+            h.run_steps(3);
+            let suffix = if ppp > 1.5 { "2x" } else { "1x" };
+            h.render().unwrap().save(dir.join(format!("solo-{}-{suffix}.png", if dark { "dark" } else { "light" }))).unwrap();
+        }
     }
 
     /// A palette's eye in its three states, in both themes. Needs a GPU:

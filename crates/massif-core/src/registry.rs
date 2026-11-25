@@ -542,6 +542,17 @@ pub fn vanilla_covers() -> Vec<CoverDef> {
     ]
 }
 
+/// Layers shown alone: what (a layer's or a palette's name), and which
+/// covers and object layers were hidden before, by number from 1.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Solo {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_covers: Vec<u16>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_objects: Vec<u16>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Registry {
     pub blocks: Vec<BlockDef>,
@@ -571,6 +582,11 @@ pub struct Registry {
     /// is shown after these.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub palettes: Vec<String>,
+    /// Layers shown alone, as WorldPainter's solo: kept with the map so
+    /// that the visibility from before comes back exactly, even after the
+    /// map is opened again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solo: Option<Solo>,
     /// The tree sizes Tree sizes paints and objects are sorted into,
     /// numbered from 1 in the `sizes` plane of a tile: the four of every
     /// map (Bushes, Small, Medium and Large trees), then the map's own.
@@ -736,6 +752,7 @@ impl Registry {
             pockets: Vec::new(),
             combined: Vec::new(),
             palettes: Vec::new(),
+            solo: None,
             tree_sizes: vanilla_tree_sizes(),
             annotations: Default::default(),
             well_known: WellKnown {
@@ -1037,6 +1054,40 @@ impl Registry {
         );
 
         reg
+    }
+}
+
+
+impl Registry {
+    /// Show only covers `covers` and object layers `objects` (by number
+    /// from 1), as WorldPainter's solo of `name`: every other cover and
+    /// object layer hidden, the visibility from before kept to come back.
+    /// Another solo already on keeps the visibility from before it.
+    pub fn solo(&mut self, name: &str, covers: &[u16], objects: &[u16]) {
+        let before = self.solo.take().unwrap_or_else(|| Solo {
+            name: String::new(),
+            hidden_covers: self.covers.iter().enumerate().filter(|(_, c)| c.hidden).map(|(k, _)| k as u16 + 1).collect(),
+            hidden_objects: self.object_layers.iter().enumerate().filter(|(_, l)| l.hidden).map(|(k, _)| k as u16 + 1).collect(),
+        });
+        for (k, c) in self.covers.iter_mut().enumerate() {
+            c.hidden = !covers.contains(&(k as u16 + 1));
+        }
+        for (k, l) in self.object_layers.iter_mut().enumerate() {
+            l.hidden = !objects.contains(&(k as u16 + 1));
+        }
+        self.solo = Some(Solo { name: name.to_owned(), ..before });
+    }
+
+    /// The solo ended: every cover and object layer shown or hidden as
+    /// before it.
+    pub fn unsolo(&mut self) {
+        let Some(before) = self.solo.take() else { return };
+        for (k, c) in self.covers.iter_mut().enumerate() {
+            c.hidden = before.hidden_covers.contains(&(k as u16 + 1));
+        }
+        for (k, l) in self.object_layers.iter_mut().enumerate() {
+            l.hidden = before.hidden_objects.contains(&(k as u16 + 1));
+        }
     }
 }
 

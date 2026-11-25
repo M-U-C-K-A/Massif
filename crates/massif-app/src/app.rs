@@ -5050,6 +5050,10 @@ impl MassifApp {
             EditorKind::Map => {
                 hui.add_space(8.0);
                 self.maps.entry(id).or_default().header(&mut hui, &mut self.settings.overlays, &mut self.tools);
+                if crate::map_view::solo_chip(&mut hui, &self.doc.world.registry) {
+                    self.doc.world.registry.unsolo();
+                    self.doc.mark_changed();
+                }
                 let mut add = false;
                 if self.references.header(&mut hui, &mut self.doc.world.meta.references, &mut add) {
                     self.doc.mark_changed();

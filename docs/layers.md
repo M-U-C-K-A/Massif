@@ -163,8 +163,17 @@ layers alike, as each layer's own eye does (the export is never changed).
 When some of its layers are hidden and some shown, it is half an eye, and
 a click shows them all. **Alt-click** the eye, or ▸ **Show only this
 palette** in its menu, to show that palette alone, as WorldPainter's
-solo: every other cover and object layer is hidden; again, every layer is
-shown.
+solo: every other cover and object layer is hidden; again, the layers are
+shown as they were.
+
+A single layer has its **solo** too: **Alt-click** its eye, or ▸ **Solo**
+in its menu, and it is the only cover or object layer drawn on the map and
+in the 3D views (the terrain is still drawn); a combined layer shows the
+cover and trees it paints. Its eye turns to the accent, and the map's
+header shows **Solo: its name**. Alt-click the eye again, ▸ **Show all
+layers**, or the chip in the map's header, and every layer is shown or
+hidden exactly as before the solo. The map keeps a solo when it is saved,
+with the visibility to come back to.
 
 The map saves its palettes and which layer is in which; a terrain mix,
 kept with the app's settings rather than the map, keeps its palette too.

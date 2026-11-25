@@ -441,6 +441,18 @@ impl Overlays {
     }
 }
 
+/// "Solo: <name>" in the map's header while layers are shown alone (a
+/// layer's or a palette's Alt-click on its eye): a pill in the accent;
+/// returns whether it was clicked, to show every layer as before.
+pub fn solo_chip(ui: &mut Ui, reg: &massif_core::registry::Registry) -> bool {
+    let Some(solo) = &reg.solo else { return false };
+    let pal = Palette::of(ui);
+    let text = egui::RichText::new(format!("{}  {}  {}", theme::glyph(Icon::ScanEye), tr!("Solo: {name}", name = solo.name), theme::glyph(Icon::X))).size(11.5).color(pal.accent);
+    ui.add(egui::Button::new(text).stroke(Line::new(1.0, pal.accent)).fill(pal.accent_soft).corner_radius(theme::PILL).truncate())
+        .on_hover_text(tr!("Layers shown alone. Click to show every layer as before"))
+        .clicked()
+}
+
 impl MapView {
     /// The view that shows what `tool` paints: the biomes for Paint biome
     /// and Auto biome, the terrains for Paint terrain and the Gradient

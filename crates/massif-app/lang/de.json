@@ -3581,7 +3581,6 @@
  "Some layers of the palette are hidden: show them all": "Einige Ebenen der Palette sind ausgeblendet: alle einblenden",
  "{what}. Alt-click: show only this palette": "{what}. Alt-Klick: nur diese Palette zeigen",
  "Show only this palette": "Nur diese Palette zeigen",
- "Alt-click its eye does the same; again, every layer is shown": "Alt-Klick auf ihr Auge tut dasselbe; noch einmal, und alle Ebenen sind wieder sichtbar",
  "Shift+Click": "Umschalt+Klick",
  "Paint with…": "Malen mit…",
  "Pick what is under the cursor to paint with it: its terrain, its biome or a layer. Shift: its terrain, height and water at once.": "Nimmt, was unter dem Cursor liegt, um damit zu malen: Gelände, Biom oder eine Ebene. Umschalt: Gelände, Höhe und Wasser auf einmal.",
@@ -3621,5 +3620,13 @@
  "Pick another terrain, or any block of the game": "Ein anderes Terrain wählen oder einen beliebigen Block des Spiels",
  "Click it to pick another, among the terrains and blocks; Alt-click picks one on the map.": "Klicken, um ein anderes unter Terrains und Blöcken zu wählen; Alt-Klick nimmt eines auf der Karte auf.",
  "Right button: back to the terrain the zones call for (below), by height, slope and water.": "Rechte Taste: zurück zum Terrain, das die Zonen verlangen (unten), nach Höhe, Neigung und Wasser.",
- "{instance} plays Minecraft {version}, whose jar was not found here. Start {version} once with the launcher, or choose its jar (versions/{version}/{version}.jar) with Choose….": "{instance} spielt Minecraft {version}, dessen Jar hier nicht gefunden wurde. Starte {version} einmal mit dem Launcher oder wähle sein Jar (versions/{version}/{version}.jar) mit Wählen…."
+ "{instance} plays Minecraft {version}, whose jar was not found here. Start {version} once with the launcher, or choose its jar (versions/{version}/{version}.jar) with Choose….": "{instance} spielt Minecraft {version}, dessen Jar hier nicht gefunden wurde. Starte {version} einmal mit dem Launcher oder wähle sein Jar (versions/{version}/{version}.jar) mit Wählen….",
+ "Alt-click its eye does the same; again, the layers are shown as they were": "Alt-Klick auf ihr Auge tut dasselbe; noch einmal, und die Ebenen sind wie zuvor",
+ "Shown alone": "Allein gezeigt",
+ "{what}. Alt-click: show only this layer": "{what}. Alt-Klick: nur diese Ebene zeigen",
+ "Show all layers": "Alle Ebenen zeigen",
+ "As they were before the solo": "Wie vor dem Solo",
+ "Show only this layer on the map and in 3D; Alt-click its eye does the same": "Nur diese Ebene auf der Karte und in 3D zeigen; Alt-Klick auf ihr Auge tut dasselbe",
+ "Solo: {name}": "Solo: {name}",
+ "Layers shown alone. Click to show every layer as before": "Ebenen allein gezeigt. Klicken, um alle Ebenen wie zuvor zu zeigen"
 }

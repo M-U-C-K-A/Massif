@@ -3578,7 +3578,6 @@
  "Some layers of the palette are hidden: show them all": "Algumas camadas da paleta estão ocultas: mostrar todas",
  "{what}. Alt-click: show only this palette": "{what}. Alt-clique: mostrar só esta paleta",
  "Show only this palette": "Mostrar só esta paleta",
- "Alt-click its eye does the same; again, every layer is shown": "Alt-clique no olho faz o mesmo; de novo, todas as camadas voltam",
  "Shift+Click": "Shift+clique",
  "Paint with…": "Pintar com…",
  "Pick what is under the cursor to paint with it: its terrain, its biome or a layer. Shift: its terrain, height and water at once.": "Pega o que está sob o cursor para pintar com ele: o terreno, o bioma ou uma camada. Shift: terreno, altura e água de uma vez.",
@@ -3618,5 +3617,13 @@
  "Pick another terrain, or any block of the game": "Escolher outro terreno, ou qualquer bloco do jogo",
  "Click it to pick another, among the terrains and blocks; Alt-click picks one on the map.": "Clique para escolher outro entre terrenos e blocos; Alt-clique apanha um no mapa.",
  "Right button: back to the terrain the zones call for (below), by height, slope and water.": "Botão direito: volta ao terreno que as zonas pedem (abaixo), pela altura, declive e água.",
- "{instance} plays Minecraft {version}, whose jar was not found here. Start {version} once with the launcher, or choose its jar (versions/{version}/{version}.jar) with Choose….": "{instance} joga Minecraft {version}, cujo jar não foi encontrado aqui. Inicie {version} uma vez com o launcher, ou escolha o jar (versions/{version}/{version}.jar) com Escolher…."
+ "{instance} plays Minecraft {version}, whose jar was not found here. Start {version} once with the launcher, or choose its jar (versions/{version}/{version}.jar) with Choose….": "{instance} joga Minecraft {version}, cujo jar não foi encontrado aqui. Inicie {version} uma vez com o launcher, ou escolha o jar (versions/{version}/{version}.jar) com Escolher….",
+ "Alt-click its eye does the same; again, the layers are shown as they were": "Alt-clique no olho faz o mesmo; de novo, as camadas voltam como estavam",
+ "Shown alone": "Mostrada sozinha",
+ "{what}. Alt-click: show only this layer": "{what}. Alt-clique: mostrar só esta camada",
+ "Show all layers": "Mostrar todas as camadas",
+ "As they were before the solo": "Como estavam antes do solo",
+ "Show only this layer on the map and in 3D; Alt-click its eye does the same": "Mostrar só esta camada no mapa e em 3D; Alt-clique no olho faz o mesmo",
+ "Solo: {name}": "Solo: {name}",
+ "Layers shown alone. Click to show every layer as before": "Camadas mostradas sozinhas. Clique para mostrar todas como antes"
 }

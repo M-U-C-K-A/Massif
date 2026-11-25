@@ -3740,7 +3740,6 @@
  "Some layers of the palette are hidden: show them all": "Некоторые слои палитры скрыты: показать все",
  "{what}. Alt-click: show only this palette": "{what}. Alt-щелчок: показать только эту палитру",
  "Show only this palette": "Показать только эту палитру",
- "Alt-click its eye does the same; again, every layer is shown": "Alt-щелчок по глазу делает то же; повторно — снова показаны все слои",
  "Shift+Click": "Shift+щелчок",
  "Paint with…": "Рисовать…",
  "Pick what is under the cursor to paint with it: its terrain, its biome or a layer. Shift: its terrain, height and water at once.": "Взять то, что под курсором, чтобы рисовать им: местность, биом или слой. Shift: местность, высоту и воду сразу.",
@@ -3780,5 +3779,13 @@
  "Pick another terrain, or any block of the game": "Выбрать другой рельеф или любой блок игры",
  "Click it to pick another, among the terrains and blocks; Alt-click picks one on the map.": "Щёлкните, чтобы выбрать другой среди рельефов и блоков; Alt-щелчок берёт его с карты.",
  "Right button: back to the terrain the zones call for (below), by height, slope and water.": "Правая кнопка: вернуть рельеф, который требуют зоны (ниже), по высоте, уклону и воде.",
- "{instance} plays Minecraft {version}, whose jar was not found here. Start {version} once with the launcher, or choose its jar (versions/{version}/{version}.jar) with Choose….": "{instance} играет в Minecraft {version}, но его jar здесь не найден. Запустите {version} один раз в лаунчере или выберите его jar (versions/{version}/{version}.jar) кнопкой «Выбрать…»."
+ "{instance} plays Minecraft {version}, whose jar was not found here. Start {version} once with the launcher, or choose its jar (versions/{version}/{version}.jar) with Choose….": "{instance} играет в Minecraft {version}, но его jar здесь не найден. Запустите {version} один раз в лаунчере или выберите его jar (versions/{version}/{version}.jar) кнопкой «Выбрать…».",
+ "Alt-click its eye does the same; again, the layers are shown as they were": "Alt-щелчок по глазу делает то же; повторно — слои снова как были",
+ "Shown alone": "Показан один",
+ "{what}. Alt-click: show only this layer": "{what}. Alt-щелчок: показать только этот слой",
+ "Show all layers": "Показать все слои",
+ "As they were before the solo": "Как было до соло",
+ "Show only this layer on the map and in 3D; Alt-click its eye does the same": "Показать только этот слой на карте и в 3D; Alt-щелчок по глазу делает то же",
+ "Solo: {name}": "Соло: {name}",
+ "Layers shown alone. Click to show every layer as before": "Слои показаны отдельно. Щёлкните, чтобы показать все, как было"
 }

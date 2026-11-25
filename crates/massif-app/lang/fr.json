@@ -3642,7 +3642,6 @@
  "Some layers of the palette are hidden: show them all": "Certains calques de la palette sont masqués : les afficher tous",
  "{what}. Alt-click: show only this palette": "{what}. Alt-clic : n'afficher que cette palette",
  "Show only this palette": "N'afficher que cette palette",
- "Alt-click its eye does the same; again, every layer is shown": "Alt-clic sur son œil fait de même ; une seconde fois, tous les calques reviennent",
  "Shift+Click": "Maj+clic",
  "Paint with…": "Peindre avec…",
  "Pick what is under the cursor to paint with it: its terrain, its biome or a layer. Shift: its terrain, height and water at once.": "Prendre ce qui est sous le curseur pour peindre avec : son terrain, son biome ou un calque. Maj : son terrain, sa hauteur et son eau d'un coup.",
@@ -3682,5 +3681,13 @@
  "Pick another terrain, or any block of the game": "Choisir un autre terrain, ou n'importe quel bloc du jeu",
  "Click it to pick another, among the terrains and blocks; Alt-click picks one on the map.": "Cliquez dessus pour en choisir un autre parmi les terrains et les blocs ; Alt-clic en prend un sur la carte.",
  "Right button: back to the terrain the zones call for (below), by height, slope and water.": "Bouton droit : retour au terrain que demandent les zones (ci-dessous), selon la hauteur, la pente et l'eau.",
- "{instance} plays Minecraft {version}, whose jar was not found here. Start {version} once with the launcher, or choose its jar (versions/{version}/{version}.jar) with Choose….": "{instance} joue à Minecraft {version}, dont le jar est introuvable ici. Lancez {version} une fois avec le launcher, ou choisissez son jar (versions/{version}/{version}.jar) avec Choisir…."
+ "{instance} plays Minecraft {version}, whose jar was not found here. Start {version} once with the launcher, or choose its jar (versions/{version}/{version}.jar) with Choose….": "{instance} joue à Minecraft {version}, dont le jar est introuvable ici. Lancez {version} une fois avec le launcher, ou choisissez son jar (versions/{version}/{version}.jar) avec Choisir….",
+ "Alt-click its eye does the same; again, the layers are shown as they were": "Alt-clic sur son œil fait de même ; une seconde fois, les calques reviennent comme avant",
+ "Shown alone": "Affiché seul",
+ "{what}. Alt-click: show only this layer": "{what}. Alt-clic : n'afficher que ce calque",
+ "Show all layers": "Afficher tous les calques",
+ "As they were before the solo": "Comme avant le solo",
+ "Show only this layer on the map and in 3D; Alt-click its eye does the same": "N'afficher que ce calque sur la carte et en 3D ; Alt-clic sur son œil fait de même",
+ "Solo: {name}": "Solo : {name}",
+ "Layers shown alone. Click to show every layer as before": "Calques affichés seuls. Cliquer pour tout réafficher comme avant"
 }

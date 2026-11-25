@@ -654,12 +654,19 @@ fn palette_visibility(arena: &Arena, dimension: Value, reg: &mut Registry) {
         .filter_map(|n| arena.string(n).map(|n| n.trim().to_owned()))
         .collect();
     let solo = arena.field(dimension, "soloedPalette").and_then(|v| arena.string(v)).map(str::trim).filter(|n| !n.is_empty()).map(str::to_owned);
-    let hide = |palette: &str| solo.as_ref().is_some_and(|s| s != palette) || (!palette.is_empty() && hidden.iter().any(|h| h == palette));
+    let hide = |palette: &str| !palette.is_empty() && hidden.iter().any(|h| h == palette);
     for c in &mut reg.covers {
         c.hidden |= hide(&c.palette);
     }
     for l in &mut reg.object_layers {
         l.hidden |= hide(&l.palette);
+    }
+    // Soloed: shown alone, the palettes hidden or shown as above once the
+    // solo ends.
+    if let Some(name) = solo {
+        let covers: Vec<u16> = reg.covers.iter().enumerate().filter(|(_, c)| c.palette == name).map(|(k, _)| k as u16 + 1).collect();
+        let objects: Vec<u16> = reg.object_layers.iter().enumerate().filter(|(_, l)| l.palette == name).map(|(k, _)| k as u16 + 1).collect();
+        reg.solo(&name, &covers, &objects);
     }
 }
 
@@ -1656,6 +1663,20 @@ mod tests {
         assert_eq!(shown(visible(&["Forest"], None)), ["Grass", "Rocks"]);
         assert_eq!(shown(visible(&["Forest", "Stones"], None)), ["Grass"]);
         assert_eq!(shown(visible(&[], Some("Stones"))), ["Rocks"]);
+        // The solo ended, the hidden palette stays hidden.
+        let mut reg = Registry::vanilla();
+        let mut rocks = massif_core::objects::ObjectLayerDef::new("Rocks", &[], &reg);
+        rocks.palette = "Stones".into();
+        reg.add_object_layer(rocks);
+        let fern = reg.covers.iter().position(|c| c.name == "Flowers").unwrap();
+        reg.covers[fern].palette = "Forest".into();
+        let bytes = palette_dimension(&["Forest"], Some("Stones"));
+        let mut parser = Parser::new(&bytes[..]).unwrap();
+        let dim = parser.next_object().unwrap().unwrap();
+        palette_visibility(&parser.arena, dim, &mut reg);
+        assert_eq!(reg.solo.as_ref().map(|s| s.name.as_str()), Some("Stones"));
+        reg.unsolo();
+        assert!(reg.covers[fern].hidden && !reg.object_layers[0].hidden && reg.covers.iter().filter(|c| c.palette.is_empty()).all(|c| !c.hidden));
     }
 
     /// WorldPainter's custom ground covers are ground covers of Massif,
