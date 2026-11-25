@@ -1,0 +1,3 @@
+**A wide window for object layers of hundreds of schematics**
+
+An object layer's Settings… now opens a wide window: on the left, the layer's objects in a tall list as high as the window, with a search and a sort (as imported, by name, by height, by frequency), each row with its picture, its measures, its tree size and its share; on the right, the layer's settings and, under them, those of the objects picked, with the same picking as before (click, Shift+Click, Shift+Arrows, ⌘/Ctrl+Click). Drag its corner to make it bigger: it opens again at that size. Tree sizes of your own are made where they are used: New size… at the end of an object's Tree size list adds one and gives it to the objects picked, and New size under Density of each size adds one to the map.

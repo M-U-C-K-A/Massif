@@ -1419,8 +1419,14 @@ fn object_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, block
 }
 
 /// The settings of the object layer picked (`tools.object_layer`), as Tool
-/// Settings and the layer's own dialog show them.
+/// Settings shows them, its objects listed under them.
 pub fn object_layer_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary) {
+    object_layer_settings(ui, tools, doc, blocks, true);
+}
+
+/// [`object_layer_editor`]; without its objects (`list` false) where the
+/// layer's window lists them beside.
+pub fn object_layer_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary, list: bool) {
     let pal = Palette::of(ui);
     let before = (doc.world.registry.object_layers.clone(), doc.world.registry.objects.len());
     let pick = |title: &str| {
@@ -1503,6 +1509,8 @@ pub fn object_layer_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Documen
             }
         }
     }
+    // Sizes of one's own, made where they are used.
+    let new_size = crate::widgets::button(ui, theme::with_icon(Icon::Plus, tr!("New size"))).on_hover_text(tr!("A size of your own (Tiny, Forest…): rename it and paint it with Tree sizes")).clicked();
     ui.horizontal(|ui| {
         crate::widgets::checkbox(ui, &mut layer.rotate, tr!("Turn at random")).on_hover_text(tr!("A quarter turn picked for each"));
         crate::widgets::checkbox(ui, &mut layer.mirror, tr!("Mirror")).on_hover_text(tr!("Half of them mirrored"));
@@ -1531,15 +1539,23 @@ pub fn object_layer_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Documen
         },
     );
 
-    section(ui, Icon::Boxes, &tr!("Objects · {n}", n = layer.objects.len()));
-    reg.objects = objects;
-    crate::object_list::object_list(ui, reg, k);
+    let mut add = false;
+    if list {
+        section(ui, Icon::Boxes, &tr!("Objects · {n}", n = layer.objects.len()));
+        reg.objects = objects;
+        crate::object_list::object_list(ui, reg, k);
+        let objects = std::mem::take(&mut reg.objects);
+        let layer = &mut reg.object_layers[k];
+        add = crate::widgets::button(ui, theme::with_icon(Icon::Plus, tr!("Add objects…"))).on_hover_text(tr!("Read more files into this layer")).clicked();
+        if layer.objects.is_empty() {
+            hint(ui, tr!("Nothing stands yet: add objects."));
+        }
+        reg.objects = objects;
+    } else {
+        reg.objects = objects;
+    }
     let objects = std::mem::take(&mut reg.objects);
     let layer = &mut reg.object_layers[k];
-    let add = crate::widgets::button(ui, theme::with_icon(Icon::Plus, tr!("Add objects…"))).on_hover_text(tr!("Read more files into this layer")).clicked();
-    if layer.objects.is_empty() {
-        hint(ui, tr!("Nothing stands yet: add objects."));
-    }
     ui.add_space(6.0);
     let removed = ui
         .button(RichText::new(theme::with_icon(Icon::Trash2, tr!("Remove this layer"))).color(pal.danger))
@@ -1549,6 +1565,9 @@ pub fn object_layer_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Documen
         layer.removed = true;
     }
     reg.objects = objects;
+    if new_size {
+        crate::tree_sizes::add(reg);
+    }
     if removed {
         tools.object_layer = reg.object_layers.iter().position(|l| !l.removed).map_or(0, |k| k as u16 + 1);
     }

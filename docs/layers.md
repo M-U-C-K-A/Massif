@@ -209,6 +209,21 @@ objects picked: a change goes to each, and a setting they do not share
 reads *mixed*. An object two layers share is copied before one of them
 changes it, so that the other keeps it as it was.
 
+A tree or object layer's own window (**Settings…** in its menu) is wide,
+for layers of hundreds of schematics: on the left, the tall list of its
+objects, with a search (by name or file) and a sort (**Imported**,
+**Name**, **Height**, **Frequency**), each row with its picture, its
+measures, its tree size and its share of the layer; **Add objects…** over
+it. On the right, the layer's settings, and under them those of the
+objects picked, with **Take out of the layer**. Picking works as above,
+along the order shown. Each pane scrolls on its own; drag the window's
+corner to make it bigger or smaller, and it opens again at that size.
+
+Sizes of one's own are made where they are used: **New size…** at the end
+of an object's **Tree size** list adds one and gives it to the objects
+picked, and **New size** under **Density of each size** adds one to the
+map. Rename them, and paint them, with the Tree sizes tool.
+
 Each object has its **frequency** against the others and its **origin**,
 the block of it set on the spot over the ground. With **Own rules**, it
 has every attribute of WorldPainter's object dialog, in place of its

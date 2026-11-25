@@ -38,6 +38,7 @@ mod menu;
 mod menubar;
 mod notify;
 mod object_list;
+mod object_window;
 mod ores;
 mod pack_share;
 mod packs;

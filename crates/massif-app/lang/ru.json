@@ -3787,5 +3787,17 @@
  "As they were before the solo": "Как было до соло",
  "Show only this layer on the map and in 3D; Alt-click its eye does the same": "Показать только этот слой на карте и в 3D; Alt-щелчок по глазу делает то же",
  "Solo: {name}": "Соло: {name}",
- "Layers shown alone. Click to show every layer as before": "Слои показаны отдельно. Щёлкните, чтобы показать все, как было"
+ "Layers shown alone. Click to show every layer as before": "Слои показаны отдельно. Щёлкните, чтобы показать все, как было",
+ "Search objects": "Искать объекты",
+ "No object of this name.": "Нет объекта с таким именем.",
+ "New size…": "Новый размер…",
+ "A size of your own, given to it: rename it with the Tree sizes tool": "Свой размер, назначенный ему: переименуйте его инструментом размеров деревьев",
+ "A size of your own (Tiny, Forest…): rename it and paint it with Tree sizes": "Свой размер (Крошечный, Лес…): переименуйте и рисуйте его инструментом размеров деревьев",
+ "Pick objects in the list to set how often each stands, its size, its origin and its own rules.": "Выберите объекты в списке, чтобы задать частоту, размер, точку опоры и собственные правила.",
+ "{n} objects picked": {
+  "one": "Выбран {n} объект",
+  "few": "Выбрано {n} объекта",
+  "many": "Выбрано {n} объектов",
+  "other": "Выбрано {n} объекта"
+ }
 }

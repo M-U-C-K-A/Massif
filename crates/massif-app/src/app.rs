@@ -5573,17 +5573,33 @@ impl MassifApp {
             Dialog::Layer(kind, n) => {
                 use crate::layers::Kind;
                 let response = modal(ctx, "layer settings").show(ctx, |ui| {
-                    ui.set_width(400.0);
+                    // An object layer's: wide, its objects listed on the
+                    // left (there may be hundreds), its settings on the
+                    // right; as big as one makes it, kept.
+                    let wide = matches!(kind, Kind::Objects);
+                    if !wide {
+                        ui.set_width(400.0);
+                    }
                     let pal = Palette::of(ui);
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(theme::glyph(Icon::SlidersHorizontal).to_string()).size(17.0).color(pal.accent));
                         ui.label(RichText::new(tr!("Layer settings")).bold().size(15.0));
                     });
                     ui.add_space(6.0);
+                    if wide {
+                        self.tools.object_layer = n as u16;
+                        let room = ctx.content_rect().size() - vec2(2.0 * 22.0 + 40.0, 170.0);
+                        let max = vec2(room.x.max(420.0), room.y.max(240.0));
+                        let min = vec2(576.0f32.min(max.x), 300.0f32.min(max.y));
+                        egui::Resize::default().id_salt("object layer window").default_size(vec2(1000.0, 680.0).min(max)).min_size(min).max_size(max).show(ui, |ui| {
+                            let size = ui.available_size();
+                            crate::object_window::window(ui, &mut self.tools, &mut self.doc, &mut self.blocks, size);
+                        });
+                    }
                     // A height of its own, so that the dialog keeps its size
                     // as its settings change.
                     let height = (ctx.content_rect().height() - 220.0).clamp(200.0, 520.0);
-                    egui::ScrollArea::vertical().auto_shrink([false, false]).min_scrolled_height(height).max_height(height).show(ui, |ui| match kind {
+                    if !wide { egui::ScrollArea::vertical().auto_shrink([false, false]).min_scrolled_height(height).max_height(height).show(ui, |ui| match kind {
                         Kind::Cover => {
                             self.tools.cover = n as u16;
                             crate::panels::cover_editor(ui, &mut self.tools, &mut self.doc, &mut self.blocks);
@@ -5601,7 +5617,7 @@ impl MassifApp {
                             crate::panels::combined_editor(ui, &mut self.tools, &mut self.doc);
                         }
                         Kind::Mix => {}
-                    });
+                    }); }
                     ui.add_space(10.0);
                     ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                         if ui.add(theme::primary_button(ui, tr!("Done"))).clicked() {
@@ -12028,6 +12044,87 @@ mod tests {
         h.get_by_label("Done").click();
         h.run_steps(3);
         assert!(h.state().dialog.is_none());
+    }
+
+    /// An object layer's window: its objects listed on the left, searched,
+    /// sorted and picked along the order shown; the settings of those picked
+    /// on the right; New size… in an object's Tree size list makes a size
+    /// and gives it. Fits the smallest window. Rendered at 1x and 2x with
+    /// MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn the_object_layer_window_lists_its_objects_on_the_left() {
+        use egui_kittest::kittest::Queryable;
+        for (ppp, size) in [(1.0, vec2(1600.0, 1000.0)), (2.0, vec2(1600.0, 1000.0)), (1.0, vec2(960.0, 600.0))] {
+            let mut h = egui_kittest::Harness::builder()
+                .with_size(size)
+                .with_pixels_per_point(ppp)
+                .with_accessibility_check(false)
+                .wgpu()
+                .build_eframe(move |cc| {
+                    theme::install(&cc.egui_ctx);
+                    let world = generate(&GenParams { tiles_x: 2, tiles_z: 2, ..GenParams::default() });
+                    let mut app = MassifApp::for_tests(world);
+                    app.settings.theme = ThemeChoice::Dark;
+                    app
+                });
+            h.run_steps(3);
+            let reg = &mut h.state_mut().doc.world.registry;
+            let first = reg.objects.len() as u32;
+            let names = ["Oak", "Birch", "Acacia", "Spruce", "Dark Oak", "Bush", "Jungle", "Cherry", "Mangrove", "Pale Oak"];
+            for k in 0..60u32 {
+                let name = format!("{} {}", names[k as usize % names.len()], k / names.len() as u32 + 1);
+                reg.objects.push(massif_core::objects::ObjectDef::new(&name, [5, (3 + (k * 7) % 26) as u16, 5], vec!["minecraft:air".into(), "minecraft:oak_log".into()], vec![1, 1]));
+            }
+            let ids: Vec<u32> = (first..first + 60).collect();
+            let layer = massif_core::objects::ObjectLayerDef::new("Mixed forest", &ids, reg);
+            reg.add_object_layer(layer);
+            let n = reg.object_layers.len();
+            h.state_mut().layers_ui.open = Some((crate::layers::Kind::Objects, n));
+            h.run_steps(5);
+            // Sorted by name, Shift+Click picks along the order shown.
+            // Sorted by name.
+            h.ctx.data_mut(|d| d.insert_temp(Id::unique(("object window sort", n - 1)), crate::object_window::Sort::Name));
+            h.run_steps(3);
+            h.get_by_label("Acacia 1").click();
+            h.run_steps(2);
+            h.get_by_label("Acacia 3").click_modifiers(Modifiers::SHIFT);
+            h.run_steps(3);
+            let picked = crate::object_list::picked(&h.ctx, n - 1);
+            assert_eq!(picked.rows.len(), 3, "Acacia 1 to 3, next to each other by name");
+            if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+                h.render().unwrap().save(dir.join(format!("object-layer-window-{}x{}-{ppp}x.png", size.x, size.y))).unwrap();
+            }
+            // The search keeps what it finds.
+            h.ctx.data_mut(|d| d.insert_temp(Id::unique(("object window query", n - 1)), "spruce".to_owned()));
+            h.run_steps(3);
+            assert!(h.query_by_label("Oak 1").is_none() && h.query_by_label("Spruce 1").is_some());
+            if size.x > 1000.0 && ppp == 1.0 {
+                // New size… gives the objects picked a size of their own.
+                h.get_by_label("Spruce 1").click();
+                h.run_steps(2);
+                let sizes = h.state().doc.world.registry.tree_sizes.len();
+                // The list of sizes, right of its name.
+                let combo = |h: &egui_kittest::Harness<'static, MassifApp>| h.query_all_by_label("Tree size").max_by(|a, b| a.rect().left().total_cmp(&b.rect().left())).unwrap().rect();
+                h.query_all_by_label("Tree size").max_by(|a, b| a.rect().left().total_cmp(&b.rect().left())).unwrap().scroll_to_me();
+                h.run_steps(3);
+                let r = combo(&h);
+                h.event(egui::Event::PointerMoved(r.center()));
+                for pressed in [true, false] {
+                    h.event(egui::Event::PointerButton { pos: r.center(), button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+                }
+                h.run_steps(2);
+                h.get_by_label_contains("New size…").click();
+                h.run_steps(3);
+                let reg = &h.state().doc.world.registry;
+                assert_eq!(reg.tree_sizes.len(), sizes + 1, "a size added");
+                let layer = &reg.object_layers[n - 1];
+                let spruce = layer.objects.iter().map(|o| &reg.objects[o.0 as usize]).find(|d| d.name == "Spruce 1").unwrap();
+                assert_eq!(spruce.tree_size as usize, sizes + 1, "and given to it");
+            }
+            h.get_by_label("Done").click();
+            h.run_steps(3);
+            assert!(h.state().dialog.is_none());
+        }
     }
 
     /// In a layer's dialog, Base / Sub-canopy answers its clicks while Tool

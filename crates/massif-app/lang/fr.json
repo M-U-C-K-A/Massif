@@ -3689,5 +3689,15 @@
  "As they were before the solo": "Comme avant le solo",
  "Show only this layer on the map and in 3D; Alt-click its eye does the same": "N'afficher que ce calque sur la carte et en 3D ; Alt-clic sur son œil fait de même",
  "Solo: {name}": "Solo : {name}",
- "Layers shown alone. Click to show every layer as before": "Calques affichés seuls. Cliquer pour tout réafficher comme avant"
+ "Layers shown alone. Click to show every layer as before": "Calques affichés seuls. Cliquer pour tout réafficher comme avant",
+ "Search objects": "Chercher des objets",
+ "No object of this name.": "Aucun objet de ce nom.",
+ "New size…": "Nouvelle taille…",
+ "A size of your own, given to it: rename it with the Tree sizes tool": "Une taille à vous, qui lui est donnée : renommez-la avec l'outil Tailles d'arbres",
+ "A size of your own (Tiny, Forest…): rename it and paint it with Tree sizes": "Une taille à vous (Minuscule, Forêt…) : renommez-la et peignez-la avec Tailles d'arbres",
+ "Pick objects in the list to set how often each stands, its size, its origin and its own rules.": "Choisissez des objets dans la liste pour régler leur fréquence, leur taille, leur origine et leurs propres règles.",
+ "{n} objects picked": {
+  "one": "{n} objet choisi",
+  "other": "{n} objets choisis"
+ }
 }

@@ -109,20 +109,33 @@ pub fn editor(ui: &mut Ui, reg: &mut Registry) -> bool {
         reg.tree_sizes[k].removed = true;
     }
     ui.add_space(4.0);
-    if crate::widgets::button(ui, theme::with_icon(Icon::Plus, tr!("New size"))).on_hover_text(tr!("A size of your own: Tiny, Forest, Open-grown…")).clicked() && reg.tree_sizes.len() < massif_core::tile::SIZE_MAX as usize {
-        let taken: Vec<String> = live(reg).map(|(_, t)| name_of(t)).collect();
-        let name = crate::layers::unique_name(tr!("Size"), taken.iter().map(String::as_str));
-        // A colour between the greens of the four.
-        let hue = reg.tree_sizes.len() as f32 * 0.17;
-        let color = [(110.0 + 90.0 * hue.sin()) as u8, (150.0 + 60.0 * (hue * 1.3).cos()) as u8, (90.0 + 70.0 * (hue * 0.7).sin()) as u8];
-        reg.tree_sizes.push(TreeSize { name, color, removed: false });
+    if crate::widgets::button(ui, theme::with_icon(Icon::Plus, tr!("New size"))).on_hover_text(tr!("A size of your own: Tiny, Forest, Open-grown…")).clicked() {
+        add(reg);
     }
     reg.tree_sizes != before
 }
 
+/// A size of one's own added to the map, named Size (Size 2…): its number,
+/// `None` when the map has as many as it can.
+pub fn add(reg: &mut Registry) -> Option<u16> {
+    if reg.tree_sizes.len() >= massif_core::tile::SIZE_MAX as usize {
+        return None;
+    }
+    let taken: Vec<String> = live(reg).map(|(_, t)| name_of(t)).collect();
+    let name = crate::layers::unique_name(tr!("Size"), taken.iter().map(String::as_str));
+    // A colour between the greens of the four.
+    let hue = reg.tree_sizes.len() as f32 * 0.17;
+    let color = [(110.0 + 90.0 * hue.sin()) as u8, (150.0 + 60.0 * (hue * 1.3).cos()) as u8, (90.0 + 70.0 * (hue * 0.7).sin()) as u8];
+    reg.tree_sizes.push(TreeSize { name, color, removed: false });
+    Some(reg.tree_sizes.len() as u16)
+}
+
+/// What [`object_size`] returns for New size…: a size to add and give.
+pub const NEW_SIZE: u8 = u8::MAX;
+
 /// The size of an object, by hand or guessed: a choice of every size of
-/// the map, and Auto (the guess, named). Returns the size picked (0:
-/// Auto) when it changed.
+/// the map, and Auto (the guess, named), and New size… ([`NEW_SIZE`]).
+/// Returns the size picked (0: Auto) when it changed.
 pub fn object_size(ui: &mut Ui, reg: &Registry, id: impl egui::AsIdSalt, now: u8, guess: u8) -> Option<u8> {
     let text = |n: u8| if n == 0 { tr!("Auto ({size})", size = label(reg, guess as u16)) } else { label(reg, n as u16) };
     let mut pick = now;
@@ -130,6 +143,10 @@ pub fn object_size(ui: &mut Ui, reg: &Registry, id: impl egui::AsIdSalt, now: u8
         ui.selectable_value(&mut pick, 0, text(0));
         for (n, _) in live(reg) {
             ui.selectable_value(&mut pick, n as u8, label(reg, n));
+        }
+        if reg.tree_sizes.len() < massif_core::tile::SIZE_MAX as usize {
+            ui.separator();
+            ui.selectable_value(&mut pick, NEW_SIZE, theme::with_icon(Icon::Plus, tr!("New size…"))).on_hover_text(tr!("A size of your own, given to it: rename it with the Tree sizes tool"));
         }
     });
     r.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, tr!("Tree size")));

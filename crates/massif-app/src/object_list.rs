@@ -61,6 +61,36 @@ impl Picked {
         }
     }
 
+    /// A click on `row` in a list shown in `order` (rows of the layer, as
+    /// sorted and filtered): a range runs along the order shown.
+    pub fn click_in(&mut self, order: &[usize], row: usize, toggle: bool, range: bool) {
+        let at = |r: usize| order.iter().position(|&o| o == r);
+        match (range, at(self.anchor), at(row)) {
+            (true, Some(a), Some(b)) => {
+                self.rows = order[a.min(b)..=a.max(b)].to_vec();
+                self.rows.sort_unstable();
+                self.cursor = row;
+            }
+            _ => self.click(row, toggle, range && !order.contains(&self.anchor)),
+        }
+    }
+
+    /// An arrow key in a list shown in `order`.
+    pub fn step_in(&mut self, order: &[usize], up: bool, extend: bool) {
+        if order.is_empty() {
+            return;
+        }
+        let here = order.iter().position(|&o| o == self.cursor).unwrap_or(0);
+        let next = order[if up { here.saturating_sub(1) } else { (here + 1).min(order.len() - 1) }];
+        if extend {
+            self.click_in(order, next, false, true);
+        } else {
+            self.rows = vec![next];
+            self.anchor = next;
+        }
+        self.cursor = next;
+    }
+
     /// Kept to the rows there are.
     fn clamp(&mut self, count: usize) {
         self.rows.retain(|&r| r < count);
@@ -197,7 +227,7 @@ pub fn object_list(ui: &mut Ui, reg: &mut Registry, k: usize) -> bool {
 
 /// The settings of rows `rows` of layer `k`: of one, or of several at
 /// once, what they share shown and a change made to all of them.
-fn editor(ui: &mut Ui, reg: &mut Registry, k: usize, rows: &[usize]) -> bool {
+pub fn editor(ui: &mut Ui, reg: &mut Registry, k: usize, rows: &[usize]) -> bool {
     let pal = Palette::of(ui);
     let layer = &reg.object_layers[k];
     let picked: Vec<(&ObjectDef, u16)> = rows.iter().filter_map(|&r| layer.objects.get(r)).filter_map(|&(i, w)| reg.objects.get(i as usize).map(|d| (d, w))).collect();
@@ -206,6 +236,7 @@ fn editor(ui: &mut Ui, reg: &mut Registry, k: usize, rows: &[usize]) -> bool {
     let mixed = |f: &dyn Fn(&ObjectDef, u16) -> String| picked.iter().any(|(d, w)| f(d, *w) != f(first, first_weight));
     let name_of = |label: &str, differ: bool| if differ { tr!("{label} · mixed", label) } else { label.to_owned() };
     let mut edits: Vec<Edit> = Vec::new();
+    let mut new_size = false;
 
     ui.add_space(6.0);
     if several {
@@ -241,8 +272,10 @@ fn editor(ui: &mut Ui, reg: &mut Registry, k: usize, rows: &[usize]) -> bool {
         // Its tree size, by hand or guessed from its height.
         let guess = layer.size_classes(reg).get(rows[0]).copied().unwrap_or(1);
         crate::widgets::row(ui, &name_of(tr!("Tree size"), mixed(&|d, _| d.tree_size.to_string())), |ui| {
-            if let Some(size) = crate::tree_sizes::object_size(ui, reg, ("object tree size", k), first.tree_size, guess) {
-                edits.push(Box::new(move |d, _| d.tree_size = size));
+            match crate::tree_sizes::object_size(ui, reg, ("object tree size", k), first.tree_size, guess) {
+                Some(crate::tree_sizes::NEW_SIZE) => new_size = true,
+                Some(size) => edits.push(Box::new(move |d, _| d.tree_size = size)),
+                None => {}
             }
         });
         // Its canopy's radius: measured, or set by hand.
@@ -437,6 +470,10 @@ fn editor(ui: &mut Ui, reg: &mut Registry, k: usize, rows: &[usize]) -> bool {
         });
     } else if !several {
         crate::panels::hint(ui, tr!("It stands as its layer says. Own rules gives it WorldPainter's: where it may stand, its turn, what it gives way to."));
+    }
+    // New size…: a size of one's own added to the map, theirs.
+    if new_size && let Some(n) = crate::tree_sizes::add(reg) {
+        edits.push(Box::new(move |d, _| d.tree_size = n as u8));
     }
     if edits.is_empty() {
         return false;
