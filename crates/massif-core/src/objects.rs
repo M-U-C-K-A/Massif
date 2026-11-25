@@ -101,7 +101,7 @@ fn is_zero_u8(n: &u8) -> bool {
 }
 
 /// How an object is turned: at random a quarter turn, or always as given.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Turning {
     Random,
     /// Quarter turns clockwise, 0 to 3.
@@ -109,7 +109,7 @@ pub enum Turning {
 }
 
 /// How an object is mirrored (east and west swapped).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Mirroring {
     Random,
     Never,
@@ -121,7 +121,7 @@ pub enum Mirroring {
 /// any block (it only takes the place of air), `Solid` to solid blocks
 /// (it takes the place of air, water and plants), `Nothing` takes the
 /// place of everything.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Collision {
     All,
     Solid,
@@ -132,7 +132,7 @@ pub enum Collision {
 /// as WorldPainter's underground modes: all of them, its solid ones (the
 /// others only where there is air), or none (they only go where there is
 /// air).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Underground {
     All,
     Solid,
@@ -140,7 +140,7 @@ pub enum Underground {
 }
 
 /// What an object's leaves do in the game.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Leaves {
     /// As the object has them.
     AsTheyAre,
@@ -154,7 +154,7 @@ pub enum Leaves {
 /// it may stand, how it is turned and set in the ground, what it gives
 /// way to. They stand in for its layer's turning, mirroring, Under water
 /// and Replace the ground; the layer's Only on soil and Sink still hold.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ObjectRules {
     pub turning: Turning,

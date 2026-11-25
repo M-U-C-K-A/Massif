@@ -8265,8 +8265,10 @@ fn covers_key(reg: &massif_core::Registry) -> u64 {
     }
     for o in &reg.objects {
         (o.size, o.anchor, &o.colors, o.tree_size, o.canopy.to_bits()).hash(&mut h);
-        // Its own rules turn, raise and keep it off where they say.
-        o.rules.as_ref().map(|r| format!("{r:?}")).hash(&mut h);
+        // Its own rules turn, raise and keep it off where they say (hashed
+        // as they are: formatting them every frame cost a map of many
+        // imported objects milliseconds a frame).
+        o.rules.hash(&mut h);
     }
     for t in &reg.tree_sizes {
         (t.color, t.removed).hash(&mut h);
