@@ -923,20 +923,6 @@ exported. The right button rubs them out.
   changes it, and the marks painted with it change too.
 - **Opacity**: each colour has its own (75 % unless set otherwise), in the
   tool's settings.
-- **Annotation layers**: **+** beside Annotations in the Layers panel makes
-  one, with its own name and colour, as WorldPainter's custom annotation
-  layers (a `.world` brings its own in). The fifteen colours take each
-  other's place on a block; annotation layers do not: each is a layer of its
-  own, over the colours and over the other layers, so that several mark the
-  same blocks, as masks (biomes, tree sizes, flow lines, the land's colours).
-  The brush and curves paint the one picked over what is there; the right
-  button rubs out that one alone. The map and the 3D view draw each in its
-  colour and opacity, one over the other; the Info panel lists them all; a
-  filter's **Only on** finds each wherever it is. In the Layers panel each
-  has its row, with its eye, Solo, Find, its colour and opacity in its menu,
-  and its palette: annotation layers are sorted into palettes with the
-  other layers (as a WorldPainter map has them, its palettes kept), and a
-  palette's eye and solo show and hide them too.
 - **Show or hide them all**, on the map and in 3D alike: the eye in the
   tool's settings and beside the colours of the Layers panel, the pen button
   in the map's header, or **View ▸ Show Annotations**.
@@ -1129,7 +1115,7 @@ the file with the name of one of the map's comes in as a layer of its own.
 **Annotations** (the **Annotations** tool, in the Paint group) mark the map in colour, as WorldPainter's do: where a town goes, a road to build, a river to dig. They are drawn over the map in every view mode and on the land of the 3D views, and are **never exported**. The right button rubs them out.
 
 - **Colours**: WorldPainter's fifteen, then the map's own **annotation layers**. The **Colour** button of the tool's settings opens a colour picker: picked from one of the fifteen, it adds a colour of the map's own (kept with the map, up to 240, shown after the fifteen); picked from one of the map's own, it changes that colour, and the marks painted with it change too. Each colour paints in its own colour.
-- **Annotation layers**: **+** beside Annotations in the **Layers** panel makes one, with its own name and colour, as WorldPainter's custom annotation layers. Each is listed by name under the colours: a click paints with it, a double-click renames it, its eye shows or hides it alone (its marks are kept), and its menu sets its colour and opacity. A WorldPainter world's annotation layers import as such, and so does a WorldPainter layer set **not to be exported** (a placeholder marking where something goes): it comes in as an annotation layer of its name, marked where it was painted, rather than as the plants or blocks it holds.
+- **Annotation layers**: **+** beside Annotations in the **Layers** panel makes one, with its own name and colour, as WorldPainter's custom annotation layers. The fifteen colours take each other's place on a block; annotation layers do not: each is a layer of its own, over the colours and over the other layers, so that several mark the same blocks, as masks (biomes, tree sizes, flow lines, the land's colours). The brush and curves paint the one picked over what is there; the right button rubs out that one alone. The map and the 3D view draw each in its colour and opacity, one over the other; the **Info** panel lists them all; a filter's **Only on** finds each wherever it is. Each is listed by name under the colours, or in its palette: annotation layers are sorted into palettes with the other layers, and a palette's eye and solo show and hide them too. A click paints with one, a double-click renames it, its eye shows or hides it alone (its marks are kept), and its menu sets its colour and opacity, finds it on the map, shows it alone (Solo) or moves it to another palette. A WorldPainter world's annotation layers import as such, overlaps kept, each in the palette it was sorted into, and so does a WorldPainter layer set **not to be exported** (a placeholder marking where something goes): it comes in as an annotation layer of its name, marked where it was painted, rather than as the plants or blocks it holds.
 - **Opacity**: each colour has its own (75 % unless set), in the tool's settings.
 - **Show or hide them all**, on the map and in 3D: the eye in the tool's settings and beside the colours of the Layers panel, the pen button in the map's header, or **View ▸ Show Annotations**.
 - **Curves**: **Curve** at the top of the tool's settings, in place of **Brush**, draws annotations as curves, as Axiom's Path tool: click to place points, drag a point to move it, drag the curve to add a point, right-click a point (or Delete) to take it off. **Smooth** (a spline through every point), **Bézier** (two handles on the point picked) or **Straight**. It is drawn as the ribbon it will paint, from its **Start width** to its **End width**, until **Paint curve** (Enter) paints it in one step to undo. Escape drops it.
