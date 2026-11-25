@@ -155,6 +155,19 @@ fn the_structures_tool_as_a_user_drives_it() {
     assert_eq!(h.state().doc.dimension().structures.len(), 2, "a second village: {:?}", h.state().tools.village.rt.notes());
     h.run_steps(5);
     save(&mut h, "two-villages");
+    // Taken away with Delete over the map, put back with undo.
+    let hover = map(&h).screen_of(spot.0 as f64 - 190.0, spot.1 as f64 - 20.0);
+    h.event(egui::Event::PointerMoved(hover));
+    h.step();
+    h.key_press(egui::Key::Delete);
+    h.run_steps(2);
+    assert_eq!(h.state().doc.dimension().structures.len(), 1, "Delete takes the selected one away");
+    h.state_mut().doc.undo();
+    h.run_steps(2);
+    assert_eq!(h.state().doc.dimension().structures.len(), 2);
+    let last = h.state().doc.dimension().structures.last().unwrap().id;
+    h.state_mut().tools.structure.selected = Some(last);
+    h.run_steps(2);
     // Taken away with its button: the land it levelled given back.
     let ground = h.state().doc.dimension().structures.last().unwrap().ground.clone();
     h.get_by_label_contains("Take it away").click();

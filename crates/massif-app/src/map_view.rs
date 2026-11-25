@@ -1595,6 +1595,15 @@ impl MapView {
                 }
             }
         }
+        // Delete or Backspace over the map: the structure selected goes.
+        if tools.tool == Tool::Structure
+            && response.hovered()
+            && let Some(id) = tools.structure.selected
+            && ui.ctx().memory(|m| m.focused().is_none())
+            && ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
+        {
+            *feedback = crate::structure_tool::remove(doc, tools, id).or(feedback.take());
+        }
         // A drag of the Structures tool follows the pointer; let go, it
         // places, moves or resizes.
         if tools.structure.rt.gesture().is_some() {
