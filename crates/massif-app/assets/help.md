@@ -68,6 +68,9 @@ One person, the **owner**, keeps the map; **contributors** start from a version 
 - **A shared folder** (Google Drive, Dropbox, iCloud, Git): **Shared folder ▸ Choose…**, then **Publish** puts the map in it for contributors to start from. Contributors open it from there (their work is saved as a map of their own) and **Send my changes…** into it; the owner sees the contributions waiting, with **Review** and **Set aside**.
 - More in the guide: `docs/versioning.md`.
 
+## Other programs
+A program running on this computer, such as an AI assistant through the massif-mcp server, can read the open map and change it while you watch. Each of its changes is one step to undo, named after it; one made while you were painting or had a dialog open is refused, never written over your work. Only programs of your own session can reach Massif; MASSIF_BRIDGE=0 turns it off.
+
 ## Survival check
 **Edit ▸ Analyse the map…** checks the whole map for a survival game, every block counted as the export writes it: the layers of the terrains, the rock and the bedrock under them, the water, what the covers grow and the objects. In red, what breaks survival: riches lying around (diamond blocks, ores at the surface, far more ore than Minecraft makes), bedrock above the floor, blocks no player can break, holes into the void, no wood. In amber, what is missing: ores (turned off, or no rock at their heights: **Set up the ores** opens Edit ▸ Ores), lava for a Nether portal, water, grass for animals, trees near the spawn. Then the way through a game, from wood to the Nether, what holds up, and **How to fix it**.
 - **Relief**: the heights players stand at, the steps between columns (walked, climbed, falls that hurt, falls that kill), the water, overhangs and caves.

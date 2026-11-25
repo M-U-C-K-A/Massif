@@ -448,6 +448,29 @@ type Inspected = ((Option<(i32, i32)>, DocKey), Option<crate::inspect::ColumnInf
 /// Layers ▸ Find: what is looked for, its places, the one shown.
 type Finding = (massif_core::filter::Match, Vec<(i32, i32)>, usize);
 
+impl Dialog {
+    /// Whether it leaves the map alone: it holds no copy of the map to put
+    /// back, and asks nothing about it, so another program may change it
+    /// meanwhile (see `bridge`).
+    fn passive(&self) -> bool {
+        matches!(self, Dialog::Origin | Dialog::About | Dialog::Help(_) | Dialog::Update | Dialog::WorldInfo | Dialog::Preferences(_) | Dialog::RecordPerformance | Dialog::Analysis(_))
+    }
+
+    /// Its name, to say which is in the way.
+    fn name(&self) -> String {
+        let name = match self {
+            Dialog::Unsaved(_) => "Unsaved changes",
+            Dialog::Script(_) => "Run Script",
+            Dialog::Reshape(_) => "Whole map",
+            Dialog::Export(_) => "Export",
+            Dialog::Crashed(..) => "Error",
+            Dialog::Recover => "Recover",
+            _ => "",
+        };
+        if name.is_empty() { "another".into() } else { name.into() }
+    }
+}
+
 enum Dialog {
     /// "Coming from WorldPainter?", at the first start.
     Origin,
@@ -707,6 +730,8 @@ pub struct MassifApp {
     /// The game's real blocks.
     blocks: BlockLibrary,
     allow_close: bool,
+    /// Other programs of this computer reaching the map (see `bridge`).
+    bridge: Option<crate::bridge::Bridge>,
     title: String,
     applied_theme: Option<ThemeChoice>,
     /// The accessibility settings, as applied.
@@ -1326,6 +1351,7 @@ impl MassifApp {
             terrain_panel: None,
             blocks: BlockLibrary::default(),
             allow_close: false,
+            bridge: None,
             title: String::new(),
             applied_theme: None,
             access: AccessState::default(),
@@ -7597,6 +7623,84 @@ impl MassifApp {
         }
     }
 
+    /// Let other programs of this computer reach the map (see `bridge`).
+    pub fn listen(&mut self, ctx: &egui::Context) {
+        self.bridge = crate::bridge::Bridge::start(ctx);
+    }
+
+    /// Answer the programs that ask for the map.
+    fn poll_bridge(&mut self, ctx: &egui::Context) {
+        let asked: Vec<crate::bridge::Request> = self.bridge.iter().flat_map(|b| b.requests.try_iter()).collect();
+        for request in asked {
+            let answer = self.answer_bridge(ctx, request.ask);
+            let _ = request.reply.send(answer);
+        }
+    }
+
+    fn answer_bridge(&mut self, ctx: &egui::Context, ask: crate::bridge::Ask) -> Result<crate::bridge::Answer, String> {
+        use crate::bridge::{Answer, Ask};
+        let mut map = None;
+        if !matches!(ask, Ask::Status) && !self.has_map {
+            return Err("no map is open in Massif".into());
+        }
+        // Nothing changes under a stroke, a dialog or a map being opened.
+        if matches!(ask, Ask::Apply { .. } | Ask::Undo | Ask::Redo | Ask::Save) {
+            if self.doc.read_only.is_some() {
+                return Err("the map is open read-only".into());
+            }
+            if let Some(d) = self.dialog.as_ref().filter(|d| !d.passive()) {
+                return Err(format!("a dialog is open in Massif ({}): close it first", d.name()));
+            }
+            if self.doc.history.is_recording() || self.jobs.iter().any(|j| j.kind.blocks_editing()) {
+                return Err("busy: Massif is in the middle of a change".into());
+            }
+        }
+        match ask {
+            Ask::Status => {}
+            Ask::Map => {
+                if self.doc.history.is_recording() {
+                    return Err("busy: Massif is in the middle of a change".into());
+                }
+                map = Some(Box::new(self.doc.world.copy_unfrozen()));
+            }
+            Ask::Apply { world, label, generation, revision } => {
+                if (generation, revision) != (self.doc.generation, self.doc.revision) {
+                    return Err("changed: the map changed in Massif meanwhile".into());
+                }
+                self.doc.apply_script(*world, &label);
+                // Sculpted volumes and caves too: every view anew.
+                self.doc.caves_changed = true;
+                self.say(ctx, label, false, None);
+            }
+            Ask::Undo => {
+                self.doc.undo().ok_or("nothing to undo")?;
+                self.doc.caves_changed = true;
+            }
+            Ask::Redo => {
+                self.doc.redo().ok_or("nothing to redo")?;
+                self.doc.caves_changed = true;
+            }
+            Ask::Save => {
+                if self.doc.path.is_none() {
+                    return Err("the map has no file yet: save it once in Massif (Save As…)".into());
+                }
+                self.save(ctx, false);
+            }
+        }
+        ctx.request_repaint();
+        let d = &self.doc;
+        let status = if self.has_map {
+            serde_json::json!({
+                "open": true, "name": d.world.meta.name, "file": d.path.as_ref().map(|p| p.display().to_string()), "modified": d.is_modified(), "read_only": d.read_only.is_some(),
+                "generation": d.generation, "revision": d.revision, "undo": d.history.undo_label(), "dimension": d.dimension().kind.label(),
+                "saving": self.jobs.iter().any(|j| j.kind == jobs::JobKind::Save),
+            })
+        } else {
+            serde_json::json!({ "open": false })
+        };
+        Ok(Answer { status, map })
+    }
+
     fn handle_close(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| i.viewport().close_requested()) && self.doc.is_modified() && !self.allow_close {
             ctx.send_viewport_cmd(ViewportCommand::CancelClose);
@@ -7651,6 +7755,7 @@ impl MassifApp {
             p.view3d.render = render;
             p.view3d.camera = Default::default();
         }
+        self.poll_bridge(&ctx);
         self.poll_terrain_apply(&ctx);
         // A save point open read-only keeps as it is.
         if self.doc.take_back() {
@@ -10461,6 +10566,40 @@ mod tests {
     /// descriptor names, runs on the map, prints in the dialog, and what it
     /// changed is one step to undo; an error says its line. Renders the
     /// dialog before and after with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn another_program_changes_the_map() {
+        use crate::bridge::Ask;
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(3);
+        let ctx = h.ctx.clone();
+        let app = h.state_mut();
+        let got = app.answer_bridge(&ctx, Ask::Map).unwrap_or_else(|e| panic!("{e}"));
+        let (generation, revision) = (got.status["generation"].as_u64().unwrap(), got.status["revision"].as_u64().unwrap());
+        let apply = |mut world: Box<World>, name: &str, revision| {
+            world.meta.sea_level = 91;
+            Ask::Apply { world, label: name.into(), generation, revision }
+        };
+        let before = app.doc.world.meta.sea_level;
+        let steps = app.doc.history.undo_count();
+        let map = got.map.unwrap();
+        // A map changed since is not written over.
+        let stale = app.answer_bridge(&ctx, apply(Box::new(map.copy_unfrozen()), "Late", revision + 1));
+        assert!(stale.is_err_and(|e| e.starts_with("changed")));
+        assert_eq!((app.doc.world.meta.sea_level, app.doc.history.undo_count()), (before, steps));
+        // Nor under a dialog that holds the map, but under the help.
+        app.dialog = Some(Dialog::Unsaved(Pending::Quit));
+        assert!(app.answer_bridge(&ctx, apply(Box::new(map.copy_unfrozen()), "Under", revision)).is_err_and(|e| e.contains("Unsaved changes")));
+        app.dialog = Some(Dialog::About);
+        // Taken, as one step to undo.
+        assert!(app.answer_bridge(&ctx, apply(map, "Claude: sea", revision)).is_ok());
+        assert_eq!((app.doc.world.meta.sea_level, app.doc.history.undo_label()), (91, Some("Claude: sea")));
+        assert!(app.doc.is_modified());
+        assert!(app.answer_bridge(&ctx, Ask::Undo).is_ok());
+        assert_eq!((app.doc.world.meta.sea_level, app.doc.history.undo_count()), (before, steps));
+        app.dialog = None;
+        h.run_steps(2);
+    }
+
     #[test]
     fn a_script_runs_on_the_map() {
         use egui_kittest::kittest::Queryable;

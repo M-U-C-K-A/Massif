@@ -12,6 +12,7 @@ is exported, or makes a map from nothing — what one does by hand, repeated.
 - [Massif's own API, in Lua](#massifs-own-api-in-lua)
 - [Examples](#examples)
 - [What a script may touch](#what-a-script-may-touch)
+- [Other programs on the open map](#other-programs-on-the-open-map)
 - [Speed](#speed)
 - [How Massif checks it gives WorldPainter's map](#how-massif-checks-it-gives-worldpainters-map)
 
@@ -326,6 +327,31 @@ A script reads and writes only:
 
 Any other path is refused with a message saying how to allow it. Scripts
 have no network at all, and cannot run programs.
+
+## Other programs on the open map
+
+A program running on the same computer, such as an AI assistant through the
+[massif-mcp](https://github.com/Swift-ality/massif-mcp) server, can read the
+map open in Massif and change it while you watch. Massif listens on the
+loopback address only, on a port it picks, and writes the port with a token
+of its own to `bridge/<process>.json` beside its log (`%LOCALAPPDATA%\Massif`
+on Windows): only programs of your own session can read it, and a request
+without the token is refused. The file goes when Massif closes.
+
+A request is one line of JSON, `{"cmd": …, "token": …}`, answered by one
+line, `{"ok": true, "status": {…}}` or `{"ok": false, "error": "…"}`:
+
+| `cmd` | |
+|---|---|
+| `status` | the open map: `name`, `file`, `modified`, `generation`, `revision`, `undo` (the last step's name) |
+| `map` | writes a copy of the open map to `file` (an absolute path to a `.massif` that does not exist yet) |
+| `apply` | takes the map in `file` in place of the open one, as **one step to undo** named `label`, when `generation` and `revision` are still those `map` gave: a map changed in Massif meanwhile, a stroke under way, a dialog open, or a map open read-only is refused, and nothing is written over |
+| `undo`, `redo` | as Edit ▸ Undo and Redo |
+| `save` | saves the map to its own file |
+
+So a program reads the map with `map`, changes the copy (with `massif-cli`
+and a script, say), and gives it back with `apply`. `MASSIF_BRIDGE=0` in
+Massif's environment turns this off.
 
 ## Speed
 

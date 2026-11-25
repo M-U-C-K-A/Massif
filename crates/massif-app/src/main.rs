@@ -11,6 +11,7 @@ mod autosave;
 mod backdrop;
 mod block_state;
 mod blocks;
+mod bridge;
 mod brushes;
 mod cards;
 mod caves;
@@ -188,7 +189,8 @@ fn main() -> eframe::Result {
             // On macOS, File, Edit, View and Help in the menu bar at the
             // top of the screen too.
             menubar::install(&cc.egui_ctx);
-            let app = app::MassifApp::new(cc, open);
+            let mut app = app::MassifApp::new(cc, open);
+            app.listen(&cc.egui_ctx);
             startup::step("app made: drawing the first frame");
             Ok(Box::new(app))
         }),
