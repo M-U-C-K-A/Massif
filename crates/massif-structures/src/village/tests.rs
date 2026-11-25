@@ -337,6 +337,32 @@ fn the_number_of_houses_and_the_size_bias_are_heard() {
     assert!(big > small + 0.2, "{small} → {big}");
 }
 
+/// A village's houses follow its land at its density: a small, sparse one
+/// a few far apart, a large, dense one many and close; the same density
+/// over twice the land, more houses.
+#[test]
+fn houses_follow_the_land_at_a_density() {
+    let (_t, th) = plains();
+    let village = |side: i32, density: f32| {
+        let rect = BlockRect::new(0, 0, side, side);
+        let inside = move |x: i32, z: i32| rect.contains(x, z);
+        let params = Params { houses: Some(houses_for(rect, density)), density, ..Params::default() };
+        let req = request(&th, rect, &inside, params);
+        let (st, _) = stages(None, &flat(), &req).unwrap();
+        let homes: Vec<[f32; 2]> = st.buildings.placed.iter().filter(|p| th.kind(&p.kind).is_some_and(|t| t.is_dwelling())).map(|p| [(p.min[0] + p.max[0]) as f32 / 2.0, (p.min[2] + p.max[2]) as f32 / 2.0]).collect();
+        // How far each house stands from its nearest neighbour, on average.
+        let gap = homes.iter().map(|a| homes.iter().filter(|b| *b != a).map(|b| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()).fold(f32::MAX, f32::min)).sum::<f32>() / homes.len().max(1) as f32;
+        (homes.len(), gap)
+    };
+    let (small, small_gap) = village(112, 0.35);
+    let (large, large_gap) = village(320, 0.85);
+    let (wider, _) = village(224, 0.35);
+    println!("small {small} houses {small_gap:.0} apart, large {large} houses {large_gap:.0} apart, small's density over twice the side {wider}");
+    assert!(small <= 6 && large >= 4 * small, "{small} then {large} houses");
+    assert!(small_gap > large_gap, "{small_gap} apart in a small village, {large_gap} in a large one");
+    assert!(wider >= 2 * small, "{small} then {wider} houses over more land");
+}
+
 #[test]
 fn mills_stand_by_water_when_asked() {
     // Water on the east side of the area.

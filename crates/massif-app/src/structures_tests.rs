@@ -142,6 +142,10 @@ fn the_structures_tool_as_a_user_drives_it() {
     let s = h.state().doc.dimension().structures.clone();
     let grown = crate::structure_tool::recipe_of(&s[0]).unwrap().area().unwrap();
     assert_eq!((grown.x1 - grown.x0, grown.z1 - grown.z0), (area.x1 - area.x0 + 48, area.z1 - area.z0 + 32));
+    // At the same density, its houses follow its land.
+    let massif_structures::placed::Recipe::Village { params, .. } = crate::structure_tool::recipe_of(&s[0]).unwrap() else { panic!("a village") };
+    assert_eq!(params.houses, Some(massif_structures::village::houses_for(grown, params.density)));
+    assert!(params.houses.unwrap() > massif_structures::village::houses_for(area, params.density), "more houses over more land");
     save(&mut h, "resized");
     // Fewer houses and stone roads, in the panel: built again once they
     // rest.
@@ -169,6 +173,33 @@ fn the_structures_tool_as_a_user_drives_it() {
     h.run_steps(2);
     let massif_structures::placed::Recipe::Village { params, .. } = crate::structure_tool::recipe_of(&h.state().doc.dimension().structures[0]).unwrap() else { panic!("a village") };
     assert_eq!(params.road, massif_structures::village::RoadType::Dirt);
+    // Another theme picked in the list while it is selected (a pack's,
+    // which needs no game files): built again of that theme, without
+    // drawing it again.
+    let packs = std::env::temp_dir().join(format!("massif-drive-pack-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&packs);
+    let pack = massif_structures::village::testpack::write_pack(&packs).unwrap();
+    h.state_mut().tools.village.packs = vec![pack];
+    let id = h.state().doc.dimension().structures[0].id;
+    h.state_mut().tools.structure.selected = Some(id);
+    h.run_steps(5);
+    h.get_by_label("Plains (test boxes) · Plains").scroll_to_me();
+    h.run_steps(3);
+    h.get_by_label("Plains (test boxes) · Plains").click();
+    h.run_steps(2);
+    settle(&mut h, 120);
+    let s = h.state().doc.dimension().structures.clone();
+    let massif_structures::placed::Recipe::Village { theme, .. } = crate::structure_tool::recipe_of(&s[0]).unwrap() else { panic!("a village") };
+    let massif_structures::placed::Recipe::Village { pack, .. } = crate::structure_tool::recipe_of(&s[0]).unwrap() else { panic!("a village") };
+    assert_eq!((pack.as_str(), theme.as_str()), ("Plains (test boxes)", "Plains"));
+    assert_ne!(s[0].id, id, "built again");
+    h.run_steps(5);
+    save(&mut h, "other-theme");
+    h.state_mut().doc.undo();
+    h.state_mut().tools.village.packs.clear();
+    h.state_mut().tools.village.theme = (String::new(), "Plains".into());
+    let _ = std::fs::remove_dir_all(&packs);
+    h.run_steps(2);
     // A rectangle dragged on free land: a second village over it.
     let a = map(&h).screen_of(spot.0 as f64 - 260.0, spot.1 as f64 - 80.0);
     let b = map(&h).screen_of(spot.0 as f64 - 120.0, spot.1 as f64 + 40.0);
@@ -225,7 +256,7 @@ fn the_village_panel_says_what_a_pack_builds() {
         s.tools.structure.village = true;
     }
     h.run_steps(5);
-    assert!(h.query_by_label_contains("Medium village · 18 houses").is_some(), "the summary line");
+    assert!(h.query_by_label_contains("Medium village · 12 houses").is_some(), "the summary line");
     assert!(h.query_by_label("churches").is_some() && h.query_by_label("farms").is_some(), "each type with its count");
     assert!(h.query_by_label_contains("It needs about").is_some(), "the land it needs");
     // Scrolled down, as a user reads it: its summary and counts, then the
@@ -258,4 +289,48 @@ fn the_village_panel_says_what_a_pack_builds() {
         h.render().unwrap().save(dir.join(format!("structures-pack-selected-{ppp}x.png"))).unwrap();
     }
     let _ = std::fs::remove_dir_all(&packs);
+}
+
+/// The Tools panel: every row's tools start at the same place, the names
+/// of the rows in a column as wide as the widest (in English and in French,
+/// whose names are longer), at a width where the names show, rendered with
+/// MASSIF_SNAPSHOT_DIR.
+#[test]
+fn the_tools_rows_line_up() {
+    let ppp = std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
+    let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from);
+    for lang in [crate::i18n::Language::English, crate::i18n::Language::French] {
+        crate::i18n::set_language(lang);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(380.0, 330.0)).with_pixels_per_point(ppp).with_accessibility_check(false).wgpu().build_ui_state(
+            |ui, tools: &mut crate::tools::ToolState| {
+                if ui.ctx().cumulative_pass_nr() == 0 {
+                    crate::theme::install(ui.ctx());
+                }
+                ui.ctx().set_theme(egui::Theme::Dark);
+                egui::Frame::new().fill(crate::theme::Palette::of(ui).panel).inner_margin(8).show(ui, |ui| {
+                    ui.set_width(364.0);
+                    crate::panels::tools_panel(ui, tools);
+                });
+            },
+            crate::tools::ToolState::default(),
+        );
+        h.run_steps(4);
+        // The middle of the first tool of each row (the one chosen stands
+        // out a little), past the names (not their icons alone).
+        let mut lefts = Vec::new();
+        for (_, _, list) in Tool::GROUPS {
+            let name = crate::i18n::tr_name(list[0].label());
+            if let Some(n) = h.query_all_by_label(name).next() {
+                lefts.push(n.rect().center().x);
+            }
+        }
+        assert_eq!(lefts.len(), Tool::GROUPS.len(), "{lefts:?}");
+        let (lo, hi) = lefts.iter().fold((f32::MAX, f32::MIN), |a, &x| (a.0.min(x), a.1.max(x)));
+        assert!(hi - lo < 0.5, "the rows' first tools at {lefts:?}");
+        assert!(lo > 85.0, "the names shown before the tools: {lefts:?}");
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join(format!("tools-panel-{}-{ppp}x.png", lang.code()))).unwrap();
+        }
+    }
+    crate::i18n::set_language(crate::i18n::Language::English);
 }

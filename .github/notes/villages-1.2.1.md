@@ -1,0 +1,3 @@
+**Villages: their size sets how close the houses stand, and a new theme rebuilds them at once**
+
+A village's Size is now how close its houses stand: a small village has a few houses far apart, a large one many houses close together, and the number of houses follows its land. Dragging a village's corners keeps that density, adding houses over more land and taking some away over less; a number typed in Houses stays as typed until you let it follow the land again. Clicking another theme or pack in the list while a village is selected builds it again of that theme, in its place, without drawing it again. In the Tools panel, the names of the rows sit in a column as wide as the longest in your language, so every row's tools start at the same place.

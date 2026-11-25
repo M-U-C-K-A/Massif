@@ -3807,7 +3807,6 @@
  "Its land: {flat:.0}% flat and dry, {steep:.0}% too steep, {wet:.0}% under water.": "Sein Land: {flat:.0} % flach und trocken, {steep:.0} % zu steil, {wet:.0} % unter Wasser.",
  "This land holds about {fits} houses, not {houses}: make the village larger, or ask for fewer.": "Dieses Land fasst etwa {fits} Häuser, nicht {houses}: mach das Dorf größer oder verlange weniger.",
  "It needs about {need} × {need} blocks of flat, dry land: the houses stand on slopes of at most 10 blocks, never in water.": "Es braucht etwa {need} × {need} Blöcke flaches, trockenes Land: Häuser stehen auf Hängen von höchstens 10 Blöcken, nie im Wasser.",
- "A square of {side} blocks; its houses follow.": "Ein Quadrat von {side} Blöcken; die Häuser folgen.",
  "The blocks of its streets; stone climbs in steps.": "Die Blöcke seiner Straßen; Stein steigt in Stufen.",
  "Walls: ramparts round it, towers at the corners, gates where its roads leave. Draw: the same number gives the same village.": "Mauern: ein Wall darum, Türme an den Ecken, Tore, wo seine Wege hinausführen. Ziehung: dieselbe Zahl gibt dasselbe Dorf.",
  "house": "Haus",
@@ -3911,5 +3910,7 @@
  "Read them from {instance}": "Aus {instance} lesen",
  "The map's terrains: what each part of the ground is made of. Click one to paint it; the blocks of your game and mods are below, each a terrain once you paint with it.": "Die Gelände der Karte: woraus jeder Teil des Bodens besteht. Klicke eines an, um es zu malen; die Blöcke deines Spiels und deiner Mods stehen darunter, jeder wird zum Gelände, sobald du damit malst.",
  "Where the blocks you paint with come from: the version of Minecraft installed here, and the mods, modpack instances and resource packs read with it. Those that make ground are offered in the Terrain panel, every block in the Blocks panel.": "Woher die Blöcke kommen, mit denen du malst: die hier installierte Minecraft-Version und die damit gelesenen Mods, Modpack-Instanzen und Ressourcenpakete. Die, aus denen Boden wird, stehen im Gelände-Panel, alle Blöcke im Blöcke-Panel.",
- "Set up the game and mods…": "Spiel und Mods einrichten…"
+ "Set up the game and mods…": "Spiel und Mods einrichten…",
+ "How close its houses stand: a small village's few and far apart, a large one's many and close. How many follows its area.": "Wie dicht die Häuser stehen: in einem kleinen Dorf wenige und weit auseinander, in einem großen viele und eng. Ihre Zahl folgt der Fläche.",
+ "Set by hand: let them follow its area again": "Von Hand gesetzt: wieder der Fläche folgen lassen"
 }

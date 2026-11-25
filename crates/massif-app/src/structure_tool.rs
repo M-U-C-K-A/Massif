@@ -513,12 +513,7 @@ fn resized(area: massif_core::BlockRect, corner: usize, to: (f64, f64)) -> massi
 
 /// A village's recipe over another rectangle.
 fn over(recipe: &Recipe, r: massif_core::BlockRect) -> Recipe {
-    let mut out = recipe.clone();
-    if let Recipe::Village { centre, size, .. } = &mut out {
-        *centre = [(r.x0 + r.x1) / 2, (r.z0 + r.z1) / 2];
-        *size = [r.x1 - r.x0, r.z1 - r.z0];
-    }
-    out
+    recipe.over(r)
 }
 
 /// The pointer let go: what the drag did.
@@ -750,7 +745,7 @@ fn village_details(ui: &mut Ui, summary: bool, id: &str, doc: &Document, theme: 
 /// whether its theme is a pack's (which may have roads of its own).
 /// Whether one changed.
 #[allow(clippy::too_many_arguments)]
-fn village_controls(ui: &mut Ui, id: &str, size: &mut VillageSize, houses: &mut u32, road: &mut massif_structures::village::RoadType, walls: &mut bool, seed: &mut u64, pack: bool) -> bool {
+fn village_controls(ui: &mut Ui, id: &str, size: &mut VillageSize, houses: &mut u32, by_hand: &mut bool, road: &mut massif_structures::village::RoadType, walls: &mut bool, seed: &mut u64, pack: bool) -> bool {
     let has_own_roads = pack;
     use crate::widgets::{Field, button, row, well};
     use massif_structures::village::RoadType;
@@ -760,10 +755,12 @@ fn village_controls(ui: &mut Ui, id: &str, size: &mut VillageSize, houses: &mut 
     let labels: Vec<&str> = VillageSize::ALL.iter().map(|s| s.label()).collect();
     if let Some(k) = crate::widgets::button_group(ui, &format!("{id} size"), &labels, &on) {
         *size = VillageSize::ALL[k];
-        *houses = size.houses();
+        if !*by_hand {
+            *houses = size.houses();
+        }
         changed = true;
     }
-    crate::panels::hint(ui, &tr!("A square of {side} blocks; its houses follow.", side = size.side()));
+    crate::panels::hint(ui, tr!("How close its houses stand: a small village's few and far apart, a large one's many and close. How many follows its area."));
     ui.label(egui::RichText::new(tr!("Roads")).small().weak());
     let mut kinds = vec![RoadType::Dirt, RoadType::Premium, RoadType::Stone];
     let mut labels = vec![tr!("Dirt"), tr!("Gravel"), tr!("Stone")];
@@ -782,7 +779,15 @@ fn village_controls(ui: &mut Ui, id: &str, size: &mut VillageSize, houses: &mut 
         // grow as the game grows them.
         if pack {
             row(ui, tr!("Houses"), |ui| {
-                changed |= ui.add(Field::new(houses, 3..=120).width((ui.available_width() * 0.55).min(120.0))).changed();
+                if ui.add(Field::new(houses, 3..=120).width((ui.available_width() * 0.55).min(120.0))).changed() {
+                    *by_hand = true;
+                    changed = true;
+                }
+                if *by_hand && button(ui, theme::with_icon(Icon::RotateCcw, "")).on_hover_text(tr!("Set by hand: let them follow its area again")).clicked() {
+                    *by_hand = false;
+                    *houses = size.houses();
+                    changed = true;
+                }
             });
         }
         row(ui, tr!("Walls"), |ui| {
@@ -834,20 +839,27 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
         });
         match recipe {
             Some(Recipe::Village { pack, theme, centre, size, params, seed }) => {
-                let side = size[0].max(size[1]);
-                let mut vsize = VillageSize::of(side);
-                let mut houses = params.houses.unwrap_or(vsize.houses());
+                let mut vsize = VillageSize::of_density(params.density);
+                let area_now = Recipe::Village { pack: pack.clone(), theme: theme.clone(), centre, size, params: params.clone(), seed }.area();
+                let fallback = vsize.houses();
+                let follow = |d: f32| area_now.map_or(fallback, |r| massif_structures::village::houses_for(r, d));
+                let mut by_hand = params.houses_by_hand;
+                let mut houses = params.houses.unwrap_or_else(|| follow(params.density));
                 let (mut road, mut walls, mut seed2) = (params.road, params.walls, seed);
                 let mut counts = params.counts.clone();
                 let th = tools.village.theme_named(&pack, &theme);
-                let area = Recipe::Village { pack: pack.clone(), theme: theme.clone(), centre, size, params: params.clone(), seed }.area();
+                let area = area_now;
                 village_details(ui, true, "selected village", doc, th.as_ref(), vsize, houses, road, walls, &mut counts, Some(&s), area);
-                let mut changed = village_controls(ui, "selected village", &mut vsize, &mut houses, &mut road, &mut walls, &mut seed2, !pack.is_empty());
+                let mut changed = village_controls(ui, "selected village", &mut vsize, &mut houses, &mut by_hand, &mut road, &mut walls, &mut seed2, !pack.is_empty());
                 changed |= village_details(ui, false, "selected village", doc, th.as_ref(), vsize, houses, road, walls, &mut counts, Some(&s), area);
                 if changed {
-                    // A size chosen: its square round the same middle.
-                    let size = if vsize != VillageSize::of(side) { [vsize.side(), vsize.side()] } else { size };
-                    let params = massif_structures::village::Params { houses: Some(houses), road, walls, counts, ..params };
+                    // A size is a density over the same land: its houses
+                    // follow the area unless typed by hand.
+                    let density = if vsize != VillageSize::of_density(params.density) { vsize.density() } else { params.density };
+                    if !by_hand {
+                        houses = follow(density);
+                    }
+                    let params = massif_structures::village::Params { houses: Some(houses), houses_by_hand: by_hand, density, road, walls, counts, ..params };
                     tools.structure.rt.regenerate(s.id, Recipe::Village { pack, theme, centre, size, params, seed: seed2 });
                 }
                 hint(ui, tr!("Drag it to move it, its corners to resize it: it is built again."));
@@ -858,18 +870,38 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
     }
 
     let themes = tools.village.rt.themes(&tools.village.packs);
+    // The village selected on the map, whose theme the list shows and a
+    // click in it changes: it is built again of the theme picked.
+    let picked = tools.structure.selected.and_then(|id| doc.dimension().structures.iter().find(|s| s.id == id).and_then(|s| Some((id, recipe_of(s)?)))).filter(|(_, r)| matches!(r, Recipe::Village { .. }));
     // What a click places: the list.
     let village_now = tools.structure.village;
     section(ui, Icon::House, tr!("Villages"));
     well(ui, |ui| {
         for t in &themes {
             let name = if t.pack.is_empty() { crate::i18n::tr_name(&t.name).to_owned() } else { format!("{} · {}", t.pack, t.name) };
-            let on = tools.structure.village && tools.village.theme == (t.pack.clone(), t.name.clone());
+            let on = match &picked {
+                Some((_, Recipe::Village { pack, theme, .. })) => *pack == t.pack && *theme == t.name,
+                _ => tools.structure.village && tools.village.theme == (t.pack.clone(), t.name.clone()),
+            };
             if ui.add(egui::Button::selectable(on, name).frame_when_inactive(false).truncate()).clicked() {
                 tools.structure.village = true;
                 tools.village.theme = (t.pack.clone(), t.name.clone());
                 if !t.pack.is_empty() && tools.village.road == massif_structures::village::RoadType::Dirt {
                     tools.village.road = massif_structures::village::RoadType::Theme;
+                }
+                if let Some((id, Recipe::Village { pack, theme, centre, size, params, seed })) = &picked
+                    && (*pack != t.pack || *theme != t.name)
+                {
+                    use massif_structures::village::RoadType;
+                    // A pack's roads where it has its own; the game's
+                    // themes have none.
+                    let road = match (t.pack.is_empty(), params.road) {
+                        (true, RoadType::Theme) => RoadType::Dirt,
+                        (false, RoadType::Dirt) => RoadType::Theme,
+                        (_, r) => r,
+                    };
+                    let params = massif_structures::village::Params { road, counts: Vec::new(), ..params.clone() };
+                    tools.structure.rt.regenerate(*id, Recipe::Village { pack: t.pack.clone(), theme: t.name.clone(), centre: *centre, size: *size, params, seed: *seed });
                 }
             }
         }
@@ -907,17 +939,18 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
         let v = &mut tools.village;
         let pack = !v.theme.0.is_empty();
         let mut houses = v.houses.unwrap_or_else(|| v.size.houses());
+        let mut by_hand = v.houses.is_some();
         let (mut size, mut road, mut walls, mut seed) = (v.size, v.road, v.walls, v.seed);
         let th = v.theme_named(&v.theme.0, &v.theme.1);
         let mut counts = v.counts.clone();
         village_details(ui, true, "new village", doc, th.as_ref(), size, houses, road, walls, &mut counts, None, None);
-        let controls = village_controls(ui, "new village", &mut size, &mut houses, &mut road, &mut walls, &mut seed, pack);
+        let controls = village_controls(ui, "new village", &mut size, &mut houses, &mut by_hand, &mut road, &mut walls, &mut seed, pack);
         if village_details(ui, false, "new village", doc, th.as_ref(), size, houses, road, walls, &mut counts, None, None) {
             v.counts = counts;
         }
         if controls {
             (v.size, v.road, v.walls, v.seed) = (size, road, walls, seed);
-            v.houses = Some(houses);
+            v.houses = by_hand.then_some(houses);
         }
         hint(ui, &tr!("Click on the map: a village {side} blocks across. Drag a rectangle: a village over it.", side = v.size.side()));
         if doc.selection().is_some() && !v.rt.is_busy() && button(ui, theme::with_icon(Icon::House, tr!("Fill the selection"))).clicked() {
@@ -1188,12 +1221,24 @@ impl VillageSize {
         }
     }
 
-    pub fn houses(self) -> u32 {
+    /// How close its houses stand: a small village's scattered, a large
+    /// one's tight.
+    pub fn density(self) -> f32 {
         match self {
-            VillageSize::Small => 8,
-            VillageSize::Medium => 18,
-            VillageSize::Large => 36,
+            VillageSize::Small => 0.35,
+            VillageSize::Medium => 0.6,
+            VillageSize::Large => 0.85,
         }
+    }
+
+    /// The houses its square holds at its density.
+    pub fn houses(self) -> u32 {
+        massif_structures::village::houses_for(massif_core::BlockRect::new(0, 0, self.side(), self.side()), self.density())
+    }
+
+    /// The size whose density is nearest `d`.
+    pub fn of_density(d: f32) -> VillageSize {
+        *VillageSize::ALL.iter().min_by(|a, b| (a.density() - d).abs().total_cmp(&(b.density() - d).abs())).expect("three")
     }
 
     pub fn label(self) -> &'static str {
@@ -1204,10 +1249,6 @@ impl VillageSize {
         }
     }
 
-    /// The size nearest a village `side` blocks across.
-    pub fn of(side: i32) -> VillageSize {
-        *VillageSize::ALL.iter().min_by_key(|s| (s.side() - side).abs()).expect("three")
-    }
 }
 
 /// A village to build: what (its recipe), over what (a selection's mask,
@@ -1340,7 +1381,9 @@ impl VillageSettings {
     /// The recipe of a village of these settings over `rect`.
     pub fn recipe(&self, rect: massif_core::BlockRect) -> Recipe {
         let mut params = self.params();
-        params.houses.get_or_insert(VillageSize::of((rect.x1 - rect.x0).max(rect.z1 - rect.z0)).houses());
+        params.density = self.size.density();
+        params.houses_by_hand = self.houses.is_some();
+        params.houses = Some(self.houses.unwrap_or_else(|| massif_structures::village::houses_for(rect, params.density)));
         Recipe::Village { pack: self.theme.0.clone(), theme: self.theme.1.clone(), centre: [(rect.x0 + rect.x1) / 2, (rect.z0 + rect.z1) / 2], size: [rect.x1 - rect.x0, rect.z1 - rect.z0], params, seed: self.seed }
     }
 

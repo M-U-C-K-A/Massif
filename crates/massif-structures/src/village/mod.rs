@@ -240,11 +240,23 @@ pub struct Params {
     /// village has, where told: those many, as far as there is room, rather
     /// than as the pack's shares draw them.
     pub counts: Vec<(String, u32)>,
+    /// Whether `houses` was typed by hand (kept as the village is resized),
+    /// rather than worked out from its area and density.
+    pub houses_by_hand: bool,
+}
+
+/// How many houses a village of `area` holds at `density` (0.2 sparse … 1
+/// tight): about one for every 1,800 blocks of its area at full density, as
+/// many as its roads find room for on flat land (a square of 112 blocks at
+/// 0.35, 3; of 192 at 0.6, 12; of 320 at 0.85, 48).
+pub fn houses_for(area: massif_core::coords::BlockRect, density: f32) -> u32 {
+    let blocks = ((area.x1 - area.x0).max(0) as f32) * ((area.z1 - area.z0).max(0) as f32);
+    ((blocks * density.clamp(0.2, 1.0) / 1800.0).round() as u32).clamp(3, 120)
 }
 
 impl Default for Params {
     fn default() -> Self {
-        Params { houses: None, size_bias: 0.0, road: RoadType::Theme, walls: false, density: 0.6, spread: 0.5, flat: 0.7, fields: 1.0, props: 0.5, mill: MillMode::Auto, max_slope: 10, margin: 1, street_width: None, foundation: None, villagers: None, counts: Vec::new() }
+        Params { houses: None, size_bias: 0.0, road: RoadType::Theme, walls: false, density: 0.6, spread: 0.5, flat: 0.7, fields: 1.0, props: 0.5, mill: MillMode::Auto, max_slope: 10, margin: 1, street_width: None, foundation: None, villagers: None, counts: Vec::new(), houses_by_hand: false }
     }
 }
 

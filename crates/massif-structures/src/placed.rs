@@ -53,6 +53,20 @@ impl Recipe {
         r
     }
 
+    /// A village over rectangle `r`: as many houses as `r` holds at its
+    /// density, unless its houses were set by hand.
+    pub fn over(&self, r: BlockRect) -> Recipe {
+        let mut out = self.clone();
+        if let Recipe::Village { centre, size, params, .. } = &mut out {
+            *centre = [(r.x0 + r.x1) / 2, (r.z0 + r.z1) / 2];
+            *size = [r.x1 - r.x0, r.z1 - r.z0];
+            if !params.houses_by_hand {
+                params.houses = Some(crate::village::houses_for(r, params.density));
+            }
+        }
+        out
+    }
+
     /// The same, moved by `(dx, dz)`.
     pub fn moved(&self, dx: i32, dz: i32) -> Recipe {
         let mut r = self.clone();
@@ -77,5 +91,30 @@ mod tests {
         assert_eq!(r.with_seed(9).seed(), 9);
         let g = Recipe::Game { kind: "stronghold".into(), at: [0, -20, 0], turn: None, seed: 1, flatten: false };
         assert_eq!(Recipe::from_json(&g.to_json()), Some(g));
+    }
+
+    /// Resizing a village keeps its density: twice the land, about twice
+    /// the houses; a denser one holds more on the same land; houses typed
+    /// by hand stay as typed.
+    #[test]
+    fn houses_follow_the_area_at_the_same_density() {
+        let r = Recipe::Village { pack: String::new(), theme: "Plains".into(), centre: [0, 0], size: [192, 192], params: Params { density: 0.6, ..Params::default() }, seed: 1 };
+        let houses = |r: &Recipe| match r {
+            Recipe::Village { params, .. } => params.houses.unwrap(),
+            Recipe::Game { .. } => 0,
+        };
+        let small = houses(&r.over(BlockRect::new(0, 0, 192, 192)));
+        let big = houses(&r.over(BlockRect::new(0, 0, 384, 192)));
+        assert!((small * 2).abs_diff(big) <= 1, "{small} houses, then {big} over twice the land");
+        let dense = match &r {
+            Recipe::Village { pack, theme, centre, size, params, seed } => Recipe::Village { pack: pack.clone(), theme: theme.clone(), centre: *centre, size: *size, params: Params { density: 0.85, ..params.clone() }, seed: *seed },
+            g => g.clone(),
+        };
+        assert!(houses(&dense.over(BlockRect::new(0, 0, 192, 192))) > small, "denser, more houses");
+        let typed = match &r {
+            Recipe::Village { pack, theme, centre, size, params, seed } => Recipe::Village { pack: pack.clone(), theme: theme.clone(), centre: *centre, size: *size, params: Params { houses: Some(7), houses_by_hand: true, ..params.clone() }, seed: *seed },
+            g => g.clone(),
+        };
+        assert_eq!(houses(&typed.over(BlockRect::new(0, 0, 384, 384))), 7);
     }
 }

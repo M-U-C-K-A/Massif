@@ -128,8 +128,20 @@ pub fn tools_panel(ui: &mut Ui, tools: &mut ToolState) {
     // In a narrow area the rows keep their tools on one line: their names
     // give way to their icons (the name shows under the pointer).
     let most = Tool::GROUPS.iter().map(|(_, _, list)| list.len()).max().unwrap_or(0) as f32;
-    let compact = ui.available_width() - 12.0 < 58.0 + 4.0 + most * 32.0;
-    let label_w = if compact { 20.0 } else { 58.0 };
+    // One column for every row's name, as wide as the widest in this
+    // language: the icons of every row then start at the same place.
+    let font = egui::FontId::proportional(11.5);
+    let widest = Tool::GROUPS
+        .iter()
+        .map(|(group, icon, _)| {
+            let group = crate::i18n::tr_name(group);
+            let short = group.split(' ').next().unwrap_or(group);
+            ui.painter().layout_no_wrap(format!("{}  {short}", theme::glyph(*icon)), font.clone(), pal.weak).size().x
+        })
+        .fold(0.0f32, f32::max);
+    let full_w = (widest + 8.0).max(58.0);
+    let compact = ui.available_width() - 12.0 < full_w + 4.0 + most * 32.0;
+    let label_w = if compact { 20.0 } else { full_w };
     for (group, icon, list) in Tool::GROUPS {
         let row = egui::Frame::new()
             .fill(fill)
@@ -139,7 +151,7 @@ pub fn tools_panel(ui: &mut Ui, tools: &mut ToolState) {
                 ui.set_width(ui.available_width());
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-                    let short = group.split(' ').next().unwrap_or(group);
+                    let short = crate::i18n::tr_name(group).split(' ').next().unwrap_or(group);
                     let (rect, name) = ui.allocate_exact_size(vec2(label_w, 28.0), Sense::hover());
                     let text = if compact { theme::glyph(icon).to_string() } else { format!("{}  {short}", theme::glyph(icon)) };
                     ui.painter().text(
@@ -149,7 +161,7 @@ pub fn tools_panel(ui: &mut Ui, tools: &mut ToolState) {
                         egui::FontId::proportional(11.5),
                         pal.weak,
                     );
-                    name.on_hover_text(group);
+                    name.on_hover_text(crate::i18n::tr_name(group));
                     for &tool in list {
                         let button = tool_button(ui, tool, tools.tool == tool, 28.0);
                         if tools.untried(tool) {

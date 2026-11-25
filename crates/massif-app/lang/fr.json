@@ -3868,7 +3868,6 @@
  "Its land: {flat:.0}% flat and dry, {steep:.0}% too steep, {wet:.0}% under water.": "Son terrain : {flat:.0} % plat et sec, {steep:.0} % trop pentu, {wet:.0} % sous l'eau.",
  "This land holds about {fits} houses, not {houses}: make the village larger, or ask for fewer.": "Ce terrain tient environ {fits} maisons, pas {houses} : agrandissez le village, ou demandez-en moins.",
  "It needs about {need} × {need} blocks of flat, dry land: the houses stand on slopes of at most 10 blocks, never in water.": "Il lui faut environ {need} × {need} blocs de terrain plat et sec : les maisons tiennent sur des pentes de 10 blocs au plus, jamais dans l'eau.",
- "A square of {side} blocks; its houses follow.": "Un carré de {side} blocs ; ses maisons suivent.",
  "The blocks of its streets; stone climbs in steps.": "Les blocs de ses rues ; la pierre monte en marches.",
  "Walls: ramparts round it, towers at the corners, gates where its roads leave. Draw: the same number gives the same village.": "Remparts : une enceinte autour, des tours aux angles, des portes où partent ses routes. Tirage : le même nombre donne le même village.",
  "house": "maison",
@@ -3972,5 +3971,7 @@
  "Read them from {instance}": "Les lire depuis {instance}",
  "The map's terrains: what each part of the ground is made of. Click one to paint it; the blocks of your game and mods are below, each a terrain once you paint with it.": "Les terrains de la carte : ce dont chaque partie du sol est faite. Cliquez-en un pour le peindre ; les blocs de votre jeu et de vos mods sont en dessous, chacun devient un terrain quand vous peignez avec.",
  "Where the blocks you paint with come from: the version of Minecraft installed here, and the mods, modpack instances and resource packs read with it. Those that make ground are offered in the Terrain panel, every block in the Blocks panel.": "D'où viennent les blocs avec lesquels vous peignez : la version de Minecraft installée ici, et les mods, instances de modpacks et packs de ressources lus avec. Ceux qui font du sol sont proposés dans le panneau Terrain, tous les blocs dans le panneau Blocs.",
- "Set up the game and mods…": "Régler le jeu et les mods…"
+ "Set up the game and mods…": "Régler le jeu et les mods…",
+ "How close its houses stand: a small village's few and far apart, a large one's many and close. How many follows its area.": "L'écart entre ses maisons : celles d'un petit village, peu nombreuses et éloignées, celles d'un grand, nombreuses et serrées. Leur nombre suit sa surface.",
+ "Set by hand: let them follow its area again": "Fixé à la main : les laisser suivre à nouveau sa surface"
 }

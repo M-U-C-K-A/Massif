@@ -158,6 +158,7 @@ fn params_of(ctx: &Ctx) -> Params {
         foundation: None,
         villagers: None,
         counts: Vec::new(),
+        houses_by_hand: true,
     }
 }
 

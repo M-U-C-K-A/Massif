@@ -33,10 +33,13 @@ settings show under **Selected** in Tool Settings.
 
 - **Drag it** to move it: it is built again where you let go.
 - **Drag a village's corner** to resize it: it is built again over the new
-  rectangle, as many houses as it then holds.
+  rectangle at the same density, with more houses over more land and fewer
+  over less.
 - Change a village's **Size**, **Houses**, **Roads** (dirt, gravel, stone, or
   the pack's own), **Walls** or **Draw**: it is built again a moment after
   you stop changing them.
+- Click another **theme** in the Villages list while a village is selected:
+  it is built again of that theme, in its place.
 - **Draw it again** (a structure of the game's) puts another draw in its
   place.
 - **Take it away**, or a right-click on it, removes it.
@@ -48,8 +51,8 @@ Villages and structures placed before 1.2 can be taken away but not moved
 
 | Setting | What it does |
 |---|---|
-| **Size** | A village's square: small (112 blocks), medium (192), large (320); its houses follow (8, 18, 36). |
-| **Houses** | How many houses the village holds: it reaches along its roads as far as it needs to. |
+| **Size** | How close its houses stand: a small village's few and far apart, a large one's many and close. A click places a square of 112, 192 or 320 blocks (about 3, 12 and 48 houses); over any rectangle, the number of houses follows its area at that density. |
+| **Houses** | How many houses the village holds, worked out from its area and size. Type a number to set it by hand: it then stays as typed when the village is resized, until the button beside it lets it follow the area again. |
 | **Roads** | The blocks of its streets. |
 | **Walls** | Ramparts round the village, towers at the corners, gates where its main roads leave. |
 | **Height** | For those placed at a depth (Ancient City, Trial Chambers, stronghold): the height of their start, the game's by default — an Ancient City's halls then lie between y −52 and y −22. |

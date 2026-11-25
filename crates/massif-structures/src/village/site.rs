@@ -49,9 +49,9 @@ pub fn site(ground: &dyn Ground, area: &Area, params: &Params, _seed: u64) -> Re
         }
         None => 120,
     };
-    // Districts: one for about 240 × 240 blocks of the area, or as many as
+    // Districts: one for about 200 × 200 blocks of the area, or as many as
     // the houses asked for need (40 to a district).
-    let by_area = (area_blocks / (240 * 240)).clamp(1, 48) as usize;
+    let by_area = (area_blocks / (200 * 200)).clamp(1, 48) as usize;
     let districts = match params.houses {
         Some(n) => (n as usize).div_ceil(40).clamp(1, by_area.max(1)),
         None => by_area,

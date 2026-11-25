@@ -3804,7 +3804,6 @@
  "Its land: {flat:.0}% flat and dry, {steep:.0}% too steep, {wet:.0}% under water.": "O terreno: {flat:.0} % plano e seco, {steep:.0} % íngreme demais, {wet:.0} % debaixo de água.",
  "This land holds about {fits} houses, not {houses}: make the village larger, or ask for fewer.": "Este terreno comporta cerca de {fits} casas, não {houses}: aumente a aldeia ou peça menos.",
  "It needs about {need} × {need} blocks of flat, dry land: the houses stand on slopes of at most 10 blocks, never in water.": "Precisa de cerca de {need} × {need} blocos de terreno plano e seco: as casas ficam em encostas de no máximo 10 blocos, nunca na água.",
- "A square of {side} blocks; its houses follow.": "Um quadrado de {side} blocos; as casas acompanham.",
  "The blocks of its streets; stone climbs in steps.": "Os blocos das ruas; a pedra sobe em degraus.",
  "Walls: ramparts round it, towers at the corners, gates where its roads leave. Draw: the same number gives the same village.": "Muralhas: uma cerca à volta, torres nos cantos, portões onde saem os caminhos. Sorteio: o mesmo número dá a mesma aldeia.",
  "house": "casa",
@@ -3908,5 +3907,7 @@
  "Read them from {instance}": "Lê-los de {instance}",
  "The map's terrains: what each part of the ground is made of. Click one to paint it; the blocks of your game and mods are below, each a terrain once you paint with it.": "Os terrenos do mapa: de que cada parte do solo é feita. Clique num para pintá-lo; os blocos do seu jogo e mods estão abaixo, cada um vira terreno quando pinta com ele.",
  "Where the blocks you paint with come from: the version of Minecraft installed here, and the mods, modpack instances and resource packs read with it. Those that make ground are offered in the Terrain panel, every block in the Blocks panel.": "De onde vêm os blocos com que pinta: a versão do Minecraft instalada aqui e os mods, instâncias de modpacks e pacotes de recursos lidos com ela. Os que formam solo aparecem no painel Terreno, todos os blocos no painel Blocos.",
- "Set up the game and mods…": "Configurar o jogo e os mods…"
+ "Set up the game and mods…": "Configurar o jogo e os mods…",
+ "How close its houses stand: a small village's few and far apart, a large one's many and close. How many follows its area.": "O quão juntas ficam as casas: as de uma aldeia pequena, poucas e afastadas; as de uma grande, muitas e próximas. O número acompanha a área.",
+ "Set by hand: let them follow its area again": "Definido à mão: voltar a acompanhar a área"
 }
