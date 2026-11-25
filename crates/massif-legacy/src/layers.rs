@@ -527,11 +527,13 @@ fn convert_layer(arena: &Arena, key: Value, class: &str, reg: &mut Registry) -> 
         "plants.PlantLayer" => plant_cover(arena, key, reg).map(Conv::Cover),
         "CustomAnnotationLayer" => {
             let rgb = arena.field(key, "colour").and_then(|c| arena.int(c)).map_or([230, 60, 40], |c| [(c >> 16) as u8, (c >> 8) as u8, c as u8]);
+            // An annotation layer of the map's, by the layer's name.
+            let name = string("name").unwrap_or_else(|| "Annotations".to_owned());
             let palette = &mut reg.annotations;
-            let k = match palette.custom.iter().position(|c| c.rgb == rgb) {
+            let k = match palette.custom.iter().position(|c| c.name == name) {
                 Some(k) => k,
                 None => {
-                    palette.custom.push(massif_core::annotations::CustomColor { rgb, opacity: massif_core::annotations::DEFAULT_OPACITY });
+                    palette.custom.push(massif_core::annotations::CustomColor { name: name.clone(), ..massif_core::annotations::CustomColor::new(rgb) });
                     palette.custom.len() - 1
                 }
             };

@@ -45,6 +45,8 @@ pub struct LayersUi {
     /// A layer to find on the map (Find in its menu): the window moves the
     /// map to the next place it is painted.
     pub find: Option<massif_core::filter::Match>,
+    /// The annotation layer being renamed: its number, and the text typed.
+    pub rename_note: Option<(u16, String)>,
 }
 
 /// What one WorldPainter `.layer` file became, in words, for its report.
@@ -563,17 +565,41 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     }
     hint(ui, tr!("Paint sizes, then a species over them: each spot takes its objects of the size marked."));
 
-    // Annotations: a click on a colour paints with it.
+    // Annotations: a click on a colour paints with it; the annotation
+    // layers (named colours of the map's) listed under them.
     ui.add_space(8.0);
+    let mut add_note = false;
     ui.horizontal(|ui| {
-        ui.label(RichText::new(format!("{}  {}", theme::glyph(Icon::PenLine), tr!("Annotations").to_uppercase())).size(10.5).strong().color(pal.weak));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| crate::panels::annotations_eye(ui, tools));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            crate::panels::annotations_eye(ui, tools);
+            add_note = ui.add(egui::Button::new(RichText::new(theme::glyph(Icon::Plus).to_string()).size(11.5)).frame(false)).on_hover_text(tr!("A new annotation layer, with its own name and colour")).clicked();
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.add(egui::Label::new(RichText::new(format!("{}  {}", theme::glyph(Icon::PenLine), tr!("Annotations").to_uppercase())).size(10.5).strong().color(pal.weak)).truncate());
+            });
+        });
     });
+    if add_note {
+        let palette = &mut doc.world.registry.annotations;
+        let name = palette.free_name(tr!("Annotations"));
+        // A colour of its own: the next of a few well apart.
+        const HUES: [[u8; 3]; 8] = [[220, 60, 160], [60, 160, 220], [240, 170, 40], [120, 200, 80], [150, 90, 220], [230, 90, 60], [40, 190, 170], [200, 200, 60]];
+        let rgb = HUES[palette.layers().count() % HUES.len()];
+        if let Some(n) = palette.add_layer(&name, rgb) {
+            tools.annotation = n;
+            tools.select(Tool::Annotate);
+            state.rename_note = Some((n, name));
+            doc.mark_changed();
+        }
+    }
     if let Some(n) = crate::panels::annotation_swatches(ui, 20.0, (tools.tool == Tool::Annotate).then_some(tools.annotation), &doc.world.registry.annotations) {
         tools.annotation = n;
         tools.select(Tool::Annotate);
     }
+    if annotation_layers(ui, tools, doc, state) {
+        doc.mark_changed();
+    }
     hint(ui, tr!("Marks on the map, to plan it, as in WorldPainter: never exported."));
+    hint(ui, tr!("+ makes an annotation layer of its own, named and shown or hidden on its own."));
 
     ui.add_space(8.0);
     hint(ui, tr!("Click a layer to paint it, double-click to rename it; its menu has its settings, its place in the list, its lock. A block holds one layer of each section. Ready-made trees, plants and mixes: Packs, above."));
@@ -585,6 +611,76 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
         doc.mark_changed();
     }
     said
+}
+
+/// The annotation layers, a row each: its colour, its name (a click paints
+/// with it, a double-click renames it), its eye; its menu sets its colour
+/// and opacity. Returns whether one changed.
+fn annotation_layers(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, state: &mut LayersUi) -> bool {
+    let pal = Palette::of(ui);
+    let mut changed = false;
+    let layers: Vec<u16> = doc.world.registry.annotations.layers().map(|(n, _)| n).collect();
+    for n in layers {
+        let picked = tools.tool == Tool::Annotate && tools.annotation == n;
+        ui.horizontal(|ui| {
+            let Some(layer) = doc.world.registry.annotations.layer_mut(n) else { return };
+            let (rect, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+            ui.painter().rect(rect, theme::TILE_RADIUS / 2, theme::rgb(layer.rgb).gamma_multiply(if layer.hidden { 0.35 } else { 1.0 }), Stroke::new(1.0, pal.border), StrokeKind::Inside);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let (icon, color) = if layer.hidden { (Icon::EyeOff, pal.weak) } else { (Icon::Eye, pal.text) };
+                let tip = if layer.hidden { tr!("Show this annotation layer") } else { tr!("Hide this annotation layer (its marks are kept)") };
+                if ui.add(egui::Button::new(RichText::new(theme::glyph(icon).to_string()).size(12.0).color(color)).frame(false)).on_hover_text(tip).clicked() {
+                    layer.hidden = !layer.hidden;
+                    changed = true;
+                }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| match &mut state.rename_note {
+                    Some((k, text)) if *k == n => {
+                        let edit = ui.add(egui::TextEdit::singleline(text).desired_width(ui.available_width()));
+                        if !edit.has_focus() && !edit.lost_focus() {
+                            edit.request_focus();
+                        }
+                        if edit.lost_focus() {
+                            let name = text.trim();
+                            if !name.is_empty() && name != layer.name {
+                                layer.name = name.to_owned();
+                                changed = true;
+                            }
+                            state.rename_note = None;
+                        }
+                    }
+                    _ => {
+                        let label = ui.add(egui::Label::new({
+                            let t = RichText::new(&layer.name).color(if layer.hidden { pal.weak } else if picked { pal.accent } else { pal.text });
+                            if picked { t.strong() } else { t }
+                        }).truncate().sense(Sense::click()));
+                        if label.double_clicked() {
+                            state.rename_note = Some((n, layer.name.clone()));
+                        } else if label.clicked() {
+                            tools.annotation = n;
+                            tools.select(Tool::Annotate);
+                        }
+                        label.context_menu(|ui| {
+                            crate::widgets::row(ui, tr!("Colour"), |ui| {
+                                if egui::widgets::color_picker::color_edit_button_srgb(ui, &mut layer.rgb).changed() {
+                                    changed = true;
+                                }
+                            });
+                            crate::widgets::row(ui, tr!("Opacity"), |ui| {
+                                if ui.add(crate::widgets::Field::new(&mut layer.opacity, 0..=100).suffix("%").width(96.0)).changed() {
+                                    changed = true;
+                                }
+                            });
+                            if ui.button(tr!("Rename")).clicked() {
+                                state.rename_note = Some((n, layer.name.clone()));
+                                ui.close();
+                            }
+                        });
+                    }
+                });
+            });
+        });
+    }
+    changed
 }
 
 /// A section's title, without a button; returns where it is.
@@ -1433,6 +1529,19 @@ mod tests {
         assert_eq!(h.state().tools.pattern.saved.last().map(|p| p.name.as_str()), Some("Mix 2"));
     }
 
+    /// An annotation layer is listed by its name under Annotations: a click
+    /// paints with it (the Annotations tool, its colour).
+    #[test]
+    fn annotation_layers_are_listed_and_painted_with() {
+        let mut s = state();
+        let n = s.doc.world.registry.annotations.add_layer("Misties Biome 8", [120, 90, 200]).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(320.0, 1600.0)).build_ui_state(draw, s);
+        h.run_steps(2);
+        h.get_all_by_label("Misties Biome 8").last().expect("its row").click();
+        h.run_steps(2);
+        assert!(h.state().tools.tool == Tool::Annotate && h.state().tools.annotation == n);
+    }
+
     /// Every cover, object layer and saved mix is listed; a click paints
     /// with it, the eye hides it from the map (and the file keeps it), a
     /// rename, a copy and a removal do what they say.
@@ -1897,10 +2006,15 @@ mod tests {
             forest.set(massif_core::combined::Part::Cover, Some((2, 0.6)));
             forest.set(massif_core::combined::Part::Trees, Some((1, 1.0)));
             s.doc.world.registry.add_combined(forest);
+            // Two annotation layers, as WorldPainter's custom ones, one hidden.
+            let notes = &mut s.doc.world.registry.annotations;
+            notes.add_layer("Misties Biome 8", [120, 90, 200]);
+            let roads = notes.add_layer("Roads to plan", [230, 150, 40]).unwrap();
+            notes.layer_mut(roads).unwrap().hidden = true;
             s.tools.cover = 3;
             s.tools.select(Tool::Cover);
             let mut h = egui_kittest::Harness::builder()
-                .with_size(vec2(320.0, 1100.0))
+                .with_size(vec2(320.0, 1400.0))
                 .with_pixels_per_point(ppp)
                 .with_accessibility_check(false)
                 .wgpu()

@@ -123,8 +123,9 @@ and exported by their names, which are their ids
 mod that defines them. One named otherwise keeps its name, its id made of
 it. Right-click a biome of the map in the Biomes panel to rename it or
 set its colours (on the map, and of grass and leaves in the 3D view and
-True Colour). **Custom annotation layers** become annotations in a colour of
-the map's own. Every custom layer keeps the colour WorldPainter shows it
+True Colour). **Custom annotation layers** become annotation layers of the
+map, with their name and colour, listed under Annotations in the Layers
+panel, each shown or hidden on its own. Every custom layer keeps the colour WorldPainter shows it
 in (on the map and in the Layers panel), and a ground cover its opacity.
 
 The import report lists any layer that was not carried over, and any

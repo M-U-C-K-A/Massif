@@ -362,7 +362,12 @@ fn smooth_pieces(dim: &Dimension, reg: &Registry, tile: TilePos, grid: &mut Grid
         // only, in the cover's colour.
         let cell = grid.cell(x, z);
         let cover = reg.cover(grid.cover[cell]);
-        if cover.is_some() {
+        if let Some(d) = cover {
+            // The game's plants cannot sit on layers: the top stays whole
+            // under them, as the export leaves it.
+            if !d.is_laid() && !d.changes_water() && !d.plants.iter().all(|(s, _)| s.contains("layers=")) {
+                continue;
+            }
             may = may.and(ShapeSet::of(&[Shape::Layers, Shape::Slab]));
         }
         let Some(piece) = choose(&c, may, f.slab_layers) else { continue };
@@ -655,7 +660,7 @@ fn note_colors(reg: &Registry, notes: Option<u64>) -> Vec<Option<([u8; 3], f32)>
     let p = &reg.annotations;
     (0..=massif_core::annotations::MAX)
         .map(|n| {
-            let alpha = p.opacity(n) as f32 / 100.0;
+            let alpha = p.drawn_opacity(n) as f32 / 100.0;
             p.color(n).filter(|_| alpha > 0.0).map(|c| (c, alpha))
         })
         .collect()

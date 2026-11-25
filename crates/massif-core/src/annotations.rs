@@ -3,7 +3,10 @@
 //! them (16 to [`MAX`]), each with its opacity on the map.
 //!
 //! The palette is kept with the map, in its [`crate::Registry`]: a tile
-//! holds numbers, the palette what they look like.
+//! holds numbers, the palette what they look like. A colour of the map's
+//! own may have a name: it is then an annotation layer of its own (as
+//! WorldPainter's custom annotation layers), listed by name in the Layers
+//! panel and shown or hidden on its own.
 
 use crate::tile::ANNOTATION_COLORS;
 use serde::{Deserialize, Serialize};
@@ -18,12 +21,24 @@ pub const MAX: u16 = 255;
 pub const DEFAULT_OPACITY: u8 = 75;
 
 /// A colour of the map's own (see [`AnnotationPalette::custom`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CustomColor {
     pub rgb: [u8; 3],
     /// Percent, 0 to 100.
     #[serde(default = "default_opacity")]
     pub opacity: u8,
+    /// Its name, as an annotation layer; empty for a plain colour.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    /// Hidden on the map and in 3D (its marks are kept).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
+}
+
+impl CustomColor {
+    pub fn new(rgb: [u8; 3]) -> Self {
+        Self { rgb, opacity: DEFAULT_OPACITY, name: String::new(), hidden: false }
+    }
 }
 
 fn default_opacity() -> u8 {
@@ -75,6 +90,46 @@ impl AnnotationPalette {
         }
     }
 
+    /// How opaque annotation `n` is drawn: its opacity, 0 when its layer
+    /// is hidden.
+    pub fn drawn_opacity(&self, n: u16) -> u8 {
+        match n {
+            0..=PRESETS => self.opacity(n),
+            _ => self.custom.get((n - PRESETS - 1) as usize).map_or(0, |c| if c.hidden { 0 } else { c.opacity }),
+        }
+    }
+
+    /// The annotation layers: the map's own colours that have a name, by
+    /// number.
+    pub fn layers(&self) -> impl Iterator<Item = (u16, &CustomColor)> + '_ {
+        self.custom.iter().enumerate().filter(|(_, c)| !c.name.is_empty()).map(|(k, c)| (k as u16 + PRESETS + 1, c))
+    }
+
+    /// The annotation layer `n`, if it is one.
+    pub fn layer_mut(&mut self, n: u16) -> Option<&mut CustomColor> {
+        n.checked_sub(PRESETS + 1).and_then(|k| self.custom.get_mut(k as usize))
+    }
+
+    /// A new annotation layer named `name`, in colour `rgb` (another of the
+    /// same colour may exist); `None` when the map holds all it can.
+    pub fn add_layer(&mut self, name: &str, rgb: [u8; 3]) -> Option<u16> {
+        let n = self.custom.len() as u16 + PRESETS + 1;
+        if n > MAX {
+            return None;
+        }
+        self.custom.push(CustomColor { name: name.to_owned(), ..CustomColor::new(rgb) });
+        Some(n)
+    }
+
+    /// A name for a new annotation layer: `Annotations 2`, `Annotations 3`…
+    pub fn free_name(&self, base: &str) -> String {
+        let taken = |n: &str| self.custom.iter().any(|c| c.name == n);
+        if !taken(base) {
+            return base.to_owned();
+        }
+        (2..).map(|k| format!("{base} {k}")).find(|n| !taken(n)).expect("a free name")
+    }
+
     pub fn set_opacity(&mut self, n: u16, opacity: u8) {
         let opacity = opacity.min(100);
         match n {
@@ -105,14 +160,14 @@ impl AnnotationPalette {
         if let Some(k) = ANNOTATION_COLORS.iter().position(|&c| c == rgb) {
             return Some(k as u16 + 1);
         }
-        if let Some(k) = self.custom.iter().position(|c| c.rgb == rgb) {
+        if let Some(k) = self.custom.iter().position(|c| c.rgb == rgb && c.name.is_empty()) {
             return Some(k as u16 + PRESETS + 1);
         }
         let n = self.custom.len() as u16 + PRESETS + 1;
         if n > MAX {
             return None;
         }
-        self.custom.push(CustomColor { rgb, opacity: DEFAULT_OPACITY });
+        self.custom.push(CustomColor::new(rgb));
         Some(n)
     }
 
@@ -165,7 +220,28 @@ mod tests {
     fn an_old_map_reads_with_the_default_palette() {
         let p: AnnotationPalette = serde_json::from_str("{}").unwrap();
         assert!(p.is_default());
-        let back: AnnotationPalette = serde_json::from_str(&serde_json::to_string(&AnnotationPalette { custom: vec![CustomColor { rgb: [1, 2, 3], opacity: 40 }], ..Default::default() }).unwrap()).unwrap();
+        let back: AnnotationPalette = serde_json::from_str(&serde_json::to_string(&AnnotationPalette { custom: vec![CustomColor { opacity: 40, ..CustomColor::new([1, 2, 3]) }], ..Default::default() }).unwrap()).unwrap();
         assert_eq!(back.color(16), Some([1, 2, 3]));
+    }
+
+    /// Named colours are annotation layers: listed, hidden on their own,
+    /// kept apart from a plain colour of the same rgb, and written with
+    /// their name (an old map reads with none).
+    #[test]
+    fn named_colours_are_annotation_layers() {
+        let mut p = AnnotationPalette::default();
+        let plain = p.number_of([10, 20, 30]).unwrap();
+        let misty = p.add_layer("Misties Biome 8", [10, 20, 30]).unwrap();
+        assert_ne!(plain, misty);
+        assert_eq!(p.number_of([10, 20, 30]), Some(plain), "the plain colour, not the layer");
+        assert_eq!(p.layers().map(|(n, c)| (n, c.name.as_str())).collect::<Vec<_>>(), [(misty, "Misties Biome 8")]);
+        p.layer_mut(misty).unwrap().hidden = true;
+        assert_eq!((p.drawn_opacity(misty), p.opacity(misty), p.drawn_opacity(plain)), (0, DEFAULT_OPACITY, DEFAULT_OPACITY));
+        assert_eq!(p.free_name("Misties Biome 8"), "Misties Biome 8 2");
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains("\"name\":\"Misties Biome 8\"") && json.contains("\"hidden\":true"), "{json}");
+        let back: AnnotationPalette = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, p);
+        assert!(!serde_json::to_string(&AnnotationPalette { custom: vec![CustomColor::new([1, 2, 3])], ..Default::default() }).unwrap().contains("name"));
     }
 }

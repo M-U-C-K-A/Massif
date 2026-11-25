@@ -96,6 +96,10 @@ pub struct ExportContext<'a> {
     /// that many eighths high, on the layers under them): of each of their
     /// states, the same with `layers` 1 to 8.
     plant_layers: HashMap<u16, [u16; 8]>,
+    /// How many eighths high each state is when it is a block of layers or
+    /// a bottom slab (snow's, a mod's `*_layer[layers=3]`); 0 for a whole
+    /// block or anything else.
+    eighths: Vec<u8>,
     /// The states of each object's palette as it stands each way: index
     /// `turn + 4` when mirrored, `turn` otherwise; [`SKIP`] for a block the
     /// version has nothing like. Empty for objects no layer uses.
@@ -275,9 +279,10 @@ impl<'a> ExportContext<'a> {
                 };
                 frosted.resize(states.len() - first_plant, frost);
                 snowy.resize(states.len() - first_plant, short == "snow");
-                // A plant that sits on layers: each height, for Smooth
-                // terrain's layers under it.
-                if era != Era::Numbered && props.iter().any(|(k, _)| k == "layers") {
+                // A plant that sits on layers (not a block of layers itself):
+                // each height, for the layers under it.
+                let layer_block = short.ends_with("_layer") || short.ends_with("_layers") || short.ends_with("_slab") || short == "snow";
+                if era != Era::Numbered && !layer_block && props.iter().any(|(k, _)| k == "layers") {
                     for (half, state) in [(tall.then_some("lower"), Some(lower)), (Some("upper"), upper)] {
                         let Some(state) = state else { continue };
                         let heights = std::array::from_fn(|n| {
@@ -629,7 +634,9 @@ impl<'a> ExportContext<'a> {
         }));
         let mat = Materializer::new(reg, world.meta.seed, dim.min_y);
         let bands = mat.substrate_bands().map(|(y0, y1, b)| (y0, y1, b.map(|b| b.0)));
+        let eighths = states.iter().map(|(name, props)| state_eighths(name, props)).collect();
         Ok(Self {
+            eighths,
             reg,
             mat,
             bands,
@@ -839,6 +846,21 @@ fn grow(ctx: &ExportContext, cover: u16, x: i32, y: i32, z: i32, blocks: &mut [u
     if y + height > max_y || (0..height).any(|k| blocks[at(y + k)] != medium) {
         return y;
     }
+    // On a block of layers (a cover's, a terrain's): a plant that sits on
+    // layers as high as they are; one that cannot does not grow there
+    // (it would float). Blocks laid and snow lie on it as they are.
+    let mut plant = *plant;
+    let below = ctx.eighths.get(blocks[at(y - 1)] as usize).copied().unwrap_or(0);
+    if below > 0 {
+        match ctx.plant_layers.get(&plant.lower) {
+            Some(heights) => {
+                plant.lower = heights[below as usize - 1];
+                plant.upper = plant.upper.map(|u| ctx.plant_layers.get(&u).map_or(u, |h| h[below as usize - 1]));
+            }
+            None if !def.is_laid() && !def.changes_water() && ctx.frosted.get((plant.lower - ctx.first_extra) as usize) != Some(&Frosted::Over) => return y,
+            None => {}
+        }
+    }
     for k in 0..height {
         blocks[at(y + k)] = match plant.upper {
             Some(upper) if k == 1 => upper,
@@ -846,6 +868,27 @@ fn grow(ctx: &ExportContext, cover: u16, x: i32, y: i32, z: i32, blocks: &mut [u
         };
     }
     y + height
+}
+
+/// How many eighths high a state is when it is a block of layers or a
+/// bottom slab (1 to 7), else 0.
+fn state_eighths(name: &str, props: &[(String, String)]) -> u8 {
+    let short = name.rsplit(':').next().unwrap_or(name);
+    let prop = |k: &str| props.iter().find(|p| p.0 == k).map(|p| p.1.as_str());
+    let layers = prop("layers").and_then(|v| v.parse::<u8>().ok());
+    let n = if short.ends_with("_layer") || short.ends_with("_layers") || short == "snow" {
+        layers.unwrap_or(1)
+    } else if short.ends_with("_slab") {
+        match (prop("type"), layers) {
+            (Some("top" | "double"), _) => 8,
+            (_, Some(n)) => n,
+            (Some("bottom"), None) => 4,
+            _ => 8,
+        }
+    } else {
+        8
+    };
+    if n < 8 { n } else { 0 }
 }
 
 /// Grow a stack of covers (see `massif_core::cover_stack`) on the top of a
@@ -1568,9 +1611,15 @@ fn fill_chunk(
                 },
                 &pieces.family,
             );
-            // Plants on the top: its height only, under them.
-            let plants = grown(blocks[at(c.y1)]);
+            // Plants on the top: its height only, under them; under a plant
+            // that cannot sit on layers (the game's), the top stays whole.
+            let on_top = blocks[at(c.y1)];
+            let plants = grown(on_top);
             if plants {
+                let fixed = !ctx.plant_layers.contains_key(&on_top) && ctx.frosted.get((on_top - ctx.first_extra) as usize) != Some(&Frosted::Over);
+                if fixed {
+                    continue;
+                }
                 may = may.and(ShapeSet::of(&[Shape::Layers, Shape::Slab]));
             }
             let Some(piece) = choose(c, may, pieces.family.slab_layers) else { continue };

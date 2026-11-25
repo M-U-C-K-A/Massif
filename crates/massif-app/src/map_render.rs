@@ -804,7 +804,7 @@ impl<'a> Colorizer<'a> {
             auto: AutoBiome::new(reg),
             notes: (0..=massif_core::annotations::MAX)
                 .map(|n| {
-                    let alpha = reg.annotations.opacity(n) as f32 / 100.0;
+                    let alpha = reg.annotations.drawn_opacity(n) as f32 / 100.0;
                     reg.annotations.color(n).filter(|_| alpha > 0.0).map(|c| (rgb(c), alpha))
                 })
                 .collect(),

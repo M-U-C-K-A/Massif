@@ -2311,8 +2311,9 @@ fn a_test_export_writes_its_regions_as_the_whole_export() {
 /// them: the game's stone is smoothed by eighths with the mod's
 /// `limestone_slab` (the mod's name for stone), black terracotta with its
 /// `black_hardened_clay_slab`, the mod's brown moss (which has a slab by
-/// eighths and no layers) by its slab's eighths; ferns growing on grass keep
-/// the layers under them, the ferns standing on them.
+/// eighths and no layers) by its slab's eighths; Conquest's meadow grass
+/// keeps the layers under it and sits on them, the game's ferns (which
+/// cannot) keep a whole block under them.
 #[test]
 fn smooth_terrain_uses_the_mods_block_families() {
     use massif_core::registry::{CoverDef, Mix, Stratum, TerrainDef, TerrainId};
@@ -2384,12 +2385,53 @@ fn smooth_terrain_uses_the_mods_block_families() {
     assert!(has(&s, &["conquest:brown_moss_slab", "layers=5"]), "brown moss by its slab's eighths: {s}");
     let s = r.state(x, 63, z + 70);
     assert!(has(&s, &["conquest:grass_block_layer", "layers=5"]), "grass: {s}");
-    // Under the ferns: the layers, the ferns on them.
-    let s = r.state(x, 63, z + 90);
-    assert!(has(&s, &["conquest:grass_block_layer", "layers=5"]), "grass under ferns: {s}");
+    // Under the game's ferns, which cannot sit on layers: a whole block.
+    assert_eq!(r.block(x, 63, z + 90), "minecraft:grass_block", "grass under ferns stays whole");
     assert_eq!(r.block(x, 64, z + 90), "minecraft:fern");
     // Conquest's plants sit as high as the layers under them.
     let s = r.state(x, 64, z + 110);
     assert!(has(&s, &["conquest:common_meadow_grass", "layers=5"]), "meadow grass on five eighths: {s}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Plants on a block of layers that is the terrain's own top (a cover of
+/// layers made the ground's, `ochre_soil_slab[layers=5]`): Conquest's
+/// meadow grass sits on its five eighths (`layers=5`), the game's ferns,
+/// which would float, do not grow there.
+#[test]
+fn plants_sit_on_the_layers_under_them() {
+    use massif_core::registry::{CoverDef, Mix, Stratum, TerrainDef, TerrainId};
+    let mut world = generate(&GenParams { tiles_x: 1, tiles_z: 1, landform: Landform::Hills, seed: 3, ..GenParams::default() });
+    world.meta.ores.on = false;
+    let soil = {
+        let reg = &mut world.registry;
+        let b = reg.intern_block("conquest:ochre_soil_slab[layers=5,type=bottom]", [150, 110, 60]);
+        reg.terrains.push(TerrainDef { name: "Ochre soil".into(), group: "Test".into(), color: [150, 110, 60], strata: vec![Stratum { blocks: vec![(b, 1)], depth: (1, 1), mix: Mix::Grain }], submerged_top: None, biome_hint: None });
+        TerrainId((reg.terrains.len() - 1) as u16)
+    };
+    let cover = |world: &mut massif_core::World, name: &str, plant: &str| {
+        let mut c = CoverDef::new(name, [60, 120, 40], &[(plant, 1)], 1.0);
+        c.soil_only = false;
+        world.registry.add_cover(c)
+    };
+    let meadow = cover(&mut world, "Meadow grass", "conquest:common_meadow_grass[layers=8]");
+    let ferns = cover(&mut world, "Ferns", "minecraft:fern");
+    let pos = world.dims[0].ground().positions().next().unwrap();
+    let (ox, oz) = pos.origin();
+    let tile = world.dims[0].ground_mut().tile_mut(pos).unwrap();
+    for i in 0..massif_core::TILE_AREA {
+        tile.top.set(i, 64.0);
+        tile.fluid.set(i, massif_core::NO_FLUID);
+        tile.terrain.set(i, soil.0);
+        tile.cover.set(i, if (i / 128) < 64 { meadow } else { ferns });
+        tile.objects.set(i, 0);
+    }
+    let options = ExportOptions { target: Target::release("1.20.1").unwrap(), ..ExportOptions::default() };
+    let dir = temp_dir("plants-on-layers");
+    export(&world.snapshot(), &dir, &options, &Progress::default()).unwrap();
+    let mut r = Reader::new(&dir);
+    let s = r.state(ox + 10, 64, oz + 10);
+    assert!(s.contains("conquest:common_meadow_grass") && s.contains("layers=5"), "meadow grass on five eighths: {s} over {}", r.state(ox + 10, 63, oz + 10));
+    assert_eq!(r.block(ox + 10, 64, oz + 100), "minecraft:air", "no fern floating over the layers");
     std::fs::remove_dir_all(&dir).unwrap();
 }

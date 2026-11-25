@@ -1670,6 +1670,9 @@ pub fn annotation_label(n: u16, palette: &massif_core::annotations::AnnotationPa
     if n <= massif_core::annotations::PRESETS {
         return annotation_name(n).to_owned();
     }
+    if let Some((_, layer)) = palette.layers().find(|(k, _)| *k == n) {
+        return layer.name.clone();
+    }
     let c = palette.color(n).unwrap_or([0; 3]);
     format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2])
 }
