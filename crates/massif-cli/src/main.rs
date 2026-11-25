@@ -44,7 +44,7 @@ USAGE
   massif-cli cut <world.massif> <y> <out.png> [--rect X0,Z0,X1,Z1]
   massif-cli structure <world.massif> <out.massif> <kind> <x> <z> [--y Y] [--seed N] [--turn T] [--jar PATH] [--keep-land]
   massif-cli structure-checks <world.massif>
-  massif-cli village <world.massif> <out.massif> <x0> <z0> <x1> <z1> [--theme NAME | --pack DIR] [--walls] [--seed N] [--jar PATH]
+  massif-cli village <world.massif> <out.massif> <x0> <z0> <x1> <z1> [--theme NAME | --pack DIR] [--walls | --enclosure STYLE] [--seed N] [--jar PATH]
       [--houses N] [--size-bias -1..1] [--road theme|dirt|premium|stone|planks] [--density 0.2..1] [--spread 0..1]
       [--props 0..1] [--fields 0..1] [--mill auto|wind|water|none]
   massif-cli village-test-pack <dir>      write a Plains pack of boxes at the sizes of the Plains list
@@ -1197,7 +1197,11 @@ fn cmd_village(mut args: Args) -> Res<()> {
     let pack = args.option("--pack")?.map(PathBuf::from);
     let seed: u64 = args.option("--seed")?.map(|s| s.parse().map_err(|_| "--seed expects an integer")).transpose()?.unwrap_or(1);
     let jar = args.option("--jar")?;
-    let walls = args.flag("--walls");
+    let enclosure = match args.option("--enclosure")? {
+        None => None,
+        Some(e) => Some(massif_structures::village::walls::Enclosure::parse(&e).ok_or_else(|| format!("--enclosure: {}, not {e}", massif_structures::village::walls::Enclosure::ALL.map(|e| e.key()).join(", ")))?),
+    };
+    let walls = args.flag("--walls") || enclosure.is_some();
     let num = |v: Option<String>, name: &str| -> Res<Option<f32>> { v.map(|s| s.parse::<f32>().map_err(|_| format!("{name} expects a number"))).transpose() };
     let houses = args.option("--houses")?.map(|s| s.parse::<u32>().map_err(|_| "--houses expects an integer")).transpose()?;
     let size_bias = num(args.option("--size-bias")?, "--size-bias")?;
@@ -1227,6 +1231,7 @@ fn cmd_village(mut args: Args) -> Res<()> {
         size_bias: size_bias.unwrap_or(d.size_bias),
         road,
         walls,
+        enclosure: enclosure.unwrap_or_default(),
         density: density.unwrap_or(0.7),
         spread: spread.unwrap_or(d.spread),
         props: props.unwrap_or(d.props),

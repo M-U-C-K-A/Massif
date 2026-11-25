@@ -334,3 +334,38 @@ fn the_tools_rows_line_up() {
     }
     crate::i18n::set_language(crate::i18n::Language::English);
 }
+
+/// The village's walls: a menu of what runs round it, each with a picture,
+/// rendered with MASSIF_SNAPSHOT_DIR; picking one sets it for the next
+/// village.
+#[test]
+fn the_walls_menu_shows_each_enclosure() {
+    use massif_structures::village::walls::Enclosure;
+    let ppp = std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
+    let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from);
+    let mut h = harness_with(ThemeChoice::Dark, ppp);
+    h.run_steps(5);
+    {
+        let s = h.state_mut();
+        s.tools.select(Tool::Structure);
+        s.tools.structure.village = true;
+        s.tools.village.walls = true;
+    }
+    h.run_steps(5);
+    h.get_by_value("Wooden fence").scroll_to_me();
+    h.run_steps(3);
+    h.get_by_value("Wooden fence").click();
+    h.run_steps(4);
+    for e in Enclosure::ALL {
+        assert!(h.query_all_by_label(e.name()).next().is_some(), "{e:?} in the menu");
+    }
+    if let Some(dir) = &dir {
+        h.render().unwrap().save(dir.join(format!("structures-walls-menu-{ppp}x.png"))).unwrap();
+    }
+    h.query_all_by_label("Hedge").last().expect("the hedge").click();
+    h.run_steps(4);
+    assert_eq!(h.state().tools.village.enclosure, Enclosure::Hedge);
+    assert!(h.state().tools.village.walls);
+    let massif_structures::placed::Recipe::Village { params, .. } = h.state().tools.village.recipe(massif_core::BlockRect::new(0, 0, 100, 100)) else { panic!("a village") };
+    assert!(params.walls && params.enclosure == Enclosure::Hedge);
+}

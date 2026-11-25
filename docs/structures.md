@@ -54,7 +54,7 @@ Villages and structures placed before 1.2 can be taken away but not moved
 | **Size** | How close its houses stand: a small village's few and far apart, a large one's many and close. A click places a square of 112, 192 or 320 blocks (about 3, 12 and 48 houses); over any rectangle, the number of houses follows its area at that density. |
 | **Houses** | How many houses the village holds, worked out from its area and size. Type a number to set it by hand: it then stays as typed when the village is resized, until the button beside it lets it follow the area again. |
 | **Roads** | The blocks of its streets. |
-| **Walls** | Ramparts round the village, towers at the corners, gates where its main roads leave. |
+| **Walls** | What runs round the village, picked from a menu with a picture of each: none, a wooden fence, a spruce fence, post and rail, a hedge, a flowering hedge, a low stone wall, a dry-stone wall, stone and fence, a palisade, or the theme's ramparts with towers. Each is of the game's own blocks, with a little variety along its run (posts, lanterns, mossy stones, taller logs), and a gate where a road crosses it: a fence gate across the road, an arch of leaves over it, a beam over a palisade's. Villages placed before 1.2.1 keep their ramparts. |
 | **Height** | For those placed at a depth (Ancient City, Trial Chambers, stronghold): the height of their start, the game's by default — an Ancient City's halls then lie between y −52 and y −22. |
 | **Turn** | Any (drawn), or a quarter turn of your choice. |
 | **Draw** | The draw it is assembled from: the same draw at the same place gives the same structure. The dice button draws another. |
@@ -91,9 +91,9 @@ district has its square; main roads join them and lead out of the village,
 finding their way over the land (gentle slopes and dry land first, planks
 over water); side roads branch off them; the buildings stand along both,
 their doors to the road, on ground levelled to their floor, with villagers
-in the houses. **Walls** runs a wall round it, a few blocks inside the
-selection's edge, with towers at its corners and along it, and a gate where
-a road crosses.
+in the houses. **Walls** runs a fence, a hedge, a low wall, a palisade or
+ramparts round it (the menu beside it), a few blocks inside the selection's
+edge, with a gate where a road crosses.
 
 Its themes are the game's own villages (plains, desert, savanna, taiga,
 snowy: each district a village assembled by the jigsaw engine, kept to the
@@ -114,7 +114,11 @@ land), the roads, the walls, the plots along the roads, the buildings, the
 props — each its own step, which the terrain graph's Village Generator will
 show as nodes. From the command line, `massif-cli village` takes the same
 settings and more (`--houses`, `--size-bias`, `--road`, `--density`,
-`--spread`, `--props`, `--fields`, `--mill`).
+`--spread`, `--props`, `--fields`, `--mill`, `--enclosure` with one of
+`wooden-fence`, `spruce-fence`, `post-and-rail`, `hedge`, `flowering-hedge`,
+`low-stone-wall`, `dry-stone-wall`, `stone-and-fence`, `palisade`,
+`ramparts`). In the terrain graph, Village walls has the same **Style**, and
+the Village Generator exposes it as **Wall style**.
 
 ## Underground
 

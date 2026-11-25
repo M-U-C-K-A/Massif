@@ -13,6 +13,7 @@ use massif_structures::Library;
 use massif_structures::geom::BBox;
 use massif_structures::placed::Recipe;
 use massif_structures::vanilla::{self, Group, Height, KINDS, Kind};
+use massif_structures::village::walls::Enclosure;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -648,7 +649,7 @@ fn site_check(doc: &Document, r: massif_core::BlockRect) -> (f32, f32, u32) {
 /// buildings type by type (counts a pack's village takes as asked), the
 /// pack's schematics, and how its land suits it. Whether a count changed.
 #[allow(clippy::too_many_arguments)]
-fn village_details(ui: &mut Ui, summary: bool, id: &str, doc: &Document, theme: Option<&massif_structures::village::Theme>, size: VillageSize, houses: u32, road: massif_structures::village::RoadType, walls: bool, counts: &mut Vec<(String, u32)>, built: Option<&massif_core::structures::Structure>, area: Option<massif_core::BlockRect>) -> bool {
+fn village_details(ui: &mut Ui, summary: bool, id: &str, doc: &Document, theme: Option<&massif_structures::village::Theme>, size: VillageSize, houses: u32, road: massif_structures::village::RoadType, walls: Option<Enclosure>, counts: &mut Vec<(String, u32)>, built: Option<&massif_core::structures::Structure>, area: Option<massif_core::BlockRect>) -> bool {
     use crate::panels::hint;
     use crate::widgets::{Field, row, well};
     use massif_structures::village::RoadType;
@@ -689,8 +690,8 @@ fn village_details(ui: &mut Ui, summary: bool, id: &str, doc: &Document, theme: 
         }
     }
     parts.push(roads.to_owned());
-    if walls {
-        parts.push(tr!("walls").to_owned());
+    if let Some(e) = walls {
+        parts.push(enclosure_name(e).to_lowercase());
     }
     if summary {
         ui.add(egui::Label::new(egui::RichText::new(parts.join(" · ")).strong()).wrap());
@@ -741,11 +742,118 @@ fn village_details(ui: &mut Ui, summary: bool, id: &str, doc: &Document, theme: 
     changed
 }
 
+/// The name of enclosure `e`, translated.
+fn enclosure_name(e: Enclosure) -> &'static str {
+    match e {
+        Enclosure::WoodenFence => tr!("Wooden fence"),
+        Enclosure::SpruceFence => tr!("Spruce fence"),
+        Enclosure::PostAndRail => tr!("Post and rail"),
+        Enclosure::Hedge => tr!("Hedge"),
+        Enclosure::FloweringHedge => tr!("Flowering hedge"),
+        Enclosure::LowStoneWall => tr!("Low stone wall"),
+        Enclosure::DryStone => tr!("Dry-stone wall"),
+        Enclosure::StoneAndFence => tr!("Stone and fence"),
+        Enclosure::Palisade => tr!("Palisade"),
+        Enclosure::Ramparts => tr!("Ramparts"),
+    }
+}
+
+/// The colour of a block of an enclosure, for its picture.
+fn enclosure_tint(id: &str) -> egui::Color32 {
+    let rgb = |r, g, b| egui::Color32::from_rgb(r, g, b);
+    if id.contains("lantern") {
+        rgb(236, 180, 84)
+    } else if id.contains("flowering") {
+        rgb(176, 112, 160)
+    } else if id.contains("azalea") {
+        rgb(104, 140, 52)
+    } else if id.contains("leaves") {
+        rgb(72, 120, 44)
+    } else if id.contains("mossy") {
+        rgb(106, 122, 92)
+    } else if id.contains("stone_bricks") {
+        rgb(124, 124, 124)
+    } else if id.contains("cobble") || id.contains("andesite") {
+        rgb(112, 112, 112)
+    } else if id.contains("stone") {
+        rgb(128, 128, 128)
+    } else if id.contains("birch") {
+        rgb(200, 184, 132)
+    } else if id.contains("stripped_spruce") {
+        rgb(116, 90, 52)
+    } else if id.contains("spruce") {
+        rgb(84, 60, 36)
+    } else {
+        rgb(152, 118, 70)
+    }
+}
+
+/// A picture of enclosure `e` (none: its ground alone) in `rect`: a
+/// straight run of it, side on, a gate in the middle.
+fn paint_enclosure(ui: &Ui, rect: egui::Rect, e: Option<Enclosure>) {
+    let pal = Palette::of(ui);
+    let painter = ui.painter_at(rect);
+    let cols = 11usize;
+    let sample = e.map(|e| e.sample(cols)).unwrap_or_default();
+    let high = sample.iter().map(|c| c.iter().rposition(|b| !b.is_empty()).map_or(0, |k| k + 1)).max().unwrap_or(0).max(3);
+    let cell = (rect.width() / cols as f32).min(rect.height() / (high + 1) as f32).floor().max(2.0);
+    let left = rect.center().x - cell * cols as f32 / 2.0;
+    let ground = rect.bottom() - cell;
+    painter.rect_filled(egui::Rect::from_min_max(egui::pos2(left, ground), egui::pos2(left + cell * cols as f32, ground + cell)), 0.0, theme::mix(pal.panel, pal.text, 0.18));
+    for (k, col) in sample.iter().enumerate() {
+        for (y, id) in col.iter().enumerate() {
+            if id.is_empty() {
+                continue;
+            }
+            let x0 = left + k as f32 * cell;
+            let y1 = ground - y as f32 * cell;
+            // Fences and walls thinner than a whole block.
+            let thin = id.ends_with("_fence") || id.ends_with("_wall") || id.ends_with("_gate");
+            let inset = if id.contains("lantern") { cell * 0.25 } else if thin { cell * 0.3 } else { 0.0 };
+            let r = egui::Rect::from_min_max(egui::pos2(x0 + inset, y1 - cell + if thin { cell * 0.2 } else { 0.0 }), egui::pos2(x0 + cell - inset, y1));
+            painter.rect_filled(r, 0.0, enclosure_tint(id));
+            if thin && !id.ends_with("_gate") {
+                // A rail to the next.
+                let rail = egui::Rect::from_min_max(egui::pos2(x0, y1 - cell * 0.7), egui::pos2(x0 + cell, y1 - cell * 0.5));
+                painter.rect_filled(rail, 0.0, enclosure_tint(id));
+            }
+        }
+    }
+}
+
+/// What runs round a village: none, or one of the enclosures, each with a
+/// picture of it. Whether it changed.
+fn enclosure_picker(ui: &mut Ui, id: &str, walls: &mut Option<Enclosure>) -> bool {
+    let mut changed = false;
+    let name = walls.map_or(tr!("None"), enclosure_name);
+    let width = (ui.available_width() * 0.8).min(190.0);
+    crate::widgets::combo(format!("{id} enclosure")).selected_text(name).width(width).height(420.0).show_ui(ui, |ui| {
+        ui.set_min_width(width.max(190.0));
+        for choice in std::iter::once(None).chain(Enclosure::ALL.map(Some)) {
+            let on = *walls == choice;
+            let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 30.0), egui::Sense::click());
+            let pal = Palette::of(ui);
+            if on || response.hovered() {
+                ui.painter().rect_filled(rect, theme::TILE_RADIUS, if on { pal.accent_soft } else { pal.control() });
+            }
+            paint_enclosure(ui, egui::Rect::from_min_size(rect.min + egui::vec2(4.0, 2.0), egui::vec2(66.0, 26.0)), choice);
+            let label = choice.map_or(tr!("None"), enclosure_name);
+            ui.painter().text(rect.left_center() + egui::vec2(80.0, 0.0), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(12.5), pal.text);
+            response.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, on, label));
+            if response.clicked() && !on {
+                *walls = choice;
+                changed = true;
+            }
+        }
+    });
+    changed
+}
+
 /// The settings of a village: size, houses, roads, walls, draw. `pack`:
 /// whether its theme is a pack's (which may have roads of its own).
 /// Whether one changed.
 #[allow(clippy::too_many_arguments)]
-fn village_controls(ui: &mut Ui, id: &str, size: &mut VillageSize, houses: &mut u32, by_hand: &mut bool, road: &mut massif_structures::village::RoadType, walls: &mut bool, seed: &mut u64, pack: bool) -> bool {
+fn village_controls(ui: &mut Ui, id: &str, size: &mut VillageSize, houses: &mut u32, by_hand: &mut bool, road: &mut massif_structures::village::RoadType, walls: &mut Option<Enclosure>, seed: &mut u64, pack: bool) -> bool {
     let has_own_roads = pack;
     use crate::widgets::{Field, button, row, well};
     use massif_structures::village::RoadType;
@@ -791,7 +899,7 @@ fn village_controls(ui: &mut Ui, id: &str, size: &mut VillageSize, houses: &mut 
             });
         }
         row(ui, tr!("Walls"), |ui| {
-            changed |= crate::widgets::switch(ui, walls).changed();
+            changed |= enclosure_picker(ui, id, walls);
         });
         row(ui, tr!("Draw"), |ui| {
             changed |= crate::widgets::drag(ui, egui::DragValue::new(seed).speed(1.0)).changed();
@@ -801,7 +909,7 @@ fn village_controls(ui: &mut Ui, id: &str, size: &mut VillageSize, houses: &mut 
             }
         });
     });
-    crate::panels::hint(ui, tr!("Walls: ramparts round it, towers at the corners, gates where its roads leave. Draw: the same number gives the same village."));
+    crate::panels::hint(ui, tr!("Walls: what runs round it, with gates where its roads leave. Draw: the same number gives the same village."));
     changed
 }
 
@@ -845,7 +953,7 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
                 let follow = |d: f32| area_now.map_or(fallback, |r| massif_structures::village::houses_for(r, d));
                 let mut by_hand = params.houses_by_hand;
                 let mut houses = params.houses.unwrap_or_else(|| follow(params.density));
-                let (mut road, mut walls, mut seed2) = (params.road, params.walls, seed);
+                let (mut road, mut walls, mut seed2) = (params.road, params.walls.then_some(params.enclosure), seed);
                 let mut counts = params.counts.clone();
                 let th = tools.village.theme_named(&pack, &theme);
                 let area = area_now;
@@ -859,7 +967,7 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
                     if !by_hand {
                         houses = follow(density);
                     }
-                    let params = massif_structures::village::Params { houses: Some(houses), houses_by_hand: by_hand, density, road, walls, counts, ..params };
+                    let params = massif_structures::village::Params { houses: Some(houses), houses_by_hand: by_hand, density, road, walls: walls.is_some(), enclosure: walls.unwrap_or(params.enclosure), counts, ..params };
                     tools.structure.rt.regenerate(s.id, Recipe::Village { pack, theme, centre, size, params, seed: seed2 });
                 }
                 hint(ui, tr!("Drag it to move it, its corners to resize it: it is built again."));
@@ -940,7 +1048,7 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
         let pack = !v.theme.0.is_empty();
         let mut houses = v.houses.unwrap_or_else(|| v.size.houses());
         let mut by_hand = v.houses.is_some();
-        let (mut size, mut road, mut walls, mut seed) = (v.size, v.road, v.walls, v.seed);
+        let (mut size, mut road, mut walls, mut seed) = (v.size, v.road, v.walls.then_some(v.enclosure), v.seed);
         let th = v.theme_named(&v.theme.0, &v.theme.1);
         let mut counts = v.counts.clone();
         village_details(ui, true, "new village", doc, th.as_ref(), size, houses, road, walls, &mut counts, None, None);
@@ -949,7 +1057,8 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
             v.counts = counts;
         }
         if controls {
-            (v.size, v.road, v.walls, v.seed) = (size, road, walls, seed);
+            (v.size, v.road, v.walls, v.seed) = (size, road, walls.is_some(), seed);
+            v.enclosure = walls.unwrap_or(v.enclosure);
             v.houses = by_hand.then_some(houses);
         }
         hint(ui, &tr!("Click on the map: a village {side} blocks across. Drag a rectangle: a village over it.", side = v.size.side()));
@@ -1181,6 +1290,8 @@ pub struct VillageSettings {
     /// The folders of the packs added.
     pub packs: Vec<PathBuf>,
     pub walls: bool,
+    /// What runs round it when `walls`.
+    pub enclosure: Enclosure,
     /// How built up, 20 % to 100 %.
     pub density: f32,
     /// From small houses (−1) to large ones and manors (+1).
@@ -1262,7 +1373,7 @@ pub struct VillageJob {
 
 impl Default for VillageSettings {
     fn default() -> Self {
-        Self { theme: (String::new(), "Plains".into()), packs: Vec::new(), walls: false, density: 0.7, size_bias: 0.0, road: massif_structures::village::RoadType::Dirt, props: 0.5, houses: None, seed: 1, size: VillageSize::Medium, counts: Vec::new(), rt: VillageRuntime::default() }
+        Self { theme: (String::new(), "Plains".into()), packs: Vec::new(), walls: false, enclosure: Enclosure::WoodenFence, density: 0.7, size_bias: 0.0, road: massif_structures::village::RoadType::Dirt, props: 0.5, houses: None, seed: 1, size: VillageSize::Medium, counts: Vec::new(), rt: VillageRuntime::default() }
     }
 }
 
@@ -1375,7 +1486,7 @@ impl VillageRuntime {
 impl VillageSettings {
     /// What the village is to be like, from these settings.
     pub fn params(&self) -> massif_structures::village::Params {
-        massif_structures::village::Params { walls: self.walls, density: self.density, size_bias: self.size_bias, road: self.road, props: self.props, houses: self.houses, counts: self.counts.clone(), ..Default::default() }
+        massif_structures::village::Params { walls: self.walls, enclosure: self.enclosure, density: self.density, size_bias: self.size_bias, road: self.road, props: self.props, houses: self.houses, counts: self.counts.clone(), ..Default::default() }
     }
 
     /// The recipe of a village of these settings over `rect`.

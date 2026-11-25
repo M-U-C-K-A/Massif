@@ -138,7 +138,10 @@ pub fn lay_graph(lib: Option<&Library>, plans: &dyn PlanSource, ground: &dyn Gro
         by_theme[main].push(i);
     }
     let road = lines.lines.iter().find_map(|l| l.attrs.get("road")).copied().unwrap_or(0.0) as usize;
-    let params = Params { road: [RoadType::Theme, RoadType::Dirt, RoadType::Premium, RoadType::Stone, RoadType::Planks].get(road).copied().unwrap_or_default(), ..Params::default() };
+    // What runs round it, as the walls' line carries it (ramparts for a
+    // line of before there was a choice).
+    let enclosure = lines.lines.iter().find(|l| l.kind == "wall").map_or(crate::village::walls::Enclosure::Ramparts, |l| l.attrs.get("enclosure").and_then(|&k| crate::village::walls::Enclosure::ALL.get(k as usize).copied()).unwrap_or(crate::village::walls::Enclosure::Ramparts));
+    let params = Params { road: [RoadType::Theme, RoadType::Dirt, RoadType::Premium, RoadType::Stone, RoadType::Planks].get(road).copied().unwrap_or_default(), enclosure, ..Params::default() };
     let mut out = Vec::new();
     for (k, theme) in themes.iter().enumerate() {
         if by_theme[k].is_empty() {
@@ -195,7 +198,7 @@ mod tests {
         for l in &mut lines.lines {
             l.attrs.insert("road".into(), 3.0);
         }
-        lines.lines.extend(geo::wall_lines(st.walls.as_ref().unwrap(), &ground));
+        lines.lines.extend(geo::wall_lines(st.walls.as_ref().unwrap(), Params::default().enclosure, &ground));
         let (themes, errors) = themes_of(std::slice::from_ref(&root));
         assert!(errors.is_empty());
         let (built, notes) = lay_graph(None, &DiskPlans::default(), &ground, &all, &lines, &themes, 4, 7, 3).unwrap();

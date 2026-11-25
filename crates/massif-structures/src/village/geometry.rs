@@ -306,9 +306,11 @@ pub fn field_instances(b: &Buildings) -> Instances {
 
 /// The walls as lines for the map: their line (`wall`, closed), and their
 /// corners and gates as two more of kind `wall_corners` and `wall_gates`
-/// (what the Map Output's roads carry of them).
-pub fn wall_lines(walls: &Walls, ground: &dyn Ground) -> Vec<Spline> {
-    let line = |pts: &[[i32; 2]], kind: &str, closed: bool| Spline { points: pts.iter().map(|&[x, z]| [x as f64, ground.floor(x, z) as f64, z as f64]).collect(), closed, width: 1.0, kind: kind.into(), attrs: Attrs::new() };
+/// (what the Map Output's roads carry of them), each with what runs along
+/// them (`enclosure`, its place in `Enclosure::ALL`).
+pub fn wall_lines(walls: &Walls, enclosure: crate::village::walls::Enclosure, ground: &dyn Ground) -> Vec<Spline> {
+    let style = crate::village::walls::Enclosure::ALL.iter().position(|e| *e == enclosure).unwrap_or(0) as f64;
+    let line = |pts: &[[i32; 2]], kind: &str, closed: bool| Spline { points: pts.iter().map(|&[x, z]| [x as f64, ground.floor(x, z) as f64, z as f64]).collect(), closed, width: 1.0, kind: kind.into(), attrs: attrs(&[("enclosure", style)]) };
     vec![line(&walls.line, "wall", true), line(&walls.corners, "wall_corners", false), line(&walls.gates, "wall_gates", false)]
 }
 

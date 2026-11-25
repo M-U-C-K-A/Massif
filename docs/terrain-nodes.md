@@ -2849,7 +2849,7 @@ Outputs:
 
 ### Village walls — `village.walls`
 
-Ramparts round a village, three blocks inside its area: towers at the corners and along them, a gate where a main road crosses. The wall's line follows the area's outline; side roads stop short of it, main roads pass through its gates (Roads out is the roads cut so). With Walls off, it draws no wall and lets the roads through as they are.
+What runs round a village, three blocks inside its area: a fence, a hedge, a low wall or ramparts with towers, a gate where a main road crosses. The wall's line follows the area's outline; side roads stop short of it, main roads pass through its gates (Roads out is the roads cut so). With Walls off, it draws no wall and lets the roads through as they are.
 
 It makes geometry over the whole terrain at once, reading reliefs and masks at the simulations' resolution.
 
@@ -2873,6 +2873,7 @@ Outputs:
 | Setting | Kind | Default | Range | What it does |
 |---|---|---|---|---|
 | `on` | boolean | true |  | Whether the village has walls. |
+| `style` | choice | `wooden-fence` | `wooden-fence`, `spruce-fence`, `post-and-rail`, `hedge`, `flowering-hedge`, `low-stone-wall`, `dry-stone-wall`, `stone-and-fence`, `palisade`, `ramparts` | What runs round it. `wooden-fence`: An oak fence, a post of oak now and then, some with a lantern. `spruce-fence`: A spruce fence on spruce posts. `post-and-rail`: Rails of birch between stripped posts. `hedge`: A hedge of oak leaves two blocks high, an arch over its gates. `flowering-hedge`: A hedge of azalea, flowering here and there. `low-stone-wall`: A cobblestone wall a block high, mossy in places. `dry-stone-wall`: Stones piled one or two high. `stone-and-fence`: A course of cobblestone with a fence on it. `palisade`: Spruce logs three or four high, a beam over its gates. `ramparts`: The theme's ramparts: battlements, towers at the corners and along them. |
 | `pack` | text | `` |  | The folder of the village pack: its schematics by type (house/, church/, farm/…) and its village.json. |
 | `theme` | text | `` |  | Which theme of the pack, when it has several: the first one when left empty. |
 

@@ -14152,7 +14152,7 @@
     },
     "village.walls": {
       "additionalProperties": false,
-      "description": "Ramparts round a village, three blocks inside its area: towers at the corners and along them, a gate where a main road crosses. The wall's line follows the area's outline; side roads stop short of it, main roads pass through its gates (Roads out is the roads cut so). With Walls off, it draws no wall and lets the roads through as they are.",
+      "description": "What runs round a village, three blocks inside its area: a fence, a hedge, a low wall or ramparts with towers, a gate where a main road crosses. The wall's line follows the area's outline; side roads stop short of it, main roads pass through its gates (Roads out is the roads cut so). With Walls off, it draws no wall and lets the roads through as they are.",
       "properties": {
         "bypass": {
           "description": "Left out of the graph: what it feeds takes its first input instead.",
@@ -14220,6 +14220,76 @@
               "description": "The folder of the village pack: its schematics by type (house/, church/, farm/…) and its village.json.",
               "title": "Pack",
               "type": "string",
+              "x-section": "main"
+            },
+            "style": {
+              "default": "wooden-fence",
+              "description": "What runs round it.",
+              "enum": [
+                "wooden-fence",
+                "spruce-fence",
+                "post-and-rail",
+                "hedge",
+                "flowering-hedge",
+                "low-stone-wall",
+                "dry-stone-wall",
+                "stone-and-fence",
+                "palisade",
+                "ramparts"
+              ],
+              "title": "Style",
+              "x-options": [
+                {
+                  "help": "An oak fence, a post of oak now and then, some with a lantern.",
+                  "label": "Wooden fence",
+                  "value": "wooden-fence"
+                },
+                {
+                  "help": "A spruce fence on spruce posts.",
+                  "label": "Spruce fence",
+                  "value": "spruce-fence"
+                },
+                {
+                  "help": "Rails of birch between stripped posts.",
+                  "label": "Post and rail",
+                  "value": "post-and-rail"
+                },
+                {
+                  "help": "A hedge of oak leaves two blocks high, an arch over its gates.",
+                  "label": "Hedge",
+                  "value": "hedge"
+                },
+                {
+                  "help": "A hedge of azalea, flowering here and there.",
+                  "label": "Flowering hedge",
+                  "value": "flowering-hedge"
+                },
+                {
+                  "help": "A cobblestone wall a block high, mossy in places.",
+                  "label": "Low stone wall",
+                  "value": "low-stone-wall"
+                },
+                {
+                  "help": "Stones piled one or two high.",
+                  "label": "Dry-stone wall",
+                  "value": "dry-stone-wall"
+                },
+                {
+                  "help": "A course of cobblestone with a fence on it.",
+                  "label": "Stone and fence",
+                  "value": "stone-and-fence"
+                },
+                {
+                  "help": "Spruce logs three or four high, a beam over its gates.",
+                  "label": "Palisade",
+                  "value": "palisade"
+                },
+                {
+                  "help": "The theme's ramparts: battlements, towers at the corners and along them.",
+                  "label": "Ramparts",
+                  "value": "ramparts"
+                }
+              ],
               "x-section": "main"
             },
             "theme": {

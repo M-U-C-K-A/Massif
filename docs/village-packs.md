@@ -188,9 +188,11 @@ near, else a windmill), wind, water, or none.
 
 ## Walls
 
-With **Walls** ticked, the brush runs a wall round the village, inside the
-selection's edge: corner towers where it turns, a tower every `towers`
-blocks along it, a gate wherever a road crosses it. It follows the land.
+With **Walls** set to **Ramparts**, the village gets a wall round it,
+inside its edge: corner towers where it turns, a tower every `towers` blocks
+along it, a gate wherever a road crosses it. It follows the land. The other
+styles (fences, hedges, low walls, a palisade) are Massif's own, of the
+game's blocks, and take nothing from the pack.
 
 The wall itself is of the manifest's block (stone bricks unless it says
 otherwise), crenellated. Its towers and gates come from the theme's

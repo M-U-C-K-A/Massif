@@ -7,6 +7,197 @@ use super::site::Site;
 use super::{Area, dist2};
 use serde::{Deserialize, Serialize};
 
+/// What runs round a village: a fence, a hedge, a low wall… or the
+/// ramparts with towers of the theme. Each made of the game's own blocks,
+/// with gates where its roads cross and a little variety along its run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum Enclosure {
+    /// An oak fence, a post of oak now and then, some with a lantern.
+    #[default]
+    WoodenFence,
+    /// A spruce fence on spruce posts.
+    SpruceFence,
+    /// Rails of birch between stripped posts, a gap under them.
+    PostAndRail,
+    /// A hedge of oak leaves, two blocks high, an arch over its gates.
+    Hedge,
+    /// A hedge of azalea, flowering here and there.
+    FloweringHedge,
+    /// A cobblestone wall a block high, mossy in places.
+    LowStoneWall,
+    /// Stones piled one or two high: cobblestone, mossy, stone, andesite.
+    DryStone,
+    /// A course of cobblestone with a fence on it.
+    StoneAndFence,
+    /// Spruce logs three or four high, a beam over its gates.
+    Palisade,
+    /// The theme's ramparts: battlements, towers, gatehouses.
+    Ramparts,
+}
+
+impl Enclosure {
+    pub const ALL: [Enclosure; 10] = [
+        Enclosure::WoodenFence,
+        Enclosure::SpruceFence,
+        Enclosure::PostAndRail,
+        Enclosure::Hedge,
+        Enclosure::FloweringHedge,
+        Enclosure::LowStoneWall,
+        Enclosure::DryStone,
+        Enclosure::StoneAndFence,
+        Enclosure::Palisade,
+        Enclosure::Ramparts,
+    ];
+
+    /// What villages placed before there was a choice had.
+    pub fn before() -> Enclosure {
+        Enclosure::Ramparts
+    }
+
+    /// Its name, in English (the app translates it).
+    pub fn name(self) -> &'static str {
+        match self {
+            Enclosure::WoodenFence => "Wooden fence",
+            Enclosure::SpruceFence => "Spruce fence",
+            Enclosure::PostAndRail => "Post and rail",
+            Enclosure::Hedge => "Hedge",
+            Enclosure::FloweringHedge => "Flowering hedge",
+            Enclosure::LowStoneWall => "Low stone wall",
+            Enclosure::DryStone => "Dry-stone wall",
+            Enclosure::StoneAndFence => "Stone and fence",
+            Enclosure::Palisade => "Palisade",
+            Enclosure::Ramparts => "Ramparts",
+        }
+    }
+
+    /// Its key in a script or on the command line (`wooden-fence`).
+    pub fn key(self) -> String {
+        self.name().to_lowercase().replace(' ', "-")
+    }
+
+    /// The one of key or name `s`.
+    pub fn parse(s: &str) -> Option<Enclosure> {
+        let s = s.trim().to_lowercase().replace(['_', ' '], "-");
+        Enclosure::ALL.into_iter().find(|e| e.key() == s)
+    }
+
+    /// The blocks of one column of its run, from the ground up (`""`: left
+    /// as it is): column `k` of the run, `r` a random number of its own;
+    /// `gate`, a road passes there; `edge`, beside a gate.
+    pub fn column(self, k: usize, r: u32, gate: bool, edge: bool) -> Vec<&'static str> {
+        let chance = |n: u32| r % 100 < n;
+        let post = |every: usize| k.is_multiple_of(every) || edge;
+        let lantern = |p: u32| if edge || chance(p) { "minecraft:lantern" } else { "" };
+        match self {
+            Enclosure::WoodenFence => match (gate, post(7 + (r % 3) as usize)) {
+                (true, _) => vec!["minecraft:oak_fence_gate"],
+                (false, true) => vec!["minecraft:oak_log", lantern(30)],
+                _ => vec!["minecraft:oak_fence"],
+            },
+            Enclosure::SpruceFence => match (gate, post(6)) {
+                (true, _) => vec!["minecraft:spruce_fence_gate"],
+                (false, true) => vec!["minecraft:spruce_log", if edge || chance(40) { "minecraft:spruce_fence" } else { "" }, lantern(0)],
+                _ => vec!["minecraft:spruce_fence"],
+            },
+            Enclosure::PostAndRail => match (gate, post(4)) {
+                (true, _) => vec!["", "minecraft:birch_fence_gate"],
+                (false, true) => vec!["minecraft:stripped_birch_log", "minecraft:stripped_birch_log", if edge { "minecraft:lantern" } else { "" }],
+                _ => vec!["", "minecraft:birch_fence"],
+            },
+            Enclosure::Hedge | Enclosure::FloweringHedge => {
+                let leaf = || match self {
+                    Enclosure::Hedge => {
+                        if chance(12) {
+                            "minecraft:azalea_leaves"
+                        } else {
+                            "minecraft:oak_leaves"
+                        }
+                    }
+                    _ => {
+                        if chance(35) {
+                            "minecraft:flowering_azalea_leaves"
+                        } else {
+                            "minecraft:azalea_leaves"
+                        }
+                    }
+                };
+                if gate {
+                    // An arch of leaves over the road.
+                    vec!["", "", "", leaf()]
+                } else if edge {
+                    vec![leaf(), leaf(), leaf(), leaf()]
+                } else if chance(25) {
+                    vec![leaf(), leaf(), leaf()]
+                } else {
+                    vec![leaf(), leaf()]
+                }
+            }
+            Enclosure::LowStoneWall => {
+                if gate {
+                    vec![]
+                } else if post(6) {
+                    vec!["minecraft:cobblestone", lantern(35)]
+                } else if chance(30) {
+                    vec!["minecraft:mossy_cobblestone_wall"]
+                } else {
+                    vec!["minecraft:cobblestone_wall"]
+                }
+            }
+            Enclosure::DryStone => {
+                const STONES: [&str; 5] = ["minecraft:cobblestone", "minecraft:cobblestone", "minecraft:mossy_cobblestone", "minecraft:stone", "minecraft:andesite"];
+                let stone = |n: u32| STONES[((r >> n) % STONES.len() as u32) as usize];
+                if gate {
+                    vec![]
+                } else if edge || chance(40) {
+                    vec![stone(0), stone(8)]
+                } else {
+                    vec![stone(0)]
+                }
+            }
+            Enclosure::StoneAndFence => {
+                let base = if chance(25) { "minecraft:mossy_cobblestone" } else { "minecraft:cobblestone" };
+                match (gate, post(6)) {
+                    (true, _) => vec!["", "minecraft:oak_fence_gate"],
+                    (false, true) => vec![base, "minecraft:cobblestone", lantern(40)],
+                    _ => vec![base, "minecraft:oak_fence"],
+                }
+            }
+            Enclosure::Palisade => {
+                let log = if chance(20) { "minecraft:stripped_spruce_log" } else { "minecraft:spruce_log" };
+                if gate {
+                    // A beam over the road.
+                    vec!["", "", "", "", "minecraft:spruce_log"]
+                } else if edge {
+                    vec![log, log, log, log, log, "minecraft:lantern"]
+                } else if chance(50) {
+                    vec![log, log, log, log]
+                } else {
+                    vec![log, log, log]
+                }
+            }
+            Enclosure::Ramparts => {
+                // The look of them, for a picture: the theme's walls lay
+                // them.
+                if gate { vec!["", "", "", "", "minecraft:stone_bricks"] } else if k.is_multiple_of(2) { vec!["minecraft:stone_bricks"; 5] } else { vec!["minecraft:stone_bricks"; 4] }
+            }
+        }
+    }
+
+    /// A straight run of `len` columns with a gate of three in the middle,
+    /// as [`Enclosure::column`] gives them: for a picture of it.
+    pub fn sample(self, len: usize) -> Vec<Vec<&'static str>> {
+        let mid = len / 2;
+        let mut rng = crate::rng::Rng::new(0x656e_636c ^ self as u64);
+        (0..len)
+            .map(|k| {
+                let gate = (mid - 1..=mid + 1).contains(&k);
+                let edge = k + 2 == mid || k == mid + 2;
+                self.column(k, rng.next_u64() as u32, gate, edge)
+            })
+            .collect()
+    }
+}
+
 /// A village's ramparts.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Walls {

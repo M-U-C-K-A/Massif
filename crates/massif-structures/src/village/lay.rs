@@ -8,7 +8,7 @@ use super::buildings::{Jigsaw, Placement};
 use super::pack::{Plan, Variant, plan_of};
 use super::props::Builtin;
 use super::roads::RoadKind;
-use super::walls::Walls;
+use super::walls::{Enclosure, Walls};
 use super::{Params, RoadType, Side, Theme, height};
 use crate::build::{self, Builder};
 use crate::geom::place;
@@ -210,6 +210,83 @@ fn crop(name: &str, age: u32) -> String {
     format!("minecraft:{id}[age={age}]")
 }
 
+/// The line `line` (closed) with a column added at each diagonal step, so
+/// that fences and walls along it join.
+fn four_connected(line: &[[i32; 2]]) -> Vec<[i32; 2]> {
+    let mut out = Vec::with_capacity(line.len() * 3 / 2);
+    for (k, &a) in line.iter().enumerate() {
+        out.push(a);
+        let b = line[(k + 1) % line.len()];
+        if a[0] != b[0] && a[1] != b[1] {
+            out.push([b[0], a[1]]);
+        }
+    }
+    out
+}
+
+/// The full state of block `id` laid in an enclosure: fences and walls
+/// joined to what stands beside them (`beside`, north, east, south, west),
+/// gates and beams across the line (`along_x`: the line runs east–west
+/// there).
+fn enclosure_state(id: &str, beside: [Option<&str>; 4], along_x: bool, beam: bool) -> String {
+    let joins = |b: Option<&str>| b.is_some_and(|b| !b.ends_with("lantern") && !b.ends_with("leaves"));
+    let [n, e, s, w] = beside.map(joins);
+    if id.ends_with("_fence_gate") {
+        let facing = if along_x { "north" } else { "east" };
+        format!("{id}[facing={facing},in_wall=false,open=true,powered=false]")
+    } else if id.ends_with("_fence") {
+        format!("{id}[east={e},north={n},south={s},waterlogged=false,west={w}]")
+    } else if id.ends_with("_wall") {
+        let side = |on: bool| if on { "low" } else { "none" };
+        let up = !(n && s && !e && !w || e && w && !n && !s);
+        format!("{id}[east={},north={},south={},up={up},waterlogged=false,west={}]", side(e), side(n), side(s), side(w))
+    } else if id.ends_with("_log") {
+        let axis = if !beam { "y" } else if along_x { "x" } else { "z" };
+        format!("{id}[axis={axis}]")
+    } else if id.ends_with("leaves") {
+        format!("{id}[distance=1,persistent=true,waterlogged=false]")
+    } else if id.ends_with("lantern") {
+        format!("{id}[hanging=false,waterlogged=false]")
+    } else {
+        id.to_owned()
+    }
+}
+
+/// A fence, hedge or low wall along the walls' line, as `style` makes it:
+/// each column on the land, gates where the roads cross, nothing over
+/// water.
+fn lay_enclosure(b: &mut Builder, ground: &dyn Ground, style: Enclosure, walls: &Walls, seed: u64) {
+    let line = four_connected(&walls.line);
+    let on: std::collections::HashSet<(i32, i32)> = line.iter().map(|p| (p[0], p[1])).collect();
+    let mut cols: HashMap<(i32, i32), (i32, Vec<&'static str>, bool)> = HashMap::new();
+    for (k, &[x, z]) in line.iter().enumerate() {
+        let (base, wet) = height(ground, x, z);
+        if wet || cols.contains_key(&(x, z)) {
+            continue;
+        }
+        let gate = walls.in_gate(x, z);
+        let edge = !gate && [[1, 0], [-1, 0], [0, 1], [0, -1]].iter().any(|d| on.contains(&(x + d[0], z + d[1])) && walls.in_gate(x + d[0], z + d[1]));
+        let r = Rng::at(seed ^ 0x656e_636c, [x, 0, z]).next_u64() as u32;
+        cols.insert((x, z), (base, style.column(k, r, gate, edge), gate));
+    }
+    let at = |x: i32, y: i32, z: i32| -> Option<&'static str> {
+        let (base, col, _) = cols.get(&(x, z))?;
+        let i = usize::try_from(y - base).ok()?;
+        col.get(i).copied().filter(|s| !s.is_empty())
+    };
+    for (&(x, z), (base, col, gate)) in &cols {
+        let along_x = on.contains(&(x + 1, z)) || on.contains(&(x - 1, z));
+        for (i, id) in col.iter().enumerate() {
+            if id.is_empty() {
+                continue;
+            }
+            let y = base + i as i32;
+            let beside = [at(x, y, z - 1), at(x + 1, y, z), at(x, y, z + 1), at(x - 1, y, z)];
+            b.set([x, y, z], &enclosure_state(id, beside, along_x, *gate), None);
+        }
+    }
+}
+
 /// The walls along their line, on the land: crenellated, towers at the
 /// corners and every few blocks, a gate where a road crosses.
 fn lay_walls(b: &mut Builder, ground: &dyn Ground, theme: &Theme, walls: &Walls, plans: &mut Plans, unknown: &mut Vec<String>) {
@@ -363,7 +440,11 @@ pub fn lay(lib: Option<&Library>, plans: &dyn PlanSource, ground: &dyn Ground, t
     if let Some(w) = &stages.walls
         && !w.line.is_empty()
     {
-        lay_walls(&mut b, &adapted, theme, w, &mut plans, &mut unknown);
+        if params.enclosure == Enclosure::Ramparts {
+            lay_walls(&mut b, &adapted, theme, w, &mut plans, &mut unknown);
+        } else {
+            lay_enclosure(&mut b, &adapted, params.enclosure, w, seed);
+        }
     }
     let name = if theme.pack.is_empty() { format!("{} village", theme.name) } else { theme.name.clone() };
     let mut s = b.finish(id, &name, "", true, lib.map_or(0, |l| l.data_version()));

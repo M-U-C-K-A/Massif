@@ -213,7 +213,12 @@ pub struct Params {
     /// From small houses (−1) to large ones and manors (+1).
     pub size_bias: f32,
     pub road: RoadType,
+    /// Whether something runs round it, and what (`enclosure`).
     pub walls: bool,
+    /// What runs round it when `walls`: a fence, a hedge, a low wall… or
+    /// the theme's ramparts (which villages placed before 1.2.1 had).
+    #[serde(default = "walls::Enclosure::before")]
+    pub enclosure: walls::Enclosure,
     /// How built up: 0.2 (airy) to 1 (tight).
     pub density: f32,
     /// From a compact hamlet (0) to a village strung out along its roads
@@ -256,7 +261,7 @@ pub fn houses_for(area: massif_core::coords::BlockRect, density: f32) -> u32 {
 
 impl Default for Params {
     fn default() -> Self {
-        Params { houses: None, size_bias: 0.0, road: RoadType::Theme, walls: false, density: 0.6, spread: 0.5, flat: 0.7, fields: 1.0, props: 0.5, mill: MillMode::Auto, max_slope: 10, margin: 1, street_width: None, foundation: None, villagers: None, counts: Vec::new(), houses_by_hand: false }
+        Params { houses: None, size_bias: 0.0, road: RoadType::Theme, walls: false, enclosure: walls::Enclosure::WoodenFence, density: 0.6, spread: 0.5, flat: 0.7, fields: 1.0, props: 0.5, mill: MillMode::Auto, max_slope: 10, margin: 1, street_width: None, foundation: None, villagers: None, counts: Vec::new(), houses_by_hand: false }
     }
 }
 

@@ -457,7 +457,7 @@ fn packs_build_villages_on_their_roads() {
     let ground = flat();
     let rect = BlockRect::new(-100, -100, 100, 100);
     let inside = |x: i32, z: i32| rect.contains(x, z);
-    let req = Request { theme: th, rect, inside: &inside, seed: 3, params: Params { walls: true, density: 0.8, ..Params::default() }, id: 1 };
+    let req = Request { theme: th, rect, inside: &inside, seed: 3, params: Params { walls: true, enclosure: super::walls::Enclosure::Ramparts, density: 0.8, ..Params::default() }, id: 1 };
     let built = build(None, &ground, &req).unwrap();
     let s = &built.structure;
     let houses = s.pieces.iter().filter(|p| p.template == "house").count();
@@ -613,4 +613,40 @@ fn counts_asked_for_are_built() {
     assert_eq!(n("forge"), 1);
     assert_eq!(n("farm"), 5);
     assert_eq!(st.props.placed.iter().filter(|p| p.kind == "market").count(), 2);
+}
+
+/// Each enclosure runs round the village in its own blocks: fences joined
+/// along their run, gates where the roads cross.
+#[test]
+fn every_enclosure_runs_round_the_village() {
+    use super::walls::Enclosure;
+    let (_t, th) = plains();
+    let rect = BlockRect::new(0, 0, 220, 220);
+    let inside = |x: i32, z: i32| rect.contains(x, z);
+    for e in Enclosure::ALL {
+        assert_eq!(Enclosure::parse(&e.key()), Some(e));
+        assert_eq!(Enclosure::parse(e.name()), Some(e));
+        let req = request(&th, rect, &inside, Params { walls: true, enclosure: e, ..Params::default() });
+        let built = build(None, &flat(), &req).unwrap();
+        let s = &built.structure;
+        let has = |part: &str| s.palette.iter().any(|p| p.contains(part));
+        // The block of its plain run.
+        let run = e.sample(16).into_iter().flat_map(|c| c.into_iter().filter(|b| !b.is_empty())).find(|b| !b.ends_with("lantern")).unwrap();
+        assert!(has(run), "{e:?}: no {run} in {:?}", s.palette);
+        if matches!(e, Enclosure::WoodenFence | Enclosure::SpruceFence | Enclosure::PostAndRail | Enclosure::StoneAndFence) {
+            assert!(has("_fence_gate[facing="), "{e:?}: gates where the roads cross");
+            // Its fences joined to their neighbours.
+            let fences: Vec<&String> = s.palette.iter().filter(|p| p.contains("_fence[")).collect();
+            let joined = fences.iter().filter(|p| p.matches("=true").count() >= 2).count();
+            assert!(!fences.is_empty() && joined * 2 >= fences.len(), "{e:?}: {fences:?}");
+        }
+    }
+}
+
+/// A village placed before there was a choice keeps its ramparts.
+#[test]
+fn villages_placed_before_keep_their_ramparts() {
+    let p: Params = serde_json::from_str(r#"{"walls": true}"#).unwrap();
+    assert_eq!(p.enclosure, super::walls::Enclosure::Ramparts);
+    assert_eq!(Params::default().enclosure, super::walls::Enclosure::WoodenFence);
 }

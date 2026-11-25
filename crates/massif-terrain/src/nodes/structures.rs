@@ -137,6 +137,7 @@ fn params_of(ctx: &Ctx) -> Params {
         size_bias: if has("size_bias") { p.num("size_bias") as f32 } else { d.size_bias },
         road: if has("road") { road_type(p.choice("road")) } else { d.road },
         walls: has("on") && p.flag("on"),
+        enclosure: if has("style") { village::walls::Enclosure::parse(p.choice("style")).unwrap_or_default() } else { d.enclosure },
         density: if has("density") { p.num("density") as f32 } else { d.density },
         spread: if has("spread") { p.num("spread") as f32 } else { d.spread },
         flat: if has("flat") { p.num("flat") as f32 } else { d.flat },
@@ -294,11 +295,25 @@ fn roads(ctx: &Ctx, rasters: &[Option<&Grid>], _: &(dyn Fn() -> bool + Sync)) ->
 
 // --------------------------------------------------------------- walls --
 
+/// What runs round a village, as `village::walls::Enclosure` names them.
+const ENCLOSURES: &[Choice] = &[
+    Choice { value: "wooden-fence", label: "Wooden fence", help: "An oak fence, a post of oak now and then, some with a lantern." },
+    Choice { value: "spruce-fence", label: "Spruce fence", help: "A spruce fence on spruce posts." },
+    Choice { value: "post-and-rail", label: "Post and rail", help: "Rails of birch between stripped posts." },
+    Choice { value: "hedge", label: "Hedge", help: "A hedge of oak leaves two blocks high, an arch over its gates." },
+    Choice { value: "flowering-hedge", label: "Flowering hedge", help: "A hedge of azalea, flowering here and there." },
+    Choice { value: "low-stone-wall", label: "Low stone wall", help: "A cobblestone wall a block high, mossy in places." },
+    Choice { value: "dry-stone-wall", label: "Dry-stone wall", help: "Stones piled one or two high." },
+    Choice { value: "stone-and-fence", label: "Stone and fence", help: "A course of cobblestone with a fence on it." },
+    Choice { value: "palisade", label: "Palisade", help: "Spruce logs three or four high, a beam over its gates." },
+    Choice { value: "ramparts", label: "Ramparts", help: "The theme's ramparts: battlements, towers at the corners and along them." },
+];
+
 pub static WALLS: NodeSpec = NodeSpec {
     id: "village.walls",
     label: "Village walls",
     family: Family::Geometry,
-    summary: "Ramparts round a village, three blocks inside its area: towers at the corners and along them, a gate where a main road crosses.",
+    summary: "What runs round a village, three blocks inside its area: a fence, a hedge, a low wall or ramparts with towers, a gate where a main road crosses.",
     help: "The wall's line follows the area's outline; side roads stop short of it, main roads pass through its gates (Roads out is the roads cut so). With Walls off, it draws no wall and lets the roads through as they are.",
     keywords: &["village", "walls", "ramparts", "towers", "gates", "fortification"],
     inputs: &[
@@ -314,7 +329,7 @@ pub static WALLS: NodeSpec = NodeSpec {
         PortSpec::new("towers", "Towers", PortKind::Points, "Its corners, towers and gates."),
         PortSpec::new("roads", "Roads", PortKind::Splines, "The roads, side roads cut at the wall, and the wall's lines: what the Map Output's roads take."),
     ],
-    params: &[ParamSpec::flag("on", "Walls", true, "Whether the village has walls."), PACK, THEME],
+    params: &[ParamSpec::flag("on", "Walls", true, "Whether the village has walls."), ParamSpec::choice("style", "Style", ENCLOSURES, "wooden-fence", "What runs round it."), PACK, THEME],
     kernel: Kernel::Geometry { cpu: walls },
     reads: Reads::Files,
     ..NodeSpec::BASE
@@ -349,7 +364,8 @@ fn walls(ctx: &Ctx, rasters: &[Option<&Grid>], _: &(dyn Fn() -> bool + Sync)) ->
         l.attrs = attrs.clone();
     }
     // With the walls' line, corners and gates, for the map to build them.
-    out.lines.extend(geo::wall_lines(&w, &land));
+    let style = village::walls::Enclosure::parse(ctx.params.choice("style")).unwrap_or_default();
+    out.lines.extend(geo::wall_lines(&w, style, &land));
     Ok(vec![Geo::Splines(line), Geo::Points(towers), Geo::Splines(out)])
 }
 
