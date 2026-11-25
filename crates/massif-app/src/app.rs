@@ -12452,6 +12452,93 @@ mod tests {
         assert!(h.state().dialog.is_none());
     }
 
+    /// A ground cover's blocks are edited with their states, as
+    /// WorldPainter's block picker: a click on a row shows each property of
+    /// its block with its values (Default: the game's), the state it makes
+    /// under them; Random grows a property every way, one row for each.
+    /// Rendered at 1x (and 2x with MASSIF_SNAPSHOT_PPP) with
+    /// MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn a_covers_blocks_are_edited_with_their_states() {
+        use egui_kittest::kittest::Queryable;
+        use massif_assets::materials::Property;
+        let mut h = harness(ThemeChoice::Dark);
+        h.state_mut().layout.active = 2; // Painting
+        h.run_steps(3);
+        let prop = |name: &str, values: &[&str]| Property { name: name.into(), values: values.iter().map(|v| v.to_string()).collect() };
+        let block = |id: &str, name: &str, properties: Vec<Property>| massif_assets::Block {
+            id: id.into(),
+            name: name.into(),
+            top: None,
+            side: None,
+            bottom: None,
+            top_tint: massif_assets::Tint::None,
+            side_tint: massif_assets::Tint::None,
+            full_cube: false,
+            translucent: false,
+            tall: false,
+            color: [150, 110, 70],
+            side_color: [150, 110, 70],
+            category: massif_assets::Category::Plants,
+            properties,
+        };
+        let mut blocks = vec![
+            block("conquest:muddy_autumnal_forest_floor_layer", "Muddy Autumnal Forest Floor Layer", vec![prop("layers", &["1", "2", "3", "4", "5", "6", "7", "8"]), prop("waterlogged", &["true", "false"])]),
+            block("minecraft:pink_petals", "Pink Petals", vec![prop("facing", &["north", "east", "south", "west"]), prop("flower_amount", &["1", "2", "3", "4"])]),
+        ];
+        blocks.sort_by(|a, b| a.id.cmp(&b.id));
+        let cat = massif_assets::Catalogue { version: "1.21.1".into(), source: PathBuf::new(), blocks, textures: Default::default(), mods: Vec::new(), skipped: Vec::new(), definitions: Default::default(), registered: Default::default(), biomes: Vec::new(), colors: Default::default(), connected: Default::default(), stonecutting: Vec::new(), state_properties: Default::default() };
+        h.state_mut().blocks.catalogue = Some(std::sync::Arc::new(cat));
+        let reg = &mut h.state_mut().doc.world.registry;
+        let n = reg.add_cover(massif_core::registry::CoverDef::new("Forest floor", [120, 90, 60], &[("conquest:muddy_autumnal_forest_floor_layer[layers=8]", 4), ("minecraft:pink_petals[flower_amount=2]", 8)], 0.6));
+        h.state_mut().tools.select(Tool::Cover);
+        h.state_mut().tools.cover = n;
+        h.run_steps(4);
+        // Each control is in Tool Settings, scrolled to before its click.
+        fn click(h: &mut egui_kittest::Harness<'static, MassifApp>, find: &dyn Fn(&egui_kittest::Harness<'static, MassifApp>) -> egui::Rect) {
+            let _ = find(h);
+            h.run_steps(15);
+            let r = find(h);
+            h.event(egui::Event::PointerMoved(r.center()));
+            h.run_steps(1);
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos: r.center(), button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+                h.run_steps(1);
+            }
+            h.run_steps(2);
+        }
+        let plants = |h: &egui_kittest::Harness<'static, MassifApp>| h.state().doc.world.registry.cover(n).unwrap().plants.clone();
+        // A click on a row: its block's properties.
+        click(&mut h, &|h| { let n = h.get_by_label_contains("uddy autumnal forest floor layer · layers=8"); n.scroll_to_me(); n.rect() });
+        h.run_steps(3);
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            h.render().unwrap().save(dir.join("cover-block-state-row-picked.png")).unwrap();
+        }
+        assert!(h.query_by_label("waterlogged").is_some(), "each property, by name");
+        click(&mut h, &|h| { let n = h.get_by_label("true"); n.scroll_to_me(); n.rect() });
+        h.run_steps(3);
+        assert_eq!(plants(&h)[0].0, "conquest:muddy_autumnal_forest_floor_layer[layers=8,waterlogged=true]");
+        assert!(h.query_by_label_contains("[layers=8,waterlogged=true]").is_some(), "the state it makes, under them");
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            let ppp = if std::env::var("MASSIF_SNAPSHOT_PPP").is_ok_and(|v| v == "2") { "2x" } else { "1x" };
+            h.render().unwrap().save(dir.join(format!("cover-block-state-{ppp}.png"))).unwrap();
+        }
+        // Default takes the property out: the game's.
+        click(&mut h, &|h| { let n = h.query_all_by_label("Default").last().unwrap(); n.scroll_to_me(); n.rect() });
+        h.run_steps(3);
+        assert_eq!(plants(&h)[0].0, "conquest:muddy_autumnal_forest_floor_layer[layers=8]");
+        // Random: the petals face every way, a row each, the weight shared.
+        click(&mut h, &|h| { let n = h.get_by_label_contains("Pink petals"); n.scroll_to_me(); n.rect() });
+        h.run_steps(3);
+        click(&mut h, &|h| { let n = h.query_all_by_label("Random").next().unwrap(); n.scroll_to_me(); n.rect() });
+        h.run_steps(3);
+        let p = plants(&h);
+        assert_eq!(p.len(), 5, "{p:?}");
+        for facing in ["north", "east", "south", "west"] {
+            assert!(p.iter().any(|(s, w)| *s == format!("minecraft:pink_petals[flower_amount=2,facing={facing}]") && *w == 2), "{facing}: {p:?}");
+        }
+    }
+
     /// An object layer's window: its objects listed on the left, searched,
     /// sorted and picked along the order shown; the settings of those picked
     /// on the right; New size… in an object's Tree size list makes a size
@@ -21715,6 +21802,7 @@ mod tests {
             color: [200, 40, 30],
             side_color: [200, 40, 30],
             category: massif_assets::Category::Plants,
+            properties: Vec::new(),
         };
         let reg = &mut h.state_mut().doc.world.registry;
         let n = crate::panels::block_cover(reg, &poppy);

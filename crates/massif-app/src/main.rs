@@ -9,6 +9,7 @@ mod analysis;
 mod app;
 mod autosave;
 mod backdrop;
+mod block_state;
 mod blocks;
 mod brushes;
 mod cards;

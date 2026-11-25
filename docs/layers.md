@@ -211,6 +211,22 @@ layer's layer of each slot and its share. A double-click renames a layer.
 Each section has its button to add one: New combined, New mix, New
 cover, Import objects…, New pockets.
 
+## Block states of a ground cover
+
+A ground cover's blocks (**Grows**) are edited with their states, as
+WorldPainter's block picker: a click on a row, or a block just added with
+**Add a block**, shows under the list each property of its block —
+`layers`, `facing`, `half`, `waterlogged`, `age`… — with the values it
+allows, read from the game's and the mods' states files (KubeJS blocks
+too) or from a list of blocks made for WorldPainter. Two or three values
+are a segmented control, more a list; **Default** leaves the property out,
+and the game gives it its own. The state it makes is written under them
+(`conquest:muddy_autumnal_forest_floor_layer[layers=8,waterlogged=true]`),
+and each row says its properties after its name. **Random**, beside a
+property a cover may vary (`facing`, `rotation`, `age`, `axis`, petals and
+pickles), grows it every way: one row for each value, the row's weight
+shared between them.
+
 ## Object settings
 
 A tree or object layer lists its objects one a row, as WorldPainter's

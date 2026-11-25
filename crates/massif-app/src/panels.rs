@@ -1626,6 +1626,15 @@ const COMMON_PLANTS: [&str; 24] = [
     "minecraft:seagrass",
 ];
 
+/// A row of a cover's blocks: its name, and its properties when it has
+/// any (`Snow · layers=3`).
+pub fn plant_label(state: &str) -> String {
+    match state.split_once('[') {
+        Some((_, props)) => format!("{} · {}", plant_name(state), props.trim_end_matches(']').replace(',', ", ")),
+        None => plant_name(state),
+    }
+}
+
 /// `minecraft:oxeye_daisy[x=y]` → `Oxeye daisy`.
 pub fn plant_name(state: &str) -> String {
     let name = state.split('[').next().unwrap_or(state);
@@ -2454,6 +2463,9 @@ pub fn cover_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     let total: f32 = def.plants.iter().map(|p| p.1 as f32).sum::<f32>().max(1.0);
     let mut remove = None;
     let color = def.color;
+    // The row whose state is edited under the list.
+    let row_id = egui::Id::unique(("cover row picked", tools.cover));
+    let mut row: Option<usize> = ui.data(|d| d.get_temp(row_id)).filter(|k| *k < def.plants.len());
     // The names take the room the icon, weight, share and × leave.
     // Too narrow for all: the shares go (each weight says it on hover).
     let shares = ui.available_width() >= 190.0;
@@ -2475,7 +2487,14 @@ pub fn cover_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
             let tip = if known { state.clone() } else { tr!("{state}\nNot a block of Minecraft {map_or}", map_or = catalogue.as_ref().map_or("", |c| c.version.as_str()), state) };
             ui.allocate_ui_with_layout(vec2(name_w, 20.0), egui::Layout::left_to_right(Align::Center), |ui| {
                 ui.set_width(name_w);
-                ui.add(egui::Label::new(RichText::new(plant_name(state)).color(if known { pal.text } else { pal.danger })).truncate()).on_hover_text(tip);
+                // A click edits its state (its properties) under the list.
+                let name = plant_label(state);
+                let picked = row == Some(k);
+                let r = ui.add(egui::Button::selectable(picked, RichText::new(&name).color(if known { pal.text } else { pal.danger })).truncate()).on_hover_text(tip);
+                r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, picked, &name));
+                if r.clicked() {
+                    row = if picked { None } else { Some(k) };
+                }
             });
             let share = format!("{:.0}%", *weight as f32 * 100.0 / total);
             let weight_tip = if shares { tr!("Weight: how often it grows against the others").to_owned() } else { format!("{} · {share}", tr!("Weight: how often it grows against the others")) };
@@ -2491,6 +2510,7 @@ pub fn cover_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     });
     if let Some(k) = remove {
         def.plants.remove(k);
+        row = None;
     }
     // Add a plant: one of the game's blocks, or typed.
     let search_id = egui::Id::unique("cover plant search");
@@ -2552,12 +2572,60 @@ pub fn cover_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
         }
     });
     if let Some(id) = added {
-        match def.plants.iter_mut().find(|p| p.0 == id) {
-            Some(p) => p.1 = p.1.saturating_add(1),
-            None => def.plants.push((id, 1)),
+        match def.plants.iter().position(|p| p.0 == id) {
+            Some(k) => {
+                def.plants[k].1 = def.plants[k].1.saturating_add(1);
+                row = Some(k);
+            }
+            None => {
+                def.plants.push((id, 1));
+                // Its state to set at once, as WorldPainter's picker.
+                row = Some(def.plants.len() - 1);
+            }
         }
         ui.ctx().data_mut(|d| d.remove::<String>(search_id));
     }
+    // The state of the row picked: each property of its block.
+    if let Some(k) = row {
+        ui.add_space(4.0);
+        let state = def.plants[k].0.clone();
+        let id = state.split('[').next().unwrap_or(&state).to_owned();
+        let properties = catalogue.as_ref().map(|c| c.properties_of(&id)).unwrap_or_default();
+        ui.label(RichText::new(tr!("{name}: its state", name = plant_name(&state))).strong());
+        match crate::block_state::editor(ui, ("cover state", tools.cover, k), &state, &properties) {
+            Some(crate::block_state::Change::State(new)) => match def.plants.iter().position(|p| p.0 == new) {
+                // The same as another row: one row, their weights added.
+                Some(j) if j != k => {
+                    def.plants[j].1 = def.plants[j].1.saturating_add(def.plants[k].1);
+                    def.plants.remove(k);
+                    row = Some(if j > k { j - 1 } else { j });
+                }
+                _ => def.plants[k].0 = new,
+            },
+            Some(crate::block_state::Change::Random(prop)) => {
+                let values = properties.iter().find(|p| p.name == prop).map(|p| p.values.clone()).unwrap_or_default();
+                let weight = def.plants[k].1;
+                let each = (weight / values.len().max(1) as u16).max(1);
+                let states = crate::block_state::spread(&state, &prop, &values);
+                def.plants.remove(k);
+                for (j, st) in states.into_iter().enumerate() {
+                    match def.plants.iter_mut().find(|p| p.0 == st) {
+                        Some(p) => p.1 = p.1.saturating_add(each),
+                        None => def.plants.insert((k + j).min(def.plants.len()), (st, each)),
+                    }
+                }
+                row = None;
+            }
+            None => {}
+        }
+    }
+    ui.data_mut(|d| {
+        if let Some(k) = row {
+            d.insert_temp(row_id, k);
+        } else {
+            d.remove::<usize>(row_id);
+        }
+    });
     if def.plants.is_empty() {
         hint(ui, tr!("Nothing grows yet: add a block."));
     }

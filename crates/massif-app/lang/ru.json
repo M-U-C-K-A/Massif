@@ -3855,5 +3855,10 @@
  "Loading": "Загрузка",
  "Load": "Загружать",
  "View distance": "Дальность обзора",
- "Around the view, the 3D views and the Render build the map within the view distance of their camera, the Diorama what it shows: on a huge map they are ready sooner and rest once they are. The whole map builds all of it and keeps it, for flying over it at length.": "Вокруг вида: 3D-виды и Рендер строят карту в пределах дальности обзора камеры, Диорама — то, что показывает; на огромной карте они готовы быстрее и затем отдыхают. Вся карта строит её целиком и хранит, чтобы долго летать над ней."
+ "Around the view, the 3D views and the Render build the map within the view distance of their camera, the Diorama what it shows: on a huge map they are ready sooner and rest once they are. The whole map builds all of it and keeps it, for flying over it at length.": "Вокруг вида: 3D-виды и Рендер строят карту в пределах дальности обзора камеры, Диорама — то, что показывает; на огромной карте они готовы быстрее и затем отдыхают. Вся карта строит её целиком и хранит, чтобы долго летать над ней.",
+ "Random": "Случайно",
+ "Default": "По умолчанию",
+ "One row for each value, sharing the weight: the cover grows them mixed": "По строке на каждое значение, вес делится: покров выращивает их вперемешку",
+ "This block has no properties the game's files or the lists of blocks name.": "У этого блока нет свойств, которые называют файлы игры или списки блоков.",
+ "{name}: its state": "{name}: его состояние"
 }

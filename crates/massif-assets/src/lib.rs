@@ -427,6 +427,9 @@ pub struct Block {
     pub color: [u8; 3],
     pub side_color: [u8; 3],
     pub category: Category,
+    /// Its properties and their values, as its states file names them
+    /// (`facing`: north, east…), in the order they first come.
+    pub properties: Vec<materials::Property>,
 }
 
 /// Every block of a version of the game.
@@ -892,6 +895,16 @@ impl Catalogue {
         (ns != "minecraft").then(|| self.mods.iter().find(|m| m.kind == SourceKind::Mod && m.namespaces.iter().any(|n| n == ns))).flatten()
     }
 
+    /// The properties of block `id` and their values: what a list of
+    /// blocks says of it (every property, those its models leave out too),
+    /// else what its states file names.
+    pub fn properties_of(&self, id: &str) -> Vec<materials::Property> {
+        match self.definitions.get(id) {
+            Some(def) if !def.properties.is_empty() => def.properties.clone(),
+            _ => self.block(id).map(|b| b.properties.clone()).unwrap_or_default(),
+        }
+    }
+
     /// Whether a state is one of the game's, by what lists of blocks say of
     /// its block: `Ok` too when no list speaks of it.
     pub fn check_state(&self, state: &str) -> Result<(), materials::StateProblem> {
@@ -1237,6 +1250,66 @@ fn first_model(state: &Value) -> Option<String> {
         .find_map(|part| part.get("apply").and_then(pick))
 }
 
+/// The properties a block state file names and their values: the keys
+/// of its variants (`facing=north,half=lower`) and the conditions of its
+/// parts (`{"north": "true|false"}`), in the order they first come.
+fn state_properties(state: &Value) -> Vec<materials::Property> {
+    let mut out: Vec<materials::Property> = Vec::new();
+    let mut add = |k: &str, v: &str| {
+        let (k, v) = (k.trim(), v.trim());
+        if k.is_empty() || v.is_empty() {
+            return;
+        }
+        match out.iter_mut().find(|p| p.name == k) {
+            Some(p) => {
+                if !p.values.iter().any(|x| x == v) {
+                    p.values.push(v.to_owned());
+                }
+            }
+            None => out.push(materials::Property { name: k.to_owned(), values: vec![v.to_owned()] }),
+        }
+    };
+    if let Some(variants) = state.get("variants").and_then(Value::as_object) {
+        for key in variants.keys() {
+            for kv in key.split(',') {
+                if let Some((k, v)) = kv.split_once('=') {
+                    add(k, v);
+                }
+            }
+        }
+    }
+    fn when(v: &Value, add: &mut dyn FnMut(&str, &str)) {
+        match v {
+            Value::Object(map) => {
+                for (k, v) in map {
+                    match v {
+                        Value::String(s) if k != "OR" && k != "AND" => s.split('|').for_each(|x| add(k, x)),
+                        Value::Bool(b) => add(k, &b.to_string()),
+                        Value::Number(n) => add(k, &n.to_string()),
+                        other => when(other, add),
+                    }
+                }
+            }
+            Value::Array(a) => a.iter().for_each(|x| when(x, add)),
+            _ => {}
+        }
+    }
+    if let Some(parts) = state.get("multipart").and_then(Value::as_array) {
+        for part in parts {
+            if let Some(w) = part.get("when") {
+                when(w, &mut add);
+            }
+        }
+    }
+    // Numbers in their order (`layers` 1 to 8), the rest as they came.
+    for p in &mut out {
+        if p.values.iter().all(|v| v.parse::<i64>().is_ok()) {
+            p.values.sort_by_key(|v| v.parse::<i64>().unwrap_or(0));
+        }
+    }
+    out
+}
+
 /// The model of a block's upper half (`half=upper`), when its states are
 /// variants.
 fn upper_model(state: &Value) -> Option<String> {
@@ -1541,15 +1614,15 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
     // A tall block's upper half too: a tall plant's lower half may be a
     // model of its own where its upper one is the game's cross.
     // Its id, first model, whether it is two blocks high, its upper half's
-    // model, and its properties' names.
-    type StateInfo = (String, Option<String>, bool, Option<String>, Vec<String>);
+    // model, its properties' names, and its properties with their values.
+    type StateInfo = (String, Option<String>, bool, Option<String>, Vec<String>, Vec<materials::Property>);
     let mut states: Vec<StateInfo> = state_files
         .into_par_iter()
         .filter_map(|(id, (k, n))| {
             let state = json(&archives[k].0, &n)?;
             let tall = two_halves(&state);
             let props = if namespace(&id) == "minecraft" { Vec::new() } else { state_property_names(&state) };
-            Some((id, first_model(&state), tall, tall.then(|| upper_model(&state)).flatten(), props))
+            Some((id, first_model(&state), tall, tall.then(|| upper_model(&state)).flatten(), props, state_properties(&state)))
         })
         .collect();
     states.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1557,7 +1630,7 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
     let state_properties: HashMap<String, Vec<String>> = states.iter_mut().filter(|s| !s.4.is_empty()).map(|s| (s.0.clone(), std::mem::take(&mut s.4))).collect();
     // Those models and their parents, a generation at a time, read in
     // parallel.
-    let firsts: Vec<Option<String>> = states.iter().map(|(_, first, _, _, _)| first.clone()).collect();
+    let firsts: Vec<Option<String>> = states.iter().map(|(_, first, _, _, _, _)| first.clone()).collect();
     let mut raw: HashMap<String, Value> = HashMap::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut wanted: Vec<String> = firsts.iter().flatten().chain(states.iter().filter_map(|s| s.3.as_ref())).map(|m| key(m)).collect();
@@ -1580,7 +1653,7 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
     let mut blocks: Vec<Block> = states
         .iter()
         .zip(&firsts)
-        .map(|((id, _, tall, upper, _), first)| {
+        .map(|((id, _, tall, upper, _, properties), first)| {
             let model = first.as_ref().map(|m| models.resolve(m)).unwrap_or_default();
             let particle = model.textures.get("particle").and_then(|_| model.texture("#particle"));
             let tint = tint_of(id);
@@ -1619,6 +1692,7 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
                 translucent,
                 tall: *tall,
                 category,
+                properties: properties.clone(),
             }
         })
         .collect();
@@ -1632,7 +1706,7 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
         .map(|(id, def)| {
             let c = def.map_color.unwrap_or([128, 128, 128]);
             let tall = def.property("half").is_some_and(|p| p.values.iter().any(|v| v == "lower") && p.values.iter().any(|v| v == "upper"));
-            Block { id: id.clone(), name: names_en.get(id).cloned().unwrap_or_else(|| display_name(id)), top: None, side: None, bottom: None, top_tint: Tint::None, side_tint: Tint::None, full_cube: def.plain_cube(), translucent: false, tall, color: c, side_color: c, category: Category::of(id) }
+            Block { id: id.clone(), name: names_en.get(id).cloned().unwrap_or_else(|| display_name(id)), top: None, side: None, bottom: None, top_tint: Tint::None, side_tint: Tint::None, full_cube: def.plain_cube(), translucent: false, tall, color: c, side_color: c, category: Category::of(id), properties: def.properties.clone() }
         })
         .collect();
     blocks.extend(listed);
@@ -2463,7 +2537,7 @@ mod tests {
     #[test]
     fn profiles_give_mod_terrains_their_biomes() {
         let mut reg = Registry::vanilla();
-        let block = |id: &str| Block { id: id.into(), name: display_name(id), top: None, side: None, bottom: None, top_tint: Tint::None, side_tint: Tint::None, full_cube: true, translucent: false, tall: false, color: [80, 60, 50], side_color: [80, 60, 50], category: Category::Natural };
+        let block = |id: &str| Block { id: id.into(), name: display_name(id), top: None, side: None, bottom: None, top_tint: Tint::None, side_tint: Tint::None, full_cube: true, translucent: false, tall: false, color: [80, 60, 50], side_color: [80, 60, 50], category: Category::Natural, properties: Vec::new() };
         let t = block_terrain(&mut reg, &block("regions_unexplored:peat_mud"));
         let b = reg.terrain(t).biome_hint.expect("a biome");
         assert_eq!((reg.biome(b).id.as_str(), reg.biome(b).name.as_str()), ("regions_unexplored:bayou", "Bayou"));
@@ -2974,5 +3048,22 @@ mod tests {
         check("minecraft:swamp", 0x6a7039, 0x6a7039, 0x617b64);
         check("minecraft:badlands", 0x90814d, 0x9e814d, 0x3f76e4);
         assert_eq!(hex(cat.biome("minecraft:warm_ocean").unwrap().water), 0x43d5ee);
+    }
+
+    /// The properties of a block are read from its states file: the keys
+    /// of its variants, the conditions of its parts.
+    #[test]
+    fn properties_come_from_the_states_file() {
+        let v: Value = serde_json::from_str(r#"{"variants":{"layers=2,waterlogged=false":{},"layers=10,waterlogged=true":{},"layers=1,waterlogged=false":{}}}"#).unwrap();
+        let p = state_properties(&v);
+        assert_eq!(p[0].name, "layers");
+        assert_eq!(p[0].values, ["1", "2", "10"], "numbers in their order");
+        assert_eq!(p[1].values, ["false", "true"]);
+        let v: Value = serde_json::from_str(r#"{"multipart":[{"when":{"facing":"north|east","flower_amount":"1|2|3|4"}},{"when":{"OR":[{"facing":"south"},{"facing":"west","up":true}]}}]}"#).unwrap();
+        let p = state_properties(&v);
+        let facing = p.iter().find(|p| p.name == "facing").unwrap();
+        assert_eq!(facing.values, ["north", "east", "south", "west"]);
+        assert_eq!(p.iter().find(|p| p.name == "up").unwrap().values, ["true"]);
+        assert_eq!(p.iter().find(|p| p.name == "flower_amount").unwrap().values, ["1", "2", "3", "4"]);
     }
 }

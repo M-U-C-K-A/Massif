@@ -3867,5 +3867,10 @@
  "Loading": "Carregamento",
  "Load": "Carregar",
  "View distance": "Distância de visão",
- "Around the view, the 3D views and the Render build the map within the view distance of their camera, the Diorama what it shows: on a huge map they are ready sooner and rest once they are. The whole map builds all of it and keeps it, for flying over it at length.": "Em torno da vista, as vistas 3D e o Render constroem o mapa dentro da distância de visão da câmera, o Diorama o que mostra: num mapa enorme ficam prontos mais cedo e depois descansam. O mapa inteiro constrói tudo e o guarda, para sobrevoá-lo longamente."
+ "Around the view, the 3D views and the Render build the map within the view distance of their camera, the Diorama what it shows: on a huge map they are ready sooner and rest once they are. The whole map builds all of it and keeps it, for flying over it at length.": "Em torno da vista, as vistas 3D e o Render constroem o mapa dentro da distância de visão da câmera, o Diorama o que mostra: num mapa enorme ficam prontos mais cedo e depois descansam. O mapa inteiro constrói tudo e o guarda, para sobrevoá-lo longamente.",
+ "Random": "Ao acaso",
+ "Default": "Predefinido",
+ "One row for each value, sharing the weight: the cover grows them mixed": "Uma linha por valor, partilhando o peso: a cobertura fá-las crescer misturadas",
+ "This block has no properties the game's files or the lists of blocks name.": "Este bloco não tem propriedades que os ficheiros do jogo ou as listas de blocos nomeiem.",
+ "{name}: its state": "{name}: o seu estado"
 }
