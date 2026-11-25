@@ -776,3 +776,58 @@ fn nodes_show_what_they_cost() {
     assert!(one >= 2 && inside > 0.0, "{one} nodes inside measured");
     assert!(super::canvas::cost_text(1500.0, 12 << 20) == "1.5 s · 12 MB");
 }
+
+/// The Script pane: the graph as a script, a script applied as one step
+/// to undo, the nodes kept where they were.
+#[test]
+fn a_script_makes_the_graph() {
+    let mut p = cpu_panel();
+    p.set_graph(example("m4-alpine-colors"));
+    let before = p.document();
+    p.script.open = true;
+    let doc = p.document();
+    let r = p.revision;
+    p.script.follow(|| doc, r, true);
+    assert!(p.script.text.contains("output height"), "{}", p.script.text);
+    // Written again, the graph is the same.
+    super::script::apply(&mut p).unwrap();
+    assert!(p.document().same_terrain(&before));
+    // A script of its own, applied: one step back to the graph before.
+    let pos = p.document().ui.values().next().map(|u| u.pos);
+    let first = p.document().ui.keys().next().cloned().unwrap();
+    p.script.text = format!("{}\nextra = FractalNoise(scale: 300);\n", p.script.text.trim_end().trim_end_matches('}'));
+    p.script.text.push_str("}\n");
+    p.script.check();
+    assert!(p.script.errors.iter().all(|e| e.warning), "{:?}", p.script.errors);
+    super::script::apply(&mut p).unwrap();
+    assert!(p.document().nodes.contains_key("extra"));
+    assert_eq!(p.document().ui.get(&first).map(|u| u.pos), pos, "kept where it was");
+    assert!(p.undo());
+    assert!(!p.document().nodes.contains_key("extra"));
+    // A mistake leaves the graph as it is.
+    p.script.text = "a = FractalNoize();".into();
+    p.script.check();
+    assert!(p.script.errors[0].message.contains("FractalNoise"));
+    assert!(super::script::apply(&mut p).is_err());
+    assert!(super::script::guide_for(&p).contains("- FractalNoise("));
+}
+
+/// The Script pane beside the graph, with a mistake underlined.
+#[test]
+fn the_script_pane_renders() {
+    let Some(dir) = snapshot_dir() else { return };
+    let Some(gpu) = Gpu::headless() else { return };
+    let engine = Arc::new(Engine::with_gpu(gpu, Default::default()));
+    use egui::Theme::{Dark, Light};
+    for (theme, tag) in [(Dark, "dark"), (Light, "light")] {
+        render_editor(&dir, &format!("script-pane-{tag}"), theme, 1.0, engine.clone(), example("m4-alpine-colors"), |p| {
+            p.script.open = true;
+        });
+    }
+    let src = massif_terrain::mscript::EXAMPLES[0].1.replace("SlopeMask(eroded)", "SlopeMsk(eroded)");
+    render_editor(&dir, "script-pane-error-dark-2x", Dark, 2.0, engine.clone(), massif_terrain::mscript::build(massif_terrain::mscript::EXAMPLES[0].1).unwrap(), move |p| {
+        p.script.open = true;
+        p.script.text = src.clone();
+        p.script.origin = super::script::Origin::Own;
+    });
+}

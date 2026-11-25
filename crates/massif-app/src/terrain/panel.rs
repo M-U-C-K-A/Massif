@@ -228,6 +228,8 @@ pub struct TerrainPanel {
     pub map_revision: u64,
     /// What reading the world's graph said (a graph of 1.2 migrated).
     pub notes: Vec<String>,
+    /// The Script pane beside the graph (MassifScript).
+    pub script: super::script::ScriptPane,
 }
 
 impl TerrainPanel {
@@ -289,6 +291,7 @@ impl TerrainPanel {
             doc_seen: 0,
             map_revision: 0,
             notes: Vec::new(),
+            script: Default::default(),
         }
     }
 
@@ -475,6 +478,7 @@ impl TerrainPanel {
     /// The panel in the app: the document's graph, edited, written back.
     pub fn ui_in(&mut self, ui: &mut Ui, doc: &mut crate::doc::Document) {
         self.own_undo_keys = false;
+        self.script.title = doc.world.meta.name.clone();
         self.sync(doc);
         self.ui(ui);
         self.commit(doc);
@@ -711,6 +715,25 @@ impl TerrainPanel {
         self.edit();
         self.graph = g;
         Ok(out)
+    }
+
+    /// The whole document replaced by `graph` (a script applied), as one
+    /// step to undo: the composites open are closed, the nodes that were
+    /// there already stay where they were, the others are laid out.
+    pub fn replace_document(&mut self, mut graph: Graph) {
+        self.close_to(0);
+        let old = self.document();
+        massif_terrain::mscript::lay_out(&mut graph, Some(&old));
+        graph.editor = old.editor.clone();
+        self.edit();
+        self.graph = graph;
+        self.editing = false;
+        self.scope_revision += 1;
+        self.selected.retain(|s| self.graph.nodes.contains_key(s));
+        if self.selected_frame.as_ref().is_some_and(|f| !self.graph.frames.contains_key(f)) {
+            self.selected_frame = None;
+        }
+        self.viewed = None;
     }
 
     /// The composite open, its nodes as they are now: what steps on the
@@ -1275,7 +1298,16 @@ impl TerrainPanel {
         let mid = Rect::from_min_max(pos2(mid_left, body.top()), pos2(mid_right, body.bottom()));
         let viewer_h = (mid.height() * self.split).clamp(140.0, mid.height() - 160.0).max(80.0);
         let viewer = Rect::from_min_size(mid.min, vec2(mid.width(), viewer_h));
-        let graph = Rect::from_min_max(pos2(mid.left(), viewer.bottom() + gap), mid.max);
+        let below = Rect::from_min_max(pos2(mid.left(), viewer.bottom() + gap), mid.max);
+        // The Script pane beside the graph, or in its place when narrow.
+        let (graph, script) = match (self.script.open, below.width() >= 640.0) {
+            (false, _) => (below, None),
+            (true, true) => {
+                let w = (below.width() * 0.46).clamp(300.0, 620.0);
+                (Rect::from_min_max(below.min, pos2(below.right() - w - gap, below.bottom())), Some(Rect::from_min_max(pos2(below.right() - w, below.top()), below.max)))
+            }
+            (true, false) => (Rect::NOTHING, Some(below)),
+        };
         let status = Rect::from_min_max(pos2(full.left() + gap + 4.0, body.bottom() + 2.0), pos2(full.right() - gap, full.bottom()));
 
         // The divider between the viewer and the graph, dragged.
@@ -1299,7 +1331,12 @@ impl TerrainPanel {
             card(ui, lib, |ui| super::library::ui(self, ui, graph));
         }
         card(ui, viewer, |ui| super::viewer::ui(self, ui));
-        card(ui, graph, |ui| super::canvas::ui(self, ui));
+        if graph.is_positive() {
+            card(ui, graph, |ui| super::canvas::ui(self, ui));
+        }
+        if let Some(r) = script {
+            card(ui, r, |ui| super::script::ui(self, ui));
+        }
         if props_w > 0.0 {
             card(ui, props, |ui| super::props::ui(self, ui));
         }

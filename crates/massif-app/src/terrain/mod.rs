@@ -15,6 +15,7 @@ pub mod eval;
 pub mod library;
 pub mod panel;
 pub mod props;
+pub mod script;
 pub mod shape;
 pub mod shade;
 pub mod sockets;

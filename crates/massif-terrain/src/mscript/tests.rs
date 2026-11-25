@@ -243,7 +243,7 @@ fn the_guide_holds_every_node() {
     for (name, s) in names::catalogue() {
         assert!(text.contains(&format!("- {name}(")), "{} ({name}) is missing", s.id);
         for p in s.params {
-            assert!(text.contains(&format!("{}", p.name)), "{}.{}", s.id, p.name);
+            assert!(text.contains(p.name), "{}.{}", s.id, p.name);
         }
     }
     for (kind, _, _) in crate::components::offered() {

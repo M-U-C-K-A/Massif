@@ -68,7 +68,10 @@ const CANONICAL: &[(&str, &str)] = &[
 ];
 
 /// Other names, some with settings of their own.
-fn aliases() -> Vec<(&'static str, &'static str, Vec<(&'static str, Value)>)> {
+/// An alias, the type it names, and the settings it gives.
+type Alias = (&'static str, &'static str, Vec<(&'static str, Value)>);
+
+fn aliases() -> Vec<Alias> {
     let mode = |m: &str| vec![("mode", json!(m))];
     vec![
         ("Noise", "noise.fbm", vec![]),

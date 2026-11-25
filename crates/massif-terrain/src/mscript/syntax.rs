@@ -572,12 +572,12 @@ impl<'a> Parser<'a> {
                 self.bump();
                 let Tok::Ident(f, _) = self.bump().tok.clone() else { unreachable!() };
                 // `noise.fbm(…)`: a type written as it is.
-                if self.is("(") || self.is("@") {
-                    if let Some(path) = dotted(&e) {
-                        let name_span = e.span().to(self.prev());
-                        e = self.call(format!("{path}.{f}"), name_span)?;
-                        continue;
-                    }
+                if (self.is("(") || self.is("@"))
+                    && let Some(path) = dotted(&e)
+                {
+                    let name_span = e.span().to(self.prev());
+                    e = self.call(format!("{path}.{f}"), name_span)?;
+                    continue;
                 }
                 let sp = e.span().to(self.prev());
                 e = Expr::Field(Box::new(e), f, sp);

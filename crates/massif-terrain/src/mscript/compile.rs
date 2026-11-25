@@ -1191,7 +1191,7 @@ fn binary(op: &str, a: Val, b: Val, sp: Span) -> R<Val> {
         ("+", Val::Num(x), Val::Num(y)) => Val::Num(x + y),
         ("-", Val::Num(x), Val::Num(y)) => Val::Num(x - y),
         ("*", Val::Num(x), Val::Num(y)) => Val::Num(x * y),
-        ("/", Val::Num(_), Val::Num(y)) if y == 0.0 => return err(sp, "a division by zero"),
+        ("/", Val::Num(_), Val::Num(0.0)) => return err(sp, "a division by zero"),
         ("/", Val::Num(x), Val::Num(y)) => Val::Num(x / y),
         ("%", Val::Num(x), Val::Num(y)) if y != 0.0 => Val::Num(x.rem_euclid(y)),
         ("^", Val::Num(x), Val::Num(y)) => Val::Num(x.powf(y)),

@@ -1620,6 +1620,9 @@ fn header_commands(p: &mut TerrainPanel, ui: &mut Ui) {
         r.on_hover_text(tip).clicked()
     };
     let editable = !p.read_only();
+    if icon_button(ui, Icon::FileCode, if p.script.open { t!("Hide the script") } else { t!("Show the graph as a script (MassifScript), to read, edit or ask an AI") }, true) {
+        p.script.open = !p.script.open;
+    }
     if icon_button(ui, Icon::Maximize2, t!("Frame all nodes (F)"), !p.graph.nodes.is_empty()) {
         let canvas = ui.max_rect();
         p.view.zoom = 1.0;
