@@ -91,7 +91,7 @@ fn the_panel_renders() {
                 loop {
                     h.step();
                     std::thread::sleep(std::time::Duration::from_millis(20));
-                    if (h.state().previews_idle() && h.state().viewer.as_ref().is_some_and(|v| v.1.sharp) && t0.elapsed().as_millis() > 300) || t0.elapsed().as_secs() > 60 {
+                    if (h.state().previews_idle() && (h.state().viewer.as_ref().is_some_and(|v| v.1.sharp) || h.state().viewer3d.as_ref().is_some_and(|v| v.sharp)) && t0.elapsed().as_millis() > 300) || t0.elapsed().as_secs() > 60 {
                         break;
                     }
                 }
@@ -100,6 +100,64 @@ fn the_panel_renders() {
                 h.render().unwrap().save(dir.join(format!("panel-{name}-{tag}-{ppp}x.png"))).unwrap();
             }
         }
+    }
+}
+
+/// The panel as the app runs it, its graphics at hand for the 3D view.
+struct PanelApp {
+    panel: super::TerrainPanel,
+    theme: egui::Theme,
+}
+
+impl eframe::App for PanelApp {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        if self.panel.gpu_view.is_none() {
+            crate::theme::install(ui.ctx());
+            self.panel.gpu_view = frame.wgpu_render_state().cloned();
+        }
+        ui.ctx().set_theme(self.theme);
+        self.panel.ui(ui);
+    }
+}
+
+/// The viewer in 3D draws the generator's output as the graph's viewport
+/// does: sky or a dark backdrop, soft light, clouds and sea, light and
+/// dark.
+#[test]
+fn the_viewer_renders_in_3d() {
+    let Some(dir) = snapshot_dir() else { return };
+    let Some(gpu) = Gpu::headless() else { return };
+    let engine = Arc::new(Engine::with_gpu(gpu, Default::default()));
+    use egui::Theme::{Dark, Light};
+    let cases = [
+        ("m4-alpine-colors", Dark, "dark", true, Surface::Colour, false),
+        ("m4-alpine-colors", Dark, "dark-backdrop", false, Surface::Colour, false),
+        ("m4-alpine-colors", Light, "light", true, Surface::Colour, true),
+        ("m2-archipelago", Light, "light-clay", true, Surface::Clay, true),
+        ("m2-archipelago", Dark, "dark-sea", true, Surface::Colour, true),
+    ];
+    for (name, theme, tag, sky, surface, sea) in cases {
+        let mut panel = super::TerrainPanel::with_graph(engine.clone(), example(name));
+        panel.look.three_d = true;
+        panel.look.sky = sky;
+        panel.look.surface = surface;
+        panel.split = 0.62;
+        panel.view3d.render.sea = sea;
+        panel.view3d.render.clouds = tag == "dark-sea";
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).with_pixels_per_point(1.0).with_accessibility_check(false).wgpu().build_eframe(move |_| PanelApp { panel, theme });
+        h.run_steps(3);
+        let t0 = std::time::Instant::now();
+        loop {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            if (h.state().panel.previews_idle() && h.state().panel.viewer3d.as_ref().is_some_and(|v| v.sharp) && t0.elapsed().as_millis() > 300) || t0.elapsed().as_secs() > 60 {
+                break;
+            }
+        }
+        assert!(h.state().panel.view3d.has_data(), "{name}: the 3D view has the relief");
+        h.run_steps(5);
+        eprintln!("{name} {tag}: relief in {:.0} ms", t0.elapsed().as_secs_f64() * 1000.0);
+        h.render().unwrap().save(dir.join(format!("viewer3d-{name}-{tag}.png"))).unwrap();
     }
 }
 

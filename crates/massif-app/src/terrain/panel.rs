@@ -246,6 +246,14 @@ pub struct TerrainPanel {
     pass: Option<u64>,
     /// Pixels of the viewer's picture, as it was last drawn.
     viewer_px: [usize; 2],
+    /// The viewer in 3D: the graph viewport's view, the picture it shows
+    /// (its relief handed to the view), the app's graphics it draws with.
+    pub view3d: crate::terrain_view::TerrainView,
+    pub viewer3d: Option<Picture>,
+    pub gpu_view: Option<egui_wgpu::RenderState>,
+    /// The 3D view's render settings shown; the last image saved.
+    pub render_open: bool,
+    pub saved: Option<Result<String, String>>,
 }
 
 /// One of the generator's panels, each an area of the app's layout.
@@ -318,6 +326,11 @@ impl TerrainPanel {
             dirty: false,
             own_undo_keys: true,
             docked: false,
+            view3d: crate::terrain_view::TerrainView::default(),
+            viewer3d: None,
+            gpu_view: None,
+            render_open: false,
+            saved: None,
             pass: None,
             viewer_px: [640, 360],
             env_key: None,
@@ -344,6 +357,7 @@ impl TerrainPanel {
         };
         let engine = Arc::new(engine);
         let mut p = Self::new(engine.clone());
+        p.gpu_view = frame.wgpu_render_state().cloned();
         p.categories = Arc::new(Categories::of(reg));
         // One Live per app, over the same engine: the World map's preview
         // layer (`terrain_live.rs`) draws what it makes.
@@ -401,6 +415,7 @@ impl TerrainPanel {
         self.viewed = None;
         self.thumbs.clear();
         self.viewer = None;
+        self.viewer3d = None;
         self.revision += 1;
         match self.layout.view {
             Some([x, y, z]) => {
@@ -1312,7 +1327,14 @@ impl TerrainPanel {
             return;
         }
         self.track_costs();
-        for p in self.previews.as_ref().map(|p| p.take()).unwrap_or_default() {
+        for mut p in self.previews.as_ref().map(|p| p.take()).unwrap_or_default() {
+            if let Some(relief) = p.relief.take() {
+                if p.viewer {
+                    self.view3d.set(relief);
+                    self.viewer3d = Some(p);
+                }
+                continue;
+            }
             let image = egui::ColorImage::from_rgba_unmultiplied(p.size, &p.rgba);
             if p.viewer {
                 match &mut self.viewer {
@@ -1361,6 +1383,11 @@ impl TerrainPanel {
         self.thumbs.retain(|k, _| wanted.contains(k) || all.contains(&k.node) || k.node.contains(massif_terrain::lower::SEP));
         let mut look = self.look;
         look.size = viewer_px;
+        if look.three_d {
+            // The 3D view lights and frames the relief itself: only what
+            // makes the relief asks for it again.
+            look = ViewerLook { three_d: true, surface: look.surface, relief: look.relief, overlay: look.overlay, size: look.size, resolution: look.resolution, ..ViewerLook::default() };
+        }
         let shown = self.shown();
         let nodes = self.graph.nodes.len();
         let key = (self.revision, shown.clone(), look, self.thumb_surface, nodes, self.space, thumb_px, self.env_revision, self.scope_revision);

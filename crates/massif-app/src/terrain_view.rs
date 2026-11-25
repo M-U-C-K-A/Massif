@@ -239,6 +239,8 @@ struct Uniforms {
     fog: [f32; 4],
     /// Directions and steps of the sky's occlusion.
     detail: [f32; 4],
+    /// A plain backdrop in place of the sky (linear); w: drawn.
+    backdrop: [f32; 4],
 }
 
 const SHADER: &str = r#"
@@ -259,6 +261,7 @@ struct U {
     cam_u: vec4<f32>,
     fog: vec4<f32>,
     detail: vec4<f32>,
+    backdrop: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var heights: texture_2d<f32>;
@@ -1015,6 +1018,9 @@ fn vs_sky(@builtin(vertex_index) vi: u32) -> SkyOut {
 
 @fragment
 fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
+    if (u.backdrop.w > 0.5) {
+        return vec4<f32>(u.backdrop.rgb, 1.0);
+    }
     let d = normalize(u.cam_f.xyz + u.cam_s.xyz * in.ndc.x * u.cam.x + u.cam_u.xyz * in.ndc.y * u.cam.y);
     var c = sky_color(d) + sun_disc(d);
     let cl = clouds_along(u.eye.xyz, d, u.grid.y * 6.0, dither(in.clip.xy));
@@ -1708,6 +1714,8 @@ pub struct TerrainView {
     moved: Option<Instant>,
     /// egui shows the image drawn while the view moves.
     shows_small: bool,
+    /// A plain backdrop (sRGB) in place of the sky behind the relief.
+    pub backdrop: Option<[u8; 3]>,
 }
 
 impl Default for TerrainView {
@@ -1724,6 +1732,7 @@ impl Default for TerrainView {
             last: None,
             moved: None,
             shows_small: false,
+            backdrop: None,
         }
     }
 }
@@ -1828,6 +1837,13 @@ impl TerrainView {
             cam_u: [up.x, up.y, up.z, 0.0],
             fog,
             detail: [sky_dirs, sky_steps, if quality == Quality::Moving { 0.0 } else { 1.0 }, 0.0],
+            backdrop: match self.backdrop {
+                Some(c) => {
+                    let lin = |b: u8| (b as f32 / 255.0).powf(2.2);
+                    [lin(c[0]), lin(c[1]), lin(c[2]), 1.0]
+                }
+                None => [0.0; 4],
+            },
         }
     }
 
@@ -1835,11 +1851,16 @@ impl TerrainView {
     /// relief's occlusion must be worked out again (the exaggeration
     /// changed).
     pub fn ui(&mut self, ui: &mut Ui, frame: &eframe::Frame) -> bool {
+        self.ui_with(ui, frame.wgpu_render_state())
+    }
+
+    /// [`Self::ui`] with the app's graphics as they were kept.
+    pub fn ui_with(&mut self, ui: &mut Ui, state: Option<&egui_wgpu::RenderState>) -> bool {
         let pal = Palette::of(ui);
         let rect = ui.available_rect_before_wrap();
         let response = ui.allocate_rect(rect, Sense::click_and_drag());
         let painter = ui.painter_at(rect);
-        let Some(state) = frame.wgpu_render_state() else {
+        let Some(state) = state else {
             painter.rect_filled(rect, 0, pal.canvas);
             return false;
         };

@@ -114,6 +114,10 @@ pub struct Picture {
     pub range: (f32, f32),
     pub kind: Option<PortKind>,
     pub ms: f64,
+    /// In 3D: the relief for the graphics card's view, in place of `rgba`,
+    /// and the exaggeration it reads best at (times the look's relief).
+    pub relief: Option<Arc<crate::terrain_view::ViewData>>,
+    pub auto: f32,
 }
 
 /// What a thread reports of its work.
@@ -290,10 +294,11 @@ fn work(shared: &Shared, engine: &Engine, req: Request) {
             }
         };
         match made {
-            Ok(Some((size, rgba, range, kind))) => {
+            Ok(Some((size, rgba, range, kind, relief))) => {
                 let ms = t0.elapsed().as_secs_f64() * 1000.0;
                 shared.status.lock().expect("lock").last_ms = ms;
-                push(Picture { revision, what, viewer, sharp, size, rgba, range, kind, ms });
+                let auto = relief.as_ref().map_or(1.0, |r| r.exaggeration / req.viewer.as_ref().map_or(1.0, |v| v.1.relief));
+                push(Picture { revision, what, viewer, sharp, size, rgba, range, kind, ms, relief, auto });
             }
             Ok(None) => {}
             Err(e) => {
@@ -306,7 +311,7 @@ fn work(shared: &Shared, engine: &Engine, req: Request) {
     }
 }
 
-type Made = Option<([usize; 2], Vec<u8>, (f32, f32), Option<PortKind>)>;
+type Made = Option<([usize; 2], Vec<u8>, (f32, f32), Option<PortKind>, Option<Arc<crate::terrain_view::ViewData>>)>;
 
 /// The node output feeding `what`, and its type.
 fn source(c: &Compiled, what: &Shown) -> Option<((usize, u8), PortKind)> {
@@ -459,6 +464,13 @@ fn picture(engine: &Engine, c: &Compiled, what: &Shown, samples: u32, look: Opti
         None => overlay,
     };
     let ov = overlay.as_ref().map(|(m, col)| Overlay { mask: m, color: *col, opacity: look.map_or(0.9, |l| l.overlay) });
+    // In 3D, the relief itself, for the view the graph's viewport draws.
+    if let Some(l) = look.filter(|l| l.three_d) {
+        let kind = if shown_kind.is_raster() { kind } else { shown_kind };
+        let exaggeration = shade::auto_exaggeration(&heights, sea) * l.relief;
+        let data = relief_3d(&heights, colors.as_ref(), ov, surface, sea, c.space.size as f32, exaggeration);
+        return Ok(Some(([0, 0], Vec::new(), range, Some(kind), Some(Arc::new(data)))));
+    }
     let (size, shade_look) = match look {
         None => ([samples as usize, samples as usize], Look { exaggeration: shade::auto_exaggeration(&heights, sea) * 1.6, camera: Camera::Top { view: view_of(&heights, rect, whole, [0.0, 0.0, 1.0, 1.0], c.space.samples(lod)) }, back: [0, 0, 0], water: !field, ..Look::default() }),
         Some(l) => {
@@ -478,7 +490,70 @@ fn picture(engine: &Engine, c: &Compiled, what: &Shown, samples: u32, look: Opti
         draw_geometry(&mut rgba, size, &shown, c, win, super::sockets::color(shown_kind).to_array());
     }
     let kind = if shown_kind.is_raster() { kind } else { shown_kind };
-    Ok(Some((size, rgba, range, Some(kind))))
+    Ok(Some((size, rgba, range, Some(kind), None)))
+}
+
+/// The relief as the 3D view draws it: heights in blocks, sRGB colours
+/// (clay, the height's tints or the colours given, the mask laid over),
+/// openness to the sky for `exaggeration`.
+fn relief_3d(heights: &Grid, colors: Option<&Grid>, overlay: Option<Overlay>, surface: Surface, sea: f32, side: f32, exaggeration: f32) -> crate::terrain_view::ViewData {
+    let (w, h) = (heights.rect.w as usize, heights.rect.h as usize);
+    let n = w.min(h);
+    let at = |x: usize, z: usize| heights.data[z * w + x];
+    let hs: Vec<f32> = (0..n * n).map(|i| at(i % n, i / n)).collect();
+    let (lo, hi) = hs.iter().fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+    let spacing = side / n as f32;
+    let srgb = |v: f32| {
+        let v = v.clamp(0.0, 1.0);
+        ((if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 }) * 255.0 + 0.5) as u8
+    };
+    let mix3 = |a: [f32; 3], b: [f32; 3], t: f32| [0, 1, 2].map(|k| a[k] + (b[k] - a[k]) * t.clamp(0.0, 1.0));
+    let smooth = |a: f32, b: f32, x: f32| {
+        let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    };
+    let given = colors.filter(|_| surface == Surface::Colour);
+    let mut rgb: Vec<[u8; 3]> = (0..n * n)
+        .map(|i| {
+            let (x, z) = (i % n, i / n);
+            if let Some(c) = given {
+                let k = z * w + x;
+                return [srgb(c.plane(0)[k]), srgb(c.plane(1.min(c.planes - 1))[k]), srgb(c.plane(2.min(c.planes - 1))[k])];
+            }
+            let y = hs[i];
+            if surface == Surface::Clay {
+                let t = (y - lo) / (hi - lo).max(1e-3);
+                return mix3([150.0, 143.0, 132.0], [204.0, 198.0, 188.0], t).map(|v| v as u8);
+            }
+            // The height's tints, as the 2D viewer's: sand at the shore,
+            // grass, forest, rock, snow on the tops.
+            let (x0, x1, z0, z1) = (x.saturating_sub(1), (x + 1).min(n - 1), z.saturating_sub(1), (z + 1).min(n - 1));
+            let dx = (hs[z * n + x1] - hs[z * n + x0]) / (spacing * (x1 - x0).max(1) as f32);
+            let dz = (hs[z1 * n + x] - hs[z0 * n + x]) / (spacing * (z1 - z0).max(1) as f32);
+            let steep = (1.0 - 1.0 / (1.0 + dx * dx + dz * dz).sqrt()) * 2.2;
+            let t = ((y - sea) / (hi - sea).max(1.0)).clamp(0.0, 1.0);
+            let mut c = mix3([0.62, 0.55, 0.38], [0.20, 0.30, 0.10], smooth(0.0, 0.03, t));
+            c = mix3(c, [0.11, 0.19, 0.08], smooth(0.15, 0.45, t));
+            c = mix3(c, [0.30, 0.27, 0.24], smooth(0.5, 0.75, t));
+            c = mix3(c, [0.30, 0.27, 0.24], smooth(0.55, 0.9, steep.min(1.0)));
+            c = mix3(c, [0.86, 0.88, 0.92], smooth(0.8, 0.9, t) * (1.0 - smooth(0.75, 1.0, steep.min(1.0))));
+            c.map(srgb)
+        })
+        .collect();
+    if let Some(o) = overlay {
+        let mask = Grid { lod: o.mask.lod, rect: massif_terrain::space::Rect { x: 0, z: 0, w: n as u32, h: n as u32 }, planes: 1, data: (0..n * n).map(|i| o.mask.data[(i / n) * o.mask.rect.w as usize + i % n]).collect() };
+        massif_terrain::preview::overlay(&mut rgb, &mask, o.color, o.opacity);
+    }
+    crate::terrain_view::ViewData {
+        n,
+        colors: rgb.iter().map(|c| [c[0], c[1], c[2], 255]).collect(),
+        light: crate::terrain_view::occlusion(&hs, n, spacing, exaggeration),
+        heights: hs,
+        size: side,
+        exaggeration,
+        slabs: Vec::new(),
+        water: Vec::new(),
+    }
 }
 
 /// A volume cut at height `y`, one sample of it under each sample of

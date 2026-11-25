@@ -40,6 +40,10 @@ pub fn ui(p: &mut TerrainPanel, ui: &mut Ui) {
     p.look.back = { let c = pal.well(); [c.r(), c.g(), c.b()] };
     let painter = ui.painter_at(pic);
     painter.rect_filled(pic, theme::TILE_RADIUS, pal.well());
+    if p.look.three_d {
+        three_d(p, ui, pic, &pal);
+        return;
+    }
 
     // 2D: the window over the terrain keeps the picture's shape.
     let aspect = pic.width() / pic.height().max(1.0);
@@ -90,14 +94,8 @@ pub fn ui(p: &mut TerrainPanel, ui: &mut Ui) {
         }
     }
     if resp.double_clicked() && !editing_points {
-        if p.look.three_d {
-            p.look.yaw = 25.0;
-            p.look.pitch = 34.0;
-            p.look.distance = 1.0;
-        } else {
-            p.look.center = [0.5, 0.5];
-            p.look.span = 1.0;
-        }
+        p.look.center = [0.5, 0.5];
+        p.look.span = 1.0;
     }
 
     match &p.viewer {
@@ -123,10 +121,12 @@ pub fn ui(p: &mut TerrainPanel, ui: &mut Ui) {
             painter.text(pic.center(), Align2::CENTER_CENTER, text, FontId::proportional(13.0), pal.weak);
         }
     }
-    if !p.look.three_d {
-        points_overlay(p, ui, pic, &pal);
-    }
-    // The sun's bearing, at the top left, and how to turn it.
+    points_overlay(p, ui, pic, &pal);
+    sun_badge(p, ui, &painter, pic);
+}
+
+/// The sun's bearing, at the top left, and how to turn it.
+fn sun_badge(p: &TerrainPanel, ui: &Ui, painter: &egui::Painter, pic: Rect) {
     let sun_at = pic.left_top() + vec2(22.0, 22.0);
     painter.circle(sun_at, 12.0, Color32::from_black_alpha(90), Stroke::NONE);
     let a = p.look.sun[0].to_radians();
@@ -135,6 +135,115 @@ pub fn ui(p: &mut TerrainPanel, ui: &mut Ui) {
     painter.circle_filled(s, 3.2, Color32::from_rgb(255, 214, 120));
     let sun_hit = ui.interact(Rect::from_center_size(sun_at, vec2(26.0, 26.0)), ui.scope_id().with("sun"), Sense::hover());
     sun_hit.on_hover_text(t!("Sun: {bearing}° bearing, {height}° high. Shift + drag on the picture turns it.", bearing = format!("{:.0}", p.look.sun[0]), height = format!("{:.0}", p.look.sun[1])));
+}
+
+/// The viewer in 3D: the relief as the graph's viewport draws it (sky,
+/// soft light, clouds, sea, sides), turned and lit with the pointer; its
+/// render settings, clouds, sea, framing and saving at its foot.
+fn three_d(p: &mut TerrainPanel, ui: &mut Ui, pic: Rect, pal: &Palette) {
+    let painter = ui.painter_at(pic);
+    // The viewer's look drives the view: its sun, its relief, its backdrop.
+    let v = &mut p.view3d;
+    v.render.sun_azimuth = p.look.sun[0];
+    v.render.sun_elevation = p.look.sun[1];
+    let auto = p.viewer3d.as_ref().map_or(1.0, |v| v.auto);
+    v.render.exaggeration = auto * p.look.relief;
+    v.sea_level = p.space.sea_level;
+    v.backdrop = if p.look.sky { None } else { Some(BACKDROP) };
+    if p.viewer3d.is_some() && v.has_data() {
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(pic).layout(egui::Layout::top_down(egui::Align::Min)));
+        child.set_clip_rect(pic.intersect(ui.clip_rect()));
+        v.ui_with(&mut child, p.gpu_view.as_ref());
+    } else {
+        let text = if p.graph.nodes.is_empty() {
+            t!("Add nodes to see the terrain they make.")
+        } else if p.previews_idle() {
+            t!("Connect a node to the Map Output's Height to see the terrain.")
+        } else {
+            t!("Computing…")
+        };
+        painter.text(pic.center(), Align2::CENTER_CENTER, text, FontId::proportional(13.0), pal.weak);
+    }
+    // What the view turned is the viewer's.
+    p.look.sun = [p.view3d.render.sun_azimuth, p.view3d.render.sun_elevation.clamp(4.0, 85.0)];
+    if let Some(picture) = &p.viewer3d {
+        legend(ui, &painter, Rect::from_min_max(pic.min, pos2(pic.max.x, pic.max.y - 44.0)), picture, pal);
+        if !picture.sharp {
+            chip(&painter, pic.right_top() + vec2(-10.0, 10.0), Align2::RIGHT_TOP, t!("refining…"));
+        }
+    }
+    sun_badge(p, ui, &painter, pic);
+    // The view's commands, at its foot, as in the graph's viewport.
+    let bar = Rect::from_min_max(pos2(pic.left() + 10.0, pic.bottom() - 40.0), pos2(pic.right() - 10.0, pic.bottom() - 8.0));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(bar).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    egui::Frame::new().fill(pal.panel.gamma_multiply(0.94)).stroke(Stroke::new(1.0, pal.border)).corner_radius(theme::PILL).inner_margin(egui::Margin::symmetric(5, 4)).show(&mut child, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().interact_size.y = 22.0;
+            ui.spacing_mut().item_spacing.x = 2.0;
+            {
+                let w = &mut ui.visuals_mut().widgets;
+                w.inactive.weak_bg_fill = Color32::TRANSPARENT;
+                for state in [&mut w.inactive, &mut w.hovered, &mut w.active] {
+                    state.bg_stroke = Stroke::NONE;
+                }
+            }
+            ui.toggle_value(&mut p.render_open, theme::with_icon(Icon::Sun, t!("Render"))).on_hover_text(t!("Sun, clouds, haze, sea and exposure of the view"));
+            ui.toggle_value(&mut p.view3d.render.clouds, theme::with_icon(Icon::Cloud, t!("Clouds")));
+            ui.toggle_value(&mut p.view3d.render.sea, theme::with_icon(Icon::Waves, t!("Sea"))).on_hover_text(t!("Water at the world's sea level ({sea_level})", sea_level = format!("{:.0}", p.space.sea_level)));
+            if ui.button(theme::glyph(Icon::Focus).to_string()).on_hover_text(t!("Frame the relief")).clicked() {
+                p.view3d.camera = Default::default();
+            }
+            let [w, h] = IMAGE_SIZE;
+            if ui.button(theme::glyph(Icon::Camera).to_string()).on_hover_text(t!("Save the view as an image, at full quality ({w} × {h})", w = w, h = h)).clicked() {
+                save_image(p);
+            }
+            match &p.saved {
+                Some(Ok(name)) => {
+                    ui.label(egui::RichText::new(t!("Saved {name}", name = name)).size(11.5).color(pal.weak));
+                }
+                Some(Err(e)) => {
+                    ui.label(egui::RichText::new(e).size(11.5).color(pal.danger));
+                }
+                None => {}
+            }
+        });
+    });
+    if p.render_open {
+        egui::Area::new(ui.scope_id().with("generator render settings")).order(egui::Order::Foreground).fixed_pos(pos2(pic.left() + 10.0, pic.top() + 44.0)).show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(14)).show(ui, |ui| {
+                ui.set_width(330.0);
+                egui::ScrollArea::vertical().max_height((pic.height() - 100.0).max(160.0)).show(ui, |ui| {
+                    p.view3d.settings_ui(ui);
+                });
+            });
+        });
+        p.look.sun = [p.view3d.render.sun_azimuth, p.view3d.render.sun_elevation.clamp(4.0, 85.0)];
+        p.look.relief = (p.view3d.render.exaggeration / auto).clamp(0.25, 4.0);
+    }
+}
+
+/// The 3D view's backdrop under Dark.
+const BACKDROP: [u8; 3] = [20, 20, 21];
+/// Pixels of an image of the 3D view saved.
+const IMAGE_SIZE: [u32; 2] = [1920, 1080];
+
+/// Renders the 3D view at full quality and saves it where the user says.
+fn save_image(p: &mut TerrainPanel) {
+    let name = format!("{}.png", if p.script.title.is_empty() { "Terrain" } else { &p.script.title });
+    let Some(path) = rfd::FileDialog::new().set_file_name(name).add_filter(t!("PNG image"), &["png"]).save_file() else {
+        return;
+    };
+    let Some((w, h, rgba)) = p.view3d.render_image(IMAGE_SIZE) else {
+        p.saved = Some(Err(t!("Nothing to render yet").to_owned()));
+        return;
+    };
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut png = Vec::new();
+    let encoded = image::write_buffer_with_format(&mut std::io::Cursor::new(&mut png), &rgba, w, h, image::ColorType::Rgba8, image::ImageFormat::Png);
+    p.saved = Some(match encoded.map_err(|e| e.to_string()).and_then(|()| massif_core::atomic::write(&path, &png, true).map_err(|e| massif_core::atomic::describe(&e, &path))) {
+        Ok(()) => Ok(name),
+        Err(e) => Err(t!("The image could not be saved: {e}", e = e)),
+    });
 }
 
 fn chip(painter: &egui::Painter, at: Pos2, align: Align2, text: &str) {
