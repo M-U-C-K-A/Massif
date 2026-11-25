@@ -647,6 +647,15 @@ fn the_eyedropper_tool_paints_with_what_it_picks() {
 /// to paint with (rendered at 1× and 2×).
 #[test]
 fn the_game_and_mods_are_set_up_in_their_window() {
+
+// -------------------------------------------------------- Replace terrain --
+
+/// Edit ▸ Replace terrain…: every column of one terrain painted with
+/// another, the terrain replaced chosen by its menu or the one in hand, in
+/// one step to undo (Jack: merge an imported terrain into a mod's own).
+/// Rendered at 1× and 2×.
+#[test]
+fn a_terrain_is_replaced_by_another() {
     use egui_kittest::kittest::Queryable;
     for ppp in densities() {
         let mut h = app(ppp, Tool::PaintTerrain);
@@ -683,4 +692,30 @@ fn the_blocks_panel_says_what_it_is_for() {
     h.run_steps(2);
     drop(h);
     assert!(lib.open_setup);
+}
+
+        let reg = &h.state().doc.world.registry;
+        let (stone, gravel) = (reg.terrain_by_name("Stone").unwrap().0, reg.terrain_by_name("Gravel").unwrap().0);
+        h.state_mut().command(&ctx, Command::ReplaceTerrain(Some(stone)));
+        h.run_steps(3);
+        assert!(matches!(h.state().dialog, Some(Dialog::ReplaceTerrain(f, _)) if f == stone));
+        if let Some(Dialog::ReplaceTerrain(_, to)) = &mut h.state_mut().dialog {
+            *to = gravel;
+        }
+        h.run_steps(2);
+        save(&mut h, "replace-terrain", ppp);
+        h.get_by_label("Replace").click();
+        h.run_steps(2);
+        let started = std::time::Instant::now();
+        while terrain_at(h.state().doc.dimension(), 300, 300) != Some(gravel) {
+            assert!(started.elapsed().as_secs() < 60, "replaced");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(terrain_at(h.state().doc.dimension(), 900, 700), Some(gravel));
+        assert_eq!(h.state().doc.history.undo_label(), Some("Replace terrain"));
+        h.state_mut().command(&ctx, Command::Undo);
+        h.run_steps(2);
+        assert_eq!(terrain_at(h.state().doc.dimension(), 300, 300), Some(stone), "one step undoes it");
+    }
 }

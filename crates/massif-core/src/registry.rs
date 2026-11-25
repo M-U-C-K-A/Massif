@@ -590,6 +590,15 @@ pub struct Registry {
     /// is shown after these.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub palettes: Vec<String>,
+    /// The categories of the Terrain panel in the order the user gave them,
+    /// those with no terrain left included; a terrain's own category
+    /// (`TerrainDef::group`) not named here is shown after these.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub terrain_groups: Vec<String>,
+    /// Terrains the user took out of the Terrain panel's lists (still on
+    /// the map, listed under Hidden).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_terrains: Vec<u16>,
     /// Layers shown alone, as WorldPainter's solo: kept with the map so
     /// that the visibility from before comes back exactly, even after the
     /// map is opened again.
@@ -760,6 +769,8 @@ impl Registry {
             pockets: Vec::new(),
             combined: Vec::new(),
             palettes: Vec::new(),
+            terrain_groups: Vec::new(),
+            hidden_terrains: Vec::new(),
             solo: None,
             tree_sizes: vanilla_tree_sizes(),
             annotations: Default::default(),
@@ -1099,8 +1110,126 @@ impl Registry {
     }
 }
 
+
+impl Registry {
+    /// The Terrain panel's categories in their order: those the user
+    /// ordered, then the others in the order of their first terrain.
+    pub fn terrain_group_names(&self) -> Vec<String> {
+        let mut out: Vec<String> = self.terrain_groups.clone();
+        for t in &self.terrains {
+            if !out.contains(&t.group) {
+                out.push(t.group.clone());
+            }
+        }
+        out
+    }
+
+    /// Terrain `t` into category `group`, which is listed from then on.
+    pub fn move_terrain(&mut self, t: u16, group: &str) {
+        self.terrain_groups = self.terrain_group_names();
+        if !self.terrain_groups.iter().any(|g| g == group) {
+            self.terrain_groups.push(group.to_owned());
+        }
+        if let Some(def) = self.terrains.get_mut(t as usize) {
+            def.group = group.to_owned();
+        }
+    }
+
+    /// Category `old` named `new`, its terrains with it; into another
+    /// category of that name when there is one.
+    pub fn rename_terrain_group(&mut self, old: &str, new: &str) {
+        let mut names = self.terrain_group_names();
+        if names.iter().any(|g| g == new) {
+            names.retain(|g| g != old);
+        } else {
+            for g in &mut names {
+                if g == old {
+                    *g = new.to_owned();
+                }
+            }
+        }
+        self.terrain_groups = names;
+        for t in &mut self.terrains {
+            if t.group == old {
+                t.group = new.to_owned();
+            }
+        }
+    }
+
+    /// Category `name` up (`true`) or down the list.
+    pub fn move_terrain_group(&mut self, name: &str, up: bool) {
+        let mut names = self.terrain_group_names();
+        if let Some(k) = names.iter().position(|g| g == name) {
+            let other = if up { k.checked_sub(1) } else { Some(k + 1).filter(|&o| o < names.len()) };
+            if let Some(o) = other {
+                names.swap(k, o);
+            }
+        }
+        self.terrain_groups = names;
+    }
+
+    /// Category `name` gone: its terrains into `into`.
+    pub fn delete_terrain_group(&mut self, name: &str, into: &str) {
+        let mut names = self.terrain_group_names();
+        names.retain(|g| g != name);
+        if !names.iter().any(|g| g == into) && self.terrains.iter().any(|t| t.group == name) {
+            names.push(into.to_owned());
+        }
+        self.terrain_groups = names;
+        for t in &mut self.terrains {
+            if t.group == name {
+                t.group = into.to_owned();
+            }
+        }
+    }
+
+    /// Terrain `t` hidden from the lists (`true`) or shown again.
+    pub fn hide_terrain(&mut self, t: u16, hidden: bool) {
+        self.hidden_terrains.retain(|&h| h != t);
+        if hidden {
+            self.hidden_terrains.push(t);
+            self.hidden_terrains.sort_unstable();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    /// The Terrain panel's categories: ordered, renamed (merged into one of
+    /// the same name), deleted into another, kept in the file with the
+    /// hidden terrains, only when set.
+    #[test]
+    fn terrain_categories_are_the_users() {
+        let mut reg = super::Registry::vanilla();
+        let first = reg.terrain_group_names();
+        assert!(first.len() > 2);
+        let json = serde_json::to_string(&reg).unwrap();
+        assert!(!json.contains("terrain_groups") && !json.contains("hidden_terrains"), "nothing written until set");
+        reg.move_terrain_group(&first[1], true);
+        assert_eq!(reg.terrain_group_names()[0], first[1]);
+        reg.move_terrain(0, "Conquest · Soil");
+        assert_eq!(reg.terrains[0].group, "Conquest · Soil");
+        assert_eq!(reg.terrain_group_names().last().map(String::as_str), Some("Conquest · Soil"));
+        reg.rename_terrain_group("Conquest · Soil", "Soil");
+        assert_eq!(reg.terrains[0].group, "Soil");
+        assert!(!reg.terrain_group_names().iter().any(|g| g == "Conquest · Soil"));
+        // Renamed as an existing one: merged.
+        let other = reg.terrain_group_names()[0].clone();
+        reg.rename_terrain_group("Soil", &other);
+        assert_eq!(reg.terrains[0].group, other);
+        assert_eq!(reg.terrain_group_names().iter().filter(|g| **g == other).count(), 1);
+        reg.delete_terrain_group(&other, "Other");
+        assert!(reg.terrains.iter().all(|t| t.group != other));
+        assert!(reg.terrain_group_names().iter().any(|g| g == "Other"));
+        reg.hide_terrain(3, true);
+        reg.hide_terrain(3, true);
+        assert_eq!(reg.hidden_terrains, [3]);
+        let back: super::Registry = serde_json::from_str(&serde_json::to_string(&reg).unwrap()).unwrap();
+        assert_eq!((back.terrain_groups, back.hidden_terrains), (reg.terrain_groups.clone(), vec![3]));
+        reg.hide_terrain(3, false);
+        assert!(reg.hidden_terrains.is_empty());
+    }
+
 
     /// Biomes of mods and typed by hand: added once by their ids, named and
     /// coloured from them, and files of before them still read.

@@ -957,6 +957,62 @@ fn over_the_map(
     }
 }
 
+/// Every column of the ground painted with terrain `from` painted with
+/// `to` (within the selection when there is one, by its weight), telling
+/// how far it is and stopping when asked. Only the tiles that have `from`
+/// are written, so that the step to undo holds them alone.
+pub fn replace_terrain(edit: &mut Edit, from: u16, to: u16, steps: &Steps) -> Changes {
+    let selection = edit.dim().selection.clone();
+    let positions: Vec<TilePos> = {
+        let ground = edit.dim().ground();
+        ground
+            .positions()
+            .filter(|p| selection.as_ref().is_none_or(|s| s.tile(*p).is_some()))
+            .filter(|&p| ground.view(p).is_some_and(|t| t.terrain.dense().contains(&from)))
+            .collect()
+    };
+    steps.total.store(positions.len(), Ordering::Relaxed);
+    steps.done.store(0, Ordering::Relaxed);
+    let everywhere = BlockRect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX);
+    let changed = AtomicUsize::new(0);
+    let mut touched = Vec::new();
+    let mut cancelled = false;
+    for batch in positions.chunks(BATCH * 4) {
+        if steps.cancel.load(Ordering::Relaxed) || from == to {
+            cancelled = from != to;
+            break;
+        }
+        edit.warm(batch);
+        let edited = std::sync::Mutex::new(Vec::new());
+        edit.par_tiles(batch.iter().copied(), everywhere, false, |pos, _, tile| {
+            let cells = selection.as_ref().and_then(|s| s.tile(pos));
+            let (ox, oz) = pos.origin();
+            let mut n = 0;
+            for i in 0..crate::coords::TILE_AREA {
+                if tile.terrain.get(i) != from {
+                    continue;
+                }
+                if let Some(c) = cells
+                    && !crate::selection::lets(c.get(i), ox + (i % TILE_SIZE as usize) as i32, oz + (i / TILE_SIZE as usize) as i32)
+                {
+                    continue;
+                }
+                tile.terrain.set(i, to);
+                n += 1;
+            }
+            if n > 0 {
+                tile.compact();
+                changed.fetch_add(n, Ordering::Relaxed);
+                edited.lock().expect("no panic while held").push(pos);
+            }
+        });
+        steps.done.fetch_add(batch.len(), Ordering::Relaxed);
+        touched.extend(edited.into_inner().expect("no panic while held"));
+        edit.cool(KEEP_HOT);
+    }
+    Changes { columns: changed.into_inner(), tiles: touched, cancelled }
+}
+
 /// Give every column of the map the biome its land calls for. Returns how
 /// many columns changed.
 pub fn biomes_over_the_map(edit: &mut Edit, reader: &Reader) -> usize {
@@ -1078,6 +1134,45 @@ impl Classes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Replace terrain: every column of `from` becomes `to`, only in the
+    /// selection when there is one, the tiles without `from` untouched, one
+    /// step that undoes it all.
+    #[test]
+    fn a_terrain_is_replaced_over_the_map() {
+        let mut world = crate::generate::generate(&crate::generate::GenParams { tiles_x: 4, tiles_z: 4, ..Default::default() });
+        let sand = world.registry.terrain_by_name("Sand").unwrap().0;
+        let gravel = world.registry.terrain_by_name("Gravel").unwrap().0;
+        let terrain = |w: &crate::world::World, x: i32, z: i32| w.dims[0].ground().view(TilePos::containing(x, z)).unwrap().terrain.get(local_index(x, z));
+        // Sand on two squares, one in each of two tiles.
+        for (x0, z0) in [(10, 10), (-150, -150)] {
+            let tile = world.dims[0].ground_mut().tile_mut(TilePos::containing(x0, z0)).unwrap();
+            for z in z0..z0 + 8 {
+                for x in x0..x0 + 8 {
+                    tile.terrain.set(local_index(x, z), sand);
+                }
+            }
+        }
+        let before: usize = world.dims[0].ground().positions().map(|p| world.dims[0].ground().view(p).unwrap().terrain.dense().iter().filter(|&&t| t == sand).count()).sum();
+        let mut history = History::new(1);
+        history.begin("Replace terrain", 0);
+        let changes = replace_terrain(&mut history.edit(&mut world, 0), sand, gravel, &Steps::default());
+        history.commit();
+        assert_eq!(changes.columns, before);
+        assert!(changes.tiles.len() <= 16 && changes.tiles.len() >= 2);
+        assert_eq!((terrain(&world, 12, 12), terrain(&world, -148, -148)), (gravel, gravel));
+        assert!(world.dims[0].ground().positions().all(|p| !world.dims[0].ground().view(p).unwrap().terrain.dense().contains(&sand)));
+        history.undo(&mut world);
+        assert_eq!((terrain(&world, 12, 12), terrain(&world, -148, -148)), (sand, sand), "one step undoes it");
+        // In a selection: only there.
+        let inside = (0..64).flat_map(|z| (0..64).map(move |x| (x, z))).filter(|&(x, z)| terrain(&world, x, z) == sand).count();
+        world.dims[0].selection = Some(std::sync::Arc::new(crate::selection::Selection::shape(&crate::selection::Shape::Rect(BlockRect::new(0, 0, 64, 64)))));
+        history.begin("Replace terrain", 0);
+        let changes = replace_terrain(&mut history.edit(&mut world, 0), sand, gravel, &Steps::default());
+        history.commit();
+        assert_eq!(changes.columns, inside);
+        assert_eq!((terrain(&world, 12, 12), terrain(&world, -148, -148)), (gravel, sand));
+    }
     use crate::filter::trend_slope;
     use crate::history::History;
     use crate::tile::Tile;

@@ -4441,74 +4441,254 @@ fn swatch(ui: &mut Ui, color: Color32) {
     ui.painter().rect(r, 3, color, Stroke::new(1.0, Color32::from_black_alpha(60)), StrokeKind::Inside);
 }
 
-/// Returns true when the solo setting changed.
-pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &Registry, solo: &mut bool, search: &mut String, blocks: &mut BlockLibrary) -> bool {
+/// A terrain being dragged to another category of the Terrain panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TerrainDrag(u16);
+
+/// What the Terrain panel's categories were asked to do.
+enum GroupAction {
+    Move(u16, String),
+    NewGroup(Option<u16>),
+    Hide(u16, bool),
+    Rename(String, String),
+    Up(String, bool),
+    HideGroup(String),
+    Delete(String),
+    /// Replace terrain… with this terrain to replace.
+    Replace(u16),
+}
+
+/// The Terrain panel: the map's terrains in categories the user orders,
+/// renames, folds, creates and deletes; a terrain moves to another by
+/// dragging it there or by its menu, and leaves the lists by Hide (listed
+/// under Hidden, at the end). Returns whether the solo setting changed and
+/// whether the map's categories did.
+pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &mut Registry, solo: &mut bool, search: &mut String, blocks: &mut BlockLibrary) -> (bool, bool) {
     let pal = Palette::of(ui);
     hint(ui, tr!("The map's terrains: what each part of the ground is made of, its top block and the layers under it. Click one to paint it; a block of the Blocks panel becomes a terrain when you paint with it."));
     let solo_changed = crate::widgets::checkbox(ui, solo, tr!("Solo"))
         .on_hover_text(tr!("Fade every other terrain on the map"))
         .changed();
-    crate::widgets::search(ui, search, tr!("Search terrain"), f32::INFINITY);
+    ui.horizontal(|ui| {
+        crate::widgets::search(ui, search, tr!("Search terrain"), (ui.available_width() - 34.0).max(80.0));
+    });
     let needle = search.to_lowercase();
-    let mut groups: Vec<&str> = Vec::new();
-    for t in &reg.terrains {
-        if !groups.contains(&t.group.as_str()) {
-            groups.push(&t.group);
-        }
-    }
+    let names = reg.terrain_group_names();
+    let rename_id = egui::Id::unique("terrain category rename");
+    let mut renaming: Option<(String, String)> = ui.ctx().data(|d| d.get_temp(rename_id));
+    let mut actions: Vec<GroupAction> = Vec::new();
     let mut picked = None;
-    for group in groups {
-        let members: Vec<(usize, &massif_core::registry::TerrainDef)> = reg
+    let tile = |ui: &mut Ui, i: usize, reg: &Registry, blocks: &mut BlockLibrary, names: &[String], picked: &mut Option<u16>, actions: &mut Vec<GroupAction>, hidden: bool| {
+        let selected = tools.terrain as usize == i;
+        let (rect, response) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::click_and_drag());
+        if response.drag_started() {
+            egui::DragAndDrop::set_payload(ui.ctx(), TerrainDrag(i as u16));
+        }
+        let fill = if selected {
+            pal.accent_soft
+        } else if response.hovered() {
+            pal.header
+        } else {
+            Color32::TRANSPARENT
+        };
+        let stroke = if selected { Stroke::new(1.5, pal.accent) } else { Stroke::new(1.0, pal.border) };
+        ui.painter().rect(rect, theme::TILE_RADIUS, fill, stroke, StrokeKind::Inside);
+        terrain_icon(ui, rect.shrink(4.0), reg, i as u16, blocks);
+        let name = reg.terrain(TerrainId(i as u16)).name.clone();
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &name));
+        let response = response.on_hover_text(describe_terrain(reg, i as u16));
+        if response.clicked() {
+            *picked = Some(i as u16);
+        }
+        response.context_menu(|ui| {
+            ui.menu_button(theme::with_icon(Icon::FolderInput, tr!("Move to")), |ui| {
+                for g in names {
+                    let here = reg.terrains[i].group == *g;
+                    if crate::widgets::button(ui, theme::with_icon(if here { Icon::Check } else { Icon::Folder }, &category_name(g))).clicked() && !here {
+                        actions.push(GroupAction::Move(i as u16, g.clone()));
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                if crate::widgets::button(ui, theme::with_icon(Icon::FolderPlus, tr!("New category…"))).clicked() {
+                    actions.push(GroupAction::NewGroup(Some(i as u16)));
+                    ui.close();
+                }
+            });
+            if crate::widgets::button(ui, theme::with_icon(Icon::Replace, tr!("Replace it…"))).on_hover_text(tr!("Paint every column of it with another terrain")).clicked() {
+                actions.push(GroupAction::Replace(i as u16));
+                ui.close();
+            }
+            let (icon, label) = if hidden { (Icon::Eye, tr!("Show in the list")) } else { (Icon::EyeOff, tr!("Hide from the list")) };
+            if crate::widgets::button(ui, theme::with_icon(icon, label)).on_hover_text(tr!("Only the lists: the map keeps it where it is painted")).clicked() {
+                actions.push(GroupAction::Hide(i as u16, !hidden));
+                ui.close();
+            }
+        });
+    };
+    for (k, group) in names.iter().enumerate() {
+        let members: Vec<usize> = reg
             .terrains
             .iter()
             .enumerate()
-            .filter(|(_, t)| t.group == group && (needle.is_empty() || t.name.to_lowercase().contains(&needle)))
+            .filter(|(i, t)| t.group == *group && !reg.hidden_terrains.contains(&(*i as u16)) && (needle.is_empty() || t.name.to_lowercase().contains(&needle) || group.to_lowercase().contains(&needle)))
+            .map(|(i, _)| i)
             .collect();
-        if members.is_empty() {
+        // An empty category shows only while nothing is searched for.
+        if members.is_empty() && !needle.is_empty() {
             continue;
         }
         ui.add_space(4.0);
+        let fold_id = egui::Id::unique(("terrain category open", group.as_str()));
         // The blocks of a Minecraft world's buildings, one terrain each
         // (hundreds), folded until asked for or searched.
-        if group == massif_legacy::minecraft::BLOCKS_GROUP && needle.is_empty() {
-            let id = ui.scope_id().with("imported blocks open");
-            let mut open = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
-            let text = format!("{} {} · {}", if open { "▾" } else { "▸" }, group.to_uppercase(), members.len());
-            if ui.add(egui::Label::new(RichText::new(text).size(10.5).bold().color(pal.weak)).sense(Sense::click())).clicked() {
-                open = !open;
-                ui.data_mut(|d| d.insert_temp(id, open));
-            }
-            if !open {
-                continue;
-            }
-        } else {
-            ui.label(RichText::new(group.to_uppercase()).size(10.5).bold().color(pal.weak));
-        }
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-            for (i, def) in members {
-                let selected = tools.terrain as usize == i;
-                let (rect, response) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::click());
-                let painter = ui.painter();
-                let fill = if selected {
-                    pal.accent_soft
-                } else if response.hovered() {
-                    pal.header
+        let folded_at_first = group == massif_legacy::minecraft::BLOCKS_GROUP;
+        let mut open = ui.ctx().data_mut(|d| *d.get_persisted_mut_or_insert_with(fold_id, || !folded_at_first)) || !needle.is_empty();
+        let top = ui.cursor().min.y;
+        let editing = renaming.as_ref().is_some_and(|r| r.0 == *group);
+        let header = match editing {
+            true => {
+                let text = &mut renaming.as_mut().expect("being renamed").1;
+                let r = ui.add(egui::TextEdit::singleline(text).desired_width(ui.available_width()));
+                if r.lost_focus() {
+                    let new = text.trim().to_owned();
+                    if ui.input(|i| !i.key_pressed(egui::Key::Escape)) && !new.is_empty() && new != *group {
+                        actions.push(GroupAction::Rename(group.clone(), new));
+                    }
+                    renaming = None;
                 } else {
-                    Color32::TRANSPARENT
-                };
-                let stroke = if selected { Stroke::new(1.5, pal.accent) } else { Stroke::new(1.0, pal.border) };
-                painter.rect(rect, theme::TILE_RADIUS, fill, stroke, StrokeKind::Inside);
-                terrain_icon(ui, rect.shrink(4.0), reg, i as u16, blocks);
-                if response.on_hover_ui(|ui| {
-                    ui.label(describe_terrain(reg, i as u16));
-                }).clicked() {
-                    picked = Some(i as u16);
+                    r.request_focus();
                 }
-                let _ = &def;
+                r
             }
-        });
+            false => {
+                let caret = if open { Icon::ChevronDown } else { Icon::ChevronRight };
+                let text = format!("{}  {}  ·  {}", theme::glyph(caret), category_name(group).to_uppercase(), members.len());
+                let r = ui.add(egui::Label::new(RichText::new(text).size(10.5).bold().color(pal.weak)).sense(Sense::click()).truncate());
+                r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, open, category_name(group)));
+                if r.clicked() {
+                    open = !open;
+                    ui.ctx().data_mut(|d| d.insert_persisted(fold_id, open));
+                }
+                if r.double_clicked() {
+                    renaming = Some((group.clone(), category_name(group)));
+                }
+                r.context_menu(|ui| {
+                    if crate::widgets::button(ui, theme::with_icon(Icon::Pencil, tr!("Rename"))).clicked() {
+                        renaming = Some((group.clone(), category_name(group)));
+                        ui.close();
+                    }
+                    if k > 0 && crate::widgets::button(ui, theme::with_icon(Icon::ArrowUp, tr!("Move up"))).clicked() {
+                        actions.push(GroupAction::Up(group.clone(), true));
+                        ui.close();
+                    }
+                    if k + 1 < names.len() && crate::widgets::button(ui, theme::with_icon(Icon::ArrowDown, tr!("Move down"))).clicked() {
+                        actions.push(GroupAction::Up(group.clone(), false));
+                        ui.close();
+                    }
+                    if !members.is_empty() && crate::widgets::button(ui, theme::with_icon(Icon::EyeOff, tr!("Hide its terrains"))).on_hover_text(tr!("Only the lists: the map keeps them where they are painted")).clicked() {
+                        actions.push(GroupAction::HideGroup(group.clone()));
+                        ui.close();
+                    }
+                    if crate::widgets::button(ui, theme::with_icon(Icon::FolderPlus, tr!("New category…"))).clicked() {
+                        actions.push(GroupAction::NewGroup(None));
+                        ui.close();
+                    }
+                    ui.separator();
+                    let pal = Palette::of(ui);
+                    if crate::widgets::button(ui, RichText::new(theme::with_icon(Icon::Trash2, tr!("Delete the category"))).color(pal.danger)).on_hover_text(tr!("Its terrains go to Other; none is removed")).clicked() {
+                        actions.push(GroupAction::Delete(group.clone()));
+                        ui.close();
+                    }
+                });
+                r
+            }
+        };
+        if open {
+            if members.is_empty() {
+                hint(ui, tr!("Empty: drag terrains here, or use Move to in a terrain's menu."));
+            }
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+                for &i in &members {
+                    tile(ui, i, reg, blocks, &names, &mut picked, &mut actions, false);
+                }
+            });
+        }
+        // A terrain let go over the category joins it.
+        let whole = Rect::from_min_max(egui::pos2(header.rect.left(), top), egui::pos2(ui.max_rect().right(), ui.min_rect().bottom().max(header.rect.bottom())));
+        if let Some(held) = egui::DragAndDrop::payload::<TerrainDrag>(ui.ctx())
+            && ui.ctx().pointer_hover_pos().or_else(|| ui.ctx().pointer_latest_pos()).is_some_and(|p| whole.contains(p))
+        {
+            if ui.input(|i| i.pointer.any_released()) {
+                egui::DragAndDrop::clear_payload(ui.ctx());
+                if reg.terrains.get(held.0 as usize).is_some_and(|t| t.group != *group) {
+                    actions.push(GroupAction::Move(held.0, group.clone()));
+                }
+            } else {
+                ui.painter().rect_stroke(whole.expand(2.0), theme::TILE_RADIUS, Stroke::new(1.5, pal.accent), StrokeKind::Inside);
+            }
+        }
     }
+    // The terrains taken out of the lists, folded at the end.
+    let hidden: Vec<usize> = reg.hidden_terrains.iter().map(|&t| t as usize).filter(|&i| i < reg.terrains.len() && (needle.is_empty() || reg.terrains[i].name.to_lowercase().contains(&needle))).collect();
+    if !hidden.is_empty() {
+        ui.add_space(6.0);
+        let fold_id = egui::Id::unique("terrain hidden open");
+        let mut open = ui.ctx().data_mut(|d| *d.get_persisted_mut_or_insert_with(fold_id, || false)) || !needle.is_empty();
+        let caret = if open { Icon::ChevronDown } else { Icon::ChevronRight };
+        let r = ui.add(egui::Label::new(RichText::new(format!("{}  {}  ·  {}", theme::glyph(caret), tr!("Hidden").to_uppercase(), hidden.len())).size(10.5).bold().color(pal.weak)).sense(Sense::click()));
+        r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, open, tr!("Hidden")));
+        if r.clicked() {
+            open = !open;
+            ui.ctx().data_mut(|d| d.insert_persisted(fold_id, open));
+        }
+        if open {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+                for &i in &hidden {
+                    tile(ui, i, reg, blocks, &names, &mut picked, &mut actions, true);
+                }
+            });
+        }
+    }
+    ui.add_space(4.0);
+    if ui.add(egui::Button::new(RichText::new(theme::with_icon(Icon::FolderPlus, tr!("New category"))).size(11.5)).frame(false)).clicked() {
+        actions.push(GroupAction::NewGroup(None));
+    }
+    let edited = actions.iter().any(|a| !matches!(a, GroupAction::Replace(_)));
+    for action in actions {
+        match action {
+            GroupAction::Move(t, g) => reg.move_terrain(t, &g),
+            GroupAction::NewGroup(t) => {
+                let taken = reg.terrain_group_names();
+                let name = crate::layers::unique_name(tr!("New category"), taken.iter().map(String::as_str));
+                reg.terrain_groups = taken;
+                reg.terrain_groups.push(name.clone());
+                if let Some(t) = t {
+                    reg.move_terrain(t, &name);
+                }
+                renaming = Some((name.clone(), name));
+            }
+            GroupAction::Hide(t, hide) => reg.hide_terrain(t, hide),
+            GroupAction::Rename(old, new) => reg.rename_terrain_group(&old, &new),
+            GroupAction::Up(g, up) => reg.move_terrain_group(&g, up),
+            GroupAction::HideGroup(g) => {
+                let of: Vec<u16> = reg.terrains.iter().enumerate().filter(|(_, t)| t.group == g).map(|(i, _)| i as u16).collect();
+                for t in of {
+                    reg.hide_terrain(t, true);
+                }
+            }
+            GroupAction::Delete(g) => reg.delete_terrain_group(&g, if g == "Other" { "Imported" } else { "Other" }),
+            GroupAction::Replace(t) => tools.replace_terrain = Some(t),
+        }
+    }
+    ui.ctx().data_mut(|d| match &renaming {
+        Some(r) => {
+            d.insert_temp(rename_id, r.clone());
+        }
+        None => d.remove::<(String, String)>(rename_id),
+    });
     if let Some(t) = picked {
         tools.terrain = t;
         if tools.tool != Tool::PaintTerrain {
@@ -4519,7 +4699,55 @@ pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &Registry, solo: &
     ui.separator();
     ui.label(RichText::new(&reg.terrain(TerrainId(tools.terrain)).name).bold());
     hint(ui, &describe_terrain(reg, tools.terrain));
-    solo_changed || (*solo && picked.is_some())
+    (solo_changed || (*solo && picked.is_some()), edited)
+}
+
+/// A category's name as shown: the game's own categories in the user's
+/// language, the user's as they wrote them.
+fn category_name(group: &str) -> String {
+    crate::i18n::tr_name(group).to_owned()
+}
+
+/// One of the map's terrains, picked from a list by category, with a
+/// search over their names (a WorldPainter world may have hundreds).
+pub fn terrain_combo(ui: &mut Ui, id: &str, reg: &Registry, terrain: &mut u16) -> bool {
+    let pal = Palette::of(ui);
+    let before = *terrain;
+    let search_id = egui::Id::unique((id, "search"));
+    let width = ui.available_width().clamp(120.0, 260.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        swatch(ui, theme::rgb(reg.terrain(TerrainId(*terrain)).color));
+        crate::widgets::combo(id).selected_text(reg.terrain(TerrainId(*terrain)).name.clone()).width(width - 20.0).height(360.0).truncate().show_ui(ui, |ui| {
+            let mut needle: String = ui.ctx().data(|d| d.get_temp(search_id)).unwrap_or_default();
+            crate::widgets::search(ui, &mut needle, tr!("Search terrain"), f32::INFINITY);
+            let lower = needle.to_lowercase();
+            let mut groups: Vec<&str> = Vec::new();
+            for t in &reg.terrains {
+                if !groups.contains(&t.group.as_str()) {
+                    groups.push(&t.group);
+                }
+            }
+            for group in groups {
+                let members: Vec<usize> = reg.terrains.iter().enumerate().filter(|(_, t)| t.group == group && (lower.is_empty() || t.name.to_lowercase().contains(&lower))).map(|(i, _)| i).collect();
+                if members.is_empty() {
+                    continue;
+                }
+                ui.label(RichText::new(crate::i18n::tr_name(group).to_uppercase()).size(10.5).bold().color(pal.weak));
+                for i in members {
+                    ui.horizontal(|ui| {
+                        swatch(ui, theme::rgb(reg.terrains[i].color));
+                        if ui.add(egui::Button::selectable(*terrain as usize == i, &reg.terrains[i].name).truncate()).clicked() {
+                            *terrain = i as u16;
+                            ui.close();
+                        }
+                    });
+                }
+            }
+            ui.ctx().data_mut(|d| d.insert_temp(search_id, needle));
+        });
+    });
+    *terrain != before
 }
 
 fn describe_terrain(reg: &Registry, terrain: u16) -> String {
@@ -5015,6 +5243,107 @@ mod tests {
     /// Info at a narrow panel's width: the Blocks menu, opened, and its
     /// help stay inside the panel, the mod's palette offered beside the
     /// game's (rendered with MASSIF_SNAPSHOT_DIR).
+    /// The Terrain panel's categories are the user's: a terrain dragged
+    /// onto another category joins it, its menu hides it (listed under
+    /// Hidden, shown again from there) or moves it to a new category, named
+    /// at once; a category folds, moves up, and is deleted into Other.
+    /// Rendered with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn terrain_categories_are_sorted_by_hand() {
+        use egui_kittest::kittest::Queryable;
+        struct S {
+            tools: ToolState,
+            reg: Registry,
+            blocks: BlockLibrary,
+            edited: bool,
+        }
+        let reg = Registry::vanilla();
+        let groups = reg.terrain_group_names();
+        let sand = reg.terrain_by_name("Sand").unwrap().0 as usize;
+        let grass = reg.terrain_by_name("Grass").unwrap().0 as usize;
+        // The terrain in hand, named under the lists: none of those clicked.
+        let last = reg.terrains.iter().rposition(|t| !["Grass", "Sand"].contains(&t.name.as_str())).unwrap() as u16;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(320.0, 1600.0)).build_ui_state(
+            |ui, s: &mut S| {
+                crate::theme::install(ui.ctx());
+                let (mut solo, mut search) = (false, String::new());
+                s.edited |= terrain_panel(ui, &mut s.tools, &mut s.reg, &mut solo, &mut search, &mut s.blocks).1;
+            },
+            S { tools: ToolState { terrain: last, ..ToolState::default() }, reg, blocks: BlockLibrary::default(), edited: false },
+        );
+        h.run_steps(2);
+        // Sand dragged onto Grass's category.
+        let target = h.state().reg.terrains[grass].group.clone();
+        assert_ne!(h.state().reg.terrains[sand].group, target);
+        let from = h.get_by_label("Sand").rect().center();
+        let to = h.get_by_label("Grass").rect().center();
+        h.drag_at(from);
+        h.run_steps(1);
+        h.hover_at(from + vec2(0.0, -6.0));
+        h.run_steps(1);
+        h.hover_at(to);
+        h.run_steps(1);
+        h.drop_at(to);
+        h.run_steps(3);
+        assert_eq!(h.state().reg.terrains[sand].group, target);
+        assert!(h.state().edited, "saved with the map");
+        // Hidden from the list, then shown again.
+        h.get_by_label("Sand").click_secondary();
+        h.run_steps(2);
+        h.get_by_label_contains("Hide from the list").click();
+        h.run_steps(2);
+        assert_eq!(h.state().reg.hidden_terrains, [sand as u16]);
+        h.get_by_label("Hidden").click();
+        h.run_steps(2);
+        h.get_by_label("Sand").click_secondary();
+        h.run_steps(2);
+        h.get_by_label_contains("Show in the list").click();
+        h.run_steps(2);
+        assert!(h.state().reg.hidden_terrains.is_empty());
+        // Into a new category, named at once.
+        let s = h.state_mut();
+        s.reg.move_terrain(sand as u16, "Beaches");
+        assert_eq!(s.reg.terrain_group_names().last().map(String::as_str), Some("Beaches"));
+        h.run_steps(2);
+        h.get_by_label("Beaches").click();
+        h.run_steps(2);
+        assert!(h.query_by_label("Sand").is_none(), "folded");
+        h.get_by_label("Beaches").click();
+        h.run_steps(2);
+        h.get_by_label("Sand");
+        // Up the list, then deleted: Sand goes to Other.
+        let s = h.state_mut();
+        let n = s.reg.terrain_group_names().len();
+        s.reg.move_terrain_group("Beaches", true);
+        assert_eq!(s.reg.terrain_group_names()[n - 2], "Beaches");
+        s.reg.delete_terrain_group("Beaches", "Other");
+        assert_eq!(s.reg.terrains[sand].group, "Other");
+        assert_eq!(groups.len() + 1, s.reg.terrain_group_names().len(), "Other added");
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from) {
+            for dark in [true, false] {
+                let mut reg = Registry::vanilla();
+                reg.move_terrain(sand as u16, "Beaches");
+                reg.hide_terrain(grass as u16, true);
+                let mut h = egui_kittest::Harness::builder().with_size(vec2(320.0, 900.0)).with_pixels_per_point(2.0).with_accessibility_check(false).wgpu().build_ui_state(
+                    move |ui, s: &mut S| {
+                        ui.ctx().set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
+                        crate::theme::install(ui.ctx());
+                        let pal = crate::theme::Palette::of(ui);
+                        egui::Frame::new().fill(pal.panel).inner_margin(12).show(ui, |ui| {
+                            let (mut solo, mut search) = (false, String::new());
+                            terrain_panel(ui, &mut s.tools, &mut s.reg, &mut solo, &mut search, &mut s.blocks);
+                        });
+                    },
+                    S { tools: ToolState::default(), reg, blocks: BlockLibrary::default(), edited: false },
+                );
+                h.run_steps(2);
+                h.get_by_label("Hidden").click();
+                h.run_steps(2);
+                h.render().unwrap().save(dir.join(format!("terrain-categories-{}.png", if dark { "dark" } else { "light" }))).unwrap();
+            }
+        }
+    }
+
     #[test]
     fn info_blocks_fit_a_narrow_panel() {
         use egui_kittest::kittest::Queryable;

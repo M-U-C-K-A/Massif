@@ -654,6 +654,10 @@ pub struct ToolState {
     /// show what is there by.
     #[serde(skip)]
     pub filter_pick_at: Option<((i32, i32), egui::Pos2)>,
+    /// A terrain's menu in the Terrain panel asked to replace it: the
+    /// window opens Replace terrain… with it.
+    #[serde(skip)]
+    pub replace_terrain: Option<u16>,
     /// The column the Eyedropper tool was clicked on, with several things
     /// to paint with there: the window offers them by the pointer.
     #[serde(skip)]
@@ -1283,6 +1287,7 @@ impl Default for ToolState {
             filter_list_open: false,
             filter_pick: None,
             filter_pick_at: None,
+            replace_terrain: None,
             eyedrop_at: None,
             region_pick: None,
             select_mode: Default::default(),

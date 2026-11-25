@@ -1970,8 +1970,8 @@ mod tests {
                         draw(&mut cols[0], s);
                         theme::install(cols[1].ctx());
                         let (mut solo, mut search) = (false, String::new());
-                        let reg = s.doc.world.registry.clone();
-                        crate::panels::terrain_panel(&mut cols[1], &mut s.tools, &reg, &mut solo, &mut search, &mut s.blocks);
+                        let mut reg = s.doc.world.registry.clone();
+                        crate::panels::terrain_panel(&mut cols[1], &mut s.tools, &mut reg, &mut solo, &mut search, &mut s.blocks);
                     });
                 },
                 s,

@@ -61,6 +61,10 @@ pub enum Command {
     /// Edit ▸ Covers of Layers to Ground…: ground covers of layer blocks
     /// made the land's own (see `massif_core::surface_layers`).
     LayerCovers,
+
+    /// Edit ▸ Replace terrain…: one terrain painted with another, over the
+    /// map or the selection; the terrain to replace given, if any.
+    ReplaceTerrain(Option<u16>),
     Caves,
     /// An image painted onto the map (see `import_mask`).
     ImportMask,
@@ -319,6 +323,7 @@ pub fn menus(state: &State) -> Vec<Menu> {
                 .chain([Entry::Separator, tipped(Command::Snowfall, Icon::Snowflake, tr!("Snowfall…"), map, tr!("Snow laid by the wind and the slopes: drifts in the lee, bare windward ridges")), tipped(Command::Caves, Icon::Shovel, tr!("Caves…"), map, tr!("Chambers, tunnels, ravines and lakes of water and lava, as the game's: a cave layer over the whole map or the selection"))])
                 .collect(),
         },
+        tipped(Command::ReplaceTerrain(None), Icon::Replace, tr!("Replace terrain…"), map, tr!("Every column of one terrain painted with another, over the map or in the selection: to merge duplicates")),
         tipped(Command::RealTerrain, Icon::Earth, tr!("Relief of a Real Place…"), map, tr!("The heights of a place on the Earth, into the selection or the whole map")),
         tipped(Command::ImportMask, Icon::ImageUp, tr!("Import Mask…"), map, tr!("An image painted onto the map: annotations, a layer, a terrain, a biome, water or the height")),
         tipped(Command::AddReference, Icon::ImagePlus, tr!("Add Reference Image…"), map, tr!("A picture over or under the map to trace over: shown only, never exported")),

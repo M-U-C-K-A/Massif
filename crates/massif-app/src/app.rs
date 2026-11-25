@@ -496,6 +496,9 @@ enum Dialog {
     GameAndMods,
     /// The block palettes window.
     Palettes(Box<crate::palettes::PaletteEditor>),
+    /// Edit ▸ Replace terrain…: the terrain replaced and the one put
+    /// instead.
+    ReplaceTerrain(u16, u16),
     /// Edit ▸ Smooth terrain…: the map's switch and each terrain's shapes.
     Smooth(Box<crate::smooth_page::SmoothForm>),
     /// Flood from the click on a spot that is not in a hollow: how far the
@@ -4529,6 +4532,11 @@ impl MassifApp {
             }
             Command::SmoothTerrain => self.dialog = Some(Dialog::Smooth(Box::new(crate::smooth_page::SmoothForm::new(self.doc.world.meta.smooth.clone(), &self.doc.world.registry, self.doc.dimension())))),
             Command::Caves => self.open_caves(),
+            Command::ReplaceTerrain(from) => {
+                let from = from.unwrap_or(self.tools.terrain);
+                let to = if from == self.tools.terrain { u16::from(from == 0) } else { self.tools.terrain };
+                self.dialog = Some(Dialog::ReplaceTerrain(from, to));
+            }
             Command::ImportMask => self.pick_mask(ctx, false),
             Command::RunScript => {
                 if let Some(path) = rfd::FileDialog::new().set_title(tr!("Script to run")).add_filter(tr!("Scripts"), &["lua", "js"]).pick_file() {
@@ -5477,18 +5485,27 @@ impl MassifApp {
                 }
             }
             EditorKind::Terrain => {
-                let mut solo_changed = false;
+                let (mut solo_changed, mut edited) = (false, false);
                 scrolled(&mut cui, &mut |ui| {
-                    solo_changed |= panels::terrain_panel(
+                    let (solo, sorted) = panels::terrain_panel(
                         ui,
                         &mut self.tools,
-                        &self.doc.world.registry,
+                        &mut self.doc.world.registry,
                         &mut self.settings.solo,
                         &mut self.terrain_search,
                         &mut self.blocks,
                     );
+                    (solo_changed, edited) = (solo_changed | solo, edited | sorted);
                 });
                 let _ = solo_changed; // the solo style is part of the cache key
+                if let Some(t) = self.tools.replace_terrain.take() {
+                    let ctx = ui.ctx().clone();
+                    self.command(&ctx, Command::ReplaceTerrain(Some(t)));
+                }
+                // The categories are the map's: saved with it.
+                if edited {
+                    self.doc.mark_changed();
+                }
             }
             EditorKind::Biomes => {
                 let catalogue = self.blocks.catalogue.clone();
@@ -6030,6 +6047,47 @@ impl MassifApp {
                 }
                 if keep {
                     self.dialog = Some(Dialog::Reshape(form));
+                }
+            }
+            Dialog::ReplaceTerrain(mut from, mut to) => {
+                let mut run = false;
+                let reg = &self.doc.world.registry;
+                let selected = self.doc.dimension().selection.is_some();
+                let response = modal(ctx, "replace terrain").show(ctx, |ui| {
+                    ui.set_width(440.0);
+                    ui.label(RichText::new(tr!("Replace terrain")).bold().size(15.0));
+                    ui.label(RichText::new(if selected { tr!("Every column of the selection painted with the first terrain is painted with the second.") } else { tr!("Every column of the map painted with the first terrain is painted with the second.") }).color(Palette::of(ui).weak));
+                    ui.add_space(8.0);
+                    crate::widgets::well(ui, |ui| {
+                        crate::widgets::row(ui, tr!("Terrain"), |ui| {
+                            panels::terrain_combo(ui, "replace from", reg, &mut from);
+                        });
+                        crate::widgets::row(ui, tr!("Becomes"), |ui| {
+                            panels::terrain_combo(ui, "replace with", reg, &mut to);
+                        });
+                    });
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(tr!("One step to undo. The terrain replaced stays among the map's terrains; hide it from the Terrain panel's lists if you no longer want it.")).size(11.5).color(Palette::of(ui).weak));
+                    ui.add_space(10.0);
+                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                        if ui.add_enabled(from != to, theme::primary_button(ui, tr!("Replace"))).clicked() {
+                            run = true;
+                        }
+                        if ui.button(tr!("Cancel")).clicked() {
+                            keep = false;
+                        }
+                    });
+                });
+                if response.should_close() {
+                    keep = false;
+                }
+                if run {
+                    keep = false;
+                    let snapshot = self.doc.world.snapshot();
+                    self.jobs.push(Job::replace_terrain(ctx, snapshot, self.doc.dim, from, to, self.doc.revision).on(self.doc.generation));
+                }
+                if keep {
+                    self.dialog = Some(Dialog::ReplaceTerrain(from, to));
                 }
             }
             Dialog::Snowfall(mut form) => {
@@ -22864,6 +22922,7 @@ mod tests {
             openers.push((format!("{op:?}"), Box::new(move |app: &mut MassifApp, ctx: &egui::Context| app.command(ctx, Command::WholeMap(op)))));
         }
         openers.push(("Snowfall".into(), Box::new(|app: &mut MassifApp, ctx: &egui::Context| app.command(ctx, Command::Snowfall))));
+        openers.push(("ReplaceTerrain".into(), Box::new(|app: &mut MassifApp, ctx: &egui::Context| app.command(ctx, Command::ReplaceTerrain(None)))));
         for section in [PrefsSection::Appearance, PrefsSection::Accessibility, PrefsSection::Typeface, PrefsSection::Sounds, PrefsSection::Notifications, PrefsSection::Memory, PrefsSection::Autosave, PrefsSection::Keyboard, PrefsSection::Updates, PrefsSection::Graphics, PrefsSection::Developer] {
             openers.push((format!("Settings-{section:?}"), Box::new(move |app: &mut MassifApp, _: &egui::Context| app.dialog = Some(Dialog::Preferences(section)))));
         }

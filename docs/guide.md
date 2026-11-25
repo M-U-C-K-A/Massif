@@ -1414,6 +1414,29 @@ game (a block becomes a terrain of the map the first time it is picked).
 The Terrain and Blocks panels pick it too, and Alt-click picks the one under
 the cursor on the map.
 
+**The Terrain panel's categories are yours.** Its terrains are listed by
+category (Grass & Soil, Stone, a WorldPainter world's Imported…), each
+folding at a click on its title. Drag a terrain onto another category, or
+right-click it ▸ **Move to**, to sort it there, or into a **New category…**
+named at once. Right-click a category to rename it (or double-click its
+title), move it up or down, hide its terrains, or delete it (its terrains
+go to Other; none is removed). **Hide from the list** takes a terrain out of
+the lists without touching the map: it is listed under **Hidden**, at the
+end, where **Show in the list** brings it back. The map keeps its
+categories, their order and the hidden terrains.
+
+## Replace terrain
+
+**Edit ▸ Replace terrain…** paints every column of one terrain with
+another, over the whole map, or only in the selection when there is one
+(by its weight). Choose the terrain to replace and the one it becomes, each
+in a list by category with a search; **Replace** runs over the map and is
+one step to undo. It is how two terrains made of the same block (a
+WorldPainter world's Imported one and a mod's own) become one: the terrain
+replaced stays among the map's terrains, to hide from the Terrain panel's
+lists. Right-click a terrain in the Terrain panel ▸ **Replace it…** opens
+the same window with that terrain chosen.
+
 ## Zones
 
 Paint terrain's **Zones** (among **One terrain**, **Noise**, **Zones**,
