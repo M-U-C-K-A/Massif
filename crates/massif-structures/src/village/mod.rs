@@ -350,10 +350,10 @@ pub fn stages(lib: Option<&Library>, ground: &dyn Ground, req: &Request) -> Resu
     let mut buildings = buildings;
     let notes = edits::apply(&p.edits, ground, &area, &mut roads, theme, p.villagers.unwrap_or(theme.villagers), req.seed, &mut buildings);
     buildings.notes.extend(notes);
-    // Walls round a village of so many houses: drawn again round what was
-    // built, so that it does not stand in a ring of empty land.
+    // Walls drawn again round what was built (moved by hand included), so
+    // that they enclose every building rather than the area's ring.
     let mut walls = walls;
-    if p.walls && p.houses.is_some() && theme.vanilla.is_none() {
+    if p.walls && theme.vanilla.is_none() {
         let mut boxes: Vec<([i32; 2], [i32; 2])> = buildings.placed.iter().map(|b| ([b.min[0], b.min[2]], [b.max[0], b.max[2]])).collect();
         boxes.extend(buildings.fields.iter().map(|f| ([f.rect[0] - 1, f.rect[1] - 1], [f.rect[2] + 1, f.rect[3] + 1])));
         if let Some(w) = walls::round_buildings(&area, &roads, &boxes) {

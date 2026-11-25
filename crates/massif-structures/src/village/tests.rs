@@ -712,3 +712,34 @@ fn buildings_changed_by_hand_stay_changed() {
     let lost = build_with(vec![BuildingEdit { removed: true, ..BuildingEdit::new([-999, -999]) }]);
     assert!(lost.buildings.notes.iter().any(|n| n.contains("no longer in this draw")));
 }
+
+/// The walls enclose every building actually placed, whether the village
+/// is drawn by its density or by a number of houses, and pass through
+/// none: they follow the buildings, not a ring round the area.
+#[test]
+fn the_walls_enclose_every_building() {
+    let (_t, th) = plains();
+    for (rect, houses) in [(BlockRect::new(0, 0, 260, 260), None), (BlockRect::new(0, 0, 300, 200), Some(16)), (BlockRect::new(-40, 10, 200, 260), None)] {
+        let inside = |x: i32, z: i32| rect.contains(x, z);
+        let req = request(&th, rect, &inside, Params { walls: true, houses, ..Params::default() });
+        let (st, _) = stages(None, &flat(), &req).unwrap();
+        let w = st.walls.as_ref().expect("walls asked for");
+        assert!(!st.buildings.placed.is_empty());
+        for b in &st.buildings.placed {
+            for (x, z) in [(b.min[0], b.min[2]), (b.max[0], b.min[2]), (b.min[0], b.max[2]), (b.max[0], b.max[2])] {
+                assert!(w.contains(x, z), "{houses:?}: {} at {:?}–{:?} stands outside the walls", b.kind, b.min, b.max);
+            }
+            assert!(!w.line.iter().any(|p| p[0] >= b.min[0] && p[0] <= b.max[0] && p[1] >= b.min[2] && p[1] <= b.max[2]), "{houses:?}: the walls run through {} at {:?}", b.kind, b.min);
+        }
+        // Close round them: on average a few blocks from the nearest
+        // building or field, never far (a convex hull spans the notches).
+        let near = |p: [i32; 2]| {
+            let d = |lo: [i32; 2], hi: [i32; 2]| (lo[0] - p[0]).max(p[0] - hi[0]).max(0).max((lo[1] - p[1]).max(p[1] - hi[1]).max(0));
+            st.buildings.placed.iter().map(|b| d([b.min[0], b.min[2]], [b.max[0], b.max[2]])).chain(st.buildings.fields.iter().map(|f| d([f.rect[0], f.rect[1]], [f.rect[2], f.rect[3]]))).min().unwrap()
+        };
+        let far = w.line.iter().map(|&p| near(p)).max().unwrap();
+        let mean = w.line.iter().map(|&p| near(p)).sum::<i32>() as f32 / w.line.len() as f32;
+        assert!(far <= 40 && mean <= 14.0, "{houses:?}: the walls reach {far} blocks from the buildings, {mean:.1} on average");
+        assert!(!w.gates.is_empty(), "{houses:?}: a gate where a road crosses");
+    }
+}

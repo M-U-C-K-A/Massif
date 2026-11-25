@@ -480,3 +480,54 @@ fn the_building_tool_changes_one_building() {
     assert_eq!(h.state().doc.dimension().structures[0].pieces.iter().filter(|p| p.key.is_some()).count(), before - 1);
     let _ = std::fs::remove_dir_all(&packs);
 }
+
+/// A village of a pack with walls, selected on the map: a frame costs
+/// little, and with nothing moving the app stops drawing.
+#[test]
+fn a_selected_village_keeps_the_frame_light() {
+    let packs = std::env::temp_dir().join(format!("massif-frame-pack-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&packs);
+    let pack = massif_structures::village::testpack::write_pack(&packs).unwrap();
+    let mut h = harness_with(ThemeChoice::Dark, 1.0);
+    h.run_steps(5);
+    {
+        let s = h.state_mut();
+        s.tools.select(Tool::Structure);
+        s.tools.village.packs = vec![pack.clone()];
+        s.tools.village.theme = ("Plains (test boxes)".into(), "Plains".into());
+        s.tools.village.walls = true;
+        s.tools.village.size = crate::structure_tool::VillageSize::Large;
+        s.tools.structure.village = true;
+    }
+    let spot = dry_spot(&h);
+    look(&mut h, spot.0 as f64, spot.1 as f64, 1.0);
+    let p = map(&h).screen_of(spot.0 as f64, spot.1 as f64);
+    click_on(&mut h, p, PointerButton::Primary);
+    settle(&mut h, 120);
+    assert_eq!(h.state().doc.dimension().structures.len(), 1);
+    assert!(h.state().tools.structure.selected.is_some(), "the village placed is selected");
+    h.run_steps(10);
+    // The pointer over the map, still: the frames as they come.
+    h.event(egui::Event::PointerMoved(p + egui::vec2(30.0, 20.0)));
+    let frames = std::env::var("MASSIF_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(30usize);
+    let mut times: Vec<f64> = (0..frames)
+        .map(|_| {
+            let t = std::time::Instant::now();
+            h.step();
+            t.elapsed().as_secs_f64() * 1000.0
+        })
+        .collect();
+    times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    eprintln!("selected village: frame best {:.2} ms, median {:.2} ms, worst {:.2} ms", times[0], times[frames / 2], times[frames - 1]);
+    assert!(times[frames / 2] < 40.0, "a frame with the village selected: {:.1} ms", times[frames / 2]);
+    // Nothing moving: the frames stop.
+    assert!(h.try_run().is_ok(), "the app keeps drawing with nothing moving");
+    if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from) {
+        h.render().unwrap().save(dir.join("structures-walled-village.png")).unwrap();
+        let s = h.state().doc.dimension().structures[0].clone();
+        look(&mut h, (s.min[0] + s.max[0]) as f64 / 2.0, (s.min[2] + s.max[2]) as f64 / 2.0, 3.0);
+        h.run_steps(10);
+        h.render().unwrap().save(dir.join("structures-walled-village-close.png")).unwrap();
+    }
+    let _ = std::fs::remove_dir_all(&packs);
+}

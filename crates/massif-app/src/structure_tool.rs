@@ -731,7 +731,18 @@ fn village_details(ui: &mut Ui, summary: bool, id: &str, doc: &Document, theme: 
     let need = ((houses as f32 * 340.0).sqrt() * 1.15) as i32;
     match area {
         Some(r) => {
-            let (steep, wet, fits) = site_check(doc, r);
+            // Read from the map once for each change of it, not each frame
+            // (thousands of columns of compressed tiles).
+            type Key = (u64, usize, u64, [i32; 4]);
+            let (id, key): (egui::Id, Key) = (egui::Id::new("village site check"), (doc.generation, doc.dim, doc.revision, [r.x0, r.z0, r.x1, r.z1]));
+            let (steep, wet, fits) = match ui.ctx().memory(|m| m.data.get_temp::<(Key, (f32, f32, u32))>(id)).filter(|c| c.0 == key) {
+                Some(c) => c.1,
+                None => {
+                    let v = site_check(doc, r);
+                    ui.ctx().memory_mut(|m| m.data.insert_temp(id, (key, v)));
+                    v
+                }
+            };
             hint(ui, &tr!("Its land: {flat:.0}% flat and dry, {steep:.0}% too steep, {wet:.0}% under water.", flat = (1.0 - steep - wet) * 100.0, steep = steep * 100.0, wet = wet * 100.0));
             if pack && fits < houses {
                 ui.colored_label(Palette::of(ui).danger, tr!("This land holds about {fits} houses, not {houses}: make the village larger, or ask for fewer.", fits, houses));

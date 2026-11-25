@@ -326,19 +326,34 @@ pub fn walls(area: &Area, roads: &Roads, site: Option<&Site>) -> Walls {
         }
         None => area.samples(8),
     };
-    around(area, roads, &samples)
+    around(area, roads, &samples, 3)
 }
 
-/// Walls round a village already built: round its buildings' boxes, eight
-/// blocks out, within the area.
+/// Walls round a village already built: a rounded hull of its buildings'
+/// boxes, six blocks out from each (less where the area ends sooner, never
+/// through a building), with a gate wherever a main road crosses.
 pub fn round_buildings(area: &Area, roads: &Roads, boxes: &[([i32; 2], [i32; 2])]) -> Option<Walls> {
-    let pts: Vec<[i32; 2]> = boxes.iter().flat_map(|(lo, hi)| [[lo[0] - 8, lo[1] - 8], [hi[0] + 8, lo[1] - 8], [lo[0] - 8, hi[1] + 8], [hi[0] + 8, hi[1] + 8]]).filter(|p| area.contains(p[0], p[1])).collect();
-    (pts.len() >= 3).then(|| around(area, roads, &pts))
+    const MARGIN: i32 = 6;
+    let mut pts: Vec<[i32; 2]> = Vec::new();
+    for (lo, hi) in boxes {
+        for (c, sx, sz) in [([lo[0], lo[1]], -1, -1), ([hi[0], lo[1]], 1, -1), ([lo[0], hi[1]], -1, 1), ([hi[0], hi[1]], 1, 1)] {
+            // A quarter circle round each corner, so that the hull turns
+            // in curves rather than spikes.
+            for k in 0..=4 {
+                let a = k as f32 / 4.0 * std::f32::consts::FRAC_PI_2;
+                let (ux, uz) = (a.cos() * sx as f32, a.sin() * sz as f32);
+                let at = |m: i32| [c[0] + (ux * m as f32).round() as i32, c[1] + (uz * m as f32).round() as i32];
+                let m = (1..=MARGIN).rev().find(|&m| area.contains(at(m)[0], at(m)[1])).unwrap_or(0);
+                pts.push(at(m));
+            }
+        }
+    }
+    (pts.len() >= 3).then(|| around(area, roads, &pts, 0))
 }
 
-/// Walls three blocks inside the hull of `samples`, gates where main roads
-/// cross.
-fn around(area: &Area, roads: &Roads, samples: &[[i32; 2]]) -> Walls {
+/// Walls `inset` blocks inside the hull of `samples`, gates where main
+/// roads cross.
+fn around(area: &Area, roads: &Roads, samples: &[[i32; 2]], inset: i32) -> Walls {
     let mean = samples.iter().fold((0i64, 0i64), |a, p| (a.0 + p[0] as i64, a.1 + p[1] as i64));
     let n = samples.len().max(1) as i64;
     let c = [(mean.0 / n) as i32, (mean.1 / n) as i32];
@@ -347,7 +362,7 @@ fn around(area: &Area, roads: &Roads, samples: &[[i32; 2]]) -> Walls {
         .map(|&[x, z]| {
             let (dx, dz) = ((c[0] - x) as f32, (c[1] - z) as f32);
             let d = (dx * dx + dz * dz).sqrt().max(1.0);
-            [(x as f32 + dx / d * 3.0).round() as i32, (z as f32 + dz / d * 3.0).round() as i32]
+            [(x as f32 + dx / d * inset as f32).round() as i32, (z as f32 + dz / d * inset as f32).round() as i32]
         })
         .collect();
     let mut line: Vec<[i32; 2]> = Vec::new();
@@ -387,5 +402,13 @@ fn around(area: &Area, roads: &Roads, samples: &[[i32; 2]]) -> Walls {
             gates.push([x, z]);
         }
     }
-    Walls { line, corners: inset, gates }
+    // A tower where the line turns, one at most every twelve blocks (a
+    // rounded corner is many short turns).
+    let mut corners: Vec<[i32; 2]> = Vec::new();
+    for &p in &inset {
+        if corners.iter().all(|&q| dist2(p, q) >= 144) {
+            corners.push(p);
+        }
+    }
+    Walls { line, corners, gates }
 }

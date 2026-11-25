@@ -1,0 +1,3 @@
+**Villages: walls round their houses, and a selected village no longer slows the app**
+
+A village's walls (fences, hedges, palisade, ramparts…) now run round the buildings it actually has, a few blocks out from them with rounded corners and a gate wherever a road leaves, instead of a ring round its area that left houses outside and crossed empty land; they follow the village when it is moved, resized, of another theme or density, or when one of its buildings is moved with the Building tool. A village selected with the Structures tool no longer brings the app down to a few frames a second: the line saying how its land suits it was read again from the whole map on every frame, and is now read once each time the map changes.
