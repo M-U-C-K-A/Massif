@@ -3681,5 +3681,6 @@
  "The left button paints each column with the terrain its zone calls for (below): by its height, its slope and the water over it.": "Le bouton gauche peint chaque colonne du terrain que demande sa zone (ci-dessous) : selon sa hauteur, sa pente et l'eau au-dessus.",
  "Pick another terrain, or any block of the game": "Choisir un autre terrain, ou n'importe quel bloc du jeu",
  "Click it to pick another, among the terrains and blocks; Alt-click picks one on the map.": "Cliquez dessus pour en choisir un autre parmi les terrains et les blocs ; Alt-clic en prend un sur la carte.",
- "Right button: back to the terrain the zones call for (below), by height, slope and water.": "Bouton droit : retour au terrain que demandent les zones (ci-dessous), selon la hauteur, la pente et l'eau."
+ "Right button: back to the terrain the zones call for (below), by height, slope and water.": "Bouton droit : retour au terrain que demandent les zones (ci-dessous), selon la hauteur, la pente et l'eau.",
+ "{instance} plays Minecraft {version}, whose jar was not found here. Start {version} once with the launcher, or choose its jar (versions/{version}/{version}.jar) with Choose….": "{instance} joue à Minecraft {version}, dont le jar est introuvable ici. Lancez {version} une fois avec le launcher, ou choisissez son jar (versions/{version}/{version}.jar) avec Choisir…."
 }

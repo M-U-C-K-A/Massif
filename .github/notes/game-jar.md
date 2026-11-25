@@ -1,0 +1,3 @@
+**The game is found beside your modpack's instance, whatever the launcher**
+
+On a PC whose launcher keeps Minecraft somewhere Massif did not look, the Blocks panel listed the modpack's instances but said "No Minecraft installation was found", and Use read nothing. Massif now looks for the game beside each instance it finds and wherever the launchers keep it: the official launcher, CurseForge on any drive or folder, the Modrinth App (which keeps the game under the loader's name, such as 1.20.1-fabric-0.16.10), Prism, MultiMC, ATLauncher and GDLauncher. Use reads the instance over the version of the game it plays; when that version is not on the computer, the panel says which one to start once in the launcher or to choose with Choose…. Reported by Jack (Fornad).

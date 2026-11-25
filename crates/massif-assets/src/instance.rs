@@ -362,7 +362,7 @@ fn instance_roots() -> Vec<PathBuf> {
         }
     }
     if let Some(appdata) = std::env::var_os("APPDATA").map(PathBuf::from) {
-        for sub in ["PrismLauncher/instances", "ModrinthApp/profiles"] {
+        for sub in ["PrismLauncher/instances", "ModrinthApp/profiles", "com.modrinth.theseus/profiles", "MultiMC/instances", "ATLauncher/instances", "gdlauncher_next/instances", "gdlauncher_carbon/data/instances"] {
             roots.push(appdata.join(sub));
         }
     }

@@ -102,12 +102,16 @@ impl BlockLibrary {
         let (tx, rx) = channel();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
+            // The instances installed here, and the game beside each of
+            // them and beside the mods chosen: a launcher kept elsewhere
+            // than where launchers usually are (CurseForge on another
+            // drive or in a folder of its own) is found by its instances.
+            let mut instances = installed_instances();
             let mut jars = massif_assets::find_jars();
-            // None where launchers keep the game: the one beside the mods
-            // chosen (a CurseForge instance on another drive).
-            if jars.is_empty() {
-                jars = mods.iter().flat_map(|m| massif_assets::jars_near(m)).collect();
-            }
+            jars.extend(mods.iter().flat_map(|m| massif_assets::jars_near(m)));
+            jars.extend(instances.iter().flat_map(|i| massif_assets::jars_near(&i.dir.join("mods"))));
+            jars.sort_by_key(|j| std::cmp::Reverse(massif_assets::release_numbers(&j.version)));
+            jars.dedup_by(|a, b| a.version == b.version);
             let chosen = jar
                 .filter(|p| p.is_file())
                 .map(|p| {
@@ -115,8 +119,14 @@ impl BlockLibrary {
                         .iter()
                         .find(|j| j.path == p)
                         .map(|j| j.version.clone())
+                        .or_else(|| massif_assets::jar_version(&p))
                         .unwrap_or_else(|| p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());
                     Jar { version, path: p }
+                })
+                // The version the instance of the mods plays, else the newest.
+                .or_else(|| {
+                    let wanted = instances.iter().find(|i| mods.iter().any(|m| m.starts_with(&i.dir))).and_then(|i| i.minecraft.clone())?;
+                    jars.iter().find(|j| j.version == wanted).cloned()
                 })
                 .or_else(|| jars.first().cloned());
             let result = match chosen {
@@ -128,7 +138,6 @@ impl BlockLibrary {
             // The instances installed here with block mods not read yet,
             // to offer.
             let read: Vec<String> = result.as_ref().map(|c| read_namespaces(c).into_iter().map(str::to_owned).collect()).unwrap_or_default();
-            let mut instances = installed_instances();
             instances.retain(|i| i.namespaces.iter().any(|ns| !read.contains(ns)));
             let _ = tx.send((jars, result, instances));
             ctx.request_repaint();
@@ -164,11 +173,16 @@ impl BlockLibrary {
     /// when that is installed here (else over the game read now, said in
     /// `notice`). `jar` and `mods` are the settings that remember them.
     pub fn use_instance(&mut self, ctx: &egui::Context, instance: &Instance, jar: &mut Option<PathBuf>, mods: &mut Vec<PathBuf>) {
-        let jars = if self.jars.is_empty() { massif_assets::find_jars() } else { self.jars.clone() };
+        // The game beside the instance first: its own launcher's.
+        let mut jars = massif_assets::jars_near(&instance.dir.join("mods"));
+        jars.extend(if self.jars.is_empty() { massif_assets::find_jars() } else { self.jars.clone() });
         self.notice = None;
         if let Some(version) = &instance.minecraft {
             match jars.iter().find(|j| j.version == *version) {
                 Some(j) => *jar = Some(j.path.clone()),
+                None if jars.is_empty() && jar.as_ref().is_none_or(|p| !p.is_file()) => {
+                    self.notice = Some(tr!("{instance} plays Minecraft {version}, whose jar was not found here. Start {version} once with the launcher, or choose its jar (versions/{version}/{version}.jar) with Choose….", instance = instance.name, version));
+                }
                 None => {
                     let current = self.catalogue.as_ref().map(|c| c.version.clone()).or_else(|| jars.first().map(|j| j.version.clone())).unwrap_or_default();
                     self.notice = Some(tr!("{instance} plays Minecraft {version}, which is not installed here: its blocks are read with Minecraft {current}'s. Install {version} with the launcher to read the game's blocks of that version.", instance = instance.name, version, current));
@@ -385,4 +399,51 @@ pub fn note_catalogue(cat: Option<&std::sync::Arc<Catalogue>>) {
 /// The blocks of the mods read (see [`note_catalogue`]).
 pub fn mod_blocks() -> std::sync::Arc<HashMap<String, Vec<String>>> {
     MOD_BLOCKS.read().ok().and_then(|m| m.clone()).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Jack's case, on a PC: no game where the official launcher keeps it,
+    /// a Fabric instance of the Modrinth App that plays 1.20.1, whose game
+    /// the app keeps under the loader's name. Use on the instance finds
+    /// that jar and reads the mod's blocks over it, with no error.
+    #[test]
+    fn use_finds_the_instances_own_game() {
+        let zip = |files: &[(&str, &[u8])]| {
+            let parts: Vec<crate::report::Part> = files.iter().map(|(name, bytes)| crate::report::Part { name: (*name).to_owned(), about: "", bytes: bytes.to_vec(), text: false }).collect();
+            let mut out = Vec::new();
+            crate::report::zip(&mut out, &parts).unwrap();
+            out
+        };
+        let root = std::env::temp_dir().join(format!("massif-use-instance-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let app = root.join("AppData/Roaming/ModrinthApp");
+        let jar = app.join("meta/versions/1.20.1-fabric-0.16.10/1.20.1-fabric-0.16.10.jar");
+        std::fs::create_dir_all(jar.parent().unwrap()).unwrap();
+        std::fs::write(&jar, zip(&[("version.json", br#"{"id":"1.20.1","world_version":3465}"#), ("assets/minecraft/blockstates/stone.json", br#"{"variants":{"":{"model":"minecraft:block/stone"}}}"#)])).unwrap();
+        let profile = app.join("profiles/ArdaCraft");
+        std::fs::create_dir_all(profile.join("mods")).unwrap();
+        std::fs::write(profile.join("profile.json"), br#"{"game_version":"1.20.1","loader":"fabric"}"#).unwrap();
+        std::fs::write(profile.join("mods/arda.jar"), zip(&[("fabric.mod.json", br#"{"id":"arda","name":"Arda"}"#), ("assets/arda/blockstates/mallorn_log.json", br#"{"variants":{"":{"model":"arda:block/mallorn_log"}}}"#)])).unwrap();
+        let instance = massif_assets::instance::Instance::read(&profile).expect("an instance");
+        assert_eq!(instance.minecraft.as_deref(), Some("1.20.1"));
+        let ctx = egui::Context::default();
+        let mut lib = BlockLibrary::default();
+        let (mut chosen, mut mods) = (None, Vec::new());
+        lib.use_instance(&ctx, &instance, &mut chosen, &mut mods);
+        assert_eq!(chosen.as_deref(), Some(jar.as_path()), "its own game's jar: {:?}", lib.notice);
+        let started = std::time::Instant::now();
+        while lib.is_loading() {
+            lib.poll();
+            assert!(started.elapsed().as_secs() < 60);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(lib.error.is_none(), "{:?}", lib.error);
+        let cat = lib.catalogue.as_ref().expect("read");
+        assert_eq!(cat.version, "1.20.1");
+        assert!(cat.block("arda:mallorn_log").is_some() && cat.block("minecraft:stone").is_some());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

@@ -57,17 +57,121 @@ fn app_data_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// Folders where launchers keep their game versions.
-fn version_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    // Both: on Windows, a tool may set HOME to a folder of its own while the
-    // launchers keep to the user's profile.
+/// The version of the game a client jar is, from its `version.json`
+/// (`"id": "1.20.1"`): for a jar kept under a folder not named by the
+/// version (the Modrinth App's `1.20.1-fabric-0.16.10`, a loader's). A jar
+/// without one (a loader's empty jar) is not the game's.
+pub fn jar_version(jar: &Path) -> Option<String> {
+    let archive = zip::Archive::open(jar).ok()?;
+    let json: Value = serde_json::from_slice(&archive.read("version.json")?.ok()?).ok()?;
+    let id = json.get("id").or_else(|| json.get("name"))?.as_str()?;
+    // "1.20.1 / 2c7a3b..." in some old jars.
+    let id = id.split([' ', '/']).next()?.to_owned();
+    release_numbers(&id).is_some().then_some(id)
+}
+
+/// The client jars in a launcher's folder of versions, `<id>/<id>.jar`
+/// (the official launcher, CurseForge's `Install/versions`, the Modrinth
+/// App's `meta/versions`, GDLauncher's): by the folder's name when it is a
+/// release, else by the version the jar says it is.
+fn jars_in_versions(dir: &Path, jars: &mut Vec<Jar>) {
+    let Ok(read) = std::fs::read_dir(dir) else { return };
+    for entry in read.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let jar = entry.path().join(format!("{name}.jar"));
+        if !jar.is_file() {
+            continue;
+        }
+        if release_numbers(&name).is_some() {
+            jars.push(Jar { version: name, path: jar });
+        } else if (name.chars().next().is_some_and(|c| c.is_ascii_digit()) || name.contains("fabric") || name.contains("forge") || name.contains("quilt"))
+            && let Some(version) = jar_version(&jar)
+        {
+            jars.push(Jar { version, path: jar });
+        }
+    }
+}
+
+/// The client jars among a launcher's libraries: Prism's, MultiMC's and
+/// GDLauncher's `com/mojang/minecraft/<v>/minecraft-<v>-client.jar`,
+/// ATLauncher's and others' `net/minecraft/client/<v>/client-<v>….jar`.
+fn jars_in_libraries(dir: &Path, jars: &mut Vec<Jar>) {
+    for sub in ["com/mojang/minecraft", "net/minecraft/client"] {
+        let Ok(read) = std::fs::read_dir(dir.join(sub)) else { continue };
+        for entry in read.flatten() {
+            let version = entry.file_name().to_string_lossy().into_owned();
+            if release_numbers(&version).is_none() {
+                continue;
+            }
+            let named = entry.path().join(format!("minecraft-{version}-client.jar"));
+            if named.is_file() {
+                jars.push(Jar { version, path: named });
+                continue;
+            }
+            // Another name: the one that is the game's (Forge keeps its
+            // srg and slim jars there too).
+            let Ok(files) = std::fs::read_dir(entry.path()) else { continue };
+            let mut found: Vec<PathBuf> = files.flatten().map(|f| f.path()).filter(|f| f.extension().is_some_and(|e| e.eq_ignore_ascii_case("jar")) && f.file_name().is_some_and(|n| n.to_string_lossy().contains("client"))).collect();
+            found.sort_by_key(|f| (f.file_name().is_some_and(|n| n.to_string_lossy().contains("srg") || n.to_string_lossy().contains("slim")), f.clone()));
+            if let Some(jar) = found.into_iter().find(|f| jar_version(f).is_some()) {
+                jars.push(Jar { version, path: jar });
+            }
+        }
+    }
+}
+
+/// The client jars a launcher keeps under its folder `root`, wherever it
+/// keeps them: its versions, its libraries.
+pub fn jars_in(root: &Path) -> Vec<Jar> {
+    let mut jars = Vec::new();
+    for sub in ["versions", "Install/versions", "install/versions", "meta/versions", "datastore/versions", ".minecraft/versions", "minecraft/versions"] {
+        jars_in_versions(&root.join(sub), &mut jars);
+    }
+    for sub in ["libraries", "data/libraries", "meta/libraries", "datastore/libraries"] {
+        jars_in_libraries(&root.join(sub), &mut jars);
+    }
+    jars
+}
+
+/// Newest first, one jar a version.
+fn sorted(mut jars: Vec<Jar>) -> Vec<Jar> {
+    jars.sort_by_key(|j| std::cmp::Reverse(release_numbers(&j.version)));
+    jars.dedup_by(|a, b| a.version == b.version);
+    jars
+}
+
+/// The client jars of the game installed beside a mod's jar or an
+/// instance's folder `path`: the launcher's versions and libraries found
+/// walking up from it (CurseForge keeps its instances' mods under
+/// `minecraft/Instances/<name>/mods` and the game under
+/// `minecraft/Install/versions`, on whatever drive it is; the Modrinth App
+/// its profiles beside `meta/versions`; Prism and MultiMC their instances
+/// beside `libraries`), newest first.
+pub fn jars_near(path: &Path) -> Vec<Jar> {
+    let mut jars = Vec::new();
+    for dir in path.ancestors().skip(1).take(6) {
+        jars.extend(jars_in(dir));
+    }
+    sorted(jars)
+}
+
+/// The folders launchers live in, on this computer.
+fn launcher_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
     let homes: Vec<PathBuf> = ["HOME", "USERPROFILE"].iter().filter_map(std::env::var_os).map(PathBuf::from).collect();
     for home in &homes {
-        dirs.push(home.join("Library/Application Support/minecraft/versions"));
-        dirs.push(home.join(".minecraft/versions"));
-        dirs.push(home.join("Documents/curseforge/minecraft/Install/versions"));
-        dirs.push(home.join("curseforge/minecraft/Install/versions"));
+        for sub in ["Library/Application Support/minecraft", ".minecraft", "Documents/curseforge/minecraft", "curseforge/minecraft", ".var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher"] {
+            roots.push(home.join(sub));
+        }
+    }
+    let mut data = app_data_dirs();
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        data.push(PathBuf::from(local));
+    }
+    for app in data {
+        for sub in [".minecraft", "PrismLauncher", "MultiMC", "ModrinthApp", "com.modrinth.theseus", "ATLauncher", "atlauncher", "gdlauncher_next", "gdlauncher_carbon", "gdlauncher_carbon/data", "GDLauncher", "Programs/PrismLauncher", "Programs/MultiMC", "Programs/ATLauncher"] {
+            roots.push(app.join(sub));
+        }
     }
     // Windows: CurseForge and others installed on another drive.
     if cfg!(windows) {
@@ -76,87 +180,32 @@ fn version_dirs() -> Vec<PathBuf> {
             if !drive.is_dir() {
                 continue;
             }
-            for sub in ["curseforge/minecraft/Install/versions", "CurseForge/minecraft/Install/versions", "Games/CurseForge/minecraft/Install/versions", "minecraft/Install/versions", "Minecraft/versions"] {
-                dirs.push(drive.join(sub));
+            for sub in ["curseforge/minecraft", "CurseForge/minecraft", "Games/CurseForge/minecraft", "Games/curseforge/minecraft", "minecraft", "Minecraft", "Games/Minecraft", "MultiMC", "PrismLauncher", "ATLauncher"] {
+                roots.push(drive.join(sub));
             }
         }
-    }
-    // The Modrinth App keeps the game's versions as the official launcher
-    // does, under its own folder.
-    for app in app_data_dirs() {
-        dirs.push(app.join(".minecraft/versions"));
-        dirs.push(app.join("ModrinthApp/meta/versions"));
-        dirs.push(app.join("com.modrinth.theseus/meta/versions"));
     }
     // Launchers installed on other drives (CurseForge often is).
     for root in ["/Volumes", "/media", "/mnt"] {
         if let Ok(read) = std::fs::read_dir(root) {
             for volume in read.flatten() {
-                for sub in ["minecraft/Install/versions", "curseforge/minecraft/Install/versions", "minecraft/versions"] {
-                    dirs.push(volume.path().join(sub));
+                for sub in ["minecraft", "curseforge/minecraft", "CurseForge/minecraft"] {
+                    roots.push(volume.path().join(sub));
                 }
             }
         }
     }
-    dirs
+    roots
 }
 
-/// The client jars of the game installed beside a mod's jar `path`: the
-/// launcher's versions found walking up from it (CurseForge keeps its
-/// instances' mods under `minecraft/Instances/<name>/mods` and the game
-/// under `minecraft/Install/versions`, on whatever drive it is), newest
-/// first.
-pub fn jars_near(path: &Path) -> Vec<Jar> {
-    let mut jars = Vec::new();
-    for dir in path.ancestors().skip(1).take(6) {
-        for sub in ["Install/versions", "versions", ".minecraft/versions"] {
-            let Ok(read) = std::fs::read_dir(dir.join(sub)) else { continue };
-            for entry in read.flatten() {
-                let version = entry.file_name().to_string_lossy().into_owned();
-                let jar = entry.path().join(format!("{version}.jar"));
-                if release_numbers(&version).is_some() && jar.is_file() {
-                    jars.push(Jar { version, path: jar });
-                }
-            }
-        }
-    }
-    jars.sort_by_key(|j| std::cmp::Reverse(release_numbers(&j.version)));
-    jars.dedup_by(|a, b| a.version == b.version);
-    jars
-}
-
-/// Client jars of released versions, newest first. Prism and MultiMC keep
-/// them among their libraries; the Modrinth App in folders of its own.
+/// Client jars of released versions, newest first, wherever the launchers
+/// of this computer keep them (see [`jars_in`]).
 pub fn find_jars() -> Vec<Jar> {
     let mut jars = Vec::new();
-    for dir in version_dirs() {
-        let Ok(read) = std::fs::read_dir(&dir) else { continue };
-        for entry in read.flatten() {
-            let version = entry.file_name().to_string_lossy().into_owned();
-            let jar = entry.path().join(format!("{version}.jar"));
-            if release_numbers(&version).is_some() && jar.is_file() {
-                jars.push(Jar { version, path: jar });
-            }
-        }
+    for root in launcher_roots() {
+        jars.extend(jars_in(&root));
     }
-    let mut libraries: Vec<PathBuf> = app_data_dirs().into_iter().map(|d| d.join("PrismLauncher/libraries/com/mojang/minecraft")).collect();
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-        // Prism as a Flatpak on Linux.
-        libraries.push(home.join(".var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/libraries/com/mojang/minecraft"));
-    }
-    for lib in libraries {
-        let Ok(read) = std::fs::read_dir(&lib) else { continue };
-        for entry in read.flatten() {
-            let version = entry.file_name().to_string_lossy().into_owned();
-            let jar = entry.path().join(format!("minecraft-{version}-client.jar"));
-            if release_numbers(&version).is_some() && jar.is_file() {
-                jars.push(Jar { version, path: jar });
-            }
-        }
-    }
-    jars.sort_by_key(|j| std::cmp::Reverse(release_numbers(&j.version)));
-    jars.dedup_by(|a, b| a.version == b.version);
-    jars
+    sorted(jars)
 }
 
 /// The number a client jar stamps on the worlds it saves (its
@@ -1951,6 +2000,48 @@ mod tests {
         let found: Vec<String> = super::jars_near(&mods.join("conquest.jar")).into_iter().map(|j| j.version).collect();
         assert_eq!(found, ["1.21.1", "1.20.1"]);
         assert!(super::jars_near(&root.join("elsewhere/mod.jar")).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The game's jar of 1.20.1 as each launcher keeps it, found from an
+    /// instance's mods folder, as on a Windows PC's drives: the official
+    /// launcher's `versions`, CurseForge on another drive (its Fabric
+    /// loader's empty jar left out), the Modrinth App under a loader's
+    /// name (its version read from the jar), Prism's and GDLauncher's
+    /// libraries, ATLauncher's (its srg jar left out).
+    #[test]
+    fn every_launcher_keeps_its_game_where_it_is_found() {
+        use crate::zip::tests_support::tiny_zip;
+        let root = std::env::temp_dir().join(format!("massif-launchers-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let game = tiny_zip(&[("version.json", br#"{"id":"1.20.1","world_version":3465}"#, true), ("assets/minecraft/blockstates/stone.json", b"{}", true)]);
+        let put = |path: &str, bytes: &[u8]| {
+            let p = root.join(path);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, bytes).unwrap();
+        };
+        let layouts: [(&str, &[(&str, bool)]); 6] = [
+            ("AppData/Roaming/.minecraft/mods", &[("AppData/Roaming/.minecraft/versions/1.20.1/1.20.1.jar", true), ("AppData/Roaming/.minecraft/versions/fabric-loader-0.16.10-1.20.1/fabric-loader-0.16.10-1.20.1.jar", false)]),
+            ("D/Games/CurseForge/minecraft/Instances/ArdaCraft/mods", &[("D/Games/CurseForge/minecraft/Install/versions/1.20.1/1.20.1.jar", true), ("D/Games/CurseForge/minecraft/Install/versions/fabric-loader-0.16.10-1.20.1/fabric-loader-0.16.10-1.20.1.jar", false)]),
+            ("AppData/Roaming/ModrinthApp/profiles/ArdaCraft 2.7.4/mods", &[("AppData/Roaming/ModrinthApp/meta/versions/1.20.1-fabric-0.16.10/1.20.1-fabric-0.16.10.jar", true)]),
+            ("AppData/Roaming/PrismLauncher/instances/ArdaCraft/.minecraft/mods", &[("AppData/Roaming/PrismLauncher/libraries/com/mojang/minecraft/1.20.1/minecraft-1.20.1-client.jar", true)]),
+            ("AppData/Roaming/ATLauncher/instances/ArdaCraft/mods", &[("AppData/Roaming/ATLauncher/libraries/net/minecraft/client/1.20.1/client-1.20.1-official.jar", true), ("AppData/Roaming/ATLauncher/libraries/net/minecraft/client/1.20.1/client-1.20.1-srg.jar", false)]),
+            ("AppData/Roaming/gdlauncher_carbon/data/instances/ArdaCraft/instance/mods", &[("AppData/Roaming/gdlauncher_carbon/data/libraries/com/mojang/minecraft/1.20.1/minecraft-1.20.1-client.jar", true)]),
+        ];
+        for (mods, files) in layouts {
+            let empty = tiny_zip(&[("META-INF/MANIFEST.MF", b"", true)]);
+            for (file, real) in files {
+                put(file, if *real { &game } else { &empty });
+            }
+            std::fs::create_dir_all(root.join(mods)).unwrap();
+            let found = super::jars_near(&root.join(mods).join("arda.jar"));
+            let want = root.join(files[0].0);
+            assert_eq!(found.iter().map(|j| (j.version.as_str(), j.path.clone())).collect::<Vec<_>>(), [("1.20.1", want)], "{mods}");
+            // Its launcher's folder alone gives it too.
+            let launcher = files[0].0.split("/versions/").next().unwrap().split("/libraries/").next().unwrap();
+            let launcher = launcher.strip_suffix("/Install").or_else(|| launcher.strip_suffix("/meta")).or_else(|| launcher.strip_suffix("/data")).unwrap_or(launcher);
+            assert!(super::jars_in(&root.join(launcher)).iter().any(|j| j.version == "1.20.1"), "{launcher}");
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 
