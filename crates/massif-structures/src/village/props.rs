@@ -88,7 +88,7 @@ pub fn props(ground: &dyn Ground, area: &Area, site: &Site, roads: &Roads, reser
     // Market stalls round each square, facing it (a market is the square's
     // whatever the props setting).
     if let Some(market) = theme.kind("market").filter(|t| t.share <= 0.0) {
-        let max = market.max.unwrap_or(4) as usize;
+        let max = params.counts.iter().find(|(k, _)| k == "market").map_or(market.max.unwrap_or(4), |c| c.1) as usize;
         for &c in &site.centres {
             let mut n = 0;
             'sides: for side in Side::ALL {

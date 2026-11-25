@@ -583,6 +583,169 @@ pub fn colors_of(s: &mut massif_core::structures::Structure, catalogue: Option<&
         .collect();
 }
 
+/// The name of a type of building, as the panel shows `n` of them.
+fn type_name(t: &str, n: u32) -> String {
+    let one = n == 1;
+    let s = match t {
+        "house" => if one { tr!("house") } else { tr!("houses") },
+        "manor" => if one { tr!("manor") } else { tr!("manors") },
+        "church" => if one { tr!("church") } else { tr!("churches") },
+        "forge" => if one { tr!("forge") } else { tr!("forges") },
+        "tavern" => if one { tr!("tavern") } else { tr!("taverns") },
+        "watchtower" => if one { tr!("watchtower") } else { tr!("watchtowers") },
+        "farm" => if one { tr!("farm") } else { tr!("farms") },
+        "stable" => if one { tr!("stable") } else { tr!("stables") },
+        "mill" => if one { tr!("mill") } else { tr!("mills") },
+        "well" => if one { tr!("well") } else { tr!("wells") },
+        "market" => if one { tr!("market stall") } else { tr!("market stalls") },
+        other => return other.replace('_', " "),
+    };
+    s.to_owned()
+}
+
+/// How many of each type a village of `houses` houses has: those asked
+/// for, else what the pack's shares give (at most its max), market stalls
+/// round the square.
+fn estimate(theme: &massif_structures::village::Theme, houses: u32, counts: &[(String, u32)]) -> Vec<(String, u32)> {
+    let house_share = theme.kind("house").map_or(0.55, |t| t.share).max(0.05);
+    let mut out = Vec::new();
+    for t in &theme.types {
+        if t.name == "house" {
+            continue;
+        }
+        let asked = counts.iter().find(|(k, _)| *k == t.name).map(|c| c.1);
+        let drawn = if t.name == "market" && t.share <= 0.0 {
+            t.max.unwrap_or(4)
+        } else if t.name == "mill" {
+            1
+        } else {
+            let n = (houses as f32 * t.share / house_share).round() as u32;
+            let n = if t.centre { n.max(1) } else { n };
+            t.max.map_or(n, |m| n.min(m))
+        };
+        out.push((t.name.clone(), asked.unwrap_or(drawn)));
+    }
+    out
+}
+
+/// How the land of `r` suits a village: the share too steep, the share
+/// under water, and about how many houses the rest holds.
+fn site_check(doc: &Document, r: massif_core::BlockRect) -> (f32, f32, u32) {
+    let dim = doc.dimension();
+    let h = |x: i32, z: i32| massif_core::ops::height_at(dim, 0, x, z, massif_core::ops::Surface::Top).unwrap_or(0.0);
+    let (mut all, mut steep, mut wet) = (0u32, 0u32, 0u32);
+    for z in (r.z0..r.z1).step_by(4) {
+        for x in (r.x0..r.x1).step_by(4) {
+            all += 1;
+            if massif_core::ops::water_at(dim, x, z).is_some() {
+                wet += 1;
+            } else if (h(x + 4, z) - h(x, z)).abs() > 3.0 || (h(x, z + 4) - h(x, z)).abs() > 3.0 {
+                steep += 1;
+            }
+        }
+    }
+    let all = all.max(1);
+    let good = (all - steep - wet) as f32 * 16.0;
+    (steep as f32 / all as f32, wet as f32 / all as f32, (good / 340.0) as u32)
+}
+
+/// What a village will be, in detail: a line saying it whole, its
+/// buildings type by type (counts a pack's village takes as asked), the
+/// pack's schematics, and how its land suits it. Whether a count changed.
+#[allow(clippy::too_many_arguments)]
+fn village_details(ui: &mut Ui, summary: bool, id: &str, doc: &Document, theme: Option<&massif_structures::village::Theme>, size: VillageSize, houses: u32, road: massif_structures::village::RoadType, walls: bool, counts: &mut Vec<(String, u32)>, built: Option<&massif_core::structures::Structure>, area: Option<massif_core::BlockRect>) -> bool {
+    use crate::panels::hint;
+    use crate::widgets::{Field, row, well};
+    use massif_structures::village::RoadType;
+    let mut changed = false;
+    let pack = theme.is_some_and(|t| t.vanilla.is_none());
+    // What it has: as built, or as it will be.
+    let have: Vec<(String, u32)> = match built {
+        Some(s) => {
+            let mut m: Vec<(String, u32)> = Vec::new();
+            for p in s.pieces.iter().filter(|p| !p.template.starts_with("prop:")) {
+                let k = if pack { p.template.clone() } else { "building".into() };
+                match m.iter_mut().find(|e| e.0 == k) {
+                    Some(e) => e.1 += 1,
+                    None => m.push((k, 1)),
+                }
+            }
+            m
+        }
+        None => {
+            let mut m = vec![("house".to_owned(), houses)];
+            if let Some(t) = theme.filter(|_| pack) {
+                m.extend(estimate(t, houses, counts));
+            }
+            m
+        }
+    };
+    let roads = match road {
+        RoadType::Theme => tr!("the pack's roads"),
+        RoadType::Dirt => tr!("dirt roads"),
+        RoadType::Premium => tr!("gravel roads"),
+        RoadType::Stone => tr!("stone roads"),
+        RoadType::Planks => tr!("plank roads"),
+    };
+    let mut parts = vec![tr!("{size} village", size = size.label()).to_owned()];
+    for (k, n) in &have {
+        if *n > 0 {
+            parts.push(if k == "building" { tr!("{n} buildings", n) } else { format!("{n} {}", type_name(k, *n)) });
+        }
+    }
+    parts.push(roads.to_owned());
+    if walls {
+        parts.push(tr!("walls").to_owned());
+    }
+    if summary {
+        ui.add(egui::Label::new(egui::RichText::new(parts.join(" · ")).strong()).wrap());
+        return false;
+    }
+    if !pack {
+        hint(ui, tr!("The game's own villages grow as the game grows them: their houses, farms and wells are its own."));
+    }
+    // Each type of the pack, how many: as asked, or as its shares draw.
+    if let Some(t) = theme.filter(|_| pack) {
+        ui.label(egui::RichText::new(tr!("Buildings")).small().weak());
+        well(ui, |ui| {
+            for (k, n) in estimate(t, houses, counts) {
+                let max = if k == "market" { 12 } else { 20 };
+                let mut v = n;
+                row(ui, &type_name(&k, 2), |ui| {
+                    if ui.add(Field::new(&mut v, 0..=max).width((ui.available_width() * 0.55).min(120.0))).changed() {
+                        counts.retain(|c| c.0 != k);
+                        counts.push((k.clone(), v));
+                        changed = true;
+                    }
+                });
+            }
+        });
+        hint(ui, tr!("How many of each the village has, as far as its land has room: the church and the wells by the square, the farms and towers toward the edge."));
+        egui::CollapsingHeader::new(tr!("The pack's buildings ({n})", n = t.types.iter().map(|k| k.variants.len()).sum::<usize>())).id_salt(format!("{id} pack list")).show(ui, |ui| {
+            for k in &t.types {
+                let sides: Vec<i32> = k.variants.iter().map(|v| { let f = v.footprint(); f[0].max(f[1]) }).collect();
+                let (lo, hi) = (sides.iter().min().copied().unwrap_or(0), sides.iter().max().copied().unwrap_or(0));
+                hint(ui, &format!("{} · {} · {lo}–{hi} {}", type_name(&k.name, 2), k.variants.len(), tr!("blocks")));
+                let names: Vec<String> = k.variants.iter().map(|v| { let f = v.footprint(); format!("{} {}×{}", v.file.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(), f[0], f[1]) }).collect();
+                ui.label(egui::RichText::new(names.join(", ")).small().weak());
+            }
+        });
+    }
+    // The land: what it needs, how the area suits it.
+    let need = ((houses as f32 * 340.0).sqrt() * 1.15) as i32;
+    match area {
+        Some(r) => {
+            let (steep, wet, fits) = site_check(doc, r);
+            hint(ui, &tr!("Its land: {flat:.0}% flat and dry, {steep:.0}% too steep, {wet:.0}% under water.", flat = (1.0 - steep - wet) * 100.0, steep = steep * 100.0, wet = wet * 100.0));
+            if pack && fits < houses {
+                ui.colored_label(Palette::of(ui).danger, tr!("This land holds about {fits} houses, not {houses}: make the village larger, or ask for fewer.", fits, houses));
+            }
+        }
+        None => hint(ui, &tr!("It needs about {need} × {need} blocks of flat, dry land: the houses stand on slopes of at most 10 blocks, never in water.", need)),
+    }
+    changed
+}
+
 /// The settings of a village: size, houses, roads, walls, draw. `pack`:
 /// whether its theme is a pack's (which may have roads of its own).
 /// Whether one changed.
@@ -600,6 +763,7 @@ fn village_controls(ui: &mut Ui, id: &str, size: &mut VillageSize, houses: &mut 
         *houses = size.houses();
         changed = true;
     }
+    crate::panels::hint(ui, &tr!("A square of {side} blocks; its houses follow.", side = size.side()));
     ui.label(egui::RichText::new(tr!("Roads")).small().weak());
     let mut kinds = vec![RoadType::Dirt, RoadType::Premium, RoadType::Stone];
     let mut labels = vec![tr!("Dirt"), tr!("Gravel"), tr!("Stone")];
@@ -612,6 +776,7 @@ fn village_controls(ui: &mut Ui, id: &str, size: &mut VillageSize, houses: &mut 
         *road = kinds[k];
         changed = true;
     }
+    crate::panels::hint(ui, tr!("The blocks of its streets; stone climbs in steps."));
     well(ui, |ui| {
         // A pack's village holds as many houses as asked; the game's own
         // grow as the game grows them.
@@ -631,6 +796,7 @@ fn village_controls(ui: &mut Ui, id: &str, size: &mut VillageSize, houses: &mut 
             }
         });
     });
+    crate::panels::hint(ui, tr!("Walls: ramparts round it, towers at the corners, gates where its roads leave. Draw: the same number gives the same village."));
     changed
 }
 
@@ -672,10 +838,16 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
                 let mut vsize = VillageSize::of(side);
                 let mut houses = params.houses.unwrap_or(vsize.houses());
                 let (mut road, mut walls, mut seed2) = (params.road, params.walls, seed);
-                if village_controls(ui, "selected village", &mut vsize, &mut houses, &mut road, &mut walls, &mut seed2, !pack.is_empty()) {
+                let mut counts = params.counts.clone();
+                let th = tools.village.theme_named(&pack, &theme);
+                let area = Recipe::Village { pack: pack.clone(), theme: theme.clone(), centre, size, params: params.clone(), seed }.area();
+                village_details(ui, true, "selected village", doc, th.as_ref(), vsize, houses, road, walls, &mut counts, Some(&s), area);
+                let mut changed = village_controls(ui, "selected village", &mut vsize, &mut houses, &mut road, &mut walls, &mut seed2, !pack.is_empty());
+                changed |= village_details(ui, false, "selected village", doc, th.as_ref(), vsize, houses, road, walls, &mut counts, Some(&s), area);
+                if changed {
                     // A size chosen: its square round the same middle.
                     let size = if vsize != VillageSize::of(side) { [vsize.side(), vsize.side()] } else { size };
-                    let params = massif_structures::village::Params { houses: Some(houses), road, walls, ..params };
+                    let params = massif_structures::village::Params { houses: Some(houses), road, walls, counts, ..params };
                     tools.structure.rt.regenerate(s.id, Recipe::Village { pack, theme, centre, size, params, seed: seed2 });
                 }
                 hint(ui, tr!("Drag it to move it, its corners to resize it: it is built again."));
@@ -687,6 +859,7 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
 
     let themes = tools.village.rt.themes(&tools.village.packs);
     // What a click places: the list.
+    let village_now = tools.structure.village;
     section(ui, Icon::House, tr!("Villages"));
     well(ui, |ui| {
         for t in &themes {
@@ -707,8 +880,15 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
     {
         tools.village.packs.push(dir);
     }
-    section(ui, Icon::Castle, tr!("The game's structures"));
-    well(ui, |ui| {
+    // The other list folded away while a village is picked, so that its
+    // settings come close under the list.
+    if village_now {
+        if button(ui, theme::with_icon(Icon::Castle, tr!("The game's structures…"))).clicked() {
+            tools.structure.village = false;
+        }
+    } else {
+        section(ui, Icon::Castle, tr!("The game's structures"));
+        well(ui, |ui| {
         for (group, title) in [(Group::Surface, tn!("On the land")), (Group::Water, tn!("In the water")), (Group::Underground, tn!("Underground")), (Group::Nether, tn!("From the Nether"))] {
             ui.label(egui::RichText::new(crate::i18n::tr_name(title)).small().weak());
             for k in KINDS.iter().filter(|k| k.group == group) {
@@ -719,7 +899,8 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
                 }
             }
         }
-    });
+        });
+    }
 
     // How: the settings of what a click places.
     if tools.structure.village {
@@ -727,7 +908,14 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
         let pack = !v.theme.0.is_empty();
         let mut houses = v.houses.unwrap_or_else(|| v.size.houses());
         let (mut size, mut road, mut walls, mut seed) = (v.size, v.road, v.walls, v.seed);
-        if village_controls(ui, "new village", &mut size, &mut houses, &mut road, &mut walls, &mut seed, pack) {
+        let th = v.theme_named(&v.theme.0, &v.theme.1);
+        let mut counts = v.counts.clone();
+        village_details(ui, true, "new village", doc, th.as_ref(), size, houses, road, walls, &mut counts, None, None);
+        let controls = village_controls(ui, "new village", &mut size, &mut houses, &mut road, &mut walls, &mut seed, pack);
+        if village_details(ui, false, "new village", doc, th.as_ref(), size, houses, road, walls, &mut counts, None, None) {
+            v.counts = counts;
+        }
+        if controls {
             (v.size, v.road, v.walls, v.seed) = (size, road, walls, seed);
             v.houses = Some(houses);
         }
@@ -973,6 +1161,8 @@ pub struct VillageSettings {
     pub seed: u64,
     /// How large a village a click places.
     pub size: VillageSize,
+    /// How many of each type of building, where told.
+    pub counts: Vec<(String, u32)>,
     #[serde(skip)]
     pub rt: VillageRuntime,
 }
@@ -1031,7 +1221,7 @@ pub struct VillageJob {
 
 impl Default for VillageSettings {
     fn default() -> Self {
-        Self { theme: (String::new(), "Plains".into()), packs: Vec::new(), walls: false, density: 0.7, size_bias: 0.0, road: massif_structures::village::RoadType::Dirt, props: 0.5, houses: None, seed: 1, size: VillageSize::Medium, rt: VillageRuntime::default() }
+        Self { theme: (String::new(), "Plains".into()), packs: Vec::new(), walls: false, density: 0.7, size_bias: 0.0, road: massif_structures::village::RoadType::Dirt, props: 0.5, houses: None, seed: 1, size: VillageSize::Medium, counts: Vec::new(), rt: VillageRuntime::default() }
     }
 }
 
@@ -1144,7 +1334,7 @@ impl VillageRuntime {
 impl VillageSettings {
     /// What the village is to be like, from these settings.
     pub fn params(&self) -> massif_structures::village::Params {
-        massif_structures::village::Params { walls: self.walls, density: self.density, size_bias: self.size_bias, road: self.road, props: self.props, houses: self.houses, ..Default::default() }
+        massif_structures::village::Params { walls: self.walls, density: self.density, size_bias: self.size_bias, road: self.road, props: self.props, houses: self.houses, counts: self.counts.clone(), ..Default::default() }
     }
 
     /// The recipe of a village of these settings over `rect`.

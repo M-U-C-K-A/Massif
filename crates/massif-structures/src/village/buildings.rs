@@ -213,6 +213,9 @@ pub fn buildings(ground: &dyn Ground, area: &Area, site: &Site, roads: &Roads, r
     let road_cells = roads.cells(area);
     let mut taken: Cells = reserved.union(blocked).copied().collect();
     let mut counts: HashMap<(u16, String), u32> = HashMap::new();
+    // Village-wide, against the counts asked for.
+    let mut totals: HashMap<String, u32> = HashMap::new();
+    let wanted = |name: &str| params.counts.iter().find(|(k, _)| k == name).map(|c| c.1);
     let mut floors: Vec<i32> = Vec::new();
     let mut dwellings = 0u32;
     let want = params.houses.map(|n| n.clamp(3, 120));
@@ -238,28 +241,43 @@ pub fn buildings(ground: &dyn Ground, area: &Area, site: &Site, roads: &Roads, r
         let mut weights: Vec<(usize, f32)> = Vec::new();
         for (i, t) in theme.types.iter().enumerate() {
             let n = counts.get(&(plot.district, t.name.clone())).copied().unwrap_or(0);
-            if t.max.is_some_and(|m| n >= m) || (t.centre && plot.from_centre > 48.0) || (t.edge && plot.from_centre < edge_from) {
+            // Market stalls round the squares are the props' (a market with
+            // no share of its own).
+            if t.name == "market" && t.share <= 0.0 {
+                continue;
+            }
+            let asked = wanted(&t.name);
+            let so_far = totals.get(&t.name).copied().unwrap_or(0);
+            if asked.is_some_and(|a| so_far >= a) || (asked.is_none() && t.max.is_some_and(|m| n >= m)) || (t.centre && plot.from_centre > 48.0) || (t.edge && plot.from_centre < edge_from) {
                 continue;
             }
             if t.is_dwelling() && want.is_some_and(|w| dwellings >= w) {
                 continue;
             }
             if let Some(near) = &t.near
-                && theme.kind(near).is_some()
-                && !out.placed.iter().any(|p| &p.kind == near && dist2([p.door[0], p.door[2]], plot.door) < 56 * 56)
+                && let Some(nt) = theme.kind(near)
             {
-                continue;
+                // A market of stalls stands round the square: near it is
+                // near the square.
+                let by_square = nt.share <= 0.0 && near == "market";
+                let close = if by_square { plot.from_centre < 80.0 } else { out.placed.iter().any(|p| &p.kind == near && dist2([p.door[0], p.door[2]], plot.door) < 56 * 56) };
+                if !close {
+                    continue;
+                }
             }
             let mut share = t.share;
             if t.name == "mill" {
                 if params.mill == MillMode::None || out.placed.iter().any(|p| p.kind == "mill") {
                     continue;
                 }
-                // One mill: as likely as a farm, once.
-                share = share.max(0.08);
+                // One mill: as likely as a farm, once; by the water, where
+                // a watermill may stand, most likely.
+                let by_water = params.mill != MillMode::Wind && t.variants.iter().any(|v| v.water) && water_near(ground, plot.door[0], plot.door[1], 10);
+                share = share.max(if by_water { 0.6 } else { 0.08 });
             }
             // Those that keep to the middle come first there.
-            let mut w = share / total_share * if t.centre && n == 0 { 20.0 } else { 1.0 };
+            // A type asked for so many comes first until it has them.
+            let mut w = if asked.is_some_and(|a| so_far < a) { share.max(0.05) / total_share * 6.0 } else { share / total_share * if t.centre && n == 0 { 20.0 } else { 1.0 } };
             // Manors and large buildings as the bias asks; a manor on a
             // height.
             if t.name == "manor" {
@@ -373,6 +391,7 @@ pub fn buildings(ground: &dyn Ground, area: &Area, site: &Site, roads: &Roads, r
             }
         }
         *counts.entry((plot.district, t.name.clone())).or_default() += 1;
+        *totals.entry(t.name.clone()).or_default() += 1;
         if t.is_dwelling() {
             dwellings += 1;
         }

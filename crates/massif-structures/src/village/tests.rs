@@ -573,3 +573,18 @@ fn pack_report() {
         );
     }
 }
+
+#[test]
+fn counts_asked_for_are_built() {
+    let (_t, th) = plains();
+    let rect = BlockRect::new(0, 0, 360, 360);
+    let inside = |x: i32, z: i32| rect.contains(x, z);
+    let counts = vec![("farm".to_owned(), 5), ("church".to_owned(), 0), ("forge".to_owned(), 1), ("market".to_owned(), 2)];
+    let req = request(&th, rect, &inside, Params { houses: Some(20), counts, ..Params::default() });
+    let (st, _) = stages(None, &flat(), &req).unwrap();
+    let n = |k: &str| st.buildings.placed.iter().filter(|p| p.kind == k).count();
+    assert_eq!(n("church"), 0);
+    assert_eq!(n("forge"), 1);
+    assert_eq!(n("farm"), 5);
+    assert_eq!(st.props.placed.iter().filter(|p| p.kind == "market").count(), 2);
+}

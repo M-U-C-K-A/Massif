@@ -236,11 +236,15 @@ pub struct Params {
     pub foundation: Option<i32>,
     /// Villagers in each house, if not the theme's.
     pub villagers: Option<u32>,
+    /// How many buildings of each type (`church`, `farm`, `market`…) the
+    /// village has, where told: those many, as far as there is room, rather
+    /// than as the pack's shares draw them.
+    pub counts: Vec<(String, u32)>,
 }
 
 impl Default for Params {
     fn default() -> Self {
-        Params { houses: None, size_bias: 0.0, road: RoadType::Theme, walls: false, density: 0.6, spread: 0.5, flat: 0.7, fields: 1.0, props: 0.5, mill: MillMode::Auto, max_slope: 10, margin: 1, street_width: None, foundation: None, villagers: None }
+        Params { houses: None, size_bias: 0.0, road: RoadType::Theme, walls: false, density: 0.6, spread: 0.5, flat: 0.7, fields: 1.0, props: 0.5, mill: MillMode::Auto, max_slope: 10, margin: 1, street_width: None, foundation: None, villagers: None, counts: Vec::new() }
     }
 }
 

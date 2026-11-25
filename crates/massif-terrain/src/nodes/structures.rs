@@ -157,6 +157,7 @@ fn params_of(ctx: &Ctx) -> Params {
         street_width: (has("width") && p.int("width") > 0).then(|| p.int("width") as i32),
         foundation: None,
         villagers: None,
+        counts: Vec::new(),
     }
 }
 
