@@ -701,6 +701,7 @@ pub fn graphics_ready(render: &egui_wgpu::RenderState, window: &dyn wgpu::rwh::H
         write(&format!("also found: {}", others.join(", ")));
     }
     render.device.set_device_lost_callback(|reason, message| write(&format!("the graphics card was lost ({reason:?}): {message}")));
+    render.device.on_uncaptured_error(Arc::new(uncaptured));
     let _ = GRAPHICS.set(Graphics { api: info.backend, card });
     MARKED.store(Stage::Graphics as u8, Ordering::SeqCst);
     mark(Stage::Graphics);
@@ -719,6 +720,27 @@ pub fn graphics_ready(render: &egui_wgpu::RenderState, window: &dyn wgpu::rwh::H
 
 /// egui's answer when the window gives no image to draw on, written down
 /// while the start lasts.
+/// The window's surface could not be set up for its new size: set up again
+/// at the next frame (see [`uncaptured`]).
+static SURFACE_FAILED: AtomicBool = AtomicBool::new(false);
+
+/// What wgpu reports outside an error scope. Setting up the window's
+/// surface fails when the card does not come idle in time, busy with
+/// another program's work: that frame is skipped and the surface set up at
+/// the next, where wgpu would end the app. Everything else ends it as
+/// before: it is a mistake of Massif's.
+fn uncaptured(error: wgpu::Error) {
+    let said = error.to_string();
+    if said.contains("Surface::configure") || said.contains("Surface::get_current_texture") {
+        if !SURFACE_FAILED.swap(true, Ordering::Relaxed) {
+            write(&format!("the window's surface could not be set up, set up again at the next frame: {}", said.replace('\n', " ")));
+        }
+        return;
+    }
+    log::error!("Handling wgpu errors as fatal by default");
+    panic!("wgpu error: {error}\n");
+}
+
 pub fn surface_status(answer: Arc<dyn Fn(&wgpu::CurrentSurfaceTexture) -> egui_wgpu::SurfaceErrorAction + Send + Sync>) -> Arc<dyn Fn(&wgpu::CurrentSurfaceTexture) -> egui_wgpu::SurfaceErrorAction + Send + Sync> {
     let times = AtomicU32::new(0);
     Arc::new(move |status| {
@@ -728,8 +750,31 @@ pub fn surface_status(answer: Arc<dyn Fn(&wgpu::CurrentSurfaceTexture) -> egui_w
         if !SHOWN.load(Ordering::Relaxed) && (n <= 5 || n.is_multiple_of(50)) {
             write(&format!("the window gave no image to draw on: {status:?} ({n} times)"));
         }
+        // Its surface failed to be set up: set it up again.
+        if SURFACE_FAILED.swap(false, Ordering::Relaxed) || matches!(status, wgpu::CurrentSurfaceTexture::Validation) {
+            return egui_wgpu::SurfaceErrorAction::Reconfigure;
+        }
         answer(status)
     })
+}
+
+#[cfg(test)]
+mod surface_tests {
+    use super::*;
+
+    /// A surface that cannot be set up is set up again; any other error of
+    /// wgpu still ends the app.
+    #[test]
+    fn a_surface_error_is_not_fatal() {
+        let error = |what: &str| wgpu::Error::Validation { source: Box::new(std::io::Error::other(format!("In {what}: Failed to wait for GPU to come idle before reconfiguring the Surface"))), description: format!("Validation Error\n\nCaused by:\n  In {what}") };
+        SURFACE_FAILED.store(false, Ordering::Relaxed);
+        uncaptured(error("Surface::configure"));
+        let skip: Arc<dyn Fn(&wgpu::CurrentSurfaceTexture) -> egui_wgpu::SurfaceErrorAction + Send + Sync> = Arc::new(|_| egui_wgpu::SurfaceErrorAction::SkipFrame);
+        let status = surface_status(skip);
+        assert!(matches!(status(&wgpu::CurrentSurfaceTexture::Timeout), egui_wgpu::SurfaceErrorAction::Reconfigure));
+        assert!(matches!(status(&wgpu::CurrentSurfaceTexture::Timeout), egui_wgpu::SurfaceErrorAction::SkipFrame), "once");
+        assert!(std::panic::catch_unwind(|| uncaptured(error("Device::create_buffer"))).is_err());
+    }
 }
 
 // ---------------------------------------------------------------------------
