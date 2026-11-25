@@ -633,16 +633,15 @@ fn encode(raw: RawTile, beaches: &crate::terrains::Beaches) -> (Handle, TilePos,
             // Strengths are nibbles × 17: back to the colour.
             tile.annotations = Plane::from_vec(p.strength.iter().map(|&s| (s / 17) as u16).collect());
         }
-        // Custom annotation layers: their colour where nothing else is noted.
+        // Custom annotation layers (and the layers WorldPainter never
+        // exports): each a layer of its own, over the others noted there.
         for p in &raw.painted {
             let Conv::Note(color) = p.conv else { continue };
-            let mut notes = tile.annotations.dense().to_vec();
             for (i, &s) in p.strength.iter().enumerate() {
-                if s > 0 && notes[i] == 0 {
-                    notes[i] = color;
+                if s > 0 {
+                    tile.add_note(i, color);
                 }
             }
-            tile.annotations = Plane::from_vec(notes);
         }
         // A combined layer's terrain and biome, where it is painted at half
         // strength or more, and at random a share of the rest.
@@ -733,12 +732,16 @@ fn palette_visibility(arena: &Arena, dimension: Value, reg: &mut Registry) {
     for l in &mut reg.object_layers {
         l.hidden |= hide(&l.palette);
     }
+    for c in &mut reg.annotations.custom {
+        c.hidden |= !c.name.is_empty() && hide(&c.palette);
+    }
     // Soloed: shown alone, the palettes hidden or shown as above once the
     // solo ends.
     if let Some(name) = solo {
         let covers: Vec<u16> = reg.covers.iter().enumerate().filter(|(_, c)| c.palette == name).map(|(k, _)| k as u16 + 1).collect();
         let objects: Vec<u16> = reg.object_layers.iter().enumerate().filter(|(_, l)| l.palette == name).map(|(k, _)| k as u16 + 1).collect();
-        reg.solo(&name, &covers, &objects);
+        let notes: Vec<u16> = reg.annotations.layers().filter(|(_, c)| c.palette == name).map(|(n, _)| n).collect();
+        reg.solo(&name, &covers, &objects, &notes);
     }
 }
 
@@ -1489,7 +1492,8 @@ mod tests {
     }
 
     /// [`layered_world_with`] where the covers named in `kept_back` are set
-    /// not to be exported ("Don't export").
+    /// not to be exported ("Don't export"), sorted into WorldPainter's
+    /// palette "Placeholders".
     fn layered_world_exporting(covers: &[(&str, i32, &str, std::ops::Range<usize>)], overlays: &[(&str, i32, i32, f32, f32, bool)], kept_back: &[&str]) -> Vec<u8> {
         let mut w = StreamWriter::new();
         let null = |w: &mut StreamWriter| {
@@ -1598,7 +1602,7 @@ mod tests {
                     w.u8(TC_OBJECT).class(
                         "org.pepsoft.worldpainter.layers.groundcover.GroundCoverLayer",
                         SC_SERIALIZABLE,
-                        &[(b'I', "thickness", None), (b'Z', "export", None), (b'Z', "smooth", None), (b'L', "material", Some("Lorg/pepsoft/minecraft/Material;")), (b'L', "name", Some("Ljava/lang/String;"))],
+                        &[(b'I', "thickness", None), (b'Z', "export", None), (b'Z', "smooth", None), (b'L', "material", Some("Lorg/pepsoft/minecraft/Material;")), (b'L', "name", Some("Ljava/lang/String;")), (b'L', "palette", Some("Ljava/lang/String;"))],
                         null,
                     );
                 }
@@ -1643,6 +1647,11 @@ mod tests {
             w.string(block);
             w.u8(TC_NULL);
             w.string(name);
+            if kept_back.contains(name) {
+                w.string("Placeholders");
+            } else {
+                w.u8(TC_NULL);
+            }
             match set_desc {
                 None => {
                     let set = w.next;
@@ -1815,8 +1824,8 @@ mod tests {
         let k = reg.annotations.custom.iter().position(|c| c.name == "L/M Trees").expect("an annotation layer of its name");
         let note = massif_core::annotations::PRESETS + 1 + k as u16;
         let tile = world.dims[0].ground().view(TilePos::new(0, 0)).unwrap();
-        assert_eq!(tile.annotations.get(100 * 128 + 7), note, "marked where it was painted");
-        assert_eq!(tile.annotations.get(10 * 128 + 7), 0);
+        assert!(tile.has_note(100 * 128 + 7, note), "marked where it was painted");
+        assert_eq!(tile.notes(10 * 128 + 7).count(), 0);
         assert_eq!(tile.cover.get(100 * 128 + 7), 0, "nothing of it grows there");
     }
 
@@ -1834,6 +1843,38 @@ mod tests {
         assert!(floor.smooth && floor.is_laid());
         assert_eq!(floor.plants[0].0, "conquest:grass_block_layer[layers=8]");
         assert!(!get("Gravel").smooth);
+    }
+
+    /// WorldPainter's custom annotation layers (here layers it never
+    /// exports, which import as such) overlap: each is a layer of its own,
+    /// marked wherever it was painted, over the others; and each keeps the
+    /// palette it was sorted into, which the Layers panel shows it in.
+    #[test]
+    fn annotation_layers_overlap_and_keep_their_palettes() {
+        let covers = [("Moss", 1, "minecraft:moss_carpet", 0..32), ("Tundra", 1, "minecraft:fern", 0..64), ("Big trees", 1, "minecraft:fern", 32..96), ("Flow", 1, "minecraft:fern", 48..128)];
+        let bytes = layered_world_exporting(&covers, &[], &["Tundra", "Big trees", "Flow"]);
+        let progress = ImportProgress::default();
+        let (world, _) = import_stream(&bytes[..], &progress).unwrap();
+        let notes = &world.registry.annotations;
+        let n = |name: &str| notes.layers().find(|(_, c)| c.name == name).map(|(n, _)| n).expect(name);
+        let (tundra, big, flow) = (n("Tundra"), n("Big trees"), n("Flow"));
+        for name in ["Tundra", "Big trees", "Flow"] {
+            assert!(notes.is_layer(n(name)));
+            assert_eq!(notes.layers().find(|(_, c)| c.name == name).unwrap().1.palette, "Placeholders", "{name} in its palette");
+        }
+        let tile = world.dims[0].ground().view(TilePos::new(0, 0)).unwrap();
+        let sorted = |mut v: Vec<u16>| {
+            v.sort();
+            v
+        };
+        let at = |row: usize| sorted(tile.notes(row * 128 + 7).collect());
+        assert_eq!(at(10), vec![tundra]);
+        assert_eq!(at(40), sorted(vec![tundra, big]), "two layers on one column");
+        assert_eq!(at(50), sorted(vec![tundra, big, flow]), "three");
+        assert_eq!(at(100), vec![flow]);
+        // Kept as they are through a save.
+        let back = massif_core::Tile::decode(&tile.encode()).unwrap();
+        assert_eq!(back.notes(50 * 128 + 7).count(), 3);
     }
 
     /// The memory a large imported map holds: as stored now, and with every

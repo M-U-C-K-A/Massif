@@ -65,6 +65,7 @@ impl TileSummary {
                         Kind::Cover => Painted::Cover,
                         Kind::Objects => Painted::Objects,
                         Kind::Understory => Painted::Understory,
+                        Kind::Note => Painted::Annotation,
                     };
                     let m = Match::Layer(p, e.layer);
                     if !found.iter().any(|f| f.0 == m) {

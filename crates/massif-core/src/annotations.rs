@@ -33,11 +33,15 @@ pub struct CustomColor {
     /// Hidden on the map and in 3D (its marks are kept).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,
+    /// The palette it is sorted into in the Layers panel, as an annotation
+    /// layer ("": none, it stays with the annotations).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub palette: String,
 }
 
 impl CustomColor {
     pub fn new(rgb: [u8; 3]) -> Self {
-        Self { rgb, opacity: DEFAULT_OPACITY, name: String::new(), hidden: false }
+        Self { rgb, opacity: DEFAULT_OPACITY, name: String::new(), hidden: false, palette: String::new() }
     }
 }
 
@@ -103,6 +107,13 @@ impl AnnotationPalette {
     /// number.
     pub fn layers(&self) -> impl Iterator<Item = (u16, &CustomColor)> + '_ {
         self.custom.iter().enumerate().filter(|(_, c)| !c.name.is_empty()).map(|(k, c)| (k as u16 + PRESETS + 1, c))
+    }
+
+    /// Whether `n` is an annotation layer (a colour of the map's own with
+    /// a name): one that overlaps the others on a column rather than
+    /// taking their place.
+    pub fn is_layer(&self, n: u16) -> bool {
+        n > PRESETS && self.custom.get((n - PRESETS - 1) as usize).is_some_and(|c| !c.name.is_empty())
     }
 
     /// The annotation layer `n`, if it is one.

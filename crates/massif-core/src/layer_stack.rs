@@ -36,6 +36,11 @@ pub enum Kind {
     Cover = 0,
     Objects = 1,
     Understory = 2,
+    /// An annotation layer of the map's own (a named colour of
+    /// [`crate::annotations::AnnotationPalette::custom`]): unlike the other
+    /// slots, several cover the same column, each painted and rubbed out
+    /// on its own, as WorldPainter's custom annotation layers.
+    Note = 3,
 }
 
 impl Kind {
@@ -44,6 +49,7 @@ impl Kind {
             0 => Some(Kind::Cover),
             1 => Some(Kind::Objects),
             2 => Some(Kind::Understory),
+            3 => Some(Kind::Note),
             _ => None,
         }
     }
@@ -159,6 +165,22 @@ impl LayerStacks {
         }
         let mut list: Vec<Entry> = self.entries(i).collect();
         f(&mut list);
+        self.set(i, &list);
+    }
+
+    /// The annotation layers on column `i`, as they were painted.
+    pub fn notes(&self, i: usize) -> impl Iterator<Item = u16> + '_ {
+        self.entries(i).filter(|e| e.kind == Kind::Note).map(|e| e.layer)
+    }
+
+    /// Put `entry` on column `i`, on top of those there; nothing when that
+    /// layer of its slot is there already.
+    pub fn add(&mut self, i: usize, entry: Entry) {
+        if self.has(i) && self.entries(i).any(|e| e.kind == entry.kind && e.layer == entry.layer) {
+            return;
+        }
+        let mut list: Vec<Entry> = if self.has(i) { self.entries(i).collect() } else { Vec::new() };
+        list.push(entry);
         self.set(i, &list);
     }
 

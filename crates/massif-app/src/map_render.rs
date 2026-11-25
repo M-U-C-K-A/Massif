@@ -73,6 +73,9 @@ pub struct Sample {
     pub objects: u16,
     /// Annotation of the column (on the ground level); 0 = none.
     pub annotation: u8,
+    /// The annotation layers over it (the first three; 0 for none), each
+    /// drawn over the others: they overlap, as WorldPainter's custom ones.
+    pub notes: [u8; 3],
     /// Sub-canopy object layer painted on the surface; 0 = none.
     pub understory: u16,
     /// Tree size asked for on the surface; 0 = any.
@@ -94,6 +97,7 @@ impl Sample {
         cover_under: 0,
         objects: 0,
         annotation: 0,
+        notes: [0; 3],
         understory: 0,
         size: 0,
         pockets: 0,
@@ -117,6 +121,20 @@ impl Sample {
     }
 }
 
+/// The annotation layers over column `cell`'s annotation (see
+/// [`Sample::notes`]).
+#[inline]
+pub fn note_layers(g: &massif_core::Tile, cell: usize) -> [u8; 3] {
+    let mut out = [0u8; 3];
+    if g.stacked.has(cell) {
+        let plane = g.annotations.get(cell);
+        for (o, n) in out.iter_mut().zip(g.stacked.notes(cell).filter(|&n| n != plane)) {
+            *o = n.min(massif_core::annotations::MAX) as u8;
+        }
+    }
+    out
+}
+
 #[inline]
 #[allow(clippy::too_many_arguments)]
 fn ground_sample(top: f32, terrain: u16, fluid: i16, biome: u16, (cover, cover_under): (u16, u16), objects: u16, annotation: u16, understory: u16, size: u16, pockets: u16, slabs: u16) -> Sample {
@@ -134,6 +152,7 @@ fn ground_sample(top: f32, terrain: u16, fluid: i16, biome: u16, (cover, cover_u
         cover_under,
         objects,
         annotation: annotation as u8,
+        notes: [0; 3],
         understory,
         size: size as u8,
         pockets,
@@ -154,7 +173,7 @@ impl ColumnSampler {
     pub fn sample(&mut self, stack: &TileStack, cell: usize) -> Sample {
         if stack.is_ground_only() {
             let g = stack.ground();
-            return ground_sample(
+            return Sample { notes: note_layers(g, cell), ..ground_sample(
                 g.top.get(cell),
                 g.terrain.get(cell),
                 g.fluid.get(cell),
@@ -166,7 +185,7 @@ impl ColumnSampler {
                 g.sizes.get(cell),
                 g.pockets.get(cell),
                 g.slabs.get(cell),
-            );
+            ) };
         }
         stack.spans(cell, &mut self.spans);
         stack.fluids(cell, &self.spans, &mut self.fluids);
@@ -236,6 +255,7 @@ impl ColumnSampler {
             cover_under: stack.surface_under(cell, &top).last().copied().unwrap_or(0),
             objects: stack.surface_objects(cell, &top),
             annotation: stack.ground().annotations.get(cell) as u8,
+            notes: note_layers(stack.ground(), cell),
             understory: stack.surface_understory(cell, &top),
             size: stack.surface_size(cell, &top) as u8,
             pockets: stack.ground().pockets.get(cell),
@@ -256,7 +276,7 @@ pub struct Columns {
     /// The fluids of cell `i` likewise: from, to, and whether lava.
     fstart: Vec<u32>,
     fluids: Vec<(i32, i32, bool)>,
-    annotations: Vec<u8>,
+    annotations: Vec<(u8, [u8; 3])>,
     cave_biomes: massif_core::caves::CaveBiomes,
 }
 
@@ -278,7 +298,7 @@ impl Columns {
             c.fluids.extend(caves.iter().map(|&(a, b, f)| (a, b, f == massif_core::voxel::Fluid::Lava)));
             stack.fluids(cell, &spans, &mut ground);
             c.fluids.extend(ground.iter().map(|&(a, b)| (a, b, false)));
-            c.annotations.push(stack.ground().annotations.get(cell) as u8);
+            c.annotations.push((stack.ground().annotations.get(cell) as u8, note_layers(stack.ground(), cell)));
         }
         c.start.push(c.spans.len() as u32);
         c.fstart.push(c.fluids.len() as u32);
@@ -292,7 +312,8 @@ impl Columns {
     pub fn cut(&self, cell: usize, y: i32) -> Sample {
         let spans = &self.spans[self.start[cell] as usize..self.start[cell + 1] as usize];
         let Some(last) = spans.last().copied() else { return Sample::EMPTY };
-        let sample = Sample { annotation: self.annotations[cell], ..Sample::EMPTY };
+        let (annotation, notes) = self.annotations[cell];
+        let sample = Sample { annotation, notes, ..Sample::EMPTY };
         if y >= last.y1 {
             return Sample { height: last.top, terrain: last.terrain.0, flags: FLAG_CUT_SKY, ..sample };
         }
@@ -342,7 +363,7 @@ impl SurfaceGrid {
             (0..TILE_AREA)
                 .map(|i| {
                     let under = if g.stacked.has(i) { g.stacked.covers_under(i).last().copied().unwrap_or(0) } else { 0 };
-                    ground_sample(top[i], terrain[i], fluid[i], biome[i], (cover[i], under), objects[i], annotations[i], understory[i], sizes[i], pockets[i], slabs[i])
+                    Sample { notes: note_layers(g, i), ..ground_sample(top[i], terrain[i], fluid[i], biome[i], (cover[i], under), objects[i], annotations[i], understory[i], sizes[i], pockets[i], slabs[i]) }
                 })
                 .collect()
         } else {
@@ -1066,10 +1087,12 @@ impl<'a> Colorizer<'a> {
             out = mix(out, color.map(|v| v as f32), 0.6);
         }
         // Annotations: marks of colour over everything else.
-        if self.style.annotations
-            && let Some(Some((color, alpha))) = self.notes.get(c.annotation as usize)
-        {
-            out = mix(out, *color, *alpha);
+        if self.style.annotations {
+            for n in std::iter::once(c.annotation).chain(c.notes) {
+                if let Some(Some((color, alpha))) = self.notes.get(n as usize) {
+                    out = mix(out, *color, *alpha);
+                }
+            }
         }
 
         if let Some(lines) = contour {
@@ -2682,6 +2705,39 @@ mod tests {
         let blue = at(&full, 0, 0);
         assert!(blue.b() > blue.r() + 60, "the map's own colour: {blue:?}");
         assert_eq!(at(&full, 60, 0), at(&none, 60, 0), "a colour at 0 % shows nothing");
+    }
+
+    /// Annotation layers overlap on the map: where two cover the same
+    /// columns, both their colours show, each over the land; one hidden,
+    /// the other alone.
+    #[test]
+    fn annotation_layers_overlap_on_the_map() {
+        let mut w = generate(&GenParams { tiles_x: 2, tiles_z: 2, landform: Landform::Plains, seed: 3, ..GenParams::default() });
+        let hard = |radius: f32| Brush { shape: BrushShape::Circle, radius, profile: Profile::Constant, strength: 1.0, rotation: 0.0, mask: None, filter: None };
+        let red = w.registry.annotations.add_layer("Tundra", [230, 30, 30]).unwrap();
+        let blue = w.registry.annotations.add_layer("Big trees", [30, 30, 230]).unwrap();
+        w.registry.annotations.set_opacity(red, 60);
+        w.registry.annotations.set_opacity(blue, 60);
+        let mut h = History::default();
+        h.begin("mark", 0);
+        {
+            let mut e = h.edit(&mut w, 0);
+            ops::paint_annotation_layer(&mut e, &hard(30.0), -20.0, 0.0, red, 1);
+            ops::paint_annotation_layer(&mut e, &hard(30.0), 20.0, 0.0, blue, 2);
+        }
+        h.commit();
+        let at = |img: &ColorImage, x: i32, z: i32| img.pixels[(z + 128) as usize * img.width() + (x + 128) as usize];
+        let style = |reg: &Registry| MapStyle { notes: reg.annotations.fingerprint(), ..MapStyle::default() };
+        let both = render_region(&w.dims[0], &w.registry, 63.0, style(&w.registry), 0, -128, -128, 2, 2);
+        save("map-annotation-layers-overlap.png", &both);
+        let (left, middle, right) = (at(&both, -40, 0), at(&both, 0, 0), at(&both, 40, 0));
+        assert!(left.r() > left.b() + 60 && right.b() > right.r() + 60, "each alone: {left:?} {right:?}");
+        assert!(middle.r() > 70 && middle.b() > 70 && middle.g() < middle.r().min(middle.b()), "both where they overlap: {middle:?}");
+        let mut one = w.registry.clone();
+        one.annotations.layer_mut(blue).unwrap().hidden = true;
+        let alone = render_region(&w.dims[0], &one, 63.0, style(&one), 0, -128, -128, 2, 2);
+        let m = at(&alone, 0, 0);
+        assert!(m.r() > m.b() + 60, "the other hidden, the first alone: {m:?}");
     }
 
     /// The contour lines' intervals follow the zoom: the one chosen close

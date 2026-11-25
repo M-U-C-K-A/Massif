@@ -498,6 +498,7 @@ fn compose_area(dim: &Dimension, x0: i32, z0: i32, w: usize, d: usize, mode: Map
                     } else {
                         // The annotation, which tints the top in any mode.
                         top.annotation = stack.ground().annotations.get(cell) as u8;
+                        top.notes = crate::map_render::note_layers(stack.ground(), cell);
                     }
                     if let Some(t) = sp.last() {
                         cover = stack.surface_cover(cell, t);
@@ -720,9 +721,11 @@ impl Colors<'_> {
     #[allow(clippy::too_many_arguments)]
     fn top(&self, terrain: u16, y0: i32, y1: i32, x: i32, z: i32, slope: f32, sample: &Sample, cover: u16, wet: bool) -> Skin {
         let mut skin = self.bare_top(terrain, y0, y1, x, z, slope, sample, cover, wet);
-        if let Some(Some((c, alpha))) = self.notes.get(sample.annotation as usize) {
-            skin.top = std::array::from_fn(|k| (skin.top[k] as f32 + (c[k] as f32 - skin.top[k] as f32) * alpha).round() as u8);
-            skin.top_mat = 0;
+        for n in std::iter::once(sample.annotation).chain(sample.notes) {
+            if let Some(Some((c, alpha))) = self.notes.get(n as usize) {
+                skin.top = std::array::from_fn(|k| (skin.top[k] as f32 + (c[k] as f32 - skin.top[k] as f32) * alpha).round() as u8);
+                skin.top_mat = 0;
+            }
         }
         skin
     }

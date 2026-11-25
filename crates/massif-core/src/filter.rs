@@ -185,7 +185,13 @@ pub struct Column {
     /// The layers painted on the column, by [`Painted`] (0 for none); read
     /// only when the filter asks for layers.
     pub painted: [u16; 5],
+    /// The annotation layers over the column's annotation (the first
+    /// [`NOTES`] of them; 0 for none), which overlap it.
+    pub notes: [u16; NOTES],
 }
+
+/// How many annotation layers on one column a filter tells apart.
+pub const NOTES: usize = 8;
 
 impl Filter {
     /// Whether any test is on.
@@ -273,6 +279,7 @@ impl Filter {
             Match::Biome(b) => c.biome == b,
             Match::Water => c.wet,
             Match::Land => !c.wet,
+            Match::Layer(Painted::Annotation, n) => c.painted[Painted::Annotation as usize] == n || (n != 0 && c.notes.contains(&n)),
             Match::Layer(p, n) => c.painted[p as usize] == n,
         }
     }
@@ -560,10 +567,16 @@ impl Surface {
                 let flat = stack.is_ground_only().then(|| (ground.top.dense(), ground.terrain.dense()));
                 let (fluids, biomes) = (ground.fluid.dense(), ground.biome.dense());
                 // The layers, of the level whose surface the top is.
-                let painted = |cell: usize, spans: &[Span]| -> [u16; 5] {
+                let painted = |cell: usize, spans: &[Span]| -> ([u16; 5], [u16; NOTES]) {
                     let mut out = [0u16; 5];
+                    let mut notes = [0u16; NOTES];
                     if !layers {
-                        return out;
+                        return (out, notes);
+                    }
+                    if ground.stacked.has(cell) {
+                        for (slot, n) in notes.iter_mut().zip(ground.stacked.notes(cell)) {
+                            *slot = n;
+                        }
                     }
                     let level = match (stack.is_ground_only(), spans.last()) {
                         (false, Some(top)) => stack.surface_level(cell, top).unwrap_or(0),
@@ -575,7 +588,7 @@ impl Surface {
                         let from = if matches!(p, Painted::Pockets | Painted::Annotation) { ground } else { tile };
                         out[p as usize] = p.plane(from).get(cell);
                     }
-                    out
+                    (out, notes)
                 };
                 for z in clip.z0..clip.z1 {
                     let row = &mut band[(z - z0) as usize * width..][..width];
@@ -589,6 +602,7 @@ impl Surface {
                             },
                         };
                         let fluid = fluids[cell];
+                        let (painted, notes) = painted(cell, &spans);
                         row[(x - rect.x0) as usize] = Some(Column {
                             height,
                             terrain,
@@ -597,7 +611,8 @@ impl Surface {
                             slope: 0.0,
                             relief: 0.0,
                             aspect: None,
-                            painted: painted(cell, &spans),
+                            painted,
+                            notes,
                         });
                     }
                 }
@@ -772,6 +787,7 @@ mod tests {
             relief: 0.0,
             aspect: None,
             painted: [0; 5],
+            notes: [0; NOTES],
         }
     }
 

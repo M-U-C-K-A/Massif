@@ -566,6 +566,9 @@ pub struct Solo {
     pub hidden_covers: Vec<u16>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_objects: Vec<u16>,
+    /// The annotation layers hidden before it, by number.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_notes: Vec<u16>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1089,12 +1092,19 @@ impl Registry {
     /// from 1), as WorldPainter's solo of `name`: every other cover and
     /// object layer hidden, the visibility from before kept to come back.
     /// Another solo already on keeps the visibility from before it.
-    pub fn solo(&mut self, name: &str, covers: &[u16], objects: &[u16]) {
+    pub fn solo(&mut self, name: &str, covers: &[u16], objects: &[u16], notes: &[u16]) {
         let before = self.solo.take().unwrap_or_else(|| Solo {
             name: String::new(),
             hidden_covers: self.covers.iter().enumerate().filter(|(_, c)| c.hidden).map(|(k, _)| k as u16 + 1).collect(),
             hidden_objects: self.object_layers.iter().enumerate().filter(|(_, l)| l.hidden).map(|(k, _)| k as u16 + 1).collect(),
+            hidden_notes: self.annotations.layers().filter(|(_, c)| c.hidden).map(|(n, _)| n).collect(),
         });
+        let layers: Vec<u16> = self.annotations.layers().map(|(n, _)| n).collect();
+        for n in layers {
+            if let Some(c) = self.annotations.layer_mut(n) {
+                c.hidden = !notes.contains(&n);
+            }
+        }
         for (k, c) in self.covers.iter_mut().enumerate() {
             c.hidden = !covers.contains(&(k as u16 + 1));
         }
@@ -1113,6 +1123,12 @@ impl Registry {
         }
         for (k, l) in self.object_layers.iter_mut().enumerate() {
             l.hidden = before.hidden_objects.contains(&(k as u16 + 1));
+        }
+        let layers: Vec<u16> = self.annotations.layers().map(|(n, _)| n).collect();
+        for n in layers {
+            if let Some(c) = self.annotations.layer_mut(n) {
+                c.hidden = before.hidden_notes.contains(&n);
+            }
         }
     }
 }

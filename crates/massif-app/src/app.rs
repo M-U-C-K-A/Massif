@@ -5923,7 +5923,7 @@ impl MassifApp {
                             self.tools.combined = n as u16;
                             crate::panels::combined_editor(ui, &mut self.tools, &mut self.doc);
                         }
-                        Kind::Mix => {}
+                        Kind::Mix | Kind::Note => {}
                     }); }
                     ui.add_space(10.0);
                     ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {

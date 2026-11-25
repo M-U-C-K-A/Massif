@@ -1206,7 +1206,7 @@ pub fn tile_placements(reg: &Registry, mat: &Materializer, seed: u64, lava: bool
                 match e.kind {
                     crate::layer_stack::Kind::Objects => painted.push((false, e.layer)),
                     crate::layer_stack::Kind::Understory => painted.push((true, e.layer)),
-                    crate::layer_stack::Kind::Cover => {}
+                    crate::layer_stack::Kind::Cover | crate::layer_stack::Kind::Note => {}
                 }
             }
         }

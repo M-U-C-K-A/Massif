@@ -307,7 +307,7 @@ what was not carried over.
 | Underground pockets layer | Underground pockets of the same blocks, as frequent and as large, between the same heights |
 | Combined layer | A combined layer: its terrain (a custom one from the material written with it), its biome, and the first layer of each slot it holds at its factor; the others it holds are layers of their own |
 | Tunnel and floating layers | Not carried over: Massif carves and raises land with Carve and Solid levels |
-| Custom annotation layers | Not carried over: Massif's annotations are fifteen colours |
+| Custom annotation layers | Not carried over from a `.layer` file; a `.world` brings them in as annotation layers, overlapping, in their palettes |
 
 Not carried over either, and said in the report: the entities of a
 custom object layer's objects (an object of air or entities only is
@@ -325,7 +325,11 @@ but other settings stays as it is, the file's becoming a layer of its own
   layer's number in the registry (`TerrainId`, `BiomeId`,
   `Registry::covers`, `Registry::object_layers`, `Registry::pockets`; for
   annotations 1 to 15, WorldPainter's colours, then the map's own in
-  `Registry::annotations`, up to 255, each with its opacity). A plane is written only where it holds
+  `Registry::annotations`, up to 255, each with its opacity). Annotation
+  layers (the map's own colours with a name) overlap, so they are not in
+  the plane but in the column's stacked layers (`Tile::stacked`, entries of
+  `layer_stack::Kind::Note`); `Tile::notes` gives every annotation of a
+  column, the plane's first. A plane is written only where it holds
   something, so maps without it are unchanged, and a version that does not
   know a plane keeps it as it read it.
 - Every slot is painted by `ops::paint_plane`: the brush, its dab, the

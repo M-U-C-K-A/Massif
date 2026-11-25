@@ -561,6 +561,7 @@ impl Remap {
         t.cover = map_plane(&t.cover, |v| Self::read(&self.covers, v));
         t.stacked.renumber(|kind, n| match kind {
             crate::layer_stack::Kind::Cover => Self::read(&self.covers, n),
+            crate::layer_stack::Kind::Note => n,
             _ => Self::read(&self.layers, n),
         });
         t.objects = map_plane(&t.objects, |v| Self::read(&self.layers, v));

@@ -554,6 +554,14 @@ fn note_layer(arena: &Arena, key: Value, reg: &mut Registry) -> Conv {
             palette.custom.len() - 1
         }
     };
+    // Sorted into its WorldPainter palette, as the other custom layers
+    // (the Layers panel lists the palettes its layers name).
+    let sorted = arena.field(key, "palette").and_then(|v| arena.string(v)).map_or_else(String::new, |n| n.trim().to_owned());
+    if let Some(c) = reg.annotations.custom.get_mut(k)
+        && c.palette.is_empty()
+    {
+        c.palette = sorted;
+    }
     Conv::Note((massif_core::annotations::PRESETS as usize + 1 + k) as u16)
 }
 

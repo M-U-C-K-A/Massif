@@ -23,6 +23,9 @@ pub enum Kind {
     Pockets,
     /// A combined layer, by number.
     Combined,
+    /// An annotation layer, by its annotation number (see
+    /// [`massif_core::annotations::AnnotationPalette::layers`]).
+    Note,
 }
 
 /// What the panel keeps between frames: the layer being renamed.
@@ -45,8 +48,6 @@ pub struct LayersUi {
     /// A layer to find on the map (Find in its menu): the window moves the
     /// map to the next place it is painted.
     pub find: Option<massif_core::filter::Match>,
-    /// The annotation layer being renamed: its number, and the text typed.
-    pub rename_note: Option<(u16, String)>,
 }
 
 /// What one WorldPainter `.layer` file became, in words, for its report.
@@ -214,6 +215,8 @@ enum Action {
     /// Show only this layer (WorldPainter's solo); again, the layers as
     /// they were.
     Solo(Kind, usize),
+    /// An annotation layer's colour and opacity (percent).
+    NoteLook(u16, [u8; 3], u8),
     /// The layers shown as they were before the solo.
     Unsolo,
     Find(massif_core::filter::Match),
@@ -268,7 +271,7 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
         experimental(ui);
     });
     ui.add_space(6.0);
-    let before = (doc.world.registry.covers.clone(), doc.world.registry.object_layers.clone(), doc.world.registry.pockets.clone(), doc.world.registry.combined.clone(), doc.world.registry.palettes.clone());
+    let before = (doc.world.registry.covers.clone(), doc.world.registry.object_layers.clone(), doc.world.registry.pockets.clone(), doc.world.registry.combined.clone(), doc.world.registry.palettes.clone(), doc.world.registry.annotations.clone());
     let mut said = None;
     let mut actions = Vec::new();
 
@@ -418,6 +421,27 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     pockets.sort_by_key(|(order, e)| (*order, e.id));
     let pockets: Vec<Entry> = pockets.into_iter().map(|p| p.1).collect();
 
+    // Annotation layers: named colours of the map's, each a layer of its
+    // own that overlaps the others.
+    let notes: Vec<Entry> = reg
+        .annotations
+        .layers()
+        .map(|(n, c)| Entry {
+            kind: Kind::Note,
+            id: n as usize,
+            name: c.name.clone(),
+            color: c.rgb,
+            detail: format!("{}%", c.opacity),
+            tip: tr!("An annotation layer: marks of its own, over the others, never exported").to_owned(),
+            shown: Some(!c.hidden),
+            locked: None,
+            find: Some(massif_core::filter::Match::Layer(massif_core::filter::Painted::Annotation, n)),
+            selected: tools.tool == Tool::Annotate && tools.annotation == n,
+            palette: c.palette.clone(),
+            solo: false,
+        })
+        .collect();
+
     // Each section's list, and what of it each palette holds, in the order
     // of the sections: a layer moves up and down among its neighbours of
     // the same list.
@@ -429,8 +453,8 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
         }
         v
     };
-    let (combined, covers, base, under) = (mark(combined), mark(covers), mark(base), mark(under));
-    let sections = [(Kind::Combined, false, combined), (Kind::Mix, false, mixes), (Kind::Cover, false, covers), (Kind::Objects, false, base), (Kind::Objects, true, under), (Kind::Pockets, false, pockets)];
+    let (combined, covers, base, under, notes) = (mark(combined), mark(covers), mark(base), mark(under), mark(notes));
+    let sections = [(Kind::Combined, false, combined), (Kind::Mix, false, mixes), (Kind::Cover, false, covers), (Kind::Objects, false, base), (Kind::Objects, true, under), (Kind::Pockets, false, pockets), (Kind::Note, false, notes)];
     let names = palette_names(&doc.world.registry, &tools.pattern.saved);
     let mut lists: Vec<(Kind, bool, Vec<Entry>)> = Vec::new();
     let mut grouped: Vec<Vec<usize>> = vec![Vec::new(); names.len()];
@@ -569,7 +593,7 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     // layers (named colours of the map's) listed under them.
     ui.add_space(8.0);
     let mut add_note = false;
-    ui.horizontal(|ui| {
+    let at = ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             crate::panels::annotations_eye(ui, tools);
             add_note = ui.add(egui::Button::new(RichText::new(theme::glyph(Icon::Plus).to_string()).size(11.5)).frame(false)).on_hover_text(tr!("A new annotation layer, with its own name and colour")).clicked();
@@ -577,7 +601,10 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                 ui.add(egui::Label::new(RichText::new(format!("{}  {}", theme::glyph(Icon::PenLine), tr!("Annotations").to_uppercase())).size(10.5).strong().color(pal.weak)).truncate());
             });
         });
-    });
+    })
+    .response
+    .rect;
+    take_drop(ui, at, &mut actions);
     if add_note {
         let palette = &mut doc.world.registry.annotations;
         let name = palette.free_name(tr!("Annotations"));
@@ -587,7 +614,7 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
         if let Some(n) = palette.add_layer(&name, rgb) {
             tools.annotation = n;
             tools.select(Tool::Annotate);
-            state.rename_note = Some((n, name));
+            actions.push(Action::Rename(Kind::Note, n as usize, name));
             doc.mark_changed();
         }
     }
@@ -595,9 +622,7 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
         tools.annotation = n;
         tools.select(Tool::Annotate);
     }
-    if annotation_layers(ui, tools, doc, state) {
-        doc.mark_changed();
-    }
+    list(ui, &lists[section(Kind::Note, false)].2, state, &names, &mut actions);
     hint(ui, tr!("Marks on the map, to plan it, as in WorldPainter: never exported."));
     hint(ui, tr!("+ makes an annotation layer of its own, named and shown or hidden on its own."));
 
@@ -607,80 +632,10 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     for action in actions {
         apply(action, tools, doc, state, &lists);
     }
-    if (doc.world.registry.covers.clone(), doc.world.registry.object_layers.clone(), doc.world.registry.pockets.clone(), doc.world.registry.combined.clone(), doc.world.registry.palettes.clone()) != before {
+    if (doc.world.registry.covers.clone(), doc.world.registry.object_layers.clone(), doc.world.registry.pockets.clone(), doc.world.registry.combined.clone(), doc.world.registry.palettes.clone(), doc.world.registry.annotations.clone()) != before {
         doc.mark_changed();
     }
     said
-}
-
-/// The annotation layers, a row each: its colour, its name (a click paints
-/// with it, a double-click renames it), its eye; its menu sets its colour
-/// and opacity. Returns whether one changed.
-fn annotation_layers(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, state: &mut LayersUi) -> bool {
-    let pal = Palette::of(ui);
-    let mut changed = false;
-    let layers: Vec<u16> = doc.world.registry.annotations.layers().map(|(n, _)| n).collect();
-    for n in layers {
-        let picked = tools.tool == Tool::Annotate && tools.annotation == n;
-        ui.horizontal(|ui| {
-            let Some(layer) = doc.world.registry.annotations.layer_mut(n) else { return };
-            let (rect, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
-            ui.painter().rect(rect, theme::TILE_RADIUS / 2, theme::rgb(layer.rgb).gamma_multiply(if layer.hidden { 0.35 } else { 1.0 }), Stroke::new(1.0, pal.border), StrokeKind::Inside);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let (icon, color) = if layer.hidden { (Icon::EyeOff, pal.weak) } else { (Icon::Eye, pal.text) };
-                let tip = if layer.hidden { tr!("Show this annotation layer") } else { tr!("Hide this annotation layer (its marks are kept)") };
-                if ui.add(egui::Button::new(RichText::new(theme::glyph(icon).to_string()).size(12.0).color(color)).frame(false)).on_hover_text(tip).clicked() {
-                    layer.hidden = !layer.hidden;
-                    changed = true;
-                }
-                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| match &mut state.rename_note {
-                    Some((k, text)) if *k == n => {
-                        let edit = ui.add(egui::TextEdit::singleline(text).desired_width(ui.available_width()));
-                        if !edit.has_focus() && !edit.lost_focus() {
-                            edit.request_focus();
-                        }
-                        if edit.lost_focus() {
-                            let name = text.trim();
-                            if !name.is_empty() && name != layer.name {
-                                layer.name = name.to_owned();
-                                changed = true;
-                            }
-                            state.rename_note = None;
-                        }
-                    }
-                    _ => {
-                        let label = ui.add(egui::Label::new({
-                            let t = RichText::new(&layer.name).color(if layer.hidden { pal.weak } else if picked { pal.accent } else { pal.text });
-                            if picked { t.strong() } else { t }
-                        }).truncate().sense(Sense::click()));
-                        if label.double_clicked() {
-                            state.rename_note = Some((n, layer.name.clone()));
-                        } else if label.clicked() {
-                            tools.annotation = n;
-                            tools.select(Tool::Annotate);
-                        }
-                        label.context_menu(|ui| {
-                            crate::widgets::row(ui, tr!("Colour"), |ui| {
-                                if egui::widgets::color_picker::color_edit_button_srgb(ui, &mut layer.rgb).changed() {
-                                    changed = true;
-                                }
-                            });
-                            crate::widgets::row(ui, tr!("Opacity"), |ui| {
-                                if ui.add(crate::widgets::Field::new(&mut layer.opacity, 0..=100).suffix("%").width(96.0)).changed() {
-                                    changed = true;
-                                }
-                            });
-                            if ui.button(tr!("Rename")).clicked() {
-                                state.rename_note = Some((n, layer.name.clone()));
-                                ui.close();
-                            }
-                        });
-                    }
-                });
-            });
-        });
-    }
-    changed
 }
 
 /// A section's title, without a button; returns where it is.
@@ -746,7 +701,8 @@ pub fn palette_names(reg: &massif_core::registry::Registry, mixes: &[crate::tool
         .chain(mixes.iter().map(|m| m.palette.as_str()))
         .chain(reg.covers.iter().filter(|c| !c.removed).map(|c| c.palette.as_str()))
         .chain(reg.object_layers.iter().filter(|l| !l.removed).map(|l| l.palette.as_str()))
-        .chain(reg.pockets.iter().filter(|p| !p.removed).map(|p| p.palette.as_str()));
+        .chain(reg.pockets.iter().filter(|p| !p.removed).map(|p| p.palette.as_str()))
+        .chain(reg.annotations.layers().map(|(_, c)| c.palette.as_str()));
     for name in named {
         if !name.is_empty() && !names.iter().any(|n| n == name) {
             names.push(name.to_owned());
@@ -1027,7 +983,7 @@ fn row(ui: &mut Ui, e: &Entry, state: &mut LayersUi, names: &[String], actions: 
         actions.push(Action::Paint(e.kind, e.id));
     }
     response.context_menu(|ui| {
-        if e.kind != Kind::Mix && crate::widgets::button(ui, theme::with_icon(Icon::SlidersHorizontal, tr!("Settings…"))).clicked() {
+        if !matches!(e.kind, Kind::Mix | Kind::Note) && crate::widgets::button(ui, theme::with_icon(Icon::SlidersHorizontal, tr!("Settings…"))).clicked() {
             actions.push(Action::Settings(e.kind, e.id));
             ui.close();
         }
@@ -1045,17 +1001,28 @@ fn row(ui: &mut Ui, e: &Entry, state: &mut LayersUi, names: &[String], actions: 
             actions.push(Action::Rename(e.kind, e.id, e.name.clone()));
             ui.close();
         }
-        if crate::widgets::button(ui, theme::with_icon(Icon::Copy, tr!("Duplicate"))).clicked() {
-            actions.push(Action::Duplicate(e.kind, e.id));
-            ui.close();
-        }
-        if crate::widgets::button(ui, theme::with_icon(Icon::ArrowUp, tr!("Move up"))).clicked() {
-            actions.push(Action::Move(e.kind, e.id, true));
-            ui.close();
-        }
-        if crate::widgets::button(ui, theme::with_icon(Icon::ArrowDown, tr!("Move down"))).clicked() {
-            actions.push(Action::Move(e.kind, e.id, false));
-            ui.close();
+        if e.kind == Kind::Note {
+            // Its colour and opacity, as the swatches' menu sets them.
+            let (mut rgb, mut opacity) = (e.color, e.detail.trim_end_matches('%').parse::<u8>().unwrap_or(massif_core::annotations::DEFAULT_OPACITY));
+            let mut changed = false;
+            crate::widgets::row(ui, tr!("Colour"), |ui| changed |= egui::widgets::color_picker::color_edit_button_srgb(ui, &mut rgb).changed());
+            crate::widgets::row(ui, tr!("Opacity"), |ui| changed |= ui.add(crate::widgets::Field::new(&mut opacity, 0..=100).suffix("%").width(96.0)).changed());
+            if changed {
+                actions.push(Action::NoteLook(e.id as u16, rgb, opacity));
+            }
+        } else {
+            if crate::widgets::button(ui, theme::with_icon(Icon::Copy, tr!("Duplicate"))).clicked() {
+                actions.push(Action::Duplicate(e.kind, e.id));
+                ui.close();
+            }
+            if crate::widgets::button(ui, theme::with_icon(Icon::ArrowUp, tr!("Move up"))).clicked() {
+                actions.push(Action::Move(e.kind, e.id, true));
+                ui.close();
+            }
+            if crate::widgets::button(ui, theme::with_icon(Icon::ArrowDown, tr!("Move down"))).clicked() {
+                actions.push(Action::Move(e.kind, e.id, false));
+                ui.close();
+            }
         }
         if let Some(on) = e.shown
             && crate::widgets::button(ui, theme::with_icon(if on { Icon::EyeOff } else { Icon::Eye }, if on { tr!("Hide on the map") } else { tr!("Show on the map") })).clicked()
@@ -1098,6 +1065,10 @@ fn row(ui: &mut Ui, e: &Entry, state: &mut LayersUi, names: &[String], actions: 
                 ui.close();
             }
         });
+        // An annotation layer stays: its marks are numbered by it.
+        if e.kind == Kind::Note {
+            return;
+        }
         ui.separator();
         let pal = Palette::of(ui);
         let what = match e.kind {
@@ -1105,7 +1076,7 @@ fn row(ui: &mut Ui, e: &Entry, state: &mut LayersUi, names: &[String], actions: 
             Kind::Objects => tr!("Nothing stands where it was painted any more"),
             Kind::Mix => tr!("Forget this mix (the ground painted with it stays)"),
             Kind::Pockets => tr!("No pocket where it was painted any more"),
-            Kind::Combined => tr!("What it painted stays"),
+            Kind::Combined | Kind::Note => tr!("What it painted stays"),
         };
         if crate::widgets::button(ui, RichText::new(theme::with_icon(Icon::Trash2, tr!("Remove"))).color(pal.danger)).on_hover_text(what).clicked() {
             actions.push(Action::Remove(e.kind, e.id));
@@ -1122,6 +1093,7 @@ fn set_palette(reg: &mut massif_core::registry::Registry, mixes: &mut [crate::to
         Kind::Objects => reg.object_layers.get_mut(id.wrapping_sub(1)).map(|l| &mut l.palette),
         Kind::Pockets => reg.pockets.get_mut(id.wrapping_sub(1)).map(|p| &mut p.palette),
         Kind::Combined => reg.combined.get_mut(id.wrapping_sub(1)).map(|c| &mut c.palette),
+        Kind::Note => reg.annotations.layer_mut(id as u16).map(|c| &mut c.palette),
     };
     if let Some(slot) = slot {
         *slot = name;
@@ -1141,6 +1113,11 @@ fn set_shown(reg: &mut massif_core::registry::Registry, shown: impl Fn(&str) -> 
             l.hidden = !on;
         }
     }
+    for c in reg.annotations.custom.iter_mut().filter(|c| !c.name.is_empty()) {
+        if let Some(on) = shown(&c.palette) {
+            c.hidden = !on;
+        }
+    }
 }
 
 /// Every layer of palette `old` moved to palette `new` ("": none).
@@ -1152,6 +1129,7 @@ fn rename_palette(reg: &mut massif_core::registry::Registry, mixes: &mut [crate:
         .chain(reg.object_layers.iter_mut().map(|l| &mut l.palette))
         .chain(reg.pockets.iter_mut().map(|p| &mut p.palette))
         .chain(reg.combined.iter_mut().map(|c| &mut c.palette))
+        .chain(reg.annotations.custom.iter_mut().map(|c| &mut c.palette))
         .chain(mixes.iter_mut().map(|m| &mut m.palette));
     for slot in slots {
         if slot == old {
@@ -1215,7 +1193,14 @@ fn apply(action: Action, tools: &mut ToolState, doc: &mut Document, state: &mut 
             rename_palette(reg, &mut tools.pattern.saved, &name, "");
         }
         Action::ShowPalette(name) => {
-            let all = reg.covers.iter().filter(|c| !c.removed && c.palette == name).map(|c| !c.hidden).chain(reg.object_layers.iter().filter(|l| !l.removed && l.palette == name).map(|l| !l.hidden)).all(|s| s);
+            let all = reg
+                .covers
+                .iter()
+                .filter(|c| !c.removed && c.palette == name)
+                .map(|c| !c.hidden)
+                .chain(reg.object_layers.iter().filter(|l| !l.removed && l.palette == name).map(|l| !l.hidden))
+                .chain(reg.annotations.layers().filter(|(_, c)| c.palette == name).map(|(_, c)| !c.hidden))
+                .all(|s| s);
             set_shown(reg, |palette| (palette == name).then_some(!all));
         }
         Action::SoloPalette(name) => {
@@ -1225,13 +1210,19 @@ fn apply(action: Action, tools: &mut ToolState, doc: &mut Document, state: &mut 
             } else {
                 let covers: Vec<u16> = reg.covers.iter().enumerate().filter(|(_, c)| !c.removed && c.palette == name).map(|(k, _)| k as u16 + 1).collect();
                 let objects: Vec<u16> = reg.object_layers.iter().enumerate().filter(|(_, l)| !l.removed && l.palette == name).map(|(k, _)| k as u16 + 1).collect();
-                reg.solo(&name, &covers, &objects);
+                let notes: Vec<u16> = reg.annotations.layers().filter(|(_, c)| c.palette == name).map(|(n, _)| n).collect();
+                reg.solo(&name, &covers, &objects, &notes);
             }
         }
         Action::Solo(kind, id) => {
+            let mut notes = Vec::new();
             let (name, covers, objects): (String, Vec<u16>, Vec<u16>) = match kind {
                 Kind::Cover => (reg.covers.get(id - 1).map(|c| c.name.clone()).unwrap_or_default(), vec![id as u16], Vec::new()),
                 Kind::Objects => (reg.object_layers.get(id - 1).map(|l| l.name.clone()).unwrap_or_default(), Vec::new(), vec![id as u16]),
+                Kind::Note => {
+                    notes.push(id as u16);
+                    (reg.annotations.layer_mut(id as u16).map(|c| c.name.clone()).unwrap_or_default(), Vec::new(), Vec::new())
+                }
                 // A combined layer: the cover and trees it paints.
                 Kind::Combined => {
                     use massif_core::combined::Part;
@@ -1244,7 +1235,12 @@ fn apply(action: Action, tools: &mut ToolState, doc: &mut Document, state: &mut 
             if reg.solo.as_ref().is_some_and(|s| s.name == name) {
                 reg.unsolo();
             } else {
-                reg.solo(&name, &covers, &objects);
+                reg.solo(&name, &covers, &objects, &notes);
+            }
+        }
+        Action::NoteLook(n, rgb, opacity) => {
+            if let Some(c) = reg.annotations.layer_mut(n) {
+                (c.rgb, c.opacity) = (rgb, opacity.min(100));
             }
         }
         Action::Unsolo => reg.unsolo(),
@@ -1268,7 +1264,7 @@ fn apply(action: Action, tools: &mut ToolState, doc: &mut Document, state: &mut 
                 p.locked = !p.locked;
             }
         }
-        Action::ToggleLock(Kind::Mix | Kind::Combined, _) => {}
+        Action::ToggleLock(Kind::Mix | Kind::Combined | Kind::Note, _) => {}
         Action::Move(kind, id, up) => {
             // Its section's list, in the order shown; it changes place with
             // its neighbour.
@@ -1279,6 +1275,7 @@ fn apply(action: Action, tools: &mut ToolState, doc: &mut Document, state: &mut 
             let mut ids = ids;
             ids.swap(k, other);
             match kind {
+                Kind::Note => {}
                 Kind::Mix => tools.pattern.saved.swap(k, other),
                 Kind::Pockets => {
                     for (place, &n) in ids.iter().enumerate() {
@@ -1335,6 +1332,17 @@ fn apply(action: Action, tools: &mut ToolState, doc: &mut Document, state: &mut 
                 l.hidden = !l.hidden;
             }
         }
+        Action::ToggleShown(Kind::Note, n) => {
+            if let Some(c) = reg.annotations.layer_mut(n as u16) {
+                c.hidden = !c.hidden;
+            }
+        }
+        Action::Paint(Kind::Note, n) => {
+            tools.annotation = n as u16;
+            tools.annotation_curve = false;
+            tools.select(Tool::Annotate);
+        }
+        Action::Duplicate(Kind::Note, _) | Action::Remove(Kind::Note, _) => {}
         Action::ToggleShown(Kind::Mix | Kind::Pockets | Kind::Combined, _) => {}
         Action::Paint(Kind::Combined, n) => {
             tools.combined = n as u16;
@@ -1396,6 +1404,11 @@ fn apply(action: Action, tools: &mut ToolState, doc: &mut Document, state: &mut 
                 }
                 Kind::Combined => {
                     if let Some(c) = reg.combined.get_mut(id - 1) {
+                        c.name = name;
+                    }
+                }
+                Kind::Note => {
+                    if let Some(c) = reg.annotations.layer_mut(id as u16) {
                         c.name = name;
                     }
                 }
@@ -1540,6 +1553,58 @@ mod tests {
         h.get_all_by_label("Misties Biome 8").last().expect("its row").click();
         h.run_steps(2);
         assert!(h.state().tools.tool == Tool::Annotate && h.state().tools.annotation == n);
+    }
+
+    /// Annotation layers are sorted into palettes with the other layers, as
+    /// a WorldPainter map has them ("Colours", "Placeholders"): listed in
+    /// their palette, its eye hiding and showing them, its solo showing them
+    /// alone; moved to another palette or back to the annotations from
+    /// their menu. Rendered with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn annotation_layers_sort_into_palettes() {
+        let mut s = state();
+        let reg = &mut s.doc.world.registry;
+        let biome = reg.annotations.add_layer("Misties Biome 8", [120, 90, 200]).unwrap();
+        let trees = reg.annotations.add_layer("L/M Trees", [60, 160, 220]).unwrap();
+        let flow = reg.annotations.add_layer("Flow lines", [240, 170, 40]).unwrap();
+        reg.palettes = vec!["Colours".into(), "Placeholders".into()];
+        reg.annotations.layer_mut(biome).unwrap().palette = "Colours".into();
+        reg.annotations.layer_mut(trees).unwrap().palette = "Placeholders".into();
+        reg.object_layers[0].palette = "Placeholders".into();
+        let snapshots = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from);
+        let ppp = std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
+        let builder = egui_kittest::Harness::builder().with_size(vec2(320.0, 1500.0)).with_pixels_per_point(ppp);
+        let mut h = if snapshots.is_some() { builder.with_accessibility_check(false).wgpu().build_ui_state(draw, s) } else { builder.build_ui_state(draw, s) };
+        h.run_steps(2);
+        if let Some(dir) = &snapshots {
+            h.render().unwrap().save(dir.join(format!("annotation-palettes-{ppp}x.png"))).unwrap();
+        }
+        let hidden = |s: &State, n: u16| s.doc.world.registry.annotations.custom[(n - 16) as usize].hidden;
+        // The Placeholders' eye: its annotation layer and its trees.
+        h.get_all_by_label("Hide the palette on the map").nth(1).expect("the second palette's eye").click();
+        h.run_steps(2);
+        assert!(hidden(h.state(), trees) && h.state().doc.world.registry.object_layers[0].hidden);
+        assert!(!hidden(h.state(), biome) && !hidden(h.state(), flow));
+        h.get_by_label("Show the palette on the map").click();
+        h.run_steps(2);
+        assert!(!hidden(h.state(), trees));
+        // Colours alone, then every layer again.
+        h.get_all_by_label("Hide the palette on the map").next().unwrap().click_modifiers(egui::Modifiers::ALT);
+        h.run_steps(2);
+        assert!(!hidden(h.state(), biome) && hidden(h.state(), trees) && hidden(h.state(), flow), "only the palette");
+        let s = h.state_mut();
+        apply(Action::SoloPalette("Colours".into()), &mut s.tools, &mut s.doc, &mut s.ui, &[]);
+        assert!(!hidden(s, biome) && !hidden(s, trees) && !hidden(s, flow), "as they were");
+        // Moved between palettes, and back to the annotations.
+        apply(Action::SetPalette(Kind::Note, flow as usize, "Colours".into()), &mut s.tools, &mut s.doc, &mut s.ui, &[]);
+        apply(Action::SetPalette(Kind::Note, biome as usize, String::new()), &mut s.tools, &mut s.doc, &mut s.ui, &[]);
+        let reg = &s.doc.world.registry;
+        assert_eq!((reg.annotations.layers().find(|l| l.0 == flow).unwrap().1.palette.as_str(), reg.annotations.layers().find(|l| l.0 == biome).unwrap().1.palette.as_str()), ("Colours", ""));
+        // A click on one paints with it.
+        h.run_steps(2);
+        h.get_all_by_label("L/M Trees").last().expect("its row").click();
+        h.run_steps(2);
+        assert!(h.state().tools.tool == Tool::Annotate && h.state().tools.annotation == trees);
     }
 
     /// Every cover, object layer and saved mix is listed; a click paints

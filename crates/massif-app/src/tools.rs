@@ -1746,6 +1746,9 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
     // Pockets are in the rock of the ground: on its level too.
     let level = if matches!(stroke.tool, Tool::Annotate | Tool::Pockets | Tool::Slabs | Tool::Caves | Tool::CaveBiome | Tool::Layer) { 0 } else { stroke.level.min(doc.dimension().levels.len() - 1) };
     let understory = doc.world.registry.object_layer(tools.object_layer).is_some_and(|l| l.understory);
+    // An annotation layer is painted over the others noted on a column and
+    // rubbed out alone; a colour takes the place of the column's colour.
+    let note_layer = doc.world.registry.annotations.is_layer(tools.annotation);
     let (parts, below): (Vec<massif_core::combined::Component>, Vec<massif_core::combined::Component>) = match &combined {
         Some((parts, _)) if level != 0 => parts.iter().partition(|c| c.part != massif_core::combined::Part::Pockets),
         Some((parts, _)) => (parts.clone(), Vec::new()),
@@ -1871,7 +1874,11 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
                     dabs.push((x, z, stroke.salt));
                 }
             }
-            Tool::Annotate => ops::paint_annotation(&mut edit, brush, x, z, if invert { 0 } else { tools.annotation.max(1) }, stroke.salt),
+            Tool::Annotate => match (note_layer, invert) {
+                (true, false) => ops::paint_annotation_layer(&mut edit, brush, x, z, tools.annotation, stroke.salt),
+                (true, true) => ops::erase_annotation(&mut edit, brush, x, z, tools.annotation, stroke.salt),
+                (false, _) => ops::paint_annotation(&mut edit, brush, x, z, if invert { 0 } else { tools.annotation.max(1) }, stroke.salt),
+            },
             Tool::AutoBiome => match &reader {
                 Some(reader) if !invert => {
                     let classes = stroke.classes.get_or_insert_with(|| massif_core::auto::Classes::new(true));

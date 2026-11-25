@@ -148,10 +148,11 @@ impl ColumnInfo {
                 layers.push(LayerHere { matches: None, kind: tr!("Combined"), name: c.name.clone(), color: c.color, intensity: None, paint: Some(Paint::Combined(i as u16 + 1)) });
             }
         }
-        if s.annotation != 0 {
-            let n = s.annotation as u16;
+        let notes: Vec<u16> = stack.ground().notes(cell).collect();
+        for n in notes {
             let color = reg.annotations.color(n).unwrap_or([128; 3]);
-            layers.push(LayerHere { matches: Some(Match::Layer(Painted::Annotation, n)), kind: tr!("Annotation"), name: crate::panels::annotation_label(n, &reg.annotations), color, intensity: None, paint: Some(Paint::Annotation(n)) });
+            let kind = if reg.annotations.is_layer(n) { tr!("Annotation layer") } else { tr!("Annotation") };
+            layers.push(LayerHere { matches: Some(Match::Layer(Painted::Annotation, n)), kind, name: crate::panels::annotation_label(n, &reg.annotations), color, intensity: None, paint: Some(Paint::Annotation(n)) });
         }
         let selected = doc.selection().map(|sel| sel.weight(x, z));
         Some(Self { x, z, height, terrain: (!empty).then_some(TerrainId(s.terrain)), water, biome, auto_biome, levels, layers, selected })

@@ -178,6 +178,39 @@ impl Tile {
     }
 
     /// True if no column of a slab tile exists; such tiles can be dropped.
+    /// The annotations of column `i`: the colour of its plane (one of
+    /// WorldPainter's fifteen, or a plain colour of the map's own), then
+    /// the annotation layers over it, as they were painted.
+    pub fn notes(&self, i: usize) -> impl Iterator<Item = u16> + '_ {
+        let plane = self.annotations.get(i);
+        (plane != 0).then_some(plane).into_iter().chain(self.stacked.notes(i).filter(move |&n| n != plane))
+    }
+
+    /// Whether annotation `n` is on column `i`.
+    pub fn has_note(&self, i: usize, n: u16) -> bool {
+        n != 0 && (self.annotations.get(i) == n || (!self.stacked.is_empty() && self.stacked.notes(i).any(|m| m == n)))
+    }
+
+    /// Put annotation layer `n` on column `i`, over the annotations there.
+    pub fn add_note(&mut self, i: usize, n: u16) {
+        if n != 0 && !self.has_note(i, n) {
+            self.stacked.add(i, crate::layer_stack::Entry::new(crate::layer_stack::Kind::Note, n, 255));
+        }
+    }
+
+    /// Take annotation `n` out of column `i`, the others left.
+    pub fn remove_note(&mut self, i: usize, n: u16) {
+        if n == 0 {
+            return;
+        }
+        if self.annotations.get(i) == n {
+            self.annotations.set(i, 0);
+        }
+        if self.stacked.has(i) {
+            self.stacked.remove(i, crate::layer_stack::Kind::Note, n);
+        }
+    }
+
     pub fn is_empty_slab(&self) -> bool {
         let Some(bottom) = &self.bottom else {
             return false;

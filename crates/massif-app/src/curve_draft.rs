@@ -206,7 +206,8 @@ pub fn commit(doc: &mut Document, tools: &mut ToolState) -> Feedback {
     }
     let ribbon = draft.curve.ribbon(tools.curve.width.max(0.0), tools.curve.end_width.max(0.0));
     doc.history.begin(tr!("Annotation curve"), doc.dim);
-    massif_core::ops::paint_annotation_ribbon(&mut doc.history.edit(&mut doc.world, 0), &ribbon, tools.annotation.max(1));
+    let layer = doc.world.registry.annotations.is_layer(tools.annotation);
+    massif_core::ops::paint_annotation_ribbon(&mut doc.history.edit(&mut doc.world, 0), &ribbon, tools.annotation.max(1), layer);
     doc.commit();
     Some(tr!("Painted a curve of {length:.0} blocks", length = draft.curve.length()))
 }

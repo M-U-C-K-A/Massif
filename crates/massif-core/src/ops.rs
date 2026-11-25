@@ -690,11 +690,52 @@ pub fn paint_annotation(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, color:
     paint_plane(edit, brush, cx, cz, salt, color.min(crate::annotations::MAX), None, None, |t| &mut t.annotations);
 }
 
+/// Paint annotation layer `n` (a named colour of the map's own, see
+/// [`crate::annotations::AnnotationPalette::is_layer`]) under the brush,
+/// over whatever else is noted there: annotation layers overlap, each a
+/// layer of its own, as WorldPainter's custom annotation layers. `salt`
+/// should change from dab to dab.
+pub fn paint_annotation_layer(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, n: u16, salt: u64) {
+    note_dabs(edit, brush, cx, cz, salt, |tile, i| tile.add_note(i, n));
+}
+
+/// Rub out annotation `n` under the brush, the others noted there left:
+/// an annotation layer, or one of the colours of the column's plane.
+pub fn erase_annotation(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, n: u16, salt: u64) {
+    note_dabs(edit, brush, cx, cz, salt, |tile, i| tile.remove_note(i, n));
+}
+
+/// `f` on each column of the brush's dab.
+fn note_dabs(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, salt: u64, f: impl Fn(&mut Tile, usize) + Sync) {
+    let dab = Dab::new(edit, brush, cx, cz);
+    if dab.idle {
+        return;
+    }
+    let footprint = BlockRect::around(cx, cz, brush.reach());
+    edit.par_tiles(footprint.tiles(), footprint, false, |_, clip, tile| {
+        let slab = tile.bottom.is_some();
+        for z in clip.z0..clip.z1 {
+            for x in dab.row(z, &clip) {
+                let w = dab.weight(x, z);
+                if w <= 0.0 || !paint_hit(w, brush.strength, x, z, salt) {
+                    continue;
+                }
+                let i = local_index(x, z);
+                if slab && !tile.present(i) {
+                    continue;
+                }
+                f(tile, i);
+            }
+        }
+    });
+}
+
 /// Paint annotation `color` along a ribbon: the columns whose middle lies
 /// within half its width of its middle line (see
 /// [`crate::curve::Curve::ribbon`]). A ribbon narrower than a block still
-/// marks the columns it crosses.
-pub fn paint_annotation_ribbon(edit: &mut Edit, ribbon: &[([f32; 2], f32)], color: u16) {
+/// marks the columns it crosses. `layer`: `color` is an annotation layer,
+/// painted over the others noted there (see [`paint_annotation_layer`]).
+pub fn paint_annotation_ribbon(edit: &mut Edit, ribbon: &[([f32; 2], f32)], color: u16, layer: bool) {
     let color = color.min(crate::annotations::MAX);
     // The pieces of the ribbon: from one sample to the next, with their
     // half widths.
@@ -738,7 +779,11 @@ pub fn paint_annotation_ribbon(edit: &mut Edit, ribbon: &[([f32; 2], f32)], colo
                     if slab && !tile.present(i) {
                         continue;
                     }
-                    tile.annotations.set(i, color);
+                    if layer {
+                        tile.add_note(i, color);
+                    } else {
+                        tile.annotations.set(i, color);
+                    }
                 }
             }
         }
@@ -2536,6 +2581,35 @@ mod tests {
 
     /// A curve's ribbon is painted as wide as it is at each point, every
     /// column along it at least however thin, and is undone in one step.
+    /// Annotation layers overlap: each painted over the colour and the
+    /// other layers of a column, and rubbed out alone; a colour painted
+    /// over them takes the place of the colour alone.
+    #[test]
+    fn annotation_layers_overlap() {
+        let mut w = world(1);
+        let mut hist = History::default();
+        hist.begin("notes", 0);
+        let at = |w: &World, x: i32, z: i32| w.dims[0].ground().view(TilePos::containing(x, z)).unwrap().notes(local_index(x, z)).collect::<Vec<u16>>();
+        paint_annotation(&mut hist.edit(&mut w, 0), &hard_brush(6.0), 10.0, 10.0, 14, 1);
+        paint_annotation_layer(&mut hist.edit(&mut w, 0), &hard_brush(6.0), 10.0, 10.0, 20, 2);
+        paint_annotation_layer(&mut hist.edit(&mut w, 0), &hard_brush(6.0), 14.0, 10.0, 21, 3);
+        paint_annotation_layer(&mut hist.edit(&mut w, 0), &hard_brush(6.0), 10.0, 10.0, 20, 4);
+        assert_eq!(at(&w, 10, 10), vec![14, 20, 21], "a colour and two layers");
+        assert_eq!(at(&w, 18, 10), vec![21]);
+        paint_annotation(&mut hist.edit(&mut w, 0), &hard_brush(2.0), 10.0, 10.0, 3, 5);
+        assert_eq!(at(&w, 10, 10), vec![3, 20, 21], "the colour changes, the layers stay");
+        erase_annotation(&mut hist.edit(&mut w, 0), &hard_brush(2.0), 10.0, 10.0, 20, 6);
+        assert_eq!(at(&w, 10, 10), vec![3, 21], "one layer rubbed out alone");
+        paint_annotation(&mut hist.edit(&mut w, 0), &hard_brush(2.0), 10.0, 10.0, 0, 7);
+        assert_eq!(at(&w, 10, 10), vec![21], "the colour rubbed out, the layer left");
+        paint_annotation_ribbon(&mut hist.edit(&mut w, 0), &[([30.5, 30.5], 2.0), ([40.5, 30.5], 2.0)], 20, true);
+        paint_annotation_ribbon(&mut hist.edit(&mut w, 0), &[([30.5, 30.5], 2.0), ([30.5, 40.5], 2.0)], 21, true);
+        assert_eq!(at(&w, 30, 30), vec![20, 21], "curves overlap too");
+        hist.commit();
+        hist.undo(&mut w);
+        assert!(at(&w, 10, 10).is_empty() && at(&w, 30, 30).is_empty(), "undone");
+    }
+
     #[test]
     fn a_curves_ribbon_is_painted_widening() {
         use crate::curve::{Curve, CurvePoint, Interp};
@@ -2544,7 +2618,7 @@ mod tests {
         let at = |w: &World, x: i32, z: i32| w.dims[0].ground().view(TilePos::containing(x, z)).unwrap().annotations.get(local_index(x, z));
         let curve = Curve { points: vec![CurvePoint::new([4.0, 20.0]), CurvePoint::new([100.0, 20.0])], interp: Interp::CatmullRom };
         hist.begin("curve", 0);
-        paint_annotation_ribbon(&mut hist.edit(&mut w, 0), &curve.ribbon(2.0, 20.0), 20);
+        paint_annotation_ribbon(&mut hist.edit(&mut w, 0), &curve.ribbon(2.0, 20.0), 20, false);
         hist.commit();
         let across = |x: i32| (0..64).filter(|&z| at(&w, x, z) == 20).count();
         assert!((1..=3).contains(&across(6)), "narrow at its start: {}", across(6));
@@ -2554,7 +2628,7 @@ mod tests {
         // A hair-thin diagonal still marks a line of columns, without gaps.
         let thin = Curve { points: vec![CurvePoint::new([0.0, 30.0]), CurvePoint::new([30.0, 60.0])], interp: Interp::Polyline };
         hist.begin("thin", 0);
-        paint_annotation_ribbon(&mut hist.edit(&mut w, 0), &thin.ribbon(0.1, 0.1), 3);
+        paint_annotation_ribbon(&mut hist.edit(&mut w, 0), &thin.ribbon(0.1, 0.1), 3, false);
         hist.commit();
         assert!((2..28).all(|x| (28..62).any(|z| at(&w, x, z) == 3)));
         hist.undo(&mut w);

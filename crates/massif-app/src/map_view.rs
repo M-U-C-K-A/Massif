@@ -2516,6 +2516,7 @@ impl MapView {
                             cover_under: 0,
                             objects: p.objects,
                             annotation: 0,
+                            notes: [0; 3],
                             understory: 0,
                             size: 0,
                             pockets: 0,
