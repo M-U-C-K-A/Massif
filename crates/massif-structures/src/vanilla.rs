@@ -298,7 +298,7 @@ fn code_piece(lib: &Library, b: &mut Builder, location: &str, origin: [i32; 3], 
     let (px, pz) = crate::geom::turn_xz(pivot[0], pivot[2], turn);
     let corner = [origin[0] + pivot[0] - px, origin[1], origin[2] + pivot[2] - pz];
     let bbox = build::place_template(lib, b, location, corner, turn, list, center, false)?;
-    b.pieces.push(Piece { min: bbox.min, max: bbox.max, template: crate::source::full_id(location), origin: corner, turn, depth: 0, ground_delta: 0, rigid: true, processors: String::new() });
+    b.pieces.push(Piece { min: bbox.min, max: bbox.max, template: crate::source::full_id(location), origin: corner, turn, depth: 0, ground_delta: 0, rigid: true, processors: String::new(), key: None });
     Some(bbox)
 }
 
@@ -462,7 +462,7 @@ fn ocean_ruin(lib: &Library, ground: &dyn Ground, req: &Request, warm: bool, rng
             let integrity = if warm || k == 0 { integrity } else { [1.0, 0.7, 0.5][k] };
             let bbox = build::place_template(lib, b, name, [at[0], low, at[2]], turn, &list(integrity), center, false);
             if let Some(bbox) = bbox {
-                b.pieces.push(Piece { min: bbox.min, max: bbox.max, template: name.clone(), origin: [at[0], low, at[2]], turn, depth: 0, ground_delta: 0, rigid: true, processors: String::new() });
+                b.pieces.push(Piece { min: bbox.min, max: bbox.max, template: name.clone(), origin: [at[0], low, at[2]], turn, depth: 0, ground_delta: 0, rigid: true, processors: String::new(), key: None });
             }
         }
         // Chests and drowned where the template marks them.

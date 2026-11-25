@@ -78,6 +78,7 @@ mod startup;
 mod terrain_live;
 mod terrain;
 mod structure_tool;
+mod building_tool;
 mod terrain_view;
 mod theme;
 mod tools;

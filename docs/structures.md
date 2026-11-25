@@ -68,6 +68,34 @@ structures the game places itself — it looks for them where its world seed
 puts them. Placing yours where the game would look is for a later version.
 Woodland mansions and ocean monuments are not offered yet.
 
+## Changing one building
+
+The **Building** tool (Decor group, beside Structures) changes one building
+of a village placed from a pack, the others left as they are:
+
+- **Click** a building to select it: its outline in the accent colour, with
+  handles at its corners and its name. Its picture, file and size show
+  under **Selected** in Tool Settings.
+- **Drag it** to move it. If its door no longer opens on a road, a path is
+  laid from its door to the nearest road, around the other buildings.
+- **R** (or **Turn**) turns it a quarter turn about its middle; a path leads
+  to its door wherever the door then faces.
+- **Delete** (or **Take it away**) removes it; a farm takes its field with
+  it.
+- **Another building** puts another building of the pack in its place, any
+  type, picked from a menu of the pack's buildings with a picture of each
+  seen from above, its size beside it. Its door stays on the same road.
+- **Draw it again** puts another building of its type in its place.
+- **As drawn** puts it back as the village's draw placed it.
+
+Each change is one step to undo, and is kept with the village: built again
+(moved, resized, of another theme or with other walls), the village makes
+the same changes to the same buildings as long as its draw places them. A
+change whose building is no longer in the draw (after changing the number
+of houses, say) waits for it, and the tool says so. Only villages of a pack
+placed with 1.2 or later can be changed building by building; the game's own
+villages are assembled piece by piece by its jigsaw, and are changed whole.
+
 ## What comes with them
 
 - **Chests with their loot tables**, filled by the game when first opened,

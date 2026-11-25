@@ -191,7 +191,10 @@ fn instance(theme: &Theme, p: &Placement) -> Instance {
             ("villagers", p.villagers as f64),
             ("facing", dir(p.facing).turns_from_south() as f64),
             ("size", SizeClass::ALL.iter().position(|c| *c == p.size).unwrap_or(0) as f64),
-        ]),
+        ])
+        .into_iter()
+        .chain(p.key.map(|k| [("key_x".to_owned(), k[0] as f64), ("key_z".to_owned(), k[1] as f64)]).into_iter().flatten())
+        .collect(),
     }
 }
 
@@ -220,6 +223,7 @@ pub fn placement_from(i: &Instance, theme: &Theme) -> Option<Placement> {
         facing: dir_from_turns(a("facing")),
         size: SizeClass::ALL[(a("size") as usize).min(3)],
         villagers: a("villagers") as u32,
+        key: i.attrs.get("key_x").zip(i.attrs.get("key_z")).map(|(x, z)| [*x as i32, *z as i32]),
     })
 }
 

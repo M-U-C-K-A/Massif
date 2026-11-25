@@ -40,6 +40,11 @@ pub struct Placement {
     pub size: SizeClass,
     /// Villagers to put inside its door.
     pub villagers: u32,
+    /// The building of the village it is: the column before its door the
+    /// draw gave it, which changes made to it by hand name it by (none for
+    /// props).
+    #[serde(default)]
+    pub key: Option<[i32; 2]>,
 }
 
 impl Placement {
@@ -216,7 +221,6 @@ pub fn buildings(ground: &dyn Ground, area: &Area, site: &Site, roads: &Roads, r
     // Village-wide, against the counts asked for.
     let mut totals: HashMap<String, u32> = HashMap::new();
     let wanted = |name: &str| params.counts.iter().find(|(k, _)| k == name).map(|c| c.1);
-    let mut floors: Vec<i32> = Vec::new();
     let mut dwellings = 0u32;
     let want = params.houses.map(|n| n.clamp(3, 120));
     let bias = params.size_bias.clamp(-1.0, 1.0);
@@ -395,7 +399,6 @@ pub fn buildings(ground: &dyn Ground, area: &Area, site: &Site, roads: &Roads, r
         if t.is_dwelling() {
             dwellings += 1;
         }
-        floors.push(floor);
         let door = crate::geom::place(v.door, origin, turn);
         out.placed.push(Placement {
             kind: t.name.clone(),
@@ -408,11 +411,23 @@ pub fn buildings(ground: &dyn Ground, area: &Area, site: &Site, roads: &Roads, r
             facing,
             size: v.class,
             villagers: if t.has_villagers() { villagers } else { 0 },
+            key: Some(plot.door),
         });
     }
-    // The land under each, to its floor; the fields to theirs.
-    let mut heights = level_under(out.placed.iter().zip(&floors).map(|(p, f)| (p.bbox(), *f)), ground, 4);
-    for f in &out.fields {
+    out.heights = levelled(&out.placed, &out.fields, ground);
+    if let Some(n) = want
+        && dwellings < n
+    {
+        out.notes.push(format!("{dwellings} of the {n} houses asked for: the area has no room for more"));
+    }
+    out
+}
+
+/// The land under each of `placed`, to its floor (its door's), and under
+/// `fields` to theirs: each column's new height, in order.
+pub fn levelled(placed: &[Placement], fields: &[Field], ground: &dyn Ground) -> Vec<([i32; 2], i32)> {
+    let mut heights = level_under(placed.iter().map(|p| (p.bbox(), p.door[1])), ground, 4);
+    for f in fields {
         for z in f.rect[1] - 1..=f.rect[3] + 1 {
             for x in f.rect[0] - 1..=f.rect[2] + 1 {
                 if ground.floor(x, z) != f.floor {
@@ -425,11 +440,5 @@ pub fn buildings(ground: &dyn Ground, area: &Area, site: &Site, roads: &Roads, r
     }
     let mut hv: Vec<([i32; 2], i32)> = heights.into_iter().map(|((x, z), h)| ([x, z], h)).collect();
     hv.sort();
-    out.heights = hv;
-    if let Some(n) = want
-        && dwellings < n
-    {
-        out.notes.push(format!("{dwellings} of the {n} houses asked for: the area has no room for more"));
-    }
-    out
+    hv
 }

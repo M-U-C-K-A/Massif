@@ -5728,10 +5728,10 @@ impl MassifApp {
         // Villages: the game's files read (for its own themes), each built
         // off the interface's thread; one whose settings were changed is
         // built again once they rest.
-        if self.tools.tool == Tool::Structure && let Some((id, recipe)) = self.tools.structure.rt.due_regen() {
+        if matches!(self.tools.tool, Tool::Structure | Tool::Building) && let Some((id, recipe)) = self.tools.structure.rt.due_regen() {
             crate::structure_tool::redo(&mut self.tools, id, recipe);
         }
-        if self.tools.tool == Tool::Structure || self.tools.village.rt.is_busy() {
+        if matches!(self.tools.tool, Tool::Structure | Tool::Building) || self.tools.village.rt.is_busy() {
             self.tools.structure.rt.ensure_library(ctx, self.settings.minecraft_jar.clone(), self.settings.mod_jars.clone());
             let lib = self.tools.structure.rt.library();
             let lib_failed = self.tools.structure.rt.error();

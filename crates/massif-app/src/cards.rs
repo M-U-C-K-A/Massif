@@ -283,6 +283,12 @@ pub fn tool_card(tool: Tool) -> Card<'static> {
             Some(tr!("Its chests keep their loot tables, its spawners their mobs, its villages their villagers.")),
             Some(Demo::Structure),
         ),
+        Tool::Building => card(
+            tr!("Changes one building of a village placed from a pack: moves it, turns it, takes it away, swaps it for another of the pack or draws it again. The village keeps each change when it is built again."),
+            vec![(tr!("Click"), tr!("Select a building")), (tr!("Drag"), tr!("Move it")), (tr!("R"), tr!("Turn it")), (tr!("Delete"), tr!("Take it away"))],
+            Some(tr!("A building moved off its road gets a path to its door.")),
+            Some(Demo::Building),
+        ),
         Tool::Combined => card(
             tr!("Paints several layers at once, as WorldPainter's combined layers: a forest's terrain, biome, ground cover and trees in one stroke."),
             vec![(tr!("Drag"), tr!("Paint them all")), (tr!("Right-drag"), tr!("Rub them out"))],
@@ -428,6 +434,7 @@ pub enum Demo {
     Select,
     Pan,
     Structure,
+    Building,
     Village,
 }
 
@@ -912,6 +919,43 @@ impl Demo {
                     }
                 }
                 (progress < 0.35).then_some((cx, cy, 2.0, progress % 0.35 < 0.12))
+            }
+            Demo::Building => {
+                // A street of houses; one clicked, dragged back from the
+                // road, then a path from its door to the road.
+                s.add_hills(3.0);
+                let terrain = &mut s.terrain;
+                for x in 6..122 {
+                    for y in 29..32 {
+                        terrain[y * W + x] = SAND;
+                    }
+                }
+                let moved = smooth_step(0.25, 0.7, progress);
+                let (x0, y0) = (54.0 + 14.0 * moved, 34.0 + 14.0 * moved);
+                let lots = [(14.0, 18.0), (34.0, 18.0), (78.0, 18.0), (98.0, 18.0), (14.0, 34.0), (34.0, 34.0), (98.0, 34.0), (x0, y0)];
+                for &(lx, ly) in &lots {
+                    let (lx, ly) = (lx as usize, ly as usize);
+                    let floor = s.heights[(ly + 3) * W + lx + 4];
+                    for y in ly..ly + 8 {
+                        for x in lx..lx + 10 {
+                            let i = y * W + x;
+                            s.heights[i] = floor + 3.0;
+                            s.terrain[i] = STONE;
+                        }
+                    }
+                }
+                // The path, once it stands in its new place.
+                let path = smooth_step(0.75, 0.95, progress);
+                if path > 0.0 {
+                    let door = x0 as usize + 5;
+                    let top = y0 as usize;
+                    let reach = ((top - 32) as f64 * path) as usize;
+                    for y in top - reach..top {
+                        s.terrain[y * W + door] = SAND;
+                    }
+                }
+                s.markers = vec![(x0 + 5.0, y0 + 4.0)];
+                (progress < 0.72).then_some((x0 + 5.0, y0 + 4.0, 2.0, progress < 0.08 || (0.25..0.7).contains(&progress)))
             }
             Demo::Village => {
                 // The selection, then its roads, then its houses along them.

@@ -31,6 +31,7 @@
 //! `docs/village-packs.md`).
 
 pub mod buildings;
+pub mod edits;
 pub mod from_game;
 pub mod from_world;
 pub mod geometry;
@@ -248,6 +249,9 @@ pub struct Params {
     /// Whether `houses` was typed by hand (kept as the village is resized),
     /// rather than worked out from its area and density.
     pub houses_by_hand: bool,
+    /// Changes made by hand to single buildings, made again each time it
+    /// is built.
+    pub edits: Vec<edits::BuildingEdit>,
 }
 
 /// How many houses a village of `area` holds at `density` (0.2 sparse … 1
@@ -261,7 +265,7 @@ pub fn houses_for(area: massif_core::coords::BlockRect, density: f32) -> u32 {
 
 impl Default for Params {
     fn default() -> Self {
-        Params { houses: None, size_bias: 0.0, road: RoadType::Theme, walls: false, enclosure: walls::Enclosure::WoodenFence, density: 0.6, spread: 0.5, flat: 0.7, fields: 1.0, props: 0.5, mill: MillMode::Auto, max_slope: 10, margin: 1, street_width: None, foundation: None, villagers: None, counts: Vec::new(), houses_by_hand: false }
+        Params { houses: None, size_bias: 0.0, road: RoadType::Theme, walls: false, enclosure: walls::Enclosure::WoodenFence, density: 0.6, spread: 0.5, flat: 0.7, fields: 1.0, props: 0.5, mill: MillMode::Auto, max_slope: 10, margin: 1, street_width: None, foundation: None, villagers: None, counts: Vec::new(), houses_by_hand: false, edits: Vec::new() }
     }
 }
 
@@ -341,9 +345,13 @@ pub fn stages(lib: Option<&Library>, ground: &dyn Ground, req: &Request) -> Resu
             break (site, roads, walls, plots, buildings);
         }
     };
+    // The changes made by hand to single buildings.
+    let mut roads = roads;
+    let mut buildings = buildings;
+    let notes = edits::apply(&p.edits, ground, &area, &mut roads, theme, p.villagers.unwrap_or(theme.villagers), req.seed, &mut buildings);
+    buildings.notes.extend(notes);
     // Walls round a village of so many houses: drawn again round what was
     // built, so that it does not stand in a ring of empty land.
-    let mut roads = roads;
     let mut walls = walls;
     if p.walls && p.houses.is_some() && theme.vanilla.is_none() {
         let mut boxes: Vec<([i32; 2], [i32; 2])> = buildings.placed.iter().map(|b| ([b.min[0], b.min[2]], [b.max[0], b.max[2]])).collect();

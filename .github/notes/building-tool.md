@@ -1,0 +1,3 @@
+**The Building tool: move, turn, swap or remove one building of a village**
+
+A new Building tool, beside Structures, changes one building of a village placed from a pack. Click a building to select it, then drag it to move it (a path is laid from its door to the nearest road), press R to turn it about its middle, or Delete to take it away. Tool Settings puts another building of the pack in its place from a menu showing each one from above with its size, draws another building of its type, or puts it back as the village's draw placed it. Each change is one step to undo, and the village keeps it when it is built again: moved, resized, of another theme or with other walls, the same buildings are changed the same way.

@@ -317,6 +317,7 @@ fn place_element(lib: &Library, b: &mut Builder, element: &Element, piece: &Plac
                     ground_delta: piece.ground_delta,
                     rigid: *projection == Projection::Rigid,
                     processors: processors_name.clone(),
+                    key: None,
                 });
             }
         }

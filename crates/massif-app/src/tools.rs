@@ -54,6 +54,8 @@ pub enum Tool {
     /// One of the game's structures — a village, an Ancient City — placed
     /// with a click.
     Structure,
+    /// One building of a village placed: selected, moved, turned, swapped.
+    Building,
     /// A village filling the selection: districts, roads, buildings of a
     /// theme, walls.
     Village,
@@ -104,7 +106,7 @@ impl Tool {
             &[Tool::PaintTerrain, Tool::Gradient, Tool::PaintBiome, Tool::AutoPaint, Tool::AutoBiome, Tool::Annotate],
         ),
         (SELECT_GROUP, Icon::SquareDashed, &[Tool::SelectRect, Tool::SelectEllipse, Tool::SelectLasso, Tool::SelectBrush]),
-        (tn!("Decor"), Icon::Shrub, &[Tool::Cover, Tool::Objects, Tool::TreeSize, Tool::Pockets, Tool::Slabs, Tool::Combined, Tool::Structure]),
+        (tn!("Decor"), Icon::Shrub, &[Tool::Cover, Tool::Objects, Tool::TreeSize, Tool::Pockets, Tool::Slabs, Tool::Combined, Tool::Structure, Tool::Building]),
         (WATER_GROUP, Icon::Droplet, &[Tool::Water, Tool::Flood, Tool::River]),
         (tn!("Underground"), Icon::Pickaxe, &[Tool::Layer, Tool::Caves, Tool::CaveBiome]),
         (tn!("Levels"), Icon::Layers, &[Tool::StampSlab, Tool::EraseSlab]),
@@ -137,6 +139,7 @@ impl Tool {
             Tool::Layer => tr!("Layer"),
             Tool::Combined => tr!("Combined layer"),
             Tool::Structure => tr!("Structures"),
+            Tool::Building => tr!("Building"),
             Tool::Village => tr!("Village brush"),
             Tool::AutoBiome => tr!("Auto biome"),
             Tool::AutoPaint => tr!("Auto paint"),
@@ -179,6 +182,7 @@ impl Tool {
             Tool::Layer => Icon::SquareSplitVertical,
             Tool::Combined => Icon::Combine,
             Tool::Structure => Icon::Castle,
+            Tool::Building => Icon::SquareMousePointer,
             Tool::Village => Icon::House,
             Tool::AutoBiome => Icon::Earth,
             Tool::AutoPaint => Icon::WandSparkles,
@@ -249,6 +253,7 @@ impl Tool {
             Tool::Layer => tr!("Edit the map layer by layer: the map shows the blocks cut at a height (PageUp, PageDown), and the brush digs, fills with a block, pours water or lava, or paints a cave biome on that layer, or on the layers around it. Right button: fill back with the column's rock."),
             Tool::Combined => tr!("Paint several layers at once: a terrain, a biome, a ground cover, trees, pockets, each over its share. Right button: rub out what it paints."),
             Tool::Structure => tr!("Villages and the game's structures: pick one in Tool Settings, click on the map to place it or drag a rectangle for a village. Click one placed to select it: drag it to move it, its corners to resize it. Right button: take it away."),
+            Tool::Building => tr!("One building of a village placed from a pack: click it to select it, drag it to move it (a path leads to its door), R turns it, Delete takes it away; Tool Settings swaps it for another of the pack or draws it again. Kept when the village is built again."),
             Tool::Village => tr!("Click in the selection: fill it with a village of a theme — the game's own, or a builder's pack. Its size follows the selection's."),
             Tool::AutoBiome => {
                 tr!("Sets the biome the land calls for: beach, forest, peaks…")
@@ -284,7 +289,7 @@ impl Tool {
     }
 
     pub const fn uses_brush(self) -> bool {
-        !matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::Structure | Tool::Village)
+        !matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::Structure | Tool::Building | Tool::Village)
     }
 
     /// The tools that draw the selection.
@@ -294,7 +299,7 @@ impl Tool {
 
     /// Tools that apply once per click rather than continuously.
     pub const fn is_click(self) -> bool {
-        matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Structure | Tool::Village)
+        matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Structure | Tool::Building | Tool::Village)
     }
 
     pub const fn needs_slab_level(self) -> bool {
@@ -327,6 +332,7 @@ impl Tool {
             Tool::Smooth3d => Use3d::Smooth,
             Tool::PaintTerrain => Use3d::Paint,
             Tool::Eyedropper | Tool::Flood | Tool::Structure | Tool::Village => Use3d::Click,
+            Tool::Building => Use3d::MapOnly,
             Tool::Pan | Tool::Road | Tool::River | Tool::Annotate | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush => Use3d::MapOnly,
             Tool::Smooth
             | Tool::Flatten
@@ -676,6 +682,9 @@ pub struct ToolState {
     pub structure: crate::structure_tool::StructureSettings,
     /// The village brush: its theme, walls and density.
     pub village: crate::structure_tool::VillageSettings,
+    /// The Building tool: the building selected, a move under way.
+    #[serde(skip)]
+    pub building: crate::building_tool::BuildingState,
 }
 
 /// The 3D Sculpt editor's own settings. It works with the tool of the
@@ -1295,6 +1304,7 @@ impl Default for ToolState {
             select_by: Default::default(),
             structure: Default::default(),
             village: Default::default(),
+            building: Default::default(),
         }
     }
 }
@@ -1900,7 +1910,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
                     massif_core::voxel::sculpt(&mut edit, brush, [x, y, z], strength, mode);
                 }
             }
-            Tool::Eyedropper | Tool::Flood | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush | Tool::Structure | Tool::Village => {}
+            Tool::Eyedropper | Tool::Flood | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush | Tool::Structure | Tool::Building | Tool::Village => {}
         }
     }
     // A combined layer's pockets, painted from another level: the same
@@ -2738,6 +2748,7 @@ pub fn click(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, inverse:
             }
         }
         Tool::Structure => crate::structure_tool::click(doc, tools, x, z, inverse),
+        Tool::Building => None,
         Tool::Village => crate::structure_tool::village_click(doc, tools, x, z),
         // Flood's own button, the right one: a block lower (Shift: drained
         // whole).
@@ -4262,7 +4273,7 @@ mod tests {
         for (_, _, list) in Tool::GROUPS {
             for &tool in list {
                 // What draws on the map only: its selections, points, marks.
-                let map_only = matches!(tool, Tool::Pan | Tool::Road | Tool::River | Tool::Annotate) || tool.is_select();
+                let map_only = matches!(tool, Tool::Pan | Tool::Road | Tool::River | Tool::Annotate | Tool::Building) || tool.is_select();
                 assert_eq!(tool.in_3d() == Use3d::MapOnly, map_only, "{tool:?}");
             }
         }

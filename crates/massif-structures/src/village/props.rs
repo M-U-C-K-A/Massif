@@ -107,7 +107,7 @@ pub fn props(ground: &dyn Ground, area: &Area, site: &Site, roads: &Roads, reser
                     }
                     free.take(b.min, b.max, 1);
                     let d = crate::geom::place(v.door, origin, turn);
-                    out.placed.push(Placement { kind: "market".into(), file: v.file.clone(), origin, turn, min: b.min, max: b.max, door: d, facing: side.opposite(), size: v.class, villagers: 0 });
+                    out.placed.push(Placement { kind: "market".into(), file: v.file.clone(), origin, turn, min: b.min, max: b.max, door: d, facing: side.opposite(), size: v.class, villagers: 0, key: None });
                     n += 1;
                 }
             }
@@ -126,7 +126,7 @@ pub fn props(ground: &dyn Ground, area: &Area, site: &Site, roads: &Roads, reser
             }
             free.take(b.min, b.max, 1);
             let d = crate::geom::place(v.door, origin, turn);
-            out.placed.push(Placement { kind: format!("prop:{kind}"), file: v.file.clone(), origin, turn, min: b.min, max: b.max, door: d, facing, size: v.class, villagers: 0 });
+            out.placed.push(Placement { kind: format!("prop:{kind}"), file: v.file.clone(), origin, turn, min: b.min, max: b.max, door: d, facing, size: v.class, villagers: 0, key: None });
             return true;
         }
         // Massif's: a lamppost of one column, a bench of three, hay and

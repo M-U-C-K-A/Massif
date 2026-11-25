@@ -580,7 +580,7 @@ pub fn colors_of(s: &mut massif_core::structures::Structure, catalogue: Option<&
 }
 
 /// The name of a type of building, as the panel shows `n` of them.
-fn type_name(t: &str, n: u32) -> String {
+pub(crate) fn type_name(t: &str, n: u32) -> String {
     let one = n == 1;
     let s = match t {
         "house" => if one { tr!("house") } else { tr!("houses") },
@@ -1265,7 +1265,7 @@ pub fn draw(ctx: &egui::Context, painter: &egui::Painter, canvas: Rect, screen: 
 }
 
 /// A short text on a dark pill, legible over any land.
-fn label(painter: &egui::Painter, at: Pos2, text: &str) {
+pub(crate) fn label(painter: &egui::Painter, at: Pos2, text: &str) {
     let galley = painter.layout_no_wrap(text.to_owned(), FontId::proportional(11.5), Color32::from_gray(240));
     let back = Rect::from_min_size(at, galley.size() + vec2(10.0, 4.0));
     painter.rect_filled(back, theme::PILL, Color32::from_black_alpha(165));

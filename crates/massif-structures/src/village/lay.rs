@@ -121,7 +121,7 @@ fn lay_placement(b: &mut Builder, plans: &mut Plans, p: &Placement, villagers: u
         v.insert("PersistenceRequired".into(), Value::Byte(1));
         b.add_entity([at[0] as f64 + 0.5, at[1] as f64, at[2] as f64 + 0.5], v);
     }
-    b.pieces.push(Piece { min: p.min, max: p.max, template: p.kind.clone(), origin: p.origin, turn: p.turn, depth: 0, ground_delta: p.door[1] - p.origin[1], rigid: true, processors: String::new() });
+    b.pieces.push(Piece { min: p.min, max: p.max, template: p.kind.clone(), origin: p.origin, turn: p.turn, depth: 0, ground_delta: p.door[1] - p.origin[1], rigid: true, processors: String::new(), key: p.key });
 }
 
 /// A fence's state, joined to its neighbours that way.

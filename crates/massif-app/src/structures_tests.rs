@@ -369,3 +369,114 @@ fn the_walls_menu_shows_each_enclosure() {
     let massif_structures::placed::Recipe::Village { params, .. } = h.state().tools.village.recipe(massif_core::BlockRect::new(0, 0, 100, 100)) else { panic!("a village") };
     assert!(params.walls && params.enclosure == Enclosure::Hedge);
 }
+
+/// The Building tool as a user drives it, on a village of a pack: a
+/// building clicked is selected; R turns it, a drag moves it, another of
+/// the pack takes its place from the menu of pictures, Delete takes it
+/// away, each as one step to undo; the village keeps the changes. Rendered
+/// with MASSIF_SNAPSHOT_DIR.
+#[test]
+fn the_building_tool_changes_one_building() {
+    use massif_structures::placed::Recipe;
+    let ppp = std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
+    let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from);
+    let save = |h: &mut Harness<'_, MassifApp>, name: &str| {
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join(format!("building-{name}-{ppp}x.png"))).unwrap();
+        }
+    };
+    let packs = std::env::temp_dir().join(format!("massif-building-pack-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&packs);
+    let pack = massif_structures::village::testpack::write_pack(&packs).unwrap();
+    let mut h = harness_with(ThemeChoice::Dark, ppp);
+    h.run_steps(5);
+    {
+        let s = h.state_mut();
+        s.tools.select(Tool::Structure);
+        s.tools.village.packs = vec![pack.clone()];
+        s.tools.village.theme = ("Plains (test boxes)".into(), "Plains".into());
+        s.tools.structure.village = true;
+    }
+    let spot = dry_spot(&h);
+    look(&mut h, spot.0 as f64, spot.1 as f64, 1.6);
+    let p = map(&h).screen_of(spot.0 as f64, spot.1 as f64);
+    click_on(&mut h, p, PointerButton::Primary);
+    settle(&mut h, 120);
+    assert_eq!(h.state().doc.dimension().structures.len(), 1);
+    // The Building tool, from the Tools panel.
+    h.get_by_label("Building").click();
+    h.run_steps(3);
+    assert_eq!(h.state().tools.tool, Tool::Building);
+    // A house of the village, clicked: selected.
+    let house = |h: &Harness<'_, MassifApp>| h.state().doc.dimension().structures[0].pieces.iter().find(|p| p.template == "house" && p.key.is_some()).cloned().expect("a house");
+    let first = house(&h);
+    let key = first.key.unwrap();
+    let middle = |p: &massif_core::structures::Piece| ((p.min[0] + p.max[0] + 1) as f64 / 2.0, (p.min[2] + p.max[2] + 1) as f64 / 2.0);
+    let (mx, mz) = middle(&first);
+    look(&mut h, mx, mz, 6.0);
+    let at = map(&h).screen_of(mx, mz);
+    click_on(&mut h, at, PointerButton::Primary);
+    h.run_steps(4);
+    assert_eq!(h.state().tools.building.selected, Some(key), "the house clicked is selected");
+    save(&mut h, "selected");
+    let edits = |h: &Harness<'_, MassifApp>| match crate::structure_tool::recipe_of(&h.state().doc.dimension().structures[0]) {
+        Some(Recipe::Village { params, .. }) => params.edits,
+        _ => Vec::new(),
+    };
+    let piece = |h: &Harness<'_, MassifApp>| crate::building_tool::find(&h.state().doc, key).map(|(_, p)| p.clone());
+    // R over the map: turned a quarter, about its middle.
+    h.event(egui::Event::PointerMoved(at));
+    h.step();
+    h.key_press(egui::Key::R);
+    h.run_steps(2);
+    settle(&mut h, 120);
+    assert_eq!(edits(&h).first().map(|e| e.turn), Some(1), "turned");
+    let turned = piece(&h).expect("still there");
+    assert_ne!(turned.turn, first.turn);
+    let undo_steps = h.state().doc.history.undo_count();
+    // Dragged 12 blocks east: moved there.
+    let (tx, tz) = middle(&turned);
+    let from = map(&h).screen_of(tx, tz);
+    let to = map(&h).screen_of(tx + 12.0, tz);
+    drag(&mut h, from, to);
+    settle(&mut h, 120);
+    assert_eq!(edits(&h).first().map(|e| e.offset), Some([12, 0]), "moved");
+    assert_eq!(h.state().doc.history.undo_count(), undo_steps + 1, "one step to undo");
+    let moved = piece(&h).expect("still there");
+    assert!((moved.min[0] - turned.min[0] - 12).abs() <= 1, "{:?} from {:?}", moved.min, turned.min);
+    save(&mut h, "moved");
+    // Another house of the pack, from the menu of pictures.
+    h.get_by_label("Another building").scroll_to_me();
+    h.run_steps(3);
+    let menu = || egui_kittest::kittest::by().role(egui::accesskit::Role::ComboBox);
+    let shown = h.query_all(menu()).filter_map(|n| n.value()).find(|v| v.ends_with(".nbt")).expect("the menu of the pack's buildings");
+    h.query_all(menu()).find(|n| n.value().as_deref() == Some(shown.as_str())).unwrap().click();
+    h.run_steps(4);
+    save(&mut h, "swap-menu");
+    let theme = h.state().tools.village.theme_named("Plains (test boxes)", "Plains").expect("the pack's theme");
+    let other = theme.kind("house").unwrap().variants.iter().map(massif_structures::village::edits::file_name).find(|n| *n != shown).expect("another house");
+    h.get_by_label(&other).scroll_to_me();
+    h.run_steps(3);
+    h.get_by_label(&other).click();
+    h.run_steps(2);
+    settle(&mut h, 120);
+    assert_eq!(edits(&h).first().and_then(|e| e.swap.clone()).map(|s| s.1), Some(other.clone()), "swapped");
+    save(&mut h, "swapped");
+    // Undone: the house it was.
+    h.state_mut().doc.undo();
+    h.run_steps(2);
+    assert_eq!(edits(&h).first().and_then(|e| e.swap.clone()), None);
+    // Delete: taken away; the village keeps the others.
+    let before = h.state().doc.dimension().structures[0].pieces.iter().filter(|p| p.key.is_some()).count();
+    h.state_mut().tools.building.selected = Some(key);
+    h.run_steps(2);
+    let at = map(&h).screen_of(middle(&piece(&h).unwrap()).0, middle(&piece(&h).unwrap()).1);
+    h.event(egui::Event::PointerMoved(at));
+    h.step();
+    h.key_press(egui::Key::Delete);
+    h.run_steps(2);
+    settle(&mut h, 120);
+    assert!(piece(&h).is_none(), "taken away");
+    assert_eq!(h.state().doc.dimension().structures[0].pieces.iter().filter(|p| p.key.is_some()).count(), before - 1);
+    let _ = std::fs::remove_dir_all(&packs);
+}

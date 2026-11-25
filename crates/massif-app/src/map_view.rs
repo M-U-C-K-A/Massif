@@ -1604,6 +1604,9 @@ impl MapView {
                 let (hold, note) = tools::press_water(doc, tools, bx, bz, inverse, secondary && modifiers.shift);
                 *feedback = note.or(feedback.take());
                 self.water = hold.map(|h| (h, secondary));
+            } else if tools.tool == Tool::Building {
+                // A building of a village: selected, ready to drag.
+                *feedback = crate::building_tool::press(doc, tools, (x, z)).or(feedback.take());
             } else if tools.tool == Tool::Structure && !secondary {
                 // Structures: a click or a drag, on a structure placed or
                 // on free land.
@@ -1636,6 +1639,30 @@ impl MapView {
             && ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
         {
             *feedback = crate::structure_tool::remove(doc, tools, id).or(feedback.take());
+        }
+        // The Building tool's keys over the map: R turns the building
+        // selected, Delete takes it away.
+        if tools.tool == Tool::Building
+            && response.hovered()
+            && let Some(key) = tools.building.selected
+            && ui.ctx().memory(|m| m.focused().is_none())
+        {
+            if ui.input(|i| i.key_pressed(egui::Key::R) && i.modifiers.is_none()) {
+                *feedback = crate::building_tool::turn(doc, tools, key).or(feedback.take());
+            } else if ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)) {
+                *feedback = crate::building_tool::remove(doc, tools, key).or(feedback.take());
+            }
+        }
+        // A building dragged follows the pointer; let go, it moves there.
+        if crate::building_tool::dragging(tools) {
+            if down[0] && tools.tool == Tool::Building {
+                if let Some(at) = world_pointer {
+                    crate::building_tool::drag(tools, at);
+                }
+                ui.ctx().request_repaint();
+            } else {
+                *feedback = crate::building_tool::release(doc, tools).or(feedback.take());
+            }
         }
         // A drag of the Structures tool follows the pointer; let go, it
         // places, moves or resizes.
@@ -2086,6 +2113,11 @@ impl MapView {
             self.river_bar(ui, &painter, canvas, response.id, doc, tools, feedback);
         } else {
             self.river_bar = None;
+        }
+        if tools.tool == Tool::Building {
+            let screen = |q: (f32, f32)| self.to_screen(canvas, q.0 as f64, q.1 as f64);
+            let hover = pointer.filter(|_| response.hovered()).map(|p| self.to_world(canvas, p)).map(|(x, z)| (x.floor() as i32, z.floor() as i32));
+            crate::building_tool::draw(ui.ctx(), &painter, &screen, hover, doc, tools);
         }
         if matches!(tools.tool, Tool::Structure | Tool::Village) {
             let screen = |q: (f32, f32)| self.to_screen(canvas, q.0 as f64, q.1 as f64);

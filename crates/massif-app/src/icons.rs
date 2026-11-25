@@ -111,6 +111,7 @@ fn art(tool: Tool) -> Art {
         Tool::Layer => Art::Glyph(Icon::SquareSplitVertical),
         Tool::Combined => Art::Glyph(Icon::Combine),
         Tool::Structure => Art::Glyph(Icon::Castle),
+        Tool::Building => Art::Glyph(Icon::SquareMousePointer),
         Tool::Village => Art::Glyph(Icon::House),
         Tool::Water => Art::Paths(WATER),
         Tool::EraseSlab => Art::Glyph(Icon::Eraser),
@@ -439,7 +440,7 @@ mod tests {
     use super::*;
 
     /// Every tool, in the order of the Tools panel.
-    pub(super) const ALL: [Tool; 37] = [
+    pub(super) const ALL: [Tool; 38] = [
         Tool::Raise,
         Tool::Smooth,
         Tool::Flatten,
@@ -462,6 +463,7 @@ mod tests {
         Tool::Layer,
         Tool::Combined,
         Tool::Structure,
+        Tool::Building,
         Tool::Village,
         Tool::River,
         Tool::Flood,

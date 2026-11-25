@@ -70,7 +70,7 @@ pub fn build(ground: &dyn Ground, req: &Request, rng: &mut Rng) -> Result<crate:
     }
     if matches!(req.kind.recipe, Recipe::DesertPyramid | Recipe::JunglePyramid | Recipe::SwampHut) {
         let (min, max) = ([corner[0], surface - 15, corner[2]], [corner[0] + w - 1, surface + size[1], corner[2] + l - 1]);
-        b.pieces.push(Piece { min, max, template: String::new(), origin: [corner[0], surface, corner[2]], turn, depth: 0, ground_delta: 0, rigid: true, processors: String::new() });
+        b.pieces.push(Piece { min, max, template: String::new(), origin: [corner[0], surface, corner[2]], turn, depth: 0, ground_delta: 0, rigid: true, processors: String::new(), key: None });
     }
     let heights = adapted.heights.clone();
     Ok((b.finish(req.id, req.kind.name, req.kind.game_id, true, 0), heights))
@@ -537,7 +537,7 @@ fn stronghold(b: &mut Builder, start: [i32; 3], turn: u8, rng: &mut Rng) {
     }
     for &c in &keys {
         let p = world(c);
-        b.pieces.push(Piece { min: [p[0] - CELL / 2, p[1], p[2] - CELL / 2], max: [p[0] + CELL / 2, p[1] + 6, p[2] + CELL / 2], template: String::new(), origin: p, turn, depth: 0, ground_delta: 0, rigid: true, processors: String::new() });
+        b.pieces.push(Piece { min: [p[0] - CELL / 2, p[1], p[2] - CELL / 2], max: [p[0] + CELL / 2, p[1] + 6, p[2] + CELL / 2], template: String::new(), origin: p, turn, depth: 0, ground_delta: 0, rigid: true, processors: String::new(), key: None });
     }
 }
 

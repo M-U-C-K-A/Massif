@@ -650,3 +650,65 @@ fn villages_placed_before_keep_their_ramparts() {
     assert_eq!(p.enclosure, super::walls::Enclosure::Ramparts);
     assert_eq!(Params::default().enclosure, super::walls::Enclosure::WoodenFence);
 }
+
+/// Buildings changed by hand — taken away, swapped, drawn again, turned,
+/// moved — are changed again each time the village is built with the same
+/// draw; a building moved off its road gets a path to its door; the pieces
+/// of the village name their building.
+#[test]
+fn buildings_changed_by_hand_stay_changed() {
+    use super::edits::{BuildingEdit, file_name};
+    let (_t, th) = plains();
+    let rect = BlockRect::new(0, 0, 260, 260);
+    let inside = |x: i32, z: i32| rect.contains(x, z);
+    let build_with = |edits: Vec<BuildingEdit>| {
+        let req = request(&th, rect, &inside, Params { houses: Some(14), edits, ..Params::default() });
+        stages(None, &flat(), &req).unwrap().0
+    };
+    let before = build_with(Vec::new());
+    let houses: Vec<&buildings::Placement> = before.buildings.placed.iter().filter(|p| p.kind == "house").collect();
+    assert!(houses.len() >= 6, "{} houses", houses.len());
+    let key = |p: &buildings::Placement| p.key.expect("a building of the draw has its key");
+    // Another house of the pack than the second one.
+    let other = th.kind("house").unwrap().variants.iter().find(|v| v.file != houses[1].file).unwrap();
+    let edits = vec![
+        BuildingEdit { removed: true, ..BuildingEdit::new(key(houses[0])) },
+        BuildingEdit { swap: Some(("house".into(), file_name(other))), ..BuildingEdit::new(key(houses[1])) },
+        BuildingEdit { draw: 1, ..BuildingEdit::new(key(houses[2])) },
+        BuildingEdit { turn: 1, ..BuildingEdit::new(key(houses[3])) },
+        BuildingEdit { offset: [0, 0], ..BuildingEdit::new(key(houses[4])) },
+    ];
+    let after = build_with(edits.clone());
+    let find = |st: &Stages, k: [i32; 2]| st.buildings.placed.iter().find(|p| p.key == Some(k)).cloned();
+    assert!(find(&after, key(houses[0])).is_none(), "taken away");
+    assert_eq!(find(&after, key(houses[1])).unwrap().file, other.file, "swapped");
+    // Swapped in its place: its door on the same road.
+    let swapped = find(&after, key(houses[1])).unwrap();
+    assert_eq!(swapped.facing, houses[1].facing);
+    if th.kind("house").unwrap().variants.len() > 1 {
+        assert_ne!(find(&after, key(houses[2])).unwrap().file, houses[2].file, "drawn again");
+    }
+    let turned = find(&after, key(houses[3])).unwrap();
+    assert_ne!(turned.facing, houses[3].facing, "turned");
+    let (m0, m1) = (((houses[3].min[0] + houses[3].max[0]) / 2, (houses[3].min[2] + houses[3].max[2]) / 2), ((turned.min[0] + turned.max[0]) / 2, (turned.min[2] + turned.max[2]) / 2));
+    assert!((m0.0 - m1.0).abs() <= 1 && (m0.1 - m1.1).abs() <= 1, "turned about its middle: {m0:?} {m1:?}");
+    assert_eq!(after.buildings.placed.len(), before.buildings.placed.len() - 1);
+    // The same again with the same edits.
+    assert_eq!(build_with(edits.clone()), after);
+    // Moved 30 blocks east: its door reaches a road by a path.
+    let k = key(houses[5]);
+    let moved_st = build_with(vec![BuildingEdit { offset: [30, 0], ..BuildingEdit::new(k) }]);
+    let moved = find(&moved_st, k).unwrap();
+    assert!((moved.min[0] - houses[5].min[0] - 30).abs() <= 1, "moved: {:?} from {:?}", moved.min, houses[5].min);
+    let area = Area::new(rect, &inside);
+    let cells = moved_st.roads.cells(&area);
+    let front = (moved.door[0] + moved.facing.step()[0], moved.door[2] + moved.facing.step()[1]);
+    assert!([(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|d| cells.contains_key(&(front.0 + d.0, front.1 + d.1))), "a road or a path at its door {front:?}");
+    // The pieces name their buildings.
+    let req = request(&th, rect, &inside, Params { houses: Some(14), ..Params::default() });
+    let built = build(None, &flat(), &req).unwrap();
+    assert!(built.structure.pieces.iter().any(|p| p.key == Some(key(houses[0]))));
+    // An edit of a building no longer in the draw is noted, not lost.
+    let lost = build_with(vec![BuildingEdit { removed: true, ..BuildingEdit::new([-999, -999]) }]);
+    assert!(lost.buildings.notes.iter().any(|n| n.contains("no longer in this draw")));
+}

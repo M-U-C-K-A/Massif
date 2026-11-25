@@ -86,6 +86,10 @@ pub struct Piece {
     /// (empty: none, or some of its own).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub processors: String,
+    /// For a building of a village, the column before its door the draw
+    /// gave it: what changes made to it by hand name it by.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<[i32; 2]>,
 }
 
 /// A structure placed on the map.
@@ -443,7 +447,7 @@ mod tests {
         assert!(dim.structure_boxes(crate::coords::TilePos::new(3, 3)).is_empty());
         // With pieces: theirs.
         let mut t = s;
-        t.pieces = vec![Piece { min: [10, 60, 10], max: [19, 70, 19], template: String::new(), origin: [10, 60, 10], turn: 0, depth: 0, ground_delta: 1, rigid: true, processors: String::new() }];
+        t.pieces = vec![Piece { min: [10, 60, 10], max: [19, 70, 19], template: String::new(), origin: [10, 60, 10], turn: 0, depth: 0, ground_delta: 1, rigid: true, processors: String::new(), key: None }];
         t.min = [-1, 60, 0];
         t.max = [19, 70, 19];
         dim.structures[0] = std::sync::Arc::new(t);
