@@ -262,5 +262,13 @@
   "Sky": "Himmel",
   "Resolution": "Auflösung",
   "Auto": "Auto",
-  "{n} samples a side: about {mb} MB and several seconds a picture": "{n} Werte je Seite: etwa {mb} MB und mehrere Sekunden je Bild"
+  "{n} samples a side: about {mb} MB and several seconds a picture": "{n} Werte je Seite: etwa {mb} MB und mehrere Sekunden je Bild",
+  "Node Library": "Knotenbibliothek",
+  "Generator Viewer": "Generator-Ansicht",
+  "Generator Graph": "Generator-Graph",
+  "Classic properties": "Klassische Eigenschaften",
+  "The generator's nodes by category, to search and add": "Die Knoten des Generators nach Kategorie, zum Suchen und Hinzufügen",
+  "The selected node's terrain in 2D or 3D, Live and Apply to map": "Das Gelände des gewählten Knotens in 2D oder 3D, Live und Auf Karte anwenden",
+  "The generator's nodes and wires, and its MassifScript": "Die Knoten und Verbindungen des Generators und sein MassifScript",
+  "The settings of the generator's selected node, or of its graph": "Die Einstellungen des gewählten Knotens des Generators oder seines Graphen"
 }

@@ -522,5 +522,13 @@
   "Dark": "Sombre",
   "Sky": "Ciel",
   "Resolution": "Résolution",
-  "{n} samples a side: about {mb} MB and several seconds a picture": "{n} échantillons de côté : environ {mb} Mo et plusieurs secondes par image"
+  "{n} samples a side: about {mb} MB and several seconds a picture": "{n} échantillons de côté : environ {mb} Mo et plusieurs secondes par image",
+  "Node Library": "Bibliothèque de nœuds",
+  "Generator Viewer": "Visionneuse du générateur",
+  "Generator Graph": "Graphe du générateur",
+  "Classic properties": "Propriétés classiques",
+  "The generator's nodes by category, to search and add": "Les nœuds du générateur par catégorie, à chercher et ajouter",
+  "The selected node's terrain in 2D or 3D, Live and Apply to map": "Le terrain du nœud sélectionné en 2D ou en 3D, En direct et Appliquer à la carte",
+  "The generator's nodes and wires, and its MassifScript": "Les nœuds et les liens du générateur, et son MassifScript",
+  "The settings of the generator's selected node, or of its graph": "Les réglages du nœud sélectionné du générateur, ou de son graphe"
 }

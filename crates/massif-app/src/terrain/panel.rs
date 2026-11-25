@@ -238,6 +238,27 @@ pub struct TerrainPanel {
     pub notes: Vec<String>,
     /// The Script pane beside the graph (MassifScript).
     pub script: super::script::ScriptPane,
+    /// Drawn as separate panels of the app's layout (`Part`), each in an
+    /// area of its own with its own title, rather than as one area.
+    pub docked: bool,
+    /// The frame (egui pass) the panels last started, so that what is done
+    /// once a frame is done once whichever panels are shown.
+    pass: Option<u64>,
+    /// Pixels of the viewer's picture, as it was last drawn.
+    viewer_px: [usize; 2],
+}
+
+/// One of the generator's panels, each an area of the app's layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Part {
+    /// Search and the nodes by category, to add.
+    Library,
+    /// The selected node's terrain, 2D or 3D; Live and Apply.
+    Viewer,
+    /// The canvas, its commands, minimap and the MassifScript pane.
+    Graph,
+    /// The selected node's settings, or the graph's.
+    Properties,
 }
 
 impl TerrainPanel {
@@ -296,6 +317,9 @@ impl TerrainPanel {
             written: None,
             dirty: false,
             own_undo_keys: true,
+            docked: false,
+            pass: None,
+            viewer_px: [640, 360],
             env_key: None,
             env_at: None,
             env_revision: 0,
@@ -493,6 +517,113 @@ impl TerrainPanel {
         self.sync(doc);
         self.ui(ui);
         self.commit(doc);
+    }
+
+    /// One panel of the generator in the app (`part` in `ui`'s room): the
+    /// document's graph taken once a frame, edited, written back.
+    pub fn part_in(&mut self, ui: &mut Ui, doc: &mut crate::doc::Document, part: Part) {
+        self.own_undo_keys = false;
+        self.docked = true;
+        if self.begin_pass(ui.ctx()) {
+            self.script.title = doc.world.meta.name.clone();
+            self.sync(doc);
+        }
+        self.part(ui, part);
+        self.commit(doc);
+    }
+
+    /// At the first panel drawn in a frame: the previous frame's previews
+    /// asked for (their size the viewer's as last drawn), its edit ended
+    /// when nothing is held. True when this frame had not started yet.
+    fn begin_pass(&mut self, ctx: &egui::Context) -> bool {
+        let pass = ctx.cumulative_pass_nr();
+        if self.pass == Some(pass) {
+            return false;
+        }
+        let first = self.pass.is_none();
+        self.pass = Some(pass);
+        self.events.clear();
+        if !first {
+            self.after_frame(ctx, self.viewer_px);
+        }
+        true
+    }
+
+    /// What follows the drawing of a frame: previews asked for, an edit
+    /// ended when nothing is held, a repaint while previews come.
+    fn after_frame(&mut self, ctx: &egui::Context, viewer_px: [usize; 2]) {
+        let thumb_px = if ctx.pixels_per_point() > 1.5 { 256 } else { 128 };
+        self.update_previews(ctx, viewer_px, thumb_px);
+        let held = ctx.input(|i| i.pointer.any_down()) || ctx.memory(|m| m.focused().is_some());
+        if !held {
+            self.editing = false;
+        }
+        if !self.previews_idle() && !theme::reduce_motion(ctx) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
+    }
+
+    /// The viewer's pixels for `viewer` (its card), at most 1600 × 1200,
+    /// keeping its shape.
+    fn viewer_pixels(viewer: Rect, px: f32) -> [usize; 2] {
+        let inner = super::viewer::picture_rect(viewer);
+        let (vw, vh) = (inner.width().max(1.0) * px, inner.height().max(1.0) * px);
+        let k = (1600.0 / vw).min(1200.0 / vh).min(1.0);
+        [((vw * k) as usize).max(64), ((vh * k) as usize).max(64)]
+    }
+
+    /// One panel, filling `ui`'s room.
+    pub fn part(&mut self, ui: &mut Ui, part: Part) {
+        let pal = Palette::of(ui);
+        let full = ui.available_rect_before_wrap();
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(full).layout(egui::Layout::top_down(egui::Align::Min)));
+        child.set_clip_rect(full.intersect(ui.clip_rect()));
+        let ui = &mut child;
+        match part {
+            Part::Library => super::library::ui(self, ui),
+            Part::Viewer => {
+                self.viewer_px = Self::viewer_pixels(full, ui.ctx().pixels_per_point());
+                super::viewer::ui(self, ui);
+            }
+            Part::Graph => {
+                // The status line at the foot; the Script pane beside the
+                // graph, or in its place when narrow.
+                let status_h = 22.0;
+                let body = Rect::from_min_max(full.min, pos2(full.right(), (full.bottom() - status_h).max(full.top())));
+                let status = Rect::from_min_max(pos2(full.left() + theme::PAD, body.bottom()), full.max);
+                let (graph, script) = match (self.script.open, body.width() >= 640.0) {
+                    (false, _) => (body, None),
+                    (true, true) => {
+                        let w = (body.width() * 0.46).clamp(300.0, 620.0);
+                        (Rect::from_min_max(body.min, pos2(body.right() - w, body.bottom())), Some(Rect::from_min_max(pos2(body.right() - w, body.top()), body.max)))
+                    }
+                    (true, false) => (Rect::NOTHING, Some(body)),
+                };
+                if graph.is_positive() {
+                    let mut g = ui.new_child(egui::UiBuilder::new().max_rect(graph).layout(egui::Layout::top_down(egui::Align::Min)));
+                    g.set_clip_rect(graph.intersect(ui.clip_rect()));
+                    super::canvas::ui(self, &mut g);
+                }
+                if let Some(r) = script {
+                    if graph.is_positive() {
+                        ui.painter().vline(r.left(), r.y_range(), egui::Stroke::new(1.0, pal.border));
+                    }
+                    let mut s = ui.new_child(egui::UiBuilder::new().max_rect(r).layout(egui::Layout::top_down(egui::Align::Min)));
+                    s.set_clip_rect(r.intersect(ui.clip_rect()));
+                    super::script::ui(self, &mut s);
+                }
+                ui.painter().hline(full.x_range(), body.bottom(), egui::Stroke::new(1.0, pal.border));
+                self.status_ui(ui, status);
+            }
+            Part::Properties => {
+                self.hovered_help = None;
+                super::props::ui(self, ui);
+            }
+        }
+        // The dialog that names an exposed setting, over whichever panel.
+        if self.exposing.is_some() {
+            super::props::expose_dialog(self, ui);
+        }
     }
 
     pub fn engine(&self) -> Option<&Arc<Engine>> {
@@ -1293,6 +1424,7 @@ impl TerrainPanel {
     /// The whole panel, in `ui`'s room.
     pub fn ui(&mut self, ui: &mut Ui) {
         self.events.clear();
+        self.docked = false;
         let pal = Palette::of(ui);
         let full = ui.available_rect_before_wrap();
         ui.painter().rect_filled(full, 0.0, pal.app_bg);
@@ -1333,13 +1465,9 @@ impl TerrainPanel {
 
         self.hovered_help = None;
         let px = ui.ctx().pixels_per_point();
-        let inner = super::viewer::picture_rect(viewer);
-        // The viewer's pixels, at most 1600 × 1200, keeping its shape.
-        let (vw, vh) = (inner.width().max(1.0) * px, inner.height().max(1.0) * px);
-        let k = (1600.0 / vw).min(1200.0 / vh).min(1.0);
-        let viewer_px = [((vw * k) as usize).max(64), ((vh * k) as usize).max(64)];
+        let viewer_px = Self::viewer_pixels(viewer, px);
         if lib_w > 0.0 {
-            card(ui, lib, |ui| super::library::ui(self, ui, graph));
+            card(ui, lib, |ui| super::library::ui(self, ui));
         }
         card(ui, viewer, |ui| super::viewer::ui(self, ui));
         if graph.is_positive() {
@@ -1353,17 +1481,7 @@ impl TerrainPanel {
         }
         super::props::expose_dialog(self, ui);
         self.status_ui(ui, status);
-        let thumb_px = if px > 1.5 { 256 } else { 128 };
-        self.update_previews(ui.ctx(), viewer_px, thumb_px);
-
-        // An edit ends when nothing is held.
-        let held = ui.input(|i| i.pointer.any_down()) || ui.ctx().memory(|m| m.focused().is_some());
-        if !held {
-            self.editing = false;
-        }
-        if !self.previews_idle() && !theme::reduce_motion(ui.ctx()) {
-            ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
-        }
+        self.after_frame(ui.ctx(), viewer_px);
     }
 
     fn status_ui(&self, ui: &mut Ui, rect: Rect) {

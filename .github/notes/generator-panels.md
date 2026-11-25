@@ -1,0 +1,3 @@
+**The Terrain Generator in panels of its own**
+
+The Terrain Generator is now four panels like the rest of Massif: the Node Library, the Generator Viewer, the Generator Graph (with its MassifScript pane) and Node Properties. Each can be moved, swapped, put in tabs, floated or closed, and they keep working together wherever they are: selecting a node shows its settings and its terrain, Live and Apply work from the viewer, and undo over any of them undoes the graph's last change. The Generator workspace lays them out as before, and a layout saved with the generator in one area opens split into the four. The classic graph's settings panel is now named Classic properties.

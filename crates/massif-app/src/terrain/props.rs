@@ -122,7 +122,7 @@ fn graph_ui(p: &mut TerrainPanel, ui: &mut Ui) {
     widgets::well(ui, |ui| {
         let top = ui.cursor().top();
         widgets::row(ui, t!("Terrain size"), |ui| {
-            changed |= ui.add(widgets::Field::new(&mut size, 512.0..=32768.0).suffix(" b").logarithmic(true).width(160.0)).changed();
+            changed |= ui.add(widgets::Field::new(&mut size, 512.0..=32768.0).suffix(" b").logarithmic(true).width((ui.available_width() * 0.58).min(160.0))).changed();
         });
         hover_help(p, ui, top, "Side of the square of the world the graph makes, in blocks. Mountains keep their size in blocks when it changes.");
         let top = ui.cursor().top();
@@ -131,17 +131,17 @@ fn graph_ui(p: &mut TerrainPanel, ui: &mut Ui) {
                 seed = (seed * 7919.0 + 104729.0) % 1_000_000.0;
                 changed = true;
             }
-            changed |= ui.add(widgets::Field::new(&mut seed, 0.0..=1_000_000.0).max_decimals(0).width(120.0)).changed();
+            changed |= ui.add(widgets::Field::new(&mut seed, 0.0..=1_000_000.0).max_decimals(0).width((ui.available_width() * 0.45).min(120.0))).changed();
         });
         hover_help(p, ui, top, "The seed all of the graph's randomness starts from.");
         let top = ui.cursor().top();
         widgets::row(ui, t!("Sea level"), |ui| {
-            changed |= ui.add(widgets::Field::new(&mut sea, -64.0..=320.0).suffix(" b").max_decimals(0).width(160.0)).changed();
+            changed |= ui.add(widgets::Field::new(&mut sea, -64.0..=320.0).suffix(" b").max_decimals(0).width((ui.available_width() * 0.58).min(160.0))).changed();
         });
         hover_help(p, ui, top, "Where the sea's surface lies, in blocks.");
         let top = ui.cursor().top();
         widgets::row(ui, t!("Simulation resolution"), |ui| {
-            changed |= ui.add(widgets::Field::new(&mut sim, 256.0..=8192.0).suffix(" px").logarithmic(true).max_decimals(0).width(160.0)).changed();
+            changed |= ui.add(widgets::Field::new(&mut sim, 256.0..=8192.0).suffix(" px").logarithmic(true).max_decimals(0).width((ui.available_width() * 0.58).min(160.0))).changed();
         });
         hover_help(p, ui, top, "Samples a side erosion and water run at in previews: finer is sharper and slower. Builds run at the map's own resolution.");
     });
@@ -466,7 +466,7 @@ fn composite_ui(p: &mut TerrainPanel, ui: &mut Ui) {
                 changed |= ui.add(egui::TextEdit::singleline(&mut label).desired_width(160.0)).changed();
             });
             widgets::row(ui, t!("Library group"), |ui| {
-                widgets::combo("terrain composite category").width(160.0).selected_text(super::text::name_owned(&category)).show_ui(ui, |ui| {
+                widgets::combo("terrain composite category").width((ui.available_width() * 0.58).min(160.0)).selected_text(super::text::name_owned(&category)).show_ui(ui, |ui| {
                     for f in massif_terrain::registry::Family::ALL {
                         if f == massif_terrain::registry::Family::Internal {
                             continue;

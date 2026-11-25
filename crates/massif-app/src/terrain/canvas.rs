@@ -901,6 +901,10 @@ fn breadcrumb(p: &mut TerrainPanel, ui: &mut Ui, full: Rect, pal: &Palette) -> f
     let y = full.top() + 18.0;
     let mut x = full.left() + theme::PAD;
     if p.outer.is_empty() {
+        // Docked, the area's header names it.
+        if p.docked {
+            return x;
+        }
         super::panel::title(ui, full, t!("Graph"));
         return x + 60.0;
     }

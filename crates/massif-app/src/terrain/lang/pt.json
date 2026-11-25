@@ -262,5 +262,13 @@
   "Sky": "Céu",
   "Resolution": "Resolução",
   "Auto": "Auto",
-  "{n} samples a side: about {mb} MB and several seconds a picture": "{n} amostras de lado: cerca de {mb} MB e vários segundos por imagem"
+  "{n} samples a side: about {mb} MB and several seconds a picture": "{n} amostras de lado: cerca de {mb} MB e vários segundos por imagem",
+  "Node Library": "Biblioteca de nós",
+  "Generator Viewer": "Visualizador do gerador",
+  "Generator Graph": "Grafo do gerador",
+  "Classic properties": "Propriedades clássicas",
+  "The generator's nodes by category, to search and add": "Os nós do gerador por categoria, para procurar e adicionar",
+  "The selected node's terrain in 2D or 3D, Live and Apply to map": "O terreno do nó selecionado em 2D ou 3D, Ao vivo e Aplicar ao mapa",
+  "The generator's nodes and wires, and its MassifScript": "Os nós e ligações do gerador, e o seu MassifScript",
+  "The settings of the generator's selected node, or of its graph": "As definições do nó selecionado do gerador, ou do seu grafo"
 }

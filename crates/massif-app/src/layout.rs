@@ -45,9 +45,18 @@ pub enum EditorKind {
     GraphProps,
     /// Sun, clouds and the rest of how the graph's viewport renders.
     RenderSettings,
-    /// The terrain generator of 1.2: library, lit viewer, node graph and
-    /// settings in one area (`crate::terrain`).
+    /// The terrain generator of 1.2 in one area, as before layout version
+    /// 10 split it into the four below (no longer offered; kept so that
+    /// older layouts read, and migrated).
     TerrainGraph,
+    /// The terrain generator's nodes by category, to add (`crate::terrain`).
+    GenLibrary,
+    /// The terrain generator's lit viewer: 2D/3D, Live, Apply to map.
+    GenViewer,
+    /// The terrain generator's node graph, with its MassifScript pane.
+    GenGraph,
+    /// The settings of the generator's selected node, or of its graph.
+    GenProps,
     /// How Massif runs, live (with Settings ▸ Developer on).
     Developer,
     /// The map's save points: to restore, open, compare.
@@ -90,7 +99,7 @@ impl EditorKind {
         &[(tn!("Paint"), &[EditorKind::Terrain, EditorKind::Layers, EditorKind::Packs, EditorKind::Blocks, EditorKind::Biomes, EditorKind::Levels])],
         &[(
             tn!("Terrain"),
-            &[EditorKind::TerrainGraph, EditorKind::GraphView, EditorKind::Graph, EditorKind::GraphProps, EditorKind::RenderSettings],
+            &[EditorKind::GenGraph, EditorKind::GenViewer, EditorKind::GenLibrary, EditorKind::GenProps, EditorKind::Graph, EditorKind::GraphView, EditorKind::GraphProps, EditorKind::RenderSettings],
         )],
         &[(
             tn!("Render"),
@@ -126,6 +135,10 @@ impl EditorKind {
             EditorKind::GraphProps => tr!("The settings of the selected node"),
             EditorKind::RenderSettings => tr!("Sun, clouds and haze, and images saved from the viewport"),
             EditorKind::TerrainGraph => crate::terrain::text::t("The new terrain generator: nodes, lit previews and the Map Output"),
+            EditorKind::GenLibrary => crate::terrain::text::t("The generator's nodes by category, to search and add"),
+            EditorKind::GenViewer => crate::terrain::text::t("The selected node's terrain in 2D or 3D, Live and Apply to map"),
+            EditorKind::GenGraph => crate::terrain::text::t("The generator's nodes and wires, and its MassifScript"),
+            EditorKind::GenProps => crate::terrain::text::t("The settings of the generator's selected node, or of its graph"),
             EditorKind::Developer => tr!("Frames, memory and processor, live"),
             EditorKind::Versions => tr!("Save points of the map: restore, open or compare them"),
             EditorKind::RenderView => tr!("The map path-traced under a real sky, growing clean while it stays still"),
@@ -157,9 +170,13 @@ impl EditorKind {
             EditorKind::Info => tr!("Info"),
             EditorKind::Graph => tr!("Classic graph"),
             EditorKind::GraphView => tr!("Graph Viewport"),
-            EditorKind::GraphProps => tr!("Node Properties"),
+            EditorKind::GraphProps => crate::terrain::text::t("Classic properties"),
             EditorKind::RenderSettings => tr!("Render Settings"),
             EditorKind::TerrainGraph => crate::terrain::text::t("Terrain Generator"),
+            EditorKind::GenLibrary => crate::terrain::text::t("Node Library"),
+            EditorKind::GenViewer => crate::terrain::text::t("Generator Viewer"),
+            EditorKind::GenGraph => crate::terrain::text::t("Generator Graph"),
+            EditorKind::GenProps => tr!("Node Properties"),
             EditorKind::Developer => tr!("Developer"),
             EditorKind::Versions => tr!("Versions"),
             EditorKind::RenderView => tr!("Render Viewport"),
@@ -198,7 +215,10 @@ impl EditorKind {
             EditorKind::GraphView => Icon::MountainSnow,
             EditorKind::GraphProps => Icon::SlidersVertical,
             EditorKind::RenderSettings => Icon::Sun,
-            EditorKind::TerrainGraph => Icon::Network,
+            EditorKind::TerrainGraph | EditorKind::GenGraph => Icon::Network,
+            EditorKind::GenLibrary => Icon::Boxes,
+            EditorKind::GenViewer => Icon::MountainSnow,
+            EditorKind::GenProps => Icon::SlidersVertical,
             EditorKind::Developer => Icon::Activity,
             EditorKind::Versions => Icon::History,
             EditorKind::RenderView => Icon::Aperture,
@@ -521,7 +541,6 @@ impl Workspace {
     }
 
     /// What area `id` shows, docked or floating.
-    #[cfg(test)]
     pub fn editor_of(&self, id: AreaId) -> Option<EditorKind> {
         self.root.editor_of(id).or_else(|| self.floating.iter().find(|f| f.id == id).map(|f| f.editor))
     }
@@ -580,7 +599,7 @@ pub enum Side {
 
 /// The workspaces a layout saved by an older version lacks are added to it
 /// once: this is the version they come with.
-const LAYOUT_VERSION: u32 = 9;
+const LAYOUT_VERSION: u32 = 10;
 
 /// The share of the window's width the column of the tools takes on the
 /// left of the Layout, Sculpting and Painting workspaces: the same in all
@@ -695,6 +714,36 @@ pub const WORLDPAINTER: &str = tn!("WorldPainter");
 /// The Terrain side's first workspace: the terrain generator of 1.2.
 pub const GENERATOR: &str = tn!("Generator");
 
+/// The terrain generator's panels as its workspace lays them out: the
+/// library on the left, the viewer above the graph, the selected node's
+/// settings on the right.
+fn generator_tree(b: &mut Builder) -> Node {
+    let (lib, viewer, graph, props) = (b.area(EditorKind::GenLibrary), b.area(EditorKind::GenViewer), b.area(EditorKind::GenGraph), b.area(EditorKind::GenProps));
+    let mid = b.column(0.44, viewer, graph);
+    let right = b.row(0.74, mid, props);
+    b.row(0.15, lib, right)
+}
+
+/// Every area of `node` that shows the terrain generator in one area (as
+/// before layout version 10), its four panels in its place.
+fn split_generator(node: &mut Node, next: &mut AreaId) {
+    match node {
+        Node::Area { editor: EditorKind::TerrainGraph, .. } => *node = generator_tree(&mut Builder(next)),
+        Node::Area { .. } => {}
+        Node::Split { a, b, .. } => {
+            split_generator(a, next);
+            split_generator(b, next);
+        }
+    }
+}
+
+impl EditorKind {
+    /// One of the terrain generator's panels.
+    pub const fn generator(self) -> bool {
+        matches!(self, EditorKind::TerrainGraph | EditorKind::GenLibrary | EditorKind::GenViewer | EditorKind::GenGraph | EditorKind::GenProps)
+    }
+}
+
 /// Give every area of `node` a new id, from `next` on, so that no view
 /// state is shared with the areas it was copied from.
 fn renumber(node: &mut Node, next: &mut AreaId) {
@@ -800,8 +849,8 @@ impl Default for Layout {
         add(tn!("Minimal"), b.row(0.12, tools, map));
 
         // The terrain generator of 1.2, the Terrain side's first: its
-        // library, viewer, graph and settings in one area.
-        add(GENERATOR, b.area(TerrainGraph));
+        // library, viewer, graph and settings, each a panel.
+        add(GENERATOR, generator_tree(&mut b));
         // The classic graph (older maps'). Graph: as in Gaea, the viewport
         // above the graph, the selected node's settings on the right.
         let (view, graph) = (b.area(GraphView), b.area(Graph));
@@ -940,7 +989,7 @@ impl Layout {
         }
         // Version 9: the terrain generator of 1.2 is the Terrain side's
         // first workspace, and the one it opens on.
-        if self.version < 9 && !self.workspaces.iter().any(|w| w.terrain && w.root.shows(EditorKind::TerrainGraph)) {
+        if self.version < 9 && !self.workspaces.iter().any(|w| w.terrain && (w.root.shows(EditorKind::TerrainGraph) || w.root.shows(EditorKind::GenGraph))) {
             let at = self.workspaces.iter().position(|w| w.terrain).unwrap_or(self.workspaces.len());
             let root = Builder(&mut self.next_id).area(EditorKind::TerrainGraph);
             self.workspaces.insert(at, Workspace { name: GENERATOR.into(), root, maximized: None, terrain: true, render: false, floating: Vec::new() });
@@ -950,6 +999,20 @@ impl Layout {
                 }
             }
             self.last[1] = at;
+        }
+        // Version 10: the terrain generator is four panels (library,
+        // viewer, graph, settings) rather than one area; a floating one
+        // becomes its graph.
+        if self.version < 10 {
+            for w in &mut self.workspaces {
+                split_generator(&mut w.root, &mut self.next_id);
+                if w.maximized.is_some_and(|m| w.root.editor_of(m).is_none()) {
+                    w.maximized = None;
+                }
+                for f in w.floating.iter_mut().filter(|f| f.editor == EditorKind::TerrainGraph) {
+                    f.editor = EditorKind::GenGraph;
+                }
+            }
         }
         // A floating panel whose id an area has too: a new id.
         for k in 0..self.workspaces.len() {
@@ -1119,7 +1182,7 @@ impl Layout {
     /// The Terrain side, on the terrain generator's workspace (the first
     /// that shows it).
     pub fn show_generator(&mut self) {
-        match self.workspaces.iter().position(|w| w.terrain && w.root.shows(EditorKind::TerrainGraph)) {
+        match self.workspaces.iter().position(|w| w.terrain && (w.root.shows(EditorKind::GenGraph) || w.root.shows(EditorKind::GenViewer))) {
             Some(k) => self.activate(k),
             None => self.show_side(Side::Terrain),
         }
@@ -1309,6 +1372,43 @@ mod tests {
 
     /// A workspace changed, or a copy of one, goes back to how it was.
     #[test]
+    fn the_generator_in_one_area_becomes_four_panels() {
+        // A layout of version 9: the Generator workspace one area, and a
+        // copy of it with the generator floating.
+        let mut old = Layout { version: 9, ..Layout::default() };
+        let k = old.workspaces.iter().position(|w| w.name == GENERATOR).unwrap();
+        old.workspaces[k].root = Node::Area { id: 500, editor: EditorKind::TerrainGraph };
+        old.workspaces[k].maximized = Some(500);
+        let mut copy = old.workspaces[k].clone();
+        copy.name = "Mine".into();
+        copy.root = Node::Area { id: 501, editor: EditorKind::GraphView };
+        copy.floating.push(Floating { id: 502, editor: EditorKind::TerrainGraph, pos: [10.0, 10.0], size: [400.0, 300.0], screen: false });
+        old.workspaces.push(copy);
+        let json = serde_json::to_string(&old).unwrap();
+        let layout: Layout = serde_json::from_str::<Layout>(&json).unwrap().sanitize();
+        assert_eq!(layout.version, LAYOUT_VERSION);
+        let w = &layout.workspaces[k];
+        let mut areas = Vec::new();
+        w.root.areas(&mut areas);
+        let kinds: Vec<EditorKind> = areas.iter().map(|a| a.1).collect();
+        assert_eq!(kinds, [EditorKind::GenLibrary, EditorKind::GenViewer, EditorKind::GenGraph, EditorKind::GenProps]);
+        assert_eq!(w.maximized, None, "the area maximized is gone");
+        assert!(!layout.workspaces.iter().any(|w| w.shows(EditorKind::TerrainGraph)), "no generator in one area left");
+        let mine = layout.workspaces.iter().find(|w| w.name == "Mine").unwrap();
+        assert!(mine.floating.iter().any(|f| f.editor == EditorKind::GenGraph));
+        // Every id once.
+        let mut all: Vec<AreaId> = layout.workspaces.iter().flat_map(|w| ids(&w.root).into_iter().chain(w.floating.iter().map(|f| f.id))).collect();
+        let n = all.len();
+        all.sort();
+        all.dedup();
+        assert_eq!(all.len(), n, "ids unique");
+        // The generator's workspace found by its panels.
+        let mut layout = layout;
+        layout.show_generator();
+        assert_eq!(layout.current().name, GENERATOR);
+    }
+
+    #[test]
     fn workspaces_reset_to_their_first_state() {
         let mut layout = Layout::default();
         let painting = layout.workspaces.iter().position(|w| w.name == "Painting").unwrap();
@@ -1365,7 +1465,7 @@ mod tests {
         // workspace last), three to generate terrain (the generator first,
         // then the classic graph's two), two to render.
         assert_eq!(layout.workspaces.iter().filter(|w| w.terrain).count(), 3);
-        assert!(layout.workspaces.iter().find(|w| w.terrain).is_some_and(|w| w.name == GENERATOR && w.root.shows(EditorKind::TerrainGraph)));
+        assert!(layout.workspaces.iter().find(|w| w.terrain).is_some_and(|w| w.name == GENERATOR && w.root.shows(EditorKind::GenGraph)));
         assert_eq!(layout.workspaces.iter().filter(|w| w.render).count(), 2);
         let mut seen = std::collections::HashSet::new();
         for ws in &layout.workspaces {

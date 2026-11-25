@@ -3,17 +3,24 @@
 [← Back to the README](../README.md) · [Terrain graphs](terrain-graphs.md) · [Every node](terrain-nodes.md)
 
 The terrain generator of Massif 1.2 is the Terrain side's default: the
-side opens on its **Generator** workspace, whose **Terrain Generator** area
-is marked **Experimental** while it finds its way. The samples and
-templates of the home screen open there, with their graph and its preview,
-and the World side only when you go to it (Apply, or the side switch). It
-holds the generator in one place: the **Library** on the left, the
-**Viewer** over the **Graph** in the middle, the selected node's
-**settings** on the right, and a status line at the foot (what is
-computing, how long the last picture took, the graphics card, the cache).
-The area can also be chosen from any area's header, in the Terrain
-section. The graph editor of earlier versions stays in that list as
-**Classic graph**, for older maps. The graph is saved with the world.
+side opens on its **Generator** workspace, whose panels are marked
+**Experimental** while it finds its way. The samples and templates of the
+home screen open there, with their graph and its preview, and the World
+side only when you go to it (Apply, or the side switch). The generator is
+four panels, laid out as one: the **Node Library** on the left, the
+**Generator Viewer** over the **Generator Graph** in the middle, and
+**Node Properties** (the selected node's settings, or the graph's when no
+node is selected) on the right. Like every panel of Massif, each can be
+moved, swapped, put in tabs, floated in a window of its own or closed,
+and chosen again from any area's header, in the Terrain section; they
+work together wherever they are: selecting a node in the graph shows its
+settings and its terrain, a node clicked in the library lands in the
+middle of the graph's view, and undo over any of them undoes the graph's
+last change. The Generator Graph keeps the MassifScript pane and a status
+line at its foot (what is computing, how long the last picture took, the
+graphics card, the cache). The graph editor of earlier versions stays in
+that list as **Classic graph**, with its **Classic properties**, for
+older maps. The graph is saved with the world.
 
 - [The graph](#the-graph)
 - [Composites](#composites)

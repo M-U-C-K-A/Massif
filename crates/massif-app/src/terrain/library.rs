@@ -25,11 +25,20 @@ pub fn quick_starts() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
-pub fn ui(p: &mut TerrainPanel, ui: &mut Ui, graph_rect: Rect) {
+pub fn ui(p: &mut TerrainPanel, ui: &mut Ui) {
     let pal = Palette::of(ui);
     let card = ui.max_rect();
-    super::panel::title(ui, card, t!("Library"));
-    let body = Rect::from_min_max(card.min + vec2(10.0, 34.0), card.max - vec2(10.0, 8.0));
+    // Docked, the area's header names it.
+    let top = if p.docked {
+        8.0
+    } else {
+        super::panel::title(ui, card, t!("Library"));
+        34.0
+    };
+    let body = Rect::from_min_max(card.min + vec2(10.0, top), card.max - vec2(10.0, 8.0));
+    // Where the graph's canvas was last drawn (a part of the screen when
+    // it is not shown, so that a click still adds in the graph's view).
+    let graph_rect = if p.canvas_rect.is_positive() { p.canvas_rect } else { Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 500.0)) };
     let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(body).layout(egui::Layout::top_down(egui::Align::Min)));
     widgets::search(&mut ui, &mut p.library_query, t!("Search nodes…"), body.width());
     ui.add_space(6.0);
@@ -161,7 +170,7 @@ fn entry(p: &mut TerrainPanel, ui: &mut Ui, e: &Entry, graph_rect: Rect, pal: &P
     if let Some(q) = at_screen
         && !p.read_only()
     {
-        let origin = graph_rect.min + vec2(1.0, 36.0);
+        let origin = graph_rect.min;
         let g = (q - origin - p.view.offset) / p.view.zoom;
         p.add_node(&e.id, [g.x - 80.0, g.y - 40.0]);
     }

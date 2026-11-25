@@ -14,6 +14,9 @@ use massif_terrain::params::Value;
 use massif_terrain::registry::{ParamKind, PortKind};
 
 const BAR_H: f32 = 36.0;
+/// The width the viewer's bar keeps on its right for Apply, Live and the
+/// options.
+const RIGHT_W: f32 = 236.0;
 
 /// Where the picture goes in the viewer's card.
 pub fn picture_rect(card: Rect) -> Rect {
@@ -23,8 +26,14 @@ pub fn picture_rect(card: Rect) -> Rect {
 pub fn ui(p: &mut TerrainPanel, ui: &mut Ui) {
     let pal = Palette::of(ui);
     let card = ui.max_rect();
-    super::panel::title(ui, card, t!("Viewer"));
-    let bar = Rect::from_min_max(pos2(card.left() + 74.0, card.top() + 4.0), pos2(card.right() - theme::PAD, card.top() + BAR_H - 2.0));
+    // Docked, the area's header names it: the commands from the left.
+    let left = if p.docked {
+        theme::PAD - 4.0
+    } else {
+        super::panel::title(ui, card, t!("Viewer"));
+        74.0
+    };
+    let bar = Rect::from_min_max(pos2(card.left() + left, card.top() + 4.0), pos2(card.right() - theme::PAD, card.top() + BAR_H - 2.0));
     let mut bar_ui = ui.new_child(egui::UiBuilder::new().max_rect(bar).layout(egui::Layout::left_to_right(egui::Align::Center)));
     controls(p, &mut bar_ui);
     let pic = picture_rect(card);
@@ -168,47 +177,55 @@ fn controls(p: &mut TerrainPanel, ui: &mut Ui) {
         p.look.surface = if k == 0 { Surface::Clay } else { Surface::Colour };
     }
     ui.add_space(8.0);
-    // What is viewed: a node, and which of its outputs.
-    let crumbs = p.crumbs();
-    let viewed_here = p.viewed.clone().filter(|v| v.0 == crumbs).map(|v| v.1);
-    let shown = viewed_here.clone().or_else(|| if p.viewed.is_none() && crumbs.is_empty() { p.active_output().map(|node| Shown { node, port: None }) } else { None });
-    if let Some(shown) = shown.filter(|s| p.graph.nodes.contains_key(&s.node)) {
-        let shape = p.shape(&shown.node);
-        let mut options: Vec<(Option<String>, String)> = Vec::new();
-        if let Some(shape) = &shape {
-            if shape.is_output() {
-                options.push((None, t!("Map").to_owned()));
-                for name in p.graph.nodes[&shown.node].inputs.keys() {
-                    let label = shape.inputs.iter().find(|i| i.name == *name).map_or_else(|| name.trim_start_matches("mask.").to_owned(), |i| i.label.clone());
-                    options.push((Some(name.clone()), label));
+    // What is viewed, in the room the commands on the right leave (none
+    // when the viewer is too narrow: the node stays selected in the graph).
+    let room = ui.available_width() - RIGHT_W;
+    if room > 90.0 {
+        ui.allocate_ui_with_layout(egui::vec2(room, ui.available_height()), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.set_max_width(room);
+            // What is viewed: a node, and which of its outputs.
+            let crumbs = p.crumbs();
+            let viewed_here = p.viewed.clone().filter(|v| v.0 == crumbs).map(|v| v.1);
+            let shown = viewed_here.clone().or_else(|| if p.viewed.is_none() && crumbs.is_empty() { p.active_output().map(|node| Shown { node, port: None }) } else { None });
+            if let Some(shown) = shown.filter(|s| p.graph.nodes.contains_key(&s.node)) {
+                let shape = p.shape(&shown.node);
+                let mut options: Vec<(Option<String>, String)> = Vec::new();
+                if let Some(shape) = &shape {
+                    if shape.is_output() {
+                        options.push((None, t!("Map").to_owned()));
+                        for name in p.graph.nodes[&shown.node].inputs.keys() {
+                            let label = shape.inputs.iter().find(|i| i.name == *name).map_or_else(|| name.trim_start_matches("mask.").to_owned(), |i| i.label.clone());
+                            options.push((Some(name.clone()), label));
+                        }
+                    } else {
+                        for (k, o) in shape.outputs.iter().enumerate() {
+                            options.push((if k == 0 { None } else { Some(o.name.clone()) }, o.label.clone()));
+                        }
+                    }
                 }
-            } else {
-                for (k, o) in shape.outputs.iter().enumerate() {
-                    options.push((if k == 0 { None } else { Some(o.name.clone()) }, o.label.clone()));
+                let current = options.iter().find(|o| o.0 == shown.port).map_or(String::new(), |o| o.1.clone());
+                let title = shape.map_or(shown.node.clone(), |s| super::canvas::node_title(p, &shown.node, &s));
+                ui.label(egui::RichText::new(t!("Viewing")).size(12.0).color(pal.weak));
+                ui.add(egui::Label::new(egui::RichText::new(&title).size(12.0)).truncate());
+                if options.len() > 1 {
+                    let mut port = shown.port.clone();
+                    widgets::combo("terrain viewer output").selected_text(current).show_ui(ui, |ui| {
+                        for (k, label) in &options {
+                            ui.selectable_value(&mut port, k.clone(), label);
+                        }
+                    });
+                    if port != shown.port {
+                        p.viewed = Some((crumbs.clone(), Shown { node: shown.node.clone(), port }));
+                    }
                 }
+            } else if let Some((_, v)) = &p.viewed {
+                ui.label(egui::RichText::new(t!("Viewing")).size(12.0).color(pal.weak));
+                ui.add(egui::Label::new(egui::RichText::new(&v.node).size(12.0)).truncate());
             }
-        }
-        let current = options.iter().find(|o| o.0 == shown.port).map_or(String::new(), |o| o.1.clone());
-        let title = shape.map_or(shown.node.clone(), |s| super::canvas::node_title(p, &shown.node, &s));
-        ui.label(egui::RichText::new(t!("Viewing")).size(12.0).color(pal.weak));
-        ui.add(egui::Label::new(egui::RichText::new(&title).size(12.0)).truncate());
-        if options.len() > 1 {
-            let mut port = shown.port.clone();
-            widgets::combo("terrain viewer output").selected_text(current).show_ui(ui, |ui| {
-                for (k, label) in &options {
-                    ui.selectable_value(&mut port, k.clone(), label);
-                }
-            });
-            if port != shown.port {
-                p.viewed = Some((crumbs.clone(), Shown { node: shown.node.clone(), port }));
+            if p.viewed.is_some() && ui.add(egui::Button::new(theme::glyph(Icon::X).to_string()).frame(false)).on_hover_text(t!("Back to the map output")).clicked() {
+                p.viewed = None;
             }
-        }
-    } else if let Some((_, v)) = &p.viewed {
-        ui.label(egui::RichText::new(t!("Viewing")).size(12.0).color(pal.weak));
-        ui.add(egui::Label::new(egui::RichText::new(&v.node).size(12.0)).truncate());
-    }
-    if p.viewed.is_some() && ui.add(egui::Button::new(theme::glyph(Icon::X).to_string()).frame(false)).on_hover_text(t!("Back to the map output")).clicked() {
-        p.viewed = None;
+        });
     }
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         if ui.add(theme::primary_button(ui, t!("Apply to map"))).on_hover_text(t!("Write the graph's result into the map, in one step you can undo")).clicked() {

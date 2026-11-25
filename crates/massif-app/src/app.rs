@@ -3674,8 +3674,8 @@ impl MassifApp {
     }
 
     fn undo(&mut self, ctx: &egui::Context) {
-        // Over the terrain generator of 1.3, its own changes.
-        if self.over_editor(ctx, EditorKind::TerrainGraph)
+        // Over a panel of the terrain generator, its own changes.
+        if self.over_generator(ctx)
             && let Some(p) = &mut self.terrain_panel
             && p.undo()
         {
@@ -3702,7 +3702,7 @@ impl MassifApp {
     }
 
     fn redo(&mut self, ctx: &egui::Context) {
-        if self.over_editor(ctx, EditorKind::TerrainGraph)
+        if self.over_generator(ctx)
             && let Some(p) = &mut self.terrain_panel
             && p.redo()
         {
@@ -4142,9 +4142,9 @@ impl MassifApp {
         if ctx.options(|o| o.zoom_with_keyboard) {
             ctx.options_mut(|o| o.zoom_with_keyboard = false);
         }
-        // Over the terrain generator, ⌘+ and ⌘− zoom its graph (see
+        // Over the terrain generator's graph, ⌘+ and ⌘− zoom it (see
         // `terrain::canvas`), not the interface.
-        if !self.over_editor(ctx, EditorKind::TerrainGraph) {
+        if !self.over_editor(ctx, EditorKind::GenGraph) && !self.over_editor(ctx, EditorKind::TerrainGraph) {
             if pressed(Action::UiZoomReset) {
                 ctx.set_zoom_factor(1.0);
             }
@@ -4202,7 +4202,7 @@ impl MassifApp {
         }
         // Select all, deselect and invert, but in the graph, which picks
         // its nodes with ⌘A and ⌘D.
-        let over_graph = ctx.input(|i| i.pointer.hover_pos()).and_then(|p| self.area_at(ctx, p)).and_then(|id| self.layout.current().root.editor_of(id)).is_some_and(|k| matches!(k, EditorKind::Graph | EditorKind::GraphView | EditorKind::GraphProps | EditorKind::TerrainGraph));
+        let over_graph = ctx.input(|i| i.pointer.hover_pos()).and_then(|p| self.area_at(ctx, p)).and_then(|id| self.layout.current().root.editor_of(id)).is_some_and(|k| matches!(k, EditorKind::Graph | EditorKind::GraphView | EditorKind::GraphProps) || k.generator());
         if !over_graph {
             for (action, command) in [(Action::InvertSelection, Command::InvertSelection), (Action::SelectAll, Command::SelectAll), (Action::Deselect, Command::Deselect)] {
                 if pressed(action) {
@@ -4286,7 +4286,13 @@ impl MassifApp {
     /// The area under a screen position, from the last layout pass.
     /// Whether the pointer is over an area showing `kind`.
     fn over_editor(&self, ctx: &egui::Context, kind: EditorKind) -> bool {
-        ctx.input(|i| i.pointer.hover_pos()).and_then(|p| self.area_at(ctx, p)).and_then(|id| self.layout.current().root.editor_of(id)) == Some(kind)
+        ctx.input(|i| i.pointer.hover_pos()).and_then(|p| self.area_at(ctx, p)).and_then(|id| self.layout.current().editor_of(id)) == Some(kind)
+    }
+
+    /// Whether the pointer is over a panel of the terrain generator,
+    /// docked or floating.
+    fn over_generator(&self, ctx: &egui::Context) -> bool {
+        ctx.input(|i| i.pointer.hover_pos()).and_then(|p| self.area_at(ctx, p)).and_then(|id| self.layout.current().editor_of(id)).is_some_and(EditorKind::generator)
     }
 
     fn area_at(&self, ctx: &egui::Context, p: egui::Pos2) -> Option<AreaId> {
@@ -5305,7 +5311,9 @@ impl MassifApp {
             EditorKind::RenderView => {
                 hui.label(RichText::new(tr!("Beta")).size(10.5).strong().color(pal.accent));
             }
-            EditorKind::TerrainGraph => {
+            // The generator's chip on its wide panels (the library and the
+            // settings fit the narrowest sidebar without it).
+            EditorKind::TerrainGraph | EditorKind::GenViewer | EditorKind::GenGraph => {
                 hui.add_space(6.0);
                 crate::layers::experimental(&mut hui);
             }
@@ -5589,6 +5597,16 @@ impl MassifApp {
                 egui::Frame::new().inner_margin(egui::Margin::symmetric(theme::PAD as i8 - 1, 8)).show(&mut cui, |ui| self.render_side.timeline_ui(ui, &mut self.doc));
             }
             EditorKind::TerrainGraph => self.terrain_panel.get_or_insert_with(|| crate::terrain::TerrainPanel::for_app(frame, &self.doc.world.registry)).ui_in(&mut cui, &mut self.doc),
+            EditorKind::GenLibrary | EditorKind::GenViewer | EditorKind::GenGraph | EditorKind::GenProps => {
+                use crate::terrain::panel::Part;
+                let part = match editor {
+                    EditorKind::GenLibrary => Part::Library,
+                    EditorKind::GenViewer => Part::Viewer,
+                    EditorKind::GenGraph => Part::Graph,
+                    _ => Part::Properties,
+                };
+                self.terrain_panel.get_or_insert_with(|| crate::terrain::TerrainPanel::for_app(frame, &self.doc.world.registry)).part_in(&mut cui, &mut self.doc, part);
+            }
             EditorKind::Developer => {
                 if self.settings.developer {
                     let info = crate::devtools::DevInfo { gpu: frame.wgpu_render_state(), ..self.dev_info() };
@@ -11569,7 +11587,7 @@ mod tests {
             if let Some(dir) = &dir {
                 h.render().unwrap().save(dir.join(format!("editor-page-{name}.png"))).unwrap();
             }
-            h.get_by_label("Node Properties").click();
+            h.get_by_label("Classic properties").click();
             h.run_steps(3);
             assert_eq!(h.state().layout.current().root.editor_of(map), Some(EditorKind::GraphProps));
             assert!(h.query_by_label("Render Settings").is_none(), "the page closes once an editor is chosen");
@@ -22711,7 +22729,7 @@ mod tests {
         }
         h.run_steps(3);
         let app = h.state();
-        assert!(app.layout.terrain() && app.layout.current().root.shows(EditorKind::TerrainGraph), "on the Terrain side, its graph shown");
+        assert!(app.layout.terrain() && app.layout.current().root.shows(EditorKind::GenGraph), "on the Terrain side, its graph shown");
     }
 
     /// In the system's typeface, the interface's until another is chosen.
@@ -22855,7 +22873,7 @@ mod tests {
                 }
                 save(&mut h, &format!("{tool:?}"));
             }
-            for editor in [EditorKind::Blocks, EditorKind::Info, EditorKind::Levels, EditorKind::Layers, EditorKind::Terrain, EditorKind::Biomes, EditorKind::Brushes, EditorKind::CustomBrushes, EditorKind::Packs, EditorKind::Versions, EditorKind::Tools, EditorKind::BrushSettings, EditorKind::GraphProps, EditorKind::RenderSettings] {
+            for editor in [EditorKind::Blocks, EditorKind::Info, EditorKind::Levels, EditorKind::Layers, EditorKind::Terrain, EditorKind::Biomes, EditorKind::Brushes, EditorKind::CustomBrushes, EditorKind::Packs, EditorKind::Versions, EditorKind::Tools, EditorKind::BrushSettings, EditorKind::GraphProps, EditorKind::RenderSettings, EditorKind::GenLibrary, EditorKind::GenProps] {
                 // An editor shown twice clashes with itself: each checked once.
                 if h.state().layout.current().root.shows(editor) {
                     continue;
@@ -22876,6 +22894,93 @@ mod tests {
         }
         set_language(Language::English);
         assert!(faults.is_empty(), "{} past the panel's edge in {face:?}:\n{}", faults.len(), faults.join("\n"));
+    }
+
+    /// The terrain generator's four panels (library, viewer, graph,
+    /// properties) in the largest and the smallest window: as its
+    /// workspace lays them out, the graph's selection shown in Properties,
+    /// a change undone over any of them, the viewer and the graph swapped,
+    /// the viewer floating, then each panel alone. With
+    /// MASSIF_SNAPSHOT_DIR, each is saved (at MASSIF_SNAPSHOT_PPP).
+    #[test]
+    fn the_generator_panels_dock_anywhere() {
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let ppp: f32 = std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
+        let gen_kinds = [EditorKind::GenLibrary, EditorKind::GenViewer, EditorKind::GenGraph, EditorKind::GenProps];
+        for (w, hgt, tag) in [(1600.0, 1000.0, "large"), (960.0, 640.0, "smallest")] {
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(w, hgt)).with_pixels_per_point(ppp).with_accessibility_check(false).wgpu().build_eframe(move |cc| {
+                theme::install(&cc.egui_ctx);
+                let mut app = MassifApp::for_tests(generate(&GenParams { tiles_x: 2, tiles_z: 2, ..GenParams::default() }));
+                app.settings.theme = ThemeChoice::Dark;
+                app.settings.reduce_motion = Follow::On;
+                app
+            });
+            h.run_steps(3);
+            h.state_mut().layout.show_generator();
+            h.run_steps(8);
+            let crashed = |h: &egui_kittest::Harness<'_, MassifApp>| matches!(h.state().dialog, Some(Dialog::Crashed(..)));
+            let save = |h: &mut egui_kittest::Harness<'_, MassifApp>, name: &str| {
+                assert!(!crashed(h), "{tag} {name}: crashed");
+                if let Some(dir) = &dir {
+                    h.render().unwrap().save(dir.join(format!("generator-{tag}-{name}-{ppp}x.png"))).unwrap();
+                }
+            };
+            let area_rects = |h: &egui_kittest::Harness<'_, MassifApp>| -> Vec<(AreaId, EditorKind, Rect)> {
+                let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap_or_default();
+                areas.into_iter().filter_map(|(id, r)| h.state().layout.current().editor_of(id).map(|e| (id, e, r))).collect()
+            };
+            let area_of = |h: &egui_kittest::Harness<'_, MassifApp>, kind: EditorKind| area_rects(h).into_iter().find(|a| a.1 == kind);
+            // The four, as the workspace lays them out: the library on the
+            // left, the viewer above the graph, the settings on the right.
+            for k in gen_kinds {
+                assert!(area_of(&h, k).is_some(), "{tag}: {k:?} shown");
+            }
+            let (lib, viewer, graph, props) = (area_of(&h, EditorKind::GenLibrary).unwrap().2, area_of(&h, EditorKind::GenViewer).unwrap().2, area_of(&h, EditorKind::GenGraph).unwrap().2, area_of(&h, EditorKind::GenProps).unwrap().2);
+            assert!(lib.right() <= viewer.left() && viewer.bottom() <= graph.top() && graph.right() <= props.left(), "{tag}: {lib:?} {viewer:?} {graph:?} {props:?}");
+            let canvas = h.state().terrain_panel.as_ref().expect("the generator's state").canvas_rect;
+            assert!(graph.contains_rect(canvas.shrink(0.5)), "{tag}: the canvas {canvas:?} in the Graph panel {graph:?}");
+            save(&mut h, "default");
+            // A node added (as from the library) and selected in the
+            // graph: its settings shown.
+            let before = h.state().terrain_panel.as_ref().unwrap().graph.nodes.len();
+            let node = h.state_mut().terrain_panel.as_mut().unwrap().add_node("noise.fbm", [40.0, 40.0]);
+            h.run_steps(4);
+            assert_eq!(h.state().terrain_panel.as_ref().unwrap().graph.nodes.len(), before + 1);
+            assert_eq!(h.state().terrain_panel.as_ref().unwrap().selected, [node]);
+            save(&mut h, "selected");
+            // Undone with the pointer over the Library.
+            h.input_mut().events.push(egui::Event::PointerMoved(lib.center()));
+            h.run_steps(2);
+            let ctx = h.ctx.clone();
+            h.state_mut().undo(&ctx);
+            h.run_steps(2);
+            assert_eq!(h.state().terrain_panel.as_ref().unwrap().graph.nodes.len(), before, "{tag}: undone over the Library");
+            // The viewer and the graph swapped: the canvas follows.
+            let (vid, gid) = (area_of(&h, EditorKind::GenViewer).unwrap().0, area_of(&h, EditorKind::GenGraph).unwrap().0);
+            assert!(h.state_mut().layout.current_mut().root.swap(vid, gid));
+            h.run_steps(6);
+            let graph = area_of(&h, EditorKind::GenGraph).unwrap().2;
+            let viewer = area_of(&h, EditorKind::GenViewer).unwrap().2;
+            assert!(graph.bottom() <= viewer.top(), "{tag}: swapped");
+            let canvas = h.state().terrain_panel.as_ref().unwrap().canvas_rect;
+            assert!(graph.contains_rect(canvas.shrink(0.5)), "{tag}: the canvas {canvas:?} follows to {graph:?}");
+            save(&mut h, "swapped");
+            // The viewer floating over the layout.
+            let vid = area_of(&h, EditorKind::GenViewer).unwrap().0;
+            assert!(h.state_mut().layout.detach(vid, [w * 0.3, hgt * 0.3, 520.0, 340.0], false));
+            h.run_steps(8);
+            assert!(h.state().layout.current().floating.iter().any(|f| f.editor == EditorKind::GenViewer));
+            save(&mut h, "floating-viewer");
+            // Each alone in the workspace.
+            for (k, kind) in gen_kinds.into_iter().enumerate() {
+                let ws = h.state_mut().layout.current_mut();
+                ws.floating.clear();
+                ws.maximized = None;
+                ws.root = Node::Area { id: 9000 + k as AreaId, editor: kind };
+                h.run_steps(6);
+                save(&mut h, &format!("{kind:?}"));
+            }
+        }
     }
 
     /// A map of one tile, and a map with no tiles at all, show in every
