@@ -7,7 +7,7 @@
 
 use crate::tables::{BIOMES, TERRAINS};
 use massif_core::noise::Noise;
-use massif_core::registry::{BiomeDef, BlockId, Registry, Stratum, TerrainDef, TerrainId};
+use massif_core::registry::{BiomeDef, BlockId, Mix, Registry, Stratum, TerrainDef, TerrainId};
 use std::collections::BTreeMap;
 
 /// Marks a column of WorldPainter's "Beaches" (or "Bare Beaches") until its
@@ -371,6 +371,9 @@ pub struct CustomMaterial {
     /// Block states and their relative counts.
     pub rows: Vec<(String, u32)>,
     pub colour: Option<[u8; 3]>,
+    /// How its blocks are laid out: WorldPainter's noise (each block on
+    /// its own), blobs (patches) or layers (by height).
+    pub mix: Mix,
 }
 
 /// Maps WorldPainter terrain ordinals and biome numbers to Massif ids,
@@ -528,12 +531,14 @@ impl Mapper {
                 continue;
             }
             let total: u64 = m.rows.iter().map(|r| r.1 as u64).sum::<u64>().max(1);
+            let layers = matches!(m.mix, Mix::Heights { .. });
             let blocks: Vec<(BlockId, u16)> = m
                 .rows
                 .iter()
                 .map(|(state, count)| {
-                    // Keep relative weights within u16.
-                    let w = ((*count as u64 * 1000) / total).clamp(1, 1000) as u16;
+                    // Layers keep their thickness in blocks; other mixes
+                    // their relative weights within u16.
+                    let w = if layers { (*count).clamp(1, 4096) as u16 } else { ((*count as u64 * 1000) / total).clamp(1, 1000) as u16 };
                     (self.intern(state), w)
                 })
                 .collect();
@@ -552,7 +557,7 @@ impl Mapper {
             let def = &mut self.registry.terrains[id as usize];
             def.name = name;
             def.color = color;
-            def.strata = vec![Stratum { blocks, depth: (3, 7), mix: Default::default() }];
+            def.strata = vec![Stratum { blocks, depth: (3, 7), mix: m.mix }];
             defined += 1;
         }
         defined
@@ -733,6 +738,7 @@ mod tests {
                 name: "Volcanic ash".into(),
                 rows: vec![("minecraft:gray_concrete_powder".into(), 750), ("minecraft:basalt[axis=y]".into(), 250)],
                 colour: Some([70, 70, 74]),
+                mix: Mix::Grain,
             }),
         ];
         assert_eq!(m.finish_custom(&materials), 1);

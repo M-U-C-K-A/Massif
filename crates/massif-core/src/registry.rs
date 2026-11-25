@@ -102,6 +102,12 @@ pub enum Mix {
     /// their order upwards, each as many blocks thick as its weight,
     /// repeating, dipping a little and wavering.
     Beds,
+    /// Layers by height in the world, as a WorldPainter custom terrain of
+    /// layers lays them: the blocks from the top down, each as many blocks
+    /// thick as its weight, the pattern starting at Y 0. Repeating, it
+    /// rises `slope` blocks a block eastwards and southwards; once, the
+    /// last block goes on below it and the first above.
+    Heights { repeat: bool, slope: [f32; 2] },
 }
 
 impl Mix {

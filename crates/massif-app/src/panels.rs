@@ -3846,7 +3846,12 @@ fn match_list(ui: &mut Ui, label: &str, list: &mut Option<Vec<massif_core::filte
     use crate::tools::FilterSort;
     let pal = Palette::of(ui);
     let mut on = list.is_some();
-    if crate::widgets::checkbox(ui, &mut on, label).changed() {
+    let hint = if only {
+        tr!("Where every kind listed is there at once: a terrain and a layer means that layer on that terrain. Two terrains, two biomes or two layers of one kind: either.")
+    } else {
+        tr!("Nowhere any of these is.")
+    };
+    if crate::widgets::checkbox(ui, &mut on, label).on_hover_text(hint).changed() {
         *list = on.then(Vec::new);
     }
     let Some(items) = list else { return };

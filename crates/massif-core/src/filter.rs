@@ -284,10 +284,32 @@ impl Filter {
         }
     }
 
+    /// Whether `c` matches every kind of condition of `only`, as
+    /// WorldPainter's "Only on" asks: its terrain, its biome, its water
+    /// and each plane of layers listed. Conditions of one kind cannot hold
+    /// together on a column (one terrain, one cover…), so any of them does.
+    fn matches_all(c: &Column, only: &[Match]) -> bool {
+        // The kinds: terrain, biome, water or land, then each plane.
+        let kind = |m: &Match| match *m {
+            Match::Terrain(_) => 0,
+            Match::Biome(_) => 1,
+            Match::Water | Match::Land => 2,
+            Match::Layer(p, _) => 3 + p as usize,
+        };
+        let mut asked = [false; 3 + Painted::ALL.len()];
+        let mut met = asked;
+        for m in only {
+            let k = kind(m);
+            asked[k] = true;
+            met[k] |= Self::matches(c, m);
+        }
+        asked == met
+    }
+
     /// The weight of one column, from 0 to 1.
     pub fn weight(&self, c: &Column) -> f32 {
         if let Some(only) = &self.only_on
-            && !only.iter().any(|m| Self::matches(c, m))
+            && !Self::matches_all(c, only)
         {
             return 0.0;
         }
@@ -954,11 +976,15 @@ mod tests {
             only_on: Some(vec![Match::Terrain(1), Match::Water]),
             ..Filter::default()
         };
-        assert_eq!(only_grass.weight(&c), 1.0);
-        c.terrain = 5;
+        // Terrain and water: both, as WorldPainter's Only on.
         assert_eq!(only_grass.weight(&c), 0.0);
         c.wet = true;
         assert_eq!(only_grass.weight(&c), 1.0);
+        c.terrain = 5;
+        assert_eq!(only_grass.weight(&c), 0.0);
+        // Two terrains: either.
+        let either = Filter { only_on: Some(vec![Match::Terrain(1), Match::Terrain(5)]), ..Filter::default() };
+        assert_eq!(either.weight(&c), 1.0);
         let not_wet = Filter {
             except_on: Some(vec![Match::Water]),
             ..Filter::default()
@@ -982,6 +1008,33 @@ mod tests {
         assert_eq!(hollows.weight(&c), 1.0);
         c.relief = 3.0;
         assert_eq!(hollows.weight(&c), 0.0);
+    }
+
+    /// Jack's case: meadow fescue (a cover) on dirt (a terrain) asks for
+    /// both on the same column; two covers, either.
+    #[test]
+    fn only_on_a_layer_and_a_terrain_needs_both() {
+        let mut c = column(64.0);
+        let (dirt, fescue, ferns) = (3, 7, 8);
+        let filter = Filter { only_on: Some(vec![Match::Layer(Painted::Cover, fescue), Match::Terrain(dirt)]), ..Filter::default() };
+        c.terrain = dirt;
+        assert_eq!(filter.weight(&c), 0.0, "dirt without fescue");
+        c.painted[Painted::Cover as usize] = fescue;
+        assert_eq!(filter.weight(&c), 1.0, "fescue on dirt");
+        c.terrain = 1;
+        assert_eq!(filter.weight(&c), 0.0, "fescue on grass");
+        let covers = Filter { only_on: Some(vec![Match::Layer(Painted::Cover, fescue), Match::Layer(Painted::Cover, ferns)]), ..Filter::default() };
+        assert_eq!(covers.weight(&c), 1.0);
+        c.painted[Painted::Cover as usize] = ferns;
+        assert_eq!(covers.weight(&c), 1.0);
+        c.painted[Painted::Cover as usize] = 0;
+        assert_eq!(covers.weight(&c), 0.0);
+        // A layer of another plane joins in: both again.
+        c.painted[Painted::Cover as usize] = ferns;
+        let trees = Filter { only_on: Some(vec![Match::Layer(Painted::Cover, ferns), Match::Layer(Painted::Objects, 2)]), ..Filter::default() };
+        assert_eq!(trees.weight(&c), 0.0);
+        c.painted[Painted::Objects as usize] = 2;
+        assert_eq!(trees.weight(&c), 1.0);
     }
 
     #[test]

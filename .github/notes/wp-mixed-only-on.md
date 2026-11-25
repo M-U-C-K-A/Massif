@@ -1,0 +1,3 @@
+**WorldPainter custom terrains keep their mix, and Only on asks for everything listed**
+
+A WorldPainter custom terrain imports as one terrain that lays its blocks as WorldPainter does: a noise mix block by block, a blob mix in patches of about the blobs' size, and a layered mix by height in the world (repeating and sloping as it was set), where it used to become a plain mix of its blocks whatever its mode, so a terrain of layers showed every block everywhere. A brush's **Only on** now works as WorldPainter's: with a layer and a terrain listed (meadow fescue and dirt), it paints only where that layer lies on that terrain, rather than wherever either is; two terrains, two biomes or two covers, which cannot share a column, still mean either.

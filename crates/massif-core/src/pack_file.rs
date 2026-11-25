@@ -129,6 +129,10 @@ pub enum PackMix {
         size: f32,
     },
     Beds,
+    Heights {
+        repeat: bool,
+        slope: [f32; 2],
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -666,6 +670,7 @@ impl Pack {
                     PackMix::Grain => Mix::Grain,
                     PackMix::Patches { size } => Mix::Patches { size },
                     PackMix::Beds => Mix::Beds,
+                    PackMix::Heights { repeat, slope } => Mix::Heights { repeat, slope },
                 },
             })
             .collect();
@@ -922,6 +927,7 @@ fn terrain_of(reg: &Registry, t: &TerrainDef) -> PackTerrain {
                     Mix::Grain => PackMix::Grain,
                     Mix::Patches { size } => PackMix::Patches { size },
                     Mix::Beds => PackMix::Beds,
+                    Mix::Heights { repeat, slope } => PackMix::Heights { repeat, slope },
                 },
             })
             .collect(),

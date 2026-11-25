@@ -19,7 +19,7 @@ use massif_core::codec::snap_height;
 use massif_core::compose::block_top;
 use massif_core::level::{Blob, LevelKind};
 use massif_core::plane::Plane;
-use massif_core::registry::Registry;
+use massif_core::registry::{Mix, Registry};
 use massif_core::tile::{NO_FLUID, Tile};
 use massif_core::world::{Dimension, DimensionKind, World, WorldMeta};
 use massif_core::{TILE_AREA, TilePos};
@@ -780,12 +780,14 @@ pub(crate) fn read_mixed(a: &Arena, v: Value) -> Option<CustomMaterial> {
         return None;
     }
     let name = a.field(v, "name").and_then(|n| a.string(n)).unwrap_or("").to_owned();
-    let rows = a
+    let mut scales = Vec::new();
+    let rows: Vec<(String, u32)> = a
         .list_items(a.field(v, "rows")?)?
         .into_iter()
         .filter_map(|row| {
             let material = a.field(row, "material")?;
             let count = a.int(a.field(row, "occurrence")?)?;
+            scales.push(a.field(row, "scale").and_then(|s| a.float(s)).filter(|s| *s > 0.0).unwrap_or(1.0) as f32);
             Some((material_state(a, material), count.max(1) as u32))
         })
         .collect();
@@ -793,7 +795,25 @@ pub(crate) fn read_mixed(a: &Arena, v: Value) -> Option<CustomMaterial> {
         .field(v, "colour")
         .and_then(|c| a.int(c))
         .map(|argb| [(argb >> 16) as u8, (argb >> 8) as u8, argb as u8]);
-    Some(CustomMaterial { name, rows, colour })
+    let float = |n: &str| a.field(v, n).and_then(|f| a.float(f)).unwrap_or(0.0) as f32;
+    // A world older than the modes: blobs, or noise if it says so.
+    let mode = a.field(v, "mode").and_then(|m| a.enum_name(m)).unwrap_or(if a.field(v, "noise").and_then(|n| a.bool(n)) == Some(true) { "NOISE" } else { "BLOBS" });
+    let mix = match mode {
+        _ if rows.len() < 2 => Mix::Grain,
+        "BLOBS" => {
+            // Blobs of WorldPainter's tiny size times the material's scale
+            // and its rows', on average.
+            let scale = if float("scale") > 0.0 { float("scale") } else { 1.0 };
+            let rows_scale = scales.iter().sum::<f32>() / scales.len().max(1) as f32;
+            Mix::Patches { size: (4.099 * scale * rows_scale).max(1.0) }
+        }
+        "LAYERED" => {
+            let repeat = a.field(v, "repeat").and_then(|r| a.bool(r)).unwrap_or(false);
+            Mix::Heights { repeat, slope: if repeat { [float("layerXSlope"), float("layerYSlope")] } else { [0.0; 2] } }
+        }
+        _ => Mix::Grain,
+    };
+    Some(CustomMaterial { name, rows, colour, mix })
 }
 
 /// `namespace:name[key=value,...]` of a serialized `org.pepsoft.minecraft.Material`.
@@ -1425,18 +1445,29 @@ mod tests {
             "org.pepsoft.worldpainter.MixedMaterial",
             SC_SERIALIZABLE,
             &[
+                (b'Z', "repeat", None),
                 (b'L', "colour", Some("Ljava/lang/Integer;")),
+                (b'L', "mode", Some("Lorg/pepsoft/worldpainter/MixedMaterial$Mode;")),
                 (b'L', "name", Some("Ljava/lang/String;")),
                 (b'[', "rows", Some("[Lorg/pepsoft/worldpainter/MixedMaterial$Row;")),
             ],
             null,
         );
         w.handle();
+        w.u8(0); // repeat: false
         w.u8(TC_NULL); // colour
+        // mode: LAYERED, the rows by height, basalt over tuff.
+        w.u8(TC_ENUM).class("org.pepsoft.worldpainter.MixedMaterial$Mode", SC_SERIALIZABLE | 0x10, &[], |w| {
+            w.class("java.lang.Enum", SC_SERIALIZABLE | 0x10, &[], |w| {
+                w.u8(TC_NULL);
+            });
+        });
+        w.handle();
+        w.string("LAYERED");
         w.string("Volcanic");
         w.u8(TC_ARRAY).class("[Lorg.pepsoft.worldpainter.MixedMaterial$Row;", SC_SERIALIZABLE, &[], null);
         w.handle();
-        w.i32(1);
+        w.i32(2);
         w.u8(TC_OBJECT).class(
             "org.pepsoft.worldpainter.MixedMaterial$Row",
             SC_SERIALIZABLE,
@@ -1444,7 +1475,7 @@ mod tests {
             null,
         );
         w.handle();
-        w.i32(1000);
+        w.i32(2);
         w.u8(TC_OBJECT).class(
             "org.pepsoft.minecraft.Material",
             SC_SERIALIZABLE,
@@ -1469,6 +1500,32 @@ mod tests {
         );
         w.handle();
         w.string("axis").string("y");
+        // Row(material: Material(identity: Identity("minecraft:tuff", null)), occurrence 3)
+        w.u8(TC_OBJECT).class(
+            "org.pepsoft.worldpainter.MixedMaterial$Row",
+            SC_SERIALIZABLE,
+            &[(b'I', "occurrence", None), (b'L', "material", Some("Lorg/pepsoft/minecraft/Material;"))],
+            null,
+        );
+        w.handle();
+        w.i32(3);
+        w.u8(TC_OBJECT).class(
+            "org.pepsoft.minecraft.Material",
+            SC_SERIALIZABLE,
+            &[(b'I', "blockType", None), (b'I', "data", None), (b'L', "identity", Some("Lorg/pepsoft/minecraft/Material$Identity;"))],
+            null,
+        );
+        w.handle();
+        w.i32(-1).i32(-1);
+        w.u8(TC_OBJECT).class(
+            "org.pepsoft.minecraft.Material$Identity",
+            SC_SERIALIZABLE,
+            &[(b'L', "name", Some("Ljava/lang/String;")), (b'L', "properties", Some("Ljava/util/Map;"))],
+            null,
+        );
+        w.handle();
+        w.string("minecraft:tuff");
+        w.u8(TC_NULL);
 
         w.string("Synthetic");
         w.u8(TC_OBJECT).reference(point_desc);
@@ -1984,8 +2041,19 @@ mod tests {
         let reg = &world.registry;
         assert_eq!(reg.terrain(TerrainId(tall.terrain.get(0))).name, "Sand");
         let custom = reg.terrain(TerrainId(tall.terrain.get(500)));
+        // One terrain of its mix, laid in layers by height as WorldPainter
+        // lays them: basalt two blocks thick over tuff three, from Y 0.
         assert_eq!(custom.name, "Volcanic");
-        assert_eq!(reg.block(custom.strata[0].blocks[0].0).state, "minecraft:basalt[axis=y]");
+        assert_eq!(reg.terrains.iter().filter(|t| t.name.starts_with("Volcanic")).count(), 1);
+        let s = &custom.strata[0];
+        let states: Vec<(&str, u16)> = s.blocks.iter().map(|&(b, w)| (reg.block(b).state.as_str(), w)).collect();
+        assert_eq!(states, vec![("minecraft:basalt[axis=y]", 2), ("minecraft:tuff", 3)]);
+        assert_eq!(s.mix, massif_core::registry::Mix::Heights { repeat: false, slope: [0.0; 2] });
+        let at = |y: i32| reg.block(massif_core::compose::stratum_block(s, 5, y, 9, 1)).state.as_str();
+        assert_eq!([at(-20), at(0), at(2), at(3), at(4), at(70)], ["minecraft:tuff", "minecraft:tuff", "minecraft:tuff", "minecraft:basalt[axis=y]", "minecraft:basalt[axis=y]", "minecraft:basalt[axis=y]"]);
+        // Painted everywhere WorldPainter painted it: the tile but its first row.
+        let custom_id = tall.terrain.get(500);
+        assert_eq!((128..TILE_AREA).filter(|&i| tall.terrain.get(i) == custom_id).count(), TILE_AREA - 128);
         assert_eq!(reg.biome(massif_core::BiomeId(tall.biome.get(0))).id, "minecraft:forest");
         assert_eq!(tall.biome.get(200), 0);
 

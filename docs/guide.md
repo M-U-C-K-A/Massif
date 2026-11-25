@@ -405,7 +405,12 @@ what the map shows:
   the share of the map the brush acts on.
 - **Only on / except on**: terrains, biomes, water or dry land, and layers:
   ground covers (ferns, tall grass, Frost…), tree and object layers, the
-  layers under the trees, underground pockets and annotations. **Add**
+  layers under the trees, underground pockets and annotations. As in
+  WorldPainter, **only on** asks for every kind listed at once: a ground
+  cover and a terrain (meadow fescue and dirt) means that cover on that
+  terrain, nowhere else; two of one kind that cannot share a column (two
+  terrains, two biomes, two ground covers) mean either. **Except on** keeps
+  off any of what it lists. **Add**
   opens a list to search, by name or kind, sorted three ways: **On the
   map** (what the map holds first, then the rest), **Recent** (what the
   filters were set to lately first) or **A–Z**. The **eyedropper** beside
@@ -1083,7 +1088,7 @@ and corners half). Exports to 1.12 and older have no pieces.
 | Lava (flood with lava) | The Lava cover | Converted |
 | Void | Columns of nothing: lower the land to the floor of the world | Converted: nothing in those columns |
 | Annotations | Annotations | Converted, colour for colour |
-| Biomes, custom terrains | Biomes, terrains | Converted |
+| Biomes, custom terrains | Biomes, terrains | Converted: each custom terrain one terrain of its blocks, laid as WorldPainter lays its mix — noise as each block on its own, blobs as patches of about their size, layers by height from Y 0 (repeating and sloping as set; their variation is left out) |
 | Caverns, Chasms, Caves | Cave layers (the Caves tool, Edit ▸ Whole map ▸ Caves) | Converted: a cave layer for each mix of them painted together — Caverns as chambers, Chasms as ravines, Caves as tunnels and noodles —, as dense as they were painted on average, painted where they were; closed under the ground, without lakes (set them in the layer) |
 | Resources | Edit ▸ Ores | Massif lays its own ores |
 | Tunnels, floating layers | Levels: Carve and Solid | Converted: a Carve level each (a Solid level for a floating one), its floor and roof where WorldPainter puts them (at a height, so deep under the ground, inverted, so high over the floor, within their limits), flooded up to its level; their noise and their floor, wall and roof materials are left out (the floor keeps the ground's terrain) |

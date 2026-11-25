@@ -978,6 +978,22 @@ pub fn stratum_block(s: &crate::registry::Stratum, x: i32, y: i32, z: i32, seed:
             }
             s.blocks[0].0
         }
+        Mix::Heights { repeat, slope } => {
+            let total: i32 = s.blocks.iter().map(|b| b.1 as i32).sum::<i32>().max(1);
+            let level = if repeat { y as f32 + slope[0] * x as f32 + slope[1] * z as f32 } else { y as f32 };
+            // Rounded half up, as WorldPainter rounds.
+            let level = (level + 0.5).floor() as i32;
+            let level = if repeat { level.rem_euclid(total) } else { level.clamp(0, total - 1) };
+            // From the top of the pattern down.
+            let mut r = total - 1 - level;
+            for &(b, w) in &s.blocks {
+                if r < w as i32 {
+                    return b;
+                }
+                r -= w as i32;
+            }
+            s.blocks[s.blocks.len() - 1].0
+        }
     }
 }
 
