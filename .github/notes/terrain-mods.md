@@ -1,3 +1,0 @@
-**Your mods' ground blocks in the Terrain panel, and WorldPainter worlds sorted by mod**
-
-The Terrain panel now lists, under the map's terrains, the blocks of your game and mods that make ground, by mod and category: stone, soil, wood and building blocks, without the glass, lamps, furniture, doors, slabs and plants that only cluttered the list. Click one to paint with it; it becomes a terrain of the map in its category. Every block shows the rest, and the search finds any block. A WorldPainter world made of a mod's blocks now says so on import and offers to read the mod first, and its long Imported list is sorted by mod and kind in one click. Asked for by Jack (Fornad).

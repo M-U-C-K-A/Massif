@@ -1,3 +1,0 @@
-**Test Export starts at once on a huge map**
-
-A Test Export of a few region files no longer sits at 0 % on a large map: before writing its first tile it worked out the water of the whole map, which took minutes on a map of Middle-earth's size and longer still with sculpted ground. It now works out the water of the tiles it writes and of those around them that their water depends on, and writes them exactly as a full export does: one region of a 16,384-block map is done in about a second instead of more than a minute. The progress counts that water too, so a full export's bar moves from the start, and Cancel stops it at any point.

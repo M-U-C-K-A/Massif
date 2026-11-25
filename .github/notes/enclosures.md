@@ -1,3 +1,0 @@
-**Villages: a fence, a hedge or a low wall round them rather than ramparts**
-
-A village's Walls are now picked from a menu, each with a small picture: a wooden fence, a spruce fence, post and rail, a hedge, a flowering hedge, a low stone wall, a dry-stone wall, stone and fence, a palisade, or the ramparts with towers of before. Each is made of the game's own blocks with a little variety along its run (posts, lanterns, mossy stones, logs of different heights), and has a gate wherever a road crosses it: a fence gate across the road, an arch of leaves through a hedge, a beam over a palisade's. Villages placed before keep their ramparts. The terrain graph's Village walls node and the command line (`--enclosure`) offer the same styles.

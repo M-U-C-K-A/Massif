@@ -1,3 +1,0 @@
-**Solo a layer, as in WorldPainter**
-
-Alt-click a layer's eye in the Layers panel, or choose Solo in its menu, and that layer is the only cover or tree and object layer drawn on the 2D map and in the 3D views, the terrain still drawn; a combined layer shows the cover and trees it paints. The map's header shows Solo: and the layer's name. Alt-click the eye again, choose Show all layers, or click the chip in the map's header, and every layer comes back shown or hidden exactly as it was before. A palette's solo (Alt-click its eye) works the same way now, and a WorldPainter world whose palette was soloed opens soloed, ready to come back. Asked for by Jack (Fornad).

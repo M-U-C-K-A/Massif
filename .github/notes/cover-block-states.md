@@ -1,3 +1,0 @@
-**Block states for ground covers, as WorldPainter's block picker**
-
-A ground cover's blocks are edited with their states: click a row of Grows (or add a block) and each property of its block shows under the list — layers, facing, half, waterlogged, age… — with the values it allows, read from the game's and the mods' files (KubeJS blocks and WorldPainter block lists too). Default leaves a property to the game, the resulting id with its properties is written under them, and each row shows its properties after its name instead of hiding them in a tooltip. Random, beside facing, rotation, age and the like, grows the block every way: one row for each value, sharing the weight.
