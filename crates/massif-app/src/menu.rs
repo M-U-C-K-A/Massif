@@ -35,6 +35,9 @@ pub enum Command {
     ExportHeightMap,
     /// A part of the map as images, to bring back with Import mask.
     ExportRegion,
+    /// File ▸ Import Report…: what the import of a WorldPainter world
+    /// brought in, again.
+    ImportReport,
     Export,
     Quit,
     Undo,
@@ -52,6 +55,9 @@ pub enum Command {
     Snowfall,
     /// Edit ▸ Smooth terrain…: the top of the land in partial blocks.
     SmoothTerrain,
+    /// Edit ▸ Covers of Layers to Ground…: ground covers of layer blocks
+    /// made the land's own (see `massif_core::surface_layers`).
+    LayerCovers,
     Caves,
     /// An image painted onto the map (see `import_mask`).
     ImportMask,
@@ -176,6 +182,9 @@ pub struct State<'a> {
     pub annotations: bool,
     /// A performance recording is on: the Help menu stops it.
     pub recording: bool,
+    /// The map was imported from WorldPainter: its import report can be
+    /// read again.
+    pub imported: bool,
 }
 
 /// An item: a command under a name.
@@ -267,6 +276,7 @@ pub fn menus(state: &State) -> Vec<Menu> {
         item(Command::SaveAs, Icon::Save, tr!("Save As…"), map),
         tipped(Command::SavePoint, Icon::BookmarkPlus, tr!("Save Point…"), map, tr!("Keep the map as it is now under a name, to come back to it or compare")),
         tipped(Command::WorldInfo, Icon::Info, tr!("World Information…"), map, tr!("The world's name, seed, sea level and spawn, its blocks, the map's size and the memory it takes")),
+        tipped(Command::ImportReport, Icon::Info, tr!("Import Report…"), map && state.imported, tr!("What the import of the WorldPainter world brought in, what it left out, and its covers of layers to make the ground's own")),
         Entry::Separator,
         item(Command::ExportHeightMap, Icon::ImageDown, tr!("Export Height Map…"), map),
         tipped(Command::ExportRegion, Icon::ImageDown, tr!("Export Region…"), map, tr!("A part of the map as a heightmap and masks, to work on in another tool and import back in place")),
@@ -291,6 +301,7 @@ pub fn menus(state: &State) -> Vec<Menu> {
         tipped(Command::AutoPaint, Icon::WandSparkles, tr!("Auto paint: whole map"), map, tr!("Paint every column as its biome calls for")),
         item(Command::AutoRules, Icon::Settings2, tr!("Automatic rules…"), map),
         tipped(Command::SmoothTerrain, Icon::ChartNoAxesColumn, tr!("Smooth terrain…"), map, tr!("The top of the land in partial blocks when it is exported: layers, slabs, stairs, terrain by terrain")),
+        tipped(Command::LayerCovers, Icon::ChartNoAxesColumn, tr!("Covers of Layers to Ground…"), map, tr!("Ground covers of layer blocks, as Conquest Reforged maps lay them, made the land's own height and smoothed with layers")),
         Entry::Separator,
         Entry::Submenu {
             label: tr!("Whole map").to_owned(),
@@ -519,6 +530,7 @@ mod tests {
             selected: true,
             annotations: true,
             recording: false,
+            imported: true,
         }
     }
 
@@ -565,6 +577,7 @@ mod tests {
                 "Save As…",
                 "Save Point…",
                 "World Information…",
+                "Import Report…",
                 "Export Height Map…",
                 "Export Region…",
                 "Export to Minecraft…",

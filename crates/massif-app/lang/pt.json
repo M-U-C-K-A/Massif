@@ -1087,7 +1087,6 @@
  "Import objects…": "Importar objetos…",
  "Import packs": "Importar pacotes",
  "Imported": "Importado",
- "Imported {display_name} in {secs:.1} s: {summary}": "{display_name} importado em {secs:.1} s: {summary}",
  "Imported “{name}”": "“{name}” importado",
  "Importing {file}": "Importando {file}",
  "Import…": "Importar…",
@@ -3461,8 +3460,6 @@
  "Covers of layers: {meanwhile}, nothing was done": "Coberturas de camadas: {meanwhile}, nada foi feito",
  "Covers of layers made ground": "Coberturas de camadas em solo",
  "Covers of layers made the ground's own: {columns} columns raised and smoothed in {secs:.1} s": "Coberturas de camadas tornadas solo: {columns} colunas elevadas e suavizadas em {secs:.1} s",
- "Covers of layers": "Coberturas de camadas",
- "These ground covers are layers of a block laid over the land. Ticked, they become the ground's own: the land raised by their layers, its top that block, smoothed with layers on export, as they look now.": "Estas coberturas são camadas de um bloco postas sobre o terreno. Marcadas, tornam-se o próprio solo: o terreno sobe com as camadas, o topo passa a ser esse bloco, suavizado com camadas na exportação, como aparecem agora.",
  "Make them the ground's own": "Torná-las o solo",
  "Contour lines: interval, strength, colour": "Curvas de nível: intervalo, intensidade, cor",
  "Crisp": "Nítidas",
@@ -3763,5 +3760,24 @@
  "Objects per 100 blocks²": "Objetos por 100 blocos²",
  "Generator": "Gerador",
  "Classic graph": "Grafo clássico",
- "The terrain generator of earlier versions, for older maps": "O gerador de terreno de versões anteriores, para mapas mais antigos"
+ "The terrain generator of earlier versions, for older maps": "O gerador de terreno de versões anteriores, para mapas mais antigos",
+ "Imported {display_name} in {secs:.1} s: {summary}. See File ▸ Import Report…": "{display_name} importado em {secs:.1} s: {summary}. Veja Arquivo ▸ Relatório de importação…",
+ "Cover under it": "Cobertura por baixo",
+ "Covers of Layers to Ground…": "Coberturas de camadas em solo…",
+ "Ground covers of layer blocks, as Conquest Reforged maps lay them, made the land's own height and smoothed with layers": "Coberturas de blocos de camadas, como os mapas do Conquest Reforged as colocam, viram a altura do terreno, suavizada com camadas",
+ "Covers of layers to ground": "Coberturas de camadas em solo",
+ "No ground cover of this map is made of layer blocks (a mod's _layer blocks, snow layers).": "Nenhuma cobertura deste mapa é feita de blocos de camadas (blocos _layer de um mod, camadas de neve).",
+ "{n} ground covers are made of layer blocks": {
+  "one": "{n} cobertura é feita de blocos de camadas",
+  "other": "{n} coberturas são feitas de blocos de camadas"
+ },
+ "As Conquest Reforged maps lay them over the land. Made the ground's own, the land rises by their layers, its top is their block, and the export lays the same layers (Smooth terrain): the map, the 3D view, the brushes and the smoothing then know the land's true height. Plants and frost painted over them stay.": "Como os mapas do Conquest Reforged as colocam sobre o terreno. Transformadas em solo, o terreno sobe com as suas camadas, o bloco do topo é o delas e a exportação coloca as mesmas camadas (Terreno suavizado): o mapa, a vista 3D, os pincéis e a suavização passam a conhecer a altura real do terreno. As plantas e a geada pintadas por cima ficam.",
+ "{name} — {blocks} (its other blocks stay a cover)": "{name} — {blocks} (os outros blocos continuam uma cobertura)",
+ "Map colour": "Cor no mapa",
+ "{n} custom biomes, now biomes of the map (exported by their ids):": {
+  "one": "{n} bioma personalizado, agora um bioma do mapa (exportado pelo seu id):",
+  "other": "{n} biomas personalizados, agora biomas do mapa (exportados pelos seus ids):"
+ },
+ "Import Report…": "Relatório de importação…",
+ "What the import of the WorldPainter world brought in, what it left out, and its covers of layers to make the ground's own": "O que a importação do mundo do WorldPainter trouxe, o que deixou de fora e as suas coberturas de camadas a transformar em solo"
 }

@@ -7431,6 +7431,7 @@ mod tests {
                 tile.fluid.set(i, massif_core::NO_FLUID);
                 tile.terrain.set(i, if z < 0 { stone.0 } else { grass.0 });
                 tile.cover.set(i, 0);
+                tile.stacked.clear_kind(i, massif_core::layer_stack::Kind::Cover);
                 tile.objects.set(i, 0);
             }
         }

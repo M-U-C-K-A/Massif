@@ -434,6 +434,9 @@ enum Dialog {
     /// The report of an import, its picture, and the ground covers of
     /// layer blocks it brought, each ticked to become the ground's own.
     ImportReport(Box<massif_legacy::ImportReport>, Option<egui::TextureHandle>, Vec<(massif_core::surface_layers::SurfaceCover, bool)>),
+    /// Edit ▸ Covers of Layers to Ground…: the map's ground covers of layer
+    /// blocks, each ticked to become the ground's own.
+    LayerCovers(Vec<(massif_core::surface_layers::SurfaceCover, bool)>),
     /// The help, at a topic.
     Help(crate::help::HelpState),
     /// A filter over the whole map: its settings, the map before and after.
@@ -3432,6 +3435,14 @@ impl MassifApp {
     }
 
     /// Start saving. Returns false if the user cancelled the file dialog.
+    /// The map's ground covers of layer blocks, each ticked to become the
+    /// ground's own: of those `only` names (an import's), or all of them.
+    fn layer_covers(&self, only: Option<&[u16]>) -> Vec<(massif_core::surface_layers::SurfaceCover, bool)> {
+        let mods = crate::blocks::mod_blocks();
+        let known = massif_core::shapes::Known { vanilla: &crate::blocks::vanilla_exists, mods: &mods };
+        massif_core::surface_layers::surface_covers(&self.doc.world.registry, &known).into_iter().filter(|c| only.is_none_or(|o| o.contains(&c.cover))).map(|c| (c, true)).collect()
+    }
+
     fn save(&mut self, ctx: &egui::Context, save_as: bool) -> bool {
         if self.jobs.iter().any(|j| j.kind == jobs::JobKind::Save) {
             return true;
@@ -3802,7 +3813,7 @@ impl MassifApp {
                     self.home = None;
                     self.has_map = true;
                     self.remember(source.clone());
-                    let msg = tr!("Imported {display_name} in {secs:.1} s: {summary}", display_name = jobs::display_name(&source), summary = report.summary(), secs);
+                    let msg = tr!("Imported {display_name} in {secs:.1} s: {summary}. See File ▸ Import Report…", display_name = jobs::display_name(&source), summary = report.summary(), secs);
                     self.task_done(ctx, Cue::Ready, tr!("Import done"), &msg, secs);
                     self.say(ctx, msg, false, None);
                     let thumbnail = report.thumbnail.as_deref().and_then(|jpeg| {
@@ -3811,9 +3822,7 @@ impl MassifApp {
                         let color = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
                         Some(ctx.load_texture("import thumbnail", color, egui::TextureOptions::LINEAR))
                     });
-                    let mods = crate::blocks::mod_blocks();
-                    let known = massif_core::shapes::Known { vanilla: &crate::blocks::vanilla_exists, mods: &mods };
-                    let layers = massif_core::surface_layers::surface_covers(&self.doc.world.registry, &known).into_iter().filter(|c| report.ground_covers.contains(&c.cover)).map(|c| (c, true)).collect();
+                    let layers = self.layer_covers(Some(&report.ground_covers));
                     self.dialog = Some(Dialog::ImportReport(report, thumbnail, layers));
                 }
                 Outcome::SurfaceLayers { grounded, revision, dim } => {
@@ -4382,6 +4391,7 @@ impl MassifApp {
             selected: self.doc.selection().is_some(),
             annotations: self.tools.show_annotations,
             recording: self.recording.as_ref().is_some_and(|r| r.is_on()),
+            imported: self.doc.world.meta.import_report.is_some(),
         }
     }
 
@@ -4444,6 +4454,13 @@ impl MassifApp {
             Command::Snowfall => {
                 let map = self.doc.world.dims[self.doc.dim].snapshot();
                 self.dialog = Some(Dialog::Snowfall(Box::new(crate::snowfall_ui::SnowfallForm::new(map))));
+            }
+            Command::LayerCovers => self.dialog = Some(Dialog::LayerCovers(self.layer_covers(None))),
+            Command::ImportReport => {
+                if let Some(report) = self.doc.world.meta.import_report.clone().and_then(|v| serde_json::from_value::<massif_legacy::ImportReport>(v).ok()) {
+                    let layers = self.layer_covers(Some(&report.ground_covers));
+                    self.dialog = Some(Dialog::ImportReport(Box::new(report), None, layers));
+                }
             }
             Command::SmoothTerrain => self.dialog = Some(Dialog::Smooth(Box::new(crate::smooth_page::SmoothForm::new(self.doc.world.meta.smooth.clone(), &self.doc.world.registry, self.doc.dimension())))),
             Command::Caves => self.open_caves(),
@@ -6940,6 +6957,12 @@ impl MassifApp {
                         ui.image((tex.id(), size * scale));
                         ui.add_space(6.0);
                     }
+                    // First of all: the covers of layer blocks, which a map of
+                    // Conquest Reforged wants as the ground's own.
+                    if !layers.is_empty() {
+                        ground |= layer_covers_ui(ui, &mut layers);
+                        ui.add_space(8.0);
+                    }
                     egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
                         egui::Grid::new("import grid").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
                             ui.label(RichText::new(tr!("Imported")).color(pal.weak));
@@ -6987,17 +7010,11 @@ impl MassifApp {
                                 });
                                 ui.end_row();
                             }
-                            if !layers.is_empty() {
-                                ui.label(RichText::new(tr!("Covers of layers")).color(pal.weak));
+                            if !report.custom_biomes.is_empty() {
+                                ui.label(RichText::new(tr!("Biomes")).color(pal.weak));
                                 ui.vertical(|ui| {
-                                    ui.label(tr!("These ground covers are layers of a block laid over the land. Ticked, they become the ground's own: the land raised by their layers, its top that block, smoothed with layers on export, as they look now."));
-                                    for (c, on) in layers.iter_mut() {
-                                        let blocks: Vec<&str> = c.plants.iter().map(|p| p.0.as_str()).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
-                                        crate::widgets::checkbox(ui, on, format!("{} — {}", c.name, blocks.join(", ")));
-                                    }
-                                    if ui.add_enabled(layers.iter().any(|l| l.1), egui::Button::new(tr!("Make them the ground's own"))).clicked() {
-                                        ground = true;
-                                    }
+                                    ui.label(trn!("{n} custom biome, now a biome of the map (exported by its id):", "{n} custom biomes, now biomes of the map (exported by their ids):", n = report.custom_biomes.len()));
+                                    ui.label(RichText::new(report.custom_biomes.join(", ")).size(11.5).color(pal.weak));
                                 });
                                 ui.end_row();
                             }
@@ -7043,6 +7060,35 @@ impl MassifApp {
                     self.save(ctx, true);
                 } else if keep {
                     self.dialog = Some(Dialog::ImportReport(report, thumbnail, layers));
+                }
+            }
+            Dialog::LayerCovers(mut layers) => {
+                let mut ground = false;
+                let response = modal(ctx, "layer covers").show(ctx, |ui| {
+                    ui.set_width(520.0);
+                    ui.label(RichText::new(tr!("Covers of layers to ground")).bold().size(16.0));
+                    ui.add_space(6.0);
+                    if layers.is_empty() {
+                        ui.label(tr!("No ground cover of this map is made of layer blocks (a mod's _layer blocks, snow layers)."));
+                    } else {
+                        ground = layer_covers_ui(ui, &mut layers);
+                    }
+                    ui.add_space(8.0);
+                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                        if ui.button(tr!("Close")).clicked() {
+                            keep = false;
+                        }
+                    });
+                });
+                if response.should_close() {
+                    keep = false;
+                }
+                if ground {
+                    let chosen: Vec<massif_core::surface_layers::SurfaceCover> = layers.drain(..).filter(|l| l.1).map(|l| l.0).collect();
+                    let snapshot = self.doc.world.snapshot();
+                    self.jobs.push(Job::surface_layers(ctx, snapshot, self.doc.dim, chosen, self.doc.revision).on(self.doc.generation));
+                } else if keep {
+                    self.dialog = Some(Dialog::LayerCovers(layers));
                 }
             }
             Dialog::Origin => {
@@ -7676,6 +7722,31 @@ fn header_style(ui: &mut Ui) {
 
 /// "Coming from WorldPainter?": what each answer does, and the two
 /// answers. Whether the user comes from WorldPainter, once answered.
+/// The ground covers of layer blocks (Conquest Reforged's grass layers,
+/// snow layers…), each with its box, and the button that makes those
+/// ticked the ground's own. Returns whether it was clicked.
+fn layer_covers_ui(ui: &mut Ui, layers: &mut [(massif_core::surface_layers::SurfaceCover, bool)]) -> bool {
+    let pal = Palette::of(ui);
+    let mut clicked = false;
+    crate::widgets::well(ui, |ui| {
+        ui.add_space(8.0);
+        ui.label(RichText::new(trn!("{n} ground cover is made of layer blocks", "{n} ground covers are made of layer blocks", n = layers.len())).strong());
+        ui.label(RichText::new(tr!("As Conquest Reforged maps lay them over the land. Made the ground's own, the land rises by their layers, its top is their block, and the export lays the same layers (Smooth terrain): the map, the 3D view, the brushes and the smoothing then know the land's true height. Plants and frost painted over them stay.")).size(11.5).color(pal.weak));
+        ui.add_space(4.0);
+        for (c, on) in layers.iter_mut() {
+            let blocks = c.blocks().join(", ");
+            let label = if c.all_layers() { format!("{} — {}", c.name, blocks) } else { tr!("{name} — {blocks} (its other blocks stay a cover)", name = c.name, blocks) };
+            crate::widgets::checkbox(ui, on, label);
+        }
+        ui.add_space(4.0);
+        if ui.add_enabled(layers.iter().any(|l| l.1), theme::primary_button(ui, tr!("Make them the ground's own"))).clicked() {
+            clicked = true;
+        }
+        ui.add_space(8.0);
+    });
+    clicked
+}
+
 fn origin_ui(ui: &mut Ui) -> Option<bool> {
     let pal = Palette::of(ui);
     let mut choice = None;

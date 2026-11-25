@@ -2481,6 +2481,7 @@ impl MapView {
                             fluid: p.fluid,
                             biome: p.biome,
                             cover: p.cover,
+                            cover_under: 0,
                             objects: p.objects,
                             annotation: 0,
                             understory: 0,

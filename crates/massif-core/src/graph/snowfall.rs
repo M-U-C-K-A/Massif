@@ -418,6 +418,7 @@ pub fn lay_snow(edit: &mut Edit, snow: &Snow, fall: &Snowfall, terrain: TerrainI
                     tile.slabs.set(i, smoothed);
                     if covers.get(cover).copied().unwrap_or(false) {
                         tile.cover.set(i, 0);
+                        tile.stacked.clear_kind(i, crate::layer_stack::Kind::Cover);
                     }
                     n += 1;
                 }

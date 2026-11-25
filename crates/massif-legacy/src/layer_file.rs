@@ -233,8 +233,9 @@ pub fn read_layer_file(bytes: &[u8], registry: &mut Registry) -> Result<LayerFil
                 out.left_out.push(LeftOut::Tunnel { name: t.name.clone(), floating: t.floating });
                 continue;
             }
-            // A combined layer's terrain and biome are in its own settings.
-            Conv::Terrain(_) | Conv::Biome(_) => continue,
+            // A combined layer's terrain and biome are in its own settings;
+            // custom annotations are said to be left out below.
+            Conv::Terrain(_) | Conv::Biome(_) | Conv::Note(_) => continue,
             // WorldPainter's own layers in a combined layer: caves, void,
             // rivers, annotations are painted with Massif's tools.
             other => {
@@ -256,6 +257,8 @@ pub fn read_layer_file(bytes: &[u8], registry: &mut Registry) -> Result<LayerFil
             out.made.push(made);
         }
     }
+    // A layer file paints nothing: a custom annotation layer adds no colour.
+    mapper.registry.annotations = registry.annotations.clone();
     keep_the_maps(registry, &mut mapper.registry, &mut out, &before);
     // A combined layer paints one layer of a slot: the others it held are
     // layers of their own.

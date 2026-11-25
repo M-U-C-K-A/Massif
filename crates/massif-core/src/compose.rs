@@ -161,6 +161,16 @@ impl<'a> TileStack<'a> {
         self.caves.as_ref().is_some_and(|c| c.column(cell).last().is_some_and(|r| r.y1 as i32 >= block_top(self.ground().top.get(cell))))
     }
 
+    /// Whether the ground of column `(x, z)`, anywhere on the map, holds
+    /// tree layer `n` (a sub-canopy one when `under`), stacked or not, and
+    /// the tree size asked there (see [`TileStack::ground_layers_at`]).
+    pub fn ground_holds_at(&self, x: i32, z: i32, n: u16, under: bool) -> Option<u16> {
+        let tile = self.around.and_then(|d| d.ground().view(TilePos::containing(x, z)))?;
+        let cell = crate::coords::local_index(x, z);
+        let (kind, plane) = if under { (crate::layer_stack::Kind::Understory, tile.understory.get(cell)) } else { (crate::layer_stack::Kind::Objects, tile.objects.get(cell)) };
+        (plane == n || tile.stacked.strength(cell, kind, n).is_some()).then(|| tile.sizes.get(cell))
+    }
+
     /// A stack of the given tiles — `(level index, kind, tile)`, the
     /// ground's first, bottom of the stack first — with the chunks sculpted
     /// over `pos`.
@@ -208,6 +218,53 @@ impl<'a> TileStack<'a> {
         }
         let level = self.surface_level(cell, top).unwrap_or(0);
         self.layers.iter().find(|l| l.index == level).map_or(0, |l| l.tile.cover.get(cell))
+    }
+
+    /// The topmost span of column `cell`, if it has any.
+    pub fn spans_top(&self, cell: usize) -> Option<Span> {
+        let mut spans = Vec::new();
+        self.spans(cell, &mut spans);
+        spans.last().copied()
+    }
+
+    /// The tile of the level whose surface is the top of column `cell`.
+    fn surface_tile(&self, cell: usize, top: &Span) -> Option<&Tile> {
+        if self.is_ground_only() {
+            return Some(self.ground());
+        }
+        let level = self.surface_level(cell, top).unwrap_or(0);
+        self.layers.iter().find(|l| l.index == level).map(|l| &*l.tile)
+    }
+
+    /// The covers lying under [`TileStack::surface_cover`] (see
+    /// [`crate::layer_stack`]), bottom to top.
+    pub fn surface_under(&self, cell: usize, top: &Span) -> Vec<u16> {
+        self.surface_tile(cell, top).filter(|t| t.stacked.has(cell)).map_or_else(Vec::new, |t| t.stacked.covers_under(cell))
+    }
+
+    /// The strength of tree layer `n` (a sub-canopy one when `under`) on
+    /// the top of column `cell`: 255 where it is painted, its own where it
+    /// is stacked, `None` where it is not.
+    pub fn surface_tree_strength(&self, cell: usize, top: &Span, under: bool, n: u16) -> Option<u8> {
+        let t = self.surface_tile(cell, top)?;
+        let (kind, plane) = if under { (crate::layer_stack::Kind::Understory, t.understory.get(cell)) } else { (crate::layer_stack::Kind::Objects, t.objects.get(cell)) };
+        if t.stacked.has(cell)
+            && let Some(s) = t.stacked.strength(cell, kind, n)
+        {
+            return Some(s);
+        }
+        (plane == n).then_some(255)
+    }
+
+    /// The tree layers (sub-canopy ones when `under`) on the top of column
+    /// `cell`, each with its strength there (see [`crate::layer_stack`]).
+    pub fn surface_tree_layers(&self, cell: usize, top: &Span, under: bool) -> Vec<(u16, u8)> {
+        let Some(t) = self.surface_tile(cell, top) else { return Vec::new() };
+        let (kind, plane) = if under { (crate::layer_stack::Kind::Understory, t.understory.get(cell)) } else { (crate::layer_stack::Kind::Objects, t.objects.get(cell)) };
+        if !t.stacked.has(cell) {
+            return if plane == 0 { Vec::new() } else { vec![(plane, 255)] };
+        }
+        t.stacked.layers_of(cell, kind, plane)
     }
 
     /// The object layer painted on the top of column `cell` (see

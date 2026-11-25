@@ -76,22 +76,34 @@ becomes a layer of the Layers panel, painted where it was:
 - **Custom ground covers** (a block of water, snow layers, Conquest
   Reforged's grass layers…) become ground covers of their blocks, as high as
   they are thick. One that takes the place of the top of the land lies on
-  the ground lowered under it. Where several overlap, a block shows one of
-  them, as in WorldPainter's export.
+  the ground lowered under it.
+- **Every layer of a block stays on it**, with its own intensity, as
+  WorldPainter keeps them: a block with a forest at 50 %, bushes at 15 %
+  and three ground covers keeps all of them. Covers lie over each other as
+  WorldPainter lays them (custom ground covers on the ground, plants on
+  them, frost over everything), and the export grows each in turn; each
+  tree layer stands its trees thinned to its intensity there. The Info
+  panel lists them all; rubbing one out leaves the others, and painting a
+  layer over the block takes the place of all of that slot's.
 - **Covers of layers** — ground covers whose blocks are the layers of a
-  block (`conquest:grass_block_layer[layers=3]`, snow layers) — are listed
-  in the import report, ticked. **Make them the ground's own** turns those
+  block (`conquest:grass_block_layer[layers=3]`, snow layers, covers mixing
+  several of them) — are listed first in the import report, ticked,
+  whether or not Conquest Reforged is read in the Blocks panel (the map's
+  own blocks are known). **Make them the ground's own** turns those
   you keep ticked into the land itself: each column rises by its layers'
   eighths, its top becomes the full block they are layers of (its terrain
   stays when it already is), and Smooth terrain lays the same layers on
   export, now from the land's true height, which the map, the 3D view, the
-  brushes and the smoothing all follow. It is one step to undo.
+  brushes and the smoothing all follow. It is one step to undo. Layers of
+  a block that has no full block of its own (`grass_and_sand_layer`) use
+  eight of them as their full block; a mix's other blocks (small stones)
+  stay a cover, and plants or frost painted over the layers stay. **Edit ▸
+  Covers of Layers to Ground…** does the same at any time.
 - **Forests, tree pack layers and custom object layers** become tree and
   object layers with about as many trees as WorldPainter's export stands:
   the import plays WorldPainter's placement with your objects' own shapes
   and sets the spacing and density that match, at every strength you
-  painted. Overlapping tree layers each keep a share of the columns, all of
-  them standing mixed.
+  painted.
 - **Plant layers, Frost, Lava, Void, Annotations, pockets, combined
   layers, caves, tunnels and River** come as described in
   [Layers](layers.md).
@@ -101,8 +113,19 @@ same place, scale and opacity. Their files are looked for where WorldPainter
 had them, then by name beside the `.world`; one not found keeps its place,
 and **Find its file…** in its settings links it again.
 
+**Custom biomes** come in as biomes of the map, painted where they were
+and exported by their names, which are their ids
+(`terralith:alpine_highlands`): the game shows them with the data pack or
+mod that defines them. One named otherwise keeps its name, its id made of
+it. Right-click a biome of the map in the Biomes panel to rename it or
+set its colours (on the map, and of grass and leaves in the 3D view and
+True Colour). **Custom annotation layers** become annotations in a colour of
+the map's own. Every custom layer keeps the colour WorldPainter shows it
+in (on the map and in the Layers panel), and a ground cover its opacity.
+
 The import report lists any layer that was not carried over, and any
-overlay image not found.
+overlay image not found. It is kept with the map: **File ▸ Import
+Report…** shows it again, its covers of layers included.
 
 ## What Massif adds
 

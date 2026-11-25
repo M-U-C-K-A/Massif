@@ -85,6 +85,13 @@ pub struct ExportContext<'a> {
     covers: Vec<Vec<Option<Plant>>>,
     /// Whether each block of the registry is soil that plants grow on.
     soil: Vec<bool>,
+    /// What frost does over each state of the covers' plants (by state,
+    /// from `first_extra`): see [`Frosted`].
+    frosted: Vec<Frosted>,
+    /// Whether each state of the covers' plants (from `first_extra`) is a
+    /// layer of snow, which a plant takes the place of (WorldPainter's
+    /// plants do).
+    snowy: Vec<bool>,
     /// The states of each object's palette as it stands each way: index
     /// `turn + 4` when mirrored, `turn` otherwise; [`SKIP`] for a block the
     /// version has nothing like. Empty for objects no layer uses.
@@ -209,7 +216,13 @@ impl<'a> ExportContext<'a> {
         };
         // The plants of the covers come after the registry's blocks.
         let mut covers = Vec::with_capacity(reg.covers.len());
+        let first_plant = states.len();
+        let mut frosted = Vec::new();
+        let mut snowy = Vec::new();
         for def in &reg.covers {
+            // A cover of blocks laid on the ground (a custom ground cover)
+            // is solid, its own colour on the map.
+            let laid = def.is_laid();
             let mut plants = Vec::with_capacity(def.plants.len());
             for (state, _) in &def.plants {
                 let block = BlockDef { state: state.clone(), color: [0; 3] };
@@ -238,6 +251,16 @@ impl<'a> ExportContext<'a> {
                 let lower = add(tall.then_some("lower"), number);
                 // Before 1.13 the top half of every tall plant is 175:8.
                 let upper = tall.then(|| add(Some("upper"), number.map(|(id, _)| (id, 8))));
+                let short = name.split_once(':').map_or(name, |p| p.1);
+                let frost = if laid || short.ends_with("_layer") || short.ends_with("_layers") || short == "snow" {
+                    Frosted::Over
+                } else if matches!(short, "short_grass" | "grass" | "fern" | "tall_grass" | "large_fern") {
+                    Frosted::Buries
+                } else {
+                    Frosted::Spares
+                };
+                frosted.resize(states.len() - first_plant, frost);
+                snowy.resize(states.len() - first_plant, short == "snow");
                 plants.push(Some(Plant { lower, upper }));
             }
             covers.push(plants);
@@ -443,7 +466,9 @@ impl<'a> ExportContext<'a> {
         } else {
             use massif_core::shapes::{Kind, Side, StairShape, family};
             let vanilla = |id: &str| id.strip_prefix("minecraft:").is_some_and(|short| target.has_block(short));
-            let known = massif_core::shapes::Known { vanilla: &vanilla, mods };
+            // The mods' blocks the map uses are known, read or not.
+            let merged = massif_core::shapes::with_map_blocks(reg, mods);
+            let known = massif_core::shapes::Known { vanilla: &vanilla, mods: merged.as_ref().unwrap_or(mods) };
             let mut tops: std::collections::HashSet<usize> = reg.terrains.iter().flat_map(|t| t.strata.iter().flat_map(|s| s.blocks.iter().map(|b| b.0.index())).chain(t.submerged_top.map(|b| b.index()))).collect();
             tops.extend(reg.blocks.iter().enumerate().filter(|(_, b)| b.name().ends_with("_slab")).map(|(k, _)| k));
             let mut add = |name: &str, props: Vec<(String, String)>| {
@@ -604,6 +629,8 @@ impl<'a> ExportContext<'a> {
             seed: world.meta.seed as u64,
             covers,
             soil,
+            frosted,
+            snowy,
             objects,
             shaped,
             first_extra: reg.blocks.len() as u16,
@@ -723,6 +750,16 @@ impl Encoded {
     }
 }
 
+/// What frost does over a block a cover put, as WorldPainter's: lays its
+/// snow on a block of the ground (a custom ground cover's), buries short
+/// grass and ferns, and leaves other plants unfrosted.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Frosted {
+    Over,
+    Buries,
+    Spares,
+}
+
 /// One plant of a cover, as written: its block and, for a tall plant, the
 /// block of its upper half (indices into the exported states).
 #[derive(Debug, Clone, Copy)]
@@ -780,6 +817,78 @@ fn grow(ctx: &ExportContext, cover: u16, x: i32, y: i32, z: i32, blocks: &mut [u
         };
     }
     y + height
+}
+
+/// Grow a stack of covers (see `massif_core::cover_stack`) on the top of a
+/// column, at `y`: each over the last, bottom to top, `top` last, as
+/// WorldPainter lays its layers. Frost and lava come last whatever their
+/// place: frost lays its snow where short grass or ferns grew (WorldPainter
+/// buries them), not over other plants. Returns the height above the last
+/// block put.
+#[allow(clippy::too_many_arguments)]
+fn grow_stack(ctx: &ExportContext, under: &[u16], top: u16, x: i32, y: i32, z: i32, blocks: &mut [u16], column: usize) -> i32 {
+    let changes_water = |c: u16| ctx.reg.cover(c).is_some_and(|d| d.changes_water());
+    // Custom ground covers lie on the ground, each in the place of the one
+    // under it (WorldPainter writes them at the same height, the last
+    // one staying).
+    let laid = |c: u16| ctx.reg.cover(c).is_some_and(|d| d.is_laid());
+    let all: Vec<u16> = under.iter().copied().chain(std::iter::once(top)).filter(|&c| c != 0 && !changes_water(c)).collect();
+    // A cover of snow layers lies only where nothing solid does.
+    let snow_cover = |c: u16| ctx.reg.cover(c).is_some_and(|d| !d.plants.is_empty() && d.plants.iter().all(|p| p.0.starts_with("minecraft:snow[") || p.0 == "minecraft:snow"));
+    let mut h = y;
+    for solid in [true, false] {
+        for &c in all.iter().rev().filter(|&&c| laid(c) && snow_cover(c) != solid) {
+            h = grow(ctx, c, x, y, z, blocks, column);
+            if h > y {
+                break;
+            }
+        }
+        if h > y {
+            break;
+        }
+    }
+    // One plant a column, as WorldPainter's plant layers each take the
+    // place of the plant before them: the topmost cover's, on what lies
+    // under it (on a custom ground cover's blocks, only a plant that needs
+    // no soil grows).
+    if let Some(&c) = all.iter().rev().find(|&&c| !laid(c)) {
+        let at = |y: i32| (((y - ctx.min_y) as usize) << 8) | column;
+        // A layer of snow gives its place to the plant.
+        let snow = h == y + 1 && blocks[at(y)] >= ctx.first_extra && ctx.snowy.get((blocks[at(y)] - ctx.first_extra) as usize).copied().unwrap_or(false);
+        if snow {
+            blocks[at(y)] = 0;
+            h = grow(ctx, c, x, y, z, blocks, column).max(y);
+            // No plant could grow: the snow stays.
+            if h == y
+                && let Some(&l) = all.iter().rev().find(|&&c| laid(c))
+            {
+                h = grow(ctx, l, x, y, z, blocks, column);
+            }
+        } else {
+            h = grow(ctx, c, x, h, z, blocks, column);
+        }
+    }
+    let at = |y: i32| (((y - ctx.min_y) as usize) << 8) | column;
+    let frosted = |b: u16| if b >= ctx.first_extra { ctx.frosted.get((b - ctx.first_extra) as usize).copied() } else { None };
+    for &c in under.iter().chain(std::iter::once(&top)).filter(|&&c| c != 0 && changes_water(c)) {
+        // Over water, the water's top freezes; on land, the snow lies on
+        // what the covers put.
+        let mut base = if h == y || blocks[at(y)] == ctx.water { y } else { h };
+        if base > y {
+            match frosted(blocks[at(base - 1)]) {
+                Some(Frosted::Spares) => continue,
+                Some(Frosted::Buries) => {
+                    while base > y && frosted(blocks[at(base - 1)]) == Some(Frosted::Buries) {
+                        base -= 1;
+                        blocks[at(base)] = 0;
+                    }
+                }
+                _ => {}
+            }
+        }
+        h = h.max(grow(ctx, c, x, base, z, blocks, column));
+    }
+    h
 }
 
 /// Whether every block of a section is the same: compared 64 at a time,
@@ -1287,8 +1396,13 @@ fn fill_chunk(
                 && let Some(surface) = spans.last()
             {
                 let cover = stack.surface_cover(cell, surface);
-                if cover != 0 {
-                    top = top.max(grow(ctx, cover, x, surface.y1, z, blocks, column));
+                let under = stack.surface_under(cell, surface);
+                if under.is_empty() {
+                    if cover != 0 {
+                        top = top.max(grow(ctx, cover, x, surface.y1, z, blocks, column));
+                    }
+                } else {
+                    top = top.max(grow_stack(ctx, &under, cover, x, surface.y1, z, blocks, column));
                 }
             }
             // The water as the game leaves it: flowing at the edges of its

@@ -54,6 +54,25 @@ impl TileSummary {
         for p in Painted::ALL {
             plane(p.plane(tile), &|v| (v != 0).then_some(Match::Layer(p, v)));
         }
+        // The layers stacked on columns: each at its first column.
+        if !tile.stacked.is_empty() {
+            use crate::layer_stack::Kind;
+            let dense = tile.stacked.plane.dense();
+            for (k, _) in tile.stacked.lists.iter().enumerate() {
+                let Some(i) = dense.iter().position(|&v| v as usize == k + 1) else { continue };
+                for e in tile.stacked.entries(i) {
+                    let p = match e.kind {
+                        Kind::Cover => Painted::Cover,
+                        Kind::Objects => Painted::Objects,
+                        Kind::Understory => Painted::Understory,
+                    };
+                    let m = Match::Layer(p, e.layer);
+                    if !found.iter().any(|f| f.0 == m) {
+                        found.push((m, i as u16));
+                    }
+                }
+            }
+        }
         Self { found }
     }
 }

@@ -559,6 +559,10 @@ impl Remap {
         t.terrain = map_plane(&t.terrain, |v| Self::read(&self.terrains, v));
         t.biome = map_plane(&t.biome, |v| Self::read(&self.biomes, v));
         t.cover = map_plane(&t.cover, |v| Self::read(&self.covers, v));
+        t.stacked.renumber(|kind, n| match kind {
+            crate::layer_stack::Kind::Cover => Self::read(&self.covers, n),
+            _ => Self::read(&self.layers, n),
+        });
         t.objects = map_plane(&t.objects, |v| Self::read(&self.layers, v));
         t.understory = map_plane(&t.understory, |v| Self::read(&self.layers, v));
         t.pockets = map_plane(&t.pockets, |v| Self::read(&self.pockets, v));

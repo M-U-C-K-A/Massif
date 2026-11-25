@@ -751,6 +751,7 @@ impl Pack {
             spacing_mode: l.spacing_mode,
             min_gap: l.min_gap,
             size_density: l.size_density.clone(),
+            intensity: None,
         })
     }
 

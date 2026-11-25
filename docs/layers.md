@@ -44,6 +44,18 @@ Cover slot with plants: a frozen pond holds no flowers. The
 terrain: a pocket layer never meets the ground's blocks, its cover or its
 trees.
 
+A map brought from WorldPainter keeps what WorldPainter allows instead:
+**several layers of a slot on a block**, each with its own intensity
+(three ground covers, a forest at 50 % and bushes at 15 %). Its covers
+lie over each other as WorldPainter lays them — custom ground covers on
+the ground, plants on them, frost and lava over everything — and the
+export grows each in turn; each of its tree layers stands its trees
+thinned to its intensity there. The Info panel lists them all. Rubbing one
+out with the right button takes it alone out (the cover under it shows
+again); painting a layer of the slot over the block takes the place of
+all of them, as a slot holds one. A map without such blocks is saved as
+before.
+
 Water itself is not a layer: Flood, the River tool and the Water brush
 shape it. Levels and 3D sculpting are not layers either: they shape
 the land the layers lie on.

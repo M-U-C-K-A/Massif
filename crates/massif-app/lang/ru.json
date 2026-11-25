@@ -1091,7 +1091,6 @@
  "Import objects…": "Импорт объектов…",
  "Import packs": "Импортировать наборы",
  "Imported": "Импортировано",
- "Imported {display_name} in {secs:.1} s: {summary}": "{display_name} импортирован за {secs:.1} с: {summary}",
  "Imported “{name}”": "«{name}» импортирован",
  "Importing {file}": "Импорт {file}",
  "Import…": "Импорт…",
@@ -3625,8 +3624,6 @@
  "Covers of layers: {meanwhile}, nothing was done": "Покровы из слоёв: {meanwhile}, ничего не сделано",
  "Covers of layers made ground": "Покровы из слоёв в землю",
  "Covers of layers made the ground's own: {columns} columns raised and smoothed in {secs:.1} s": "Покровы из слоёв стали землёй: {columns} столбцов поднято и сглажено за {secs:.1} с",
- "Covers of layers": "Покровы из слоёв",
- "These ground covers are layers of a block laid over the land. Ticked, they become the ground's own: the land raised by their layers, its top that block, smoothed with layers on export, as they look now.": "Эти покровы — слои блока, положенные на землю. Отмеченные, они станут самой землёй: земля поднимется на их слои, сверху будет этот блок, сглаженный слоями при экспорте, как сейчас.",
  "Make them the ground's own": "Сделать землёй",
  "Contour lines: interval, strength, colour": "Горизонтали: шаг, яркость, цвет",
  "Crisp": "Чёткие",
@@ -3784,5 +3781,28 @@
  "Objects per 100 blocks²": "Объектов на 100 блоков²",
  "Generator": "Генератор",
  "Classic graph": "Классический граф",
- "The terrain generator of earlier versions, for older maps": "Генератор рельефа прежних версий, для старых карт"
+ "The terrain generator of earlier versions, for older maps": "Генератор рельефа прежних версий, для старых карт",
+ "Imported {display_name} in {secs:.1} s: {summary}. See File ▸ Import Report…": "{display_name} импортирован за {secs:.1} с: {summary}. См. Файл ▸ Отчёт об импорте…",
+ "Cover under it": "Покров под ним",
+ "Covers of Layers to Ground…": "Покровы из слоёв в грунт…",
+ "Ground covers of layer blocks, as Conquest Reforged maps lay them, made the land's own height and smoothed with layers": "Покровы из блоков-слоёв, как их кладут карты Conquest Reforged, становятся высотой самой земли и сглаживаются слоями",
+ "Covers of layers to ground": "Покровы из слоёв в грунт",
+ "No ground cover of this map is made of layer blocks (a mod's _layer blocks, snow layers).": "Ни один покров этой карты не состоит из блоков-слоёв (блоки _layer мода, слои снега).",
+ "{n} ground covers are made of layer blocks": {
+  "one": "{n} покров состоит из блоков-слоёв",
+  "few": "{n} покрова состоят из блоков-слоёв",
+  "many": "{n} покровов состоят из блоков-слоёв",
+  "other": "{n} покрова состоят из блоков-слоёв"
+ },
+ "As Conquest Reforged maps lay them over the land. Made the ground's own, the land rises by their layers, its top is their block, and the export lays the same layers (Smooth terrain): the map, the 3D view, the brushes and the smoothing then know the land's true height. Plants and frost painted over them stay.": "Так их кладут на землю карты Conquest Reforged. Ставшие грунтом, они поднимают землю на свои слои, её верхний блок — их блок, а экспорт кладёт те же слои (Сглаженный рельеф): карта, 3D-вид, кисти и сглаживание знают настоящую высоту земли. Растения и иней, нарисованные поверх, остаются.",
+ "{name} — {blocks} (its other blocks stay a cover)": "{name} — {blocks} (остальные его блоки остаются покровом)",
+ "Map colour": "Цвет на карте",
+ "{n} custom biomes, now biomes of the map (exported by their ids):": {
+  "one": "{n} свой биом, теперь биом карты (экспортируется по своему id):",
+  "few": "{n} своих биома, теперь биомы карты (экспортируются по своим id):",
+  "many": "{n} своих биомов, теперь биомы карты (экспортируются по своим id):",
+  "other": "{n} своего биома, теперь биомы карты (экспортируются по своим id):"
+ },
+ "Import Report…": "Отчёт об импорте…",
+ "What the import of the WorldPainter world brought in, what it left out, and its covers of layers to make the ground's own": "Что импорт мира WorldPainter принёс, что оставил, и его покровы из слоёв, которые можно сделать грунтом"
 }

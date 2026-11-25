@@ -30,6 +30,7 @@ pub mod codec;
 pub mod combined;
 pub mod compose;
 pub mod coords;
+pub mod layer_stack;
 pub mod curve;
 pub mod filter;
 pub mod fingerprint;

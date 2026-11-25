@@ -1088,7 +1088,6 @@
  "Import objects…": "Importer des objets…",
  "Import packs": "Importer des packs",
  "Imported": "Importé",
- "Imported {display_name} in {secs:.1} s: {summary}": "{display_name} importé en {secs:.1} s : {summary}",
  "Imported “{name}”": "« {name} » importé",
  "Importing {file}": "Import de {file}",
  "Import…": "Importer…",
@@ -3527,8 +3526,6 @@
  "Covers of layers: {meanwhile}, nothing was done": "Couvertures de couches : {meanwhile}, rien n'a été fait",
  "Covers of layers made ground": "Couvertures de couches en sol",
  "Covers of layers made the ground's own: {columns} columns raised and smoothed in {secs:.1} s": "Couvertures de couches devenues le sol : {columns} colonnes surélevées et lissées en {secs:.1} s",
- "Covers of layers": "Couvertures de couches",
- "These ground covers are layers of a block laid over the land. Ticked, they become the ground's own: the land raised by their layers, its top that block, smoothed with layers on export, as they look now.": "Ces couvertures sont les couches d'un bloc posées sur le terrain. Cochées, elles deviennent le sol lui-même : le terrain monte de leurs couches, son dessus devient ce bloc, lissé en couches à l'export, comme elles apparaissent maintenant.",
  "Make them the ground's own": "En faire le sol",
  "Contour lines: interval, strength, colour": "Courbes de niveau : intervalle, force, couleur",
  "Crisp": "Nettes",
@@ -3827,5 +3824,24 @@
  "Objects per 100 blocks²": "Objets pour 100 blocs²",
  "Generator": "Générateur",
  "Classic graph": "Graphe classique",
- "The terrain generator of earlier versions, for older maps": "Le générateur de terrain des versions précédentes, pour les cartes plus anciennes"
+ "The terrain generator of earlier versions, for older maps": "Le générateur de terrain des versions précédentes, pour les cartes plus anciennes",
+ "Imported {display_name} in {secs:.1} s: {summary}. See File ▸ Import Report…": "{display_name} importé en {secs:.1} s : {summary}. Voir Fichier ▸ Rapport d'import…",
+ "Cover under it": "Couverture dessous",
+ "Covers of Layers to Ground…": "Couvertures de couches en sol…",
+ "Ground covers of layer blocks, as Conquest Reforged maps lay them, made the land's own height and smoothed with layers": "Les couvertures de blocs de couches, comme les posent les cartes Conquest Reforged, deviennent la hauteur du terrain, lissée en couches",
+ "Covers of layers to ground": "Couvertures de couches en sol",
+ "No ground cover of this map is made of layer blocks (a mod's _layer blocks, snow layers).": "Aucune couverture de cette carte n'est faite de blocs de couches (blocs _layer d'un mod, couches de neige).",
+ "{n} ground covers are made of layer blocks": {
+  "one": "{n} couverture est faite de blocs de couches",
+  "other": "{n} couvertures sont faites de blocs de couches"
+ },
+ "As Conquest Reforged maps lay them over the land. Made the ground's own, the land rises by their layers, its top is their block, and the export lays the same layers (Smooth terrain): the map, the 3D view, the brushes and the smoothing then know the land's true height. Plants and frost painted over them stay.": "Comme les cartes Conquest Reforged les posent sur le terrain. Devenues le sol, le terrain monte de leurs couches, son dessus est leur bloc, et l'export pose les mêmes couches (Terrain lissé) : la carte, la vue 3D, les pinceaux et le lissage connaissent alors la vraie hauteur du terrain. Les plantes et le givre peints dessus restent.",
+ "{name} — {blocks} (its other blocks stay a cover)": "{name} — {blocks} (ses autres blocs restent une couverture)",
+ "Map colour": "Couleur sur la carte",
+ "{n} custom biomes, now biomes of the map (exported by their ids):": {
+  "one": "{n} biome personnalisé, devenu biome de la carte (exporté par son identifiant) :",
+  "other": "{n} biomes personnalisés, devenus biomes de la carte (exportés par leurs identifiants) :"
+ },
+ "Import Report…": "Rapport d'import…",
+ "What the import of the WorldPainter world brought in, what it left out, and its covers of layers to make the ground's own": "Ce que l'import du monde WorldPainter a apporté, ce qu'il a laissé, et ses couvertures de couches à faire devenir le sol"
 }

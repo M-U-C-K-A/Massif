@@ -74,6 +74,11 @@ pub struct WorldMeta {
     /// dialog offers them again. `None`: never chosen.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub export_rules: Option<ExportRules>,
+    /// What the import of the WorldPainter world it was made of brought in
+    /// and left out (`massif_legacy::ImportReport`), to read again: File ▸
+    /// Import Report…
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_report: Option<serde_json::Value>,
 }
 
 /// What the world is played with, kept with the map from one export to the
@@ -110,6 +115,7 @@ impl Default for WorldMeta {
             head: None,
             region: None,
             export_rules: None,
+            import_report: None,
         }
     }
 }

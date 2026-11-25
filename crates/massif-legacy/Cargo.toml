@@ -12,4 +12,6 @@ massif-objects.workspace = true
 flate2.workspace = true
 rayon.workspace = true
 thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 log.workspace = true

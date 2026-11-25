@@ -1729,7 +1729,7 @@ enum Part {
 
 impl Part {
     /// The value of column `i` of `tile`: 0 to 65,535 for the height, an
-    /// annotation's number, else 255 where it is and 0 where not.
+    /// annotation's number, else 255 where it is and 0 where not (a stacked tree layer: its strength).
     #[inline]
     fn value(self, tile: &Tile, i: usize, lo: f32, span: f32) -> u16 {
         let on = |b: bool| if b { 255 } else { 0 };
@@ -1739,9 +1739,15 @@ impl Part {
             Part::Water => on(tile.fluid.get(i) != NO_FLUID),
             Part::Terrain(v) => on(tile.terrain.get(i) == v),
             Part::Biome(v) => on(tile.biome.get(i) == v),
-            Part::Cover(v) => on(tile.cover.get(i) == v),
-            Part::Trees(v) => on(tile.objects.get(i) == v),
-            Part::Understory(v) => on(tile.understory.get(i) == v),
+            Part::Cover(v) => on(tile.cover.get(i) == v || tile.stacked.strength(i, crate::layer_stack::Kind::Cover, v).is_some()),
+            Part::Trees(v) => match tile.stacked.strength(i, crate::layer_stack::Kind::Objects, v) {
+                Some(s) => s as u16,
+                None => on(tile.objects.get(i) == v),
+            },
+            Part::Understory(v) => match tile.stacked.strength(i, crate::layer_stack::Kind::Understory, v) {
+                Some(s) => s as u16,
+                None => on(tile.understory.get(i) == v),
+            },
             Part::Pockets(v) => on(tile.pockets.get(i) == v),
             Part::TreeSize(v) => on(tile.sizes.get(i) == v),
         }

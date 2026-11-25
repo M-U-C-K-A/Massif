@@ -90,9 +90,28 @@ impl ColumnInfo {
         if let Some(c) = reg.cover(s.cover) {
             layers.push(LayerHere { matches: Some(Match::Layer(Painted::Cover, s.cover)), kind: tr!("Cover"), name: c.name.clone(), color: c.color, intensity: Some(c.density), paint: Some(Paint::Cover(s.cover)) });
         }
-        for (plane, n, kind) in [(Painted::Objects, s.objects, tr!("Trees")), (Painted::Understory, s.understory, tr!("Under the trees"))] {
-            if let Some(l) = reg.object_layer(n) {
-                layers.push(LayerHere { matches: Some(Match::Layer(plane, n)), kind, name: l.name.clone(), color: l.color, intensity: Some(l.density), paint: Some(Paint::Objects(n)) });
+        // The covers stacked under it (a WorldPainter map's), top first.
+        let top = (!empty).then(|| stack.spans_top(cell)).flatten();
+        if let Some(top) = &top {
+            for n in stack.surface_under(cell, top).into_iter().rev() {
+                if let Some(c) = reg.cover(n) {
+                    layers.push(LayerHere { matches: Some(Match::Layer(Painted::Cover, n)), kind: tr!("Cover under it"), name: c.name.clone(), color: c.color, intensity: Some(c.density), paint: Some(Paint::Cover(n)) });
+                }
+            }
+        }
+        for (plane, under, n, kind) in [(Painted::Objects, false, s.objects, tr!("Trees")), (Painted::Understory, true, s.understory, tr!("Under the trees"))] {
+            // Every tree layer of the slot here, with its strength where it
+            // is stacked at one (a WorldPainter map's intensity).
+            let here = match &top {
+                Some(top) => stack.surface_tree_layers(cell, top, under),
+                None => Vec::new(),
+            };
+            let here = if here.is_empty() && n != 0 { vec![(n, 255)] } else { here };
+            for (n, strength) in here {
+                if let Some(l) = reg.object_layer(n) {
+                    let intensity = if strength < 255 { strength as f32 / 255.0 } else { l.density };
+                    layers.push(LayerHere { matches: Some(Match::Layer(plane, n)), kind, name: l.name.clone(), color: l.color, intensity: Some(intensity), paint: Some(Paint::Objects(n)) });
+                }
             }
         }
         if let Some(size) = reg.tree_size(s.size as u16).filter(|t| !t.removed) {

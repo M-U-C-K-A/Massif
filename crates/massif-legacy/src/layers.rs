@@ -26,7 +26,7 @@ const LAYERS: &str = "org.pepsoft.worldpainter.layers.";
 const TREE_PACK: &str = " (WorldPainter tree pack)";
 
 /// How a layer's strength turns into the share of its columns kept.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Curve {
     /// As much as its strength: objects and plants.
     Linear,
@@ -39,7 +39,7 @@ pub enum Curve {
 }
 
 /// What a WorldPainter layer becomes.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Conv {
     /// A ground cover, by number.
     Cover(u16),
@@ -49,6 +49,9 @@ pub enum Conv {
     Void,
     /// Annotations: their colour, 1 to 15, a nibble a column.
     Annotations,
+    /// A custom annotation layer: annotations of one colour of the map's
+    /// own, by number, where painted.
+    Note(u16),
     /// Caves carved where painted, once the whole dimension is read.
     Caves(CaveKind),
     /// A custom ground cover: its index in [`Converter::ground_covers`].
@@ -200,6 +203,10 @@ pub struct Converter {
     pub lay_covers: bool,
     /// The ground covers made of custom ground covers, by number.
     pub laid: Vec<u16>,
+    /// Where WorldPainter's export comes to what each layer became: a
+    /// combined layer's parts at their own layers' places, as WorldPainter
+    /// exports them one by one.
+    pub orders: HashMap<Conv, ExportOrder>,
 }
 
 impl Converter {
@@ -215,6 +222,12 @@ impl Converter {
             return parts.clone();
         }
         let parts = self.resolve(arena, key, mapper, depth);
+        if let Some(class) = arena.class_name(key).filter(|c| !c.ends_with(".CombinedLayer")) {
+            let order = export_order(arena, key, class);
+            for (conv, _) in &parts {
+                self.orders.entry(*conv).or_insert_with(|| order.clone());
+            }
+        }
         self.known.insert(handle, parts.clone());
         parts
     }
@@ -246,6 +259,9 @@ impl Converter {
                     let mut def = cover_def(&cover);
                     if let Some(c) = arena.field(key, "colour").and_then(|c| arena.int(c)).filter(|&c| c != 0) {
                         def.color = [(c >> 16) as u8, (c >> 8) as u8, c as u8];
+                    }
+                    if let Some(o) = arena.field(key, "opacity").and_then(|o| arena.float(o)) {
+                        def.opacity = (o as f32).clamp(0.0, 1.0);
                     }
                     def.palette = palette_of(arena, key, &mut mapper.registry);
                     let sink = if thickness < 0 { def.height[0] } else { 0 };
@@ -367,18 +383,73 @@ impl Converter {
 pub struct Painted {
     pub conv: Conv,
     pub strength: Vec<u8>,
-    /// Painted before the others (0: Frost and Lava, whose snow, ice and
-    /// lava take the place of plants), as the covers of a column are one.
-    pub priority: u8,
+    /// Where WorldPainter's export comes to it among the layers (see
+    /// [`export_order`]): the covers of a column lie in that order, the
+    /// last on top.
+    pub order: ExportOrder,
+}
+
+/// Where WorldPainter's export comes to a layer (`Layer.compareTo`): its
+/// export index if it was given one, its priority (custom ground covers
+/// 30, plants 35, Frost 60…), the thicker ground covers first, the layers
+/// of a palette before the others, by palette, then by name.
+pub type ExportOrder = (i64, i64, i64, u8, String, String);
+
+/// The [`ExportOrder`] of layer `key` (of class `class`).
+pub fn export_order(arena: &Arena, key: Value, class: &str) -> ExportOrder {
+    let int = |n: &str| arena.field(key, n).and_then(|v| arena.int(v));
+    let string = |n: &str| arena.field(key, n).and_then(|v| arena.string(v)).map(str::to_owned);
+    let index = int("index").unwrap_or(i64::MAX);
+    let priority = int("priority").unwrap_or(50);
+    let thickness = if class.ends_with("GroundCoverLayer") { -int("thickness").unwrap_or(1).abs() } else { 0 };
+    let palette = string("palette").filter(|p| !p.is_empty());
+    (index, priority, thickness, palette.is_none() as u8, palette.unwrap_or_default(), string("name").unwrap_or_default())
 }
 
 /// What layer `key` (of class `class`) becomes in `reg`, adding what it
 /// needs there; `None` for a layer Massif does not convert.
 pub fn convert(arena: &Arena, key: Value, class: &str, reg: &mut Registry) -> Option<Conv> {
     let conv = convert_layer(arena, key, class, reg)?;
+    // How the intensity painted thins its objects, where several layers
+    // stand on a column at their own (see `massif_core::layer_stack`).
+    if let Conv::Objects(n, curve, _) = conv
+        && let Some(layer) = reg.object_layers.get_mut(n as usize - 1)
+    {
+        layer.intensity = match curve {
+            Curve::Linear => None,
+            Curve::Square => Some(std::array::from_fn(|k| ((k * 17 * k * 17) / 255) as u8)),
+            Curve::Shares(shares) => Some(shares),
+        };
+    }
+    // A custom layer keeps its colour on the map, and the opacity
+    // WorldPainter draws it with (its own layers keep Massif's colours).
+    if arena.field(key, "storedIcon").is_some() || arena.field(key, "palette").is_some() {
+        let color = arena.field(key, "colour").and_then(|c| arena.int(c)).filter(|&c| c != 0 && c != -1).map(|c| [(c >> 16) as u8, (c >> 8) as u8, c as u8]);
+        let opacity = arena.field(key, "opacity").and_then(|o| arena.float(o)).map(|o| o.clamp(0.0, 1.0) as f32);
+        match conv {
+            Conv::Cover(n) => {
+                if let Some(c) = reg.covers.get_mut(n as usize - 1) {
+                    c.color = color.unwrap_or(c.color);
+                    c.opacity = opacity.unwrap_or(c.opacity);
+                }
+            }
+            Conv::Objects(n, ..) => {
+                if let (Some(l), Some(color)) = (reg.object_layers.get_mut(n as usize - 1), color) {
+                    l.color = color;
+                }
+            }
+            Conv::Pockets(n) => {
+                if let (Some(p), Some(color)) = (reg.pockets.get_mut(n as usize - 1), color) {
+                    p.color = color;
+                }
+            }
+            _ => {}
+        }
+    }
     // A custom layer keeps the palette WorldPainter sorted it into, and its
     // place there.
-    let palette = palette_of(arena, key, reg);
+    // (Annotations have no palette in Massif.)
+    let palette = if matches!(conv, Conv::Cover(_) | Conv::Objects(..) | Conv::Pockets(_)) { palette_of(arena, key, reg) } else { String::new() };
     if !palette.is_empty() {
         let order = arena.field(key, "paletteIndex").and_then(|v| arena.int(v)).map_or(0, |i| (i + 1).clamp(0, u32::MAX as i64) as u32);
         match conv {
@@ -448,6 +519,18 @@ fn convert_layer(arena: &Arena, key: Value, class: &str, reg: &mut Registry) -> 
             }
         }
         "plants.PlantLayer" => plant_cover(arena, key, reg).map(Conv::Cover),
+        "CustomAnnotationLayer" => {
+            let rgb = arena.field(key, "colour").and_then(|c| arena.int(c)).map_or([230, 60, 40], |c| [(c >> 16) as u8, (c >> 8) as u8, c as u8]);
+            let palette = &mut reg.annotations;
+            let k = match palette.custom.iter().position(|c| c.rgb == rgb) {
+                Some(k) => k,
+                None => {
+                    palette.custom.push(massif_core::annotations::CustomColor { rgb, opacity: massif_core::annotations::DEFAULT_OPACITY });
+                    palette.custom.len() - 1
+                }
+            };
+            Some(Conv::Note((massif_core::annotations::PRESETS as usize + 1 + k) as u16))
+        }
         _ => None,
     }
 }
@@ -683,6 +766,32 @@ fn wp_object(arena: &Arena, object: Value) -> Option<(massif_core::objects::Obje
                 _ => return None,
             };
             fits(w, h, l).then(|| (ObjectDef::new(&name, [w as u16, h as u16, l as u16], palette, blocks), None))
+        }
+        // WorldPainter's own objects (its tree pack's, those it made of
+        // others): a material a block, x first, then WorldPainter's y,
+        // then up; none for air.
+        "GenericObject" => {
+            let (w, l, h) = (int("dimX")?, int("dimY")?, int("dimZ")?);
+            let items = match arena.field(object, "data").and_then(|b| arena.array(b))? {
+                Array::Object(items) if items.len() == w * h * l => items,
+                _ => return None,
+            };
+            if !fits(w, h, l) {
+                return None;
+            }
+            let mut palette = vec!["minecraft:air".to_owned()];
+            let mut index: HashMap<Handle, u16> = HashMap::new();
+            let blocks = items
+                .iter()
+                .map(|&m| {
+                    let Value::Ref(handle) = m else { return 0 };
+                    *index.entry(handle).or_insert_with(|| {
+                        palette.push(state(m));
+                        (palette.len() - 1) as u16
+                    })
+                })
+                .collect();
+            Some((ObjectDef::new(&name, [w as u16, h as u16, l as u16], palette, blocks), None))
         }
         // MCEdit schematics: numbered blocks, in the same order.
         "Schematic" => {

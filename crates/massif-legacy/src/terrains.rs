@@ -384,6 +384,10 @@ pub struct Mapper {
     pending_custom: BTreeMap<usize, u16>,
     /// Columns per WorldPainter terrain, for the report.
     pub terrain_use: BTreeMap<String, u64>,
+    /// WorldPainter biome numbers that are none of the game's (a custom
+    /// biome's), and the biome each became: named once the dimension's
+    /// custom biomes are read (see [`Mapper::name_custom_biomes`]).
+    pub custom_biomes: Vec<(u8, u16)>,
 }
 
 impl Mapper {
@@ -394,6 +398,7 @@ impl Mapper {
             biomes: [None; 256],
             pending_custom: BTreeMap::new(),
             terrain_use: BTreeMap::new(),
+            custom_biomes: Vec::new(),
         }
     }
 
@@ -559,7 +564,16 @@ impl Mapper {
             return id;
         }
         let id = match BIOMES[wp as usize] {
-            None => 0,
+            None if wp == 255 => 0,
+            // One of the world's custom biomes: a biome of its own, named
+            // when the world's list of them is read.
+            None => {
+                let def = BiomeDef::of_id(&format!("worldpainter:custom_biome_{wp}"));
+                self.registry.biomes.push(def);
+                let id = (self.registry.biomes.len() - 1) as u16;
+                self.custom_biomes.push((wp, id));
+                id
+            }
             Some(name) => match self.registry.biome_by_id(name) {
                 Some(id) => id.0,
                 None => {
@@ -584,6 +598,46 @@ impl Mapper {
         };
         self.biomes[wp as usize] = Some(id);
         id
+    }
+}
+
+impl Mapper {
+    /// Name the custom biomes met (and add those never painted): from
+    /// WorldPainter's list of them, its number, name and colour each. The
+    /// name is the id WorldPainter exports (a data pack's or mod's,
+    /// `terralith:alpine_highlands`); one that is no id is the biome's name,
+    /// its id made of it. Returns their names.
+    pub fn name_custom_biomes(&mut self, list: &[(u8, String, Option<[u8; 3]>)]) -> Vec<String> {
+        let mut names = Vec::new();
+        for (wp, name, color) in list {
+            let id = match massif_core::registry::check_biome_id(name) {
+                Ok(()) => name.clone(),
+                Err(_) => {
+                    let slug: String = name.to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+                    format!("worldpainter:{}", slug.trim_matches('_'))
+                }
+            };
+            let display = if id == *name { massif_core::registry::biome_display_name(&id) } else { name.clone() };
+            let n = match self.custom_biomes.iter().find(|c| c.0 == *wp) {
+                Some(&(_, n)) => n,
+                None => match self.registry.biome_by_id(&id) {
+                    Some(b) => b.0,
+                    None => {
+                        self.registry.biomes.push(BiomeDef::of_id(&id));
+                        (self.registry.biomes.len() - 1) as u16
+                    }
+                },
+            };
+            let def = &mut self.registry.biomes[n as usize];
+            def.id = id;
+            def.name = display.clone();
+            if let Some(c) = color {
+                def.color = *c;
+            }
+            def.group = "WorldPainter".into();
+            names.push(display);
+        }
+        names
     }
 }
 

@@ -4487,6 +4487,34 @@ fn biome_matches(needle: &str, group: &str, def: &massif_core::registry::BiomeDe
     needle.is_empty() || def.name.to_lowercase().contains(needle) || def.id.contains(needle) || group.to_lowercase().contains(needle)
 }
 
+/// The settings of a biome of the map's own: its name, its colour on the
+/// map, and the colours the game gives grass and leaves in it (the 3D view
+/// and True Colour tint them so). Its id stays: it is what is exported.
+fn biome_settings(ui: &mut Ui, def: &mut massif_core::registry::BiomeDef) {
+    ui.set_min_width(260.0);
+    ui.label(RichText::new(&def.id).size(11.5).color(Palette::of(ui).weak));
+    crate::widgets::well(ui, |ui| {
+        crate::widgets::row(ui, tr!("Name"), |ui| {
+            ui.add(egui::TextEdit::singleline(&mut def.name).desired_width(150.0));
+        });
+        crate::widgets::row(ui, tr!("Map colour"), |ui| {
+            ui.color_edit_button_srgb(&mut def.color);
+        });
+        for (label, colour) in [(tr!("Grass"), &mut def.grass), (tr!("Leaves"), &mut def.foliage)] {
+            crate::widgets::row(ui, label, |ui| {
+                let mut on = colour.is_some();
+                crate::widgets::checkbox(ui, &mut on, "");
+                if on != colour.is_some() {
+                    *colour = on.then_some([120, 180, 80]);
+                }
+                if let Some(c) = colour {
+                    ui.color_edit_button_srgb(c);
+                }
+            });
+        }
+    });
+}
+
 /// A group's title in a list of biomes, cut to the room.
 fn biome_group_title(ui: &mut Ui, title: &str, count: usize) {
     let pal = Palette::of(ui);
@@ -4526,6 +4554,7 @@ pub fn biome_panel(ui: &mut Ui, tools: &mut ToolState, reg: &mut Registry, cat: 
     }
     let groups = biome_choices(reg, cat);
     let mut chosen: Option<BiomeChoice> = None;
+    let mut edited: Option<(u16, massif_core::registry::BiomeDef)> = None;
     for (group, choices) in &groups {
         let shown: Vec<&BiomeChoice> = choices.iter().filter(|c| biome_matches(&needle, group, &c.def)).collect();
         if shown.is_empty() {
@@ -4536,11 +4565,28 @@ pub fn biome_panel(ui: &mut Ui, tools: &mut ToolState, reg: &mut Registry, cat: 
             ui.horizontal(|ui| {
                 swatch(ui, theme::rgb(c.def.color));
                 let selected = c.known.is_some_and(|k| k == tools.biome);
-                if ui.add(egui::Button::selectable(selected, &c.def.name).truncate()).on_hover_text(&c.def.id).clicked() {
+                let response = ui.add(egui::Button::selectable(selected, &c.def.name).truncate()).on_hover_text(&c.def.id);
+                if response.clicked() {
                     chosen = Some(c.clone());
+                }
+                // A biome of the map's own (a mod's, a data pack's, one
+                // typed or brought from WorldPainter): its name and colours.
+                if let Some(k) = c.known.filter(|_| group != massif_assets::MINECRAFT) {
+                    response.context_menu(|ui| {
+                        let mut def = c.def.clone();
+                        biome_settings(ui, &mut def);
+                        if def != c.def {
+                            edited = Some((k, def));
+                        }
+                    });
                 }
             });
         }
+    }
+    if let Some((k, def)) = edited
+        && let Some(b) = reg.biomes.get_mut(k as usize)
+    {
+        *b = def;
     }
     let known = groups.iter().flat_map(|g| &g.1).any(|c| c.def.id == needle);
     if let Some(id) = typed_biome(ui, &needle, known) {

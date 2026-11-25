@@ -425,6 +425,14 @@ pub struct Growth {
 }
 
 impl CoverDef {
+    /// Whether it lays blocks on the ground rather than growing plants (a
+    /// custom ground cover of WorldPainter's: layers, gravel, stones): none
+    /// of its blocks is a plant, it needs no soil, and it leaves the water
+    /// as it is.
+    pub fn is_laid(&self) -> bool {
+        !self.soil_only && !self.changes_water() && !self.underwater && !self.plants.is_empty() && self.plants.iter().all(|p| plant_color(&p.0).is_none())
+    }
+
     /// A cover of one block, or of the blocks given with their weights.
     pub fn new(name: &str, color: [u8; 3], plants: &[(&str, u16)], density: f32) -> Self {
         Self {

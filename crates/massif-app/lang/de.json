@@ -1088,7 +1088,6 @@
  "Import objects…": "Objekte importieren…",
  "Import packs": "Pakete importieren",
  "Imported": "Importiert",
- "Imported {display_name} in {secs:.1} s: {summary}": "{display_name} in {secs:.1} s importiert: {summary}",
  "Imported “{name}”": "„{name}“ importiert",
  "Importing {file}": "{file} wird importiert",
  "Import…": "Importieren…",
@@ -3464,8 +3463,6 @@
  "Covers of layers: {meanwhile}, nothing was done": "Schichtdecken: {meanwhile}, nichts wurde getan",
  "Covers of layers made ground": "Schichtdecken zu Boden",
  "Covers of layers made the ground's own: {columns} columns raised and smoothed in {secs:.1} s": "Schichtdecken zum Boden gemacht: {columns} Säulen in {secs:.1} s angehoben und geglättet",
- "Covers of layers": "Schichtdecken",
- "These ground covers are layers of a block laid over the land. Ticked, they become the ground's own: the land raised by their layers, its top that block, smoothed with layers on export, as they look now.": "Diese Bodendecken sind Schichten eines Blocks über dem Land. Angehakt werden sie zum Boden selbst: das Land um ihre Schichten angehoben, oben dieser Block, beim Export mit Schichten geglättet, so wie sie jetzt aussehen.",
  "Make them the ground's own": "Zum Boden machen",
  "Contour lines: interval, strength, colour": "Höhenlinien: Abstand, Stärke, Farbe",
  "Crisp": "Scharf",
@@ -3766,5 +3763,24 @@
  "Objects per 100 blocks²": "Objekte je 100 Blöcke²",
  "Generator": "Generator",
  "Classic graph": "Klassischer Graph",
- "The terrain generator of earlier versions, for older maps": "Der Geländegenerator früherer Versionen, für ältere Karten"
+ "The terrain generator of earlier versions, for older maps": "Der Geländegenerator früherer Versionen, für ältere Karten",
+ "Imported {display_name} in {secs:.1} s: {summary}. See File ▸ Import Report…": "{display_name} in {secs:.1} s importiert: {summary}. Siehe Datei ▸ Importbericht…",
+ "Cover under it": "Bedeckung darunter",
+ "Covers of Layers to Ground…": "Schichtdecken zu Boden…",
+ "Ground covers of layer blocks, as Conquest Reforged maps lay them, made the land's own height and smoothed with layers": "Bodendecken aus Schichtblöcken, wie Conquest-Reforged-Karten sie legen, werden zur Höhe des Landes und mit Schichten geglättet",
+ "Covers of layers to ground": "Schichtdecken zu Boden",
+ "No ground cover of this map is made of layer blocks (a mod's _layer blocks, snow layers).": "Keine Bodendecke dieser Karte besteht aus Schichtblöcken (_layer-Blöcke eines Mods, Schneeschichten).",
+ "{n} ground covers are made of layer blocks": {
+  "one": "{n} Bodendecke besteht aus Schichtblöcken",
+  "other": "{n} Bodendecken bestehen aus Schichtblöcken"
+ },
+ "As Conquest Reforged maps lay them over the land. Made the ground's own, the land rises by their layers, its top is their block, and the export lays the same layers (Smooth terrain): the map, the 3D view, the brushes and the smoothing then know the land's true height. Plants and frost painted over them stay.": "So, wie Conquest-Reforged-Karten sie über das Land legen. Zum Boden gemacht, steigt das Land um ihre Schichten, sein oberster Block ist ihr Block, und der Export legt dieselben Schichten (Geglättetes Gelände): Karte, 3D-Ansicht, Pinsel und Glättung kennen dann die wahre Höhe des Landes. Darüber gemalte Pflanzen und Frost bleiben.",
+ "{name} — {blocks} (its other blocks stay a cover)": "{name} — {blocks} (seine anderen Blöcke bleiben eine Bodendecke)",
+ "Map colour": "Kartenfarbe",
+ "{n} custom biomes, now biomes of the map (exported by their ids):": {
+  "one": "{n} eigenes Biom, jetzt ein Biom der Karte (nach seiner ID exportiert):",
+  "other": "{n} eigene Biome, jetzt Biome der Karte (nach ihren IDs exportiert):"
+ },
+ "Import Report…": "Importbericht…",
+ "What the import of the WorldPainter world brought in, what it left out, and its covers of layers to make the ground's own": "Was der Import der WorldPainter-Welt mitgebracht und was er ausgelassen hat, und ihre Schichtdecken, die zum Boden werden können"
 }

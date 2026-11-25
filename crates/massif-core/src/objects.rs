@@ -769,6 +769,12 @@ pub struct ObjectLayerDef {
     /// layer's: 1 for a size not listed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub size_density: Vec<f32>,
+    /// How an intensity painted in WorldPainter thins it, where it is
+    /// stacked at one (see [`crate::layer_stack`]): the share of its objects
+    /// standing (out of 255) at each intensity, 0 to 15. `None`: the
+    /// intensity itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intensity: Option<[u8; 16]>,
 }
 
 /// How an object layer spaces its objects.
@@ -805,6 +811,15 @@ impl ObjectLayerDef {
     pub fn size_share(&self, size: u16) -> f32 {
         (size as usize).checked_sub(1).and_then(|k| self.size_density.get(k)).copied().unwrap_or(1.0).clamp(0.0, 1.0)
     }
+
+    /// The share of its objects (out of 255) standing where it is stacked at
+    /// strength `s` (255: full).
+    pub fn share_at(&self, s: u8) -> u8 {
+        match &self.intensity {
+            Some(shares) => shares[(s as usize * 15 + 127) / 255],
+            None => s,
+        }
+    }
 }
 
 impl ObjectLayerDef {
@@ -832,6 +847,7 @@ impl ObjectLayerDef {
             spacing_mode: Spacing::Grid,
             min_gap: default_gap(),
             size_density: Vec::new(),
+            intensity: None,
         }
     }
 
@@ -1136,6 +1152,16 @@ pub fn tile_placements(reg: &Registry, mat: &Materializer, seed: u64, lava: bool
                 None => painted.extend(plane.dense().iter().copied().filter(|&v| v != 0).map(|v| (under, v))),
             }
         }
+        // And those stacked on its columns (a WorldPainter map's).
+        for list in &tile.stacked.lists {
+            for e in list.iter().filter_map(|&v| crate::layer_stack::Entry::unpack(v)) {
+                match e.kind {
+                    crate::layer_stack::Kind::Objects => painted.push((false, e.layer)),
+                    crate::layer_stack::Kind::Understory => painted.push((true, e.layer)),
+                    crate::layer_stack::Kind::Cover => {}
+                }
+            }
+        }
         painted.sort_unstable();
         painted.dedup();
     }
@@ -1155,7 +1181,7 @@ pub fn tile_placements(reg: &Registry, mat: &Materializer, seed: u64, lava: bool
             stack.spans(cell, spans);
             let top = spans.last().copied()?;
             let here = if under { stack.surface_understory(cell, &top) } else { stack.surface_objects(cell, &top) };
-            (here == n).then(|| (top, reg.live_size(stack.surface_size(cell, &top))))
+            (here == n || stack.surface_tree_strength(cell, &top, under, n).is_some()).then(|| (top, reg.live_size(stack.surface_size(cell, &top))))
         };
         // The object of a spot, and its size: of the size asked there, or
         // any.
@@ -1194,6 +1220,14 @@ pub fn tile_placements(reg: &Registry, mat: &Materializer, seed: u64, lava: bool
             let cell = local_index(c.x, c.z);
             stack.spans(cell, &mut spans);
             let Some(top) = spans.last().copied() else { continue };
+            // A layer stacked at a strength stands that share of its objects
+            // there (WorldPainter's intensity).
+            if let Some(strength) = stack.surface_tree_strength(cell, &top, under, n)
+                && strength < 255
+                && (crate::compose::hash2(c.x, c.z, 0x7374_7265_6e67 ^ n as u64) % 255) as u8 >= layer.share_at(strength)
+            {
+                continue;
+            }
             stack.fluids(cell, &spans, &mut fluids);
             let liquid = fluids.iter().find(|f| f.0 == top.y1).copied();
             let wet = liquid.is_some();
@@ -1287,18 +1321,19 @@ fn canopy_spots(reg: &Registry, layer: &ObjectLayerDef, seed: u64, n: u16, under
     // What would stand in cell `(i, j)`, its neighbours aside.
     let look = |i: i32, j: i32| -> Option<Spot> {
         let c = layer.candidate_in(seed, n, SALT, g, 1.0, i, j)?;
-        let (objects, understory, asked) = if TilePos::containing(c.x, c.z) == pos {
+        let asked = if TilePos::containing(c.x, c.z) == pos {
             let cell = local_index(c.x, c.z);
             let mut spans = Vec::new();
             stack.spans(cell, &mut spans);
             let top = spans.last().copied()?;
-            (stack.surface_objects(cell, &top), stack.surface_understory(cell, &top), stack.surface_size(cell, &top))
+            let here = if under { stack.surface_understory(cell, &top) } else { stack.surface_objects(cell, &top) };
+            if here != n && stack.surface_tree_strength(cell, &top, under, n).is_none() {
+                return None;
+            }
+            stack.surface_size(cell, &top)
         } else {
-            stack.ground_layers_at(c.x, c.z)
+            stack.ground_holds_at(c.x, c.z, n, under)?
         };
-        if (if under { understory } else { objects }) != n {
-            return None;
-        }
         let (object, size) = choose(&c, reg.live_size(asked), false)?;
         Some((c, object, size, reg.objects[object as usize].canopy_radius()))
     };

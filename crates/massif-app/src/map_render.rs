@@ -65,6 +65,10 @@ pub struct Sample {
     pub biome: u16,
     /// Ground cover painted on the surface; 0 = none.
     pub cover: u16,
+    /// The cover lying right under it, as a WorldPainter map stacks them
+    /// (see [`massif_core::layer_stack`]): shown where the one on top is
+    /// hidden; 0 = none.
+    pub cover_under: u16,
     /// Object layer painted on the surface; 0 = none.
     pub objects: u16,
     /// Annotation of the column (on the ground level); 0 = none.
@@ -87,6 +91,7 @@ impl Sample {
         fluid: NO_FLUID,
         biome: 0,
         cover: 0,
+        cover_under: 0,
         objects: 0,
         annotation: 0,
         understory: 0,
@@ -114,7 +119,7 @@ impl Sample {
 
 #[inline]
 #[allow(clippy::too_many_arguments)]
-fn ground_sample(top: f32, terrain: u16, fluid: i16, biome: u16, cover: u16, objects: u16, annotation: u16, understory: u16, size: u16, pockets: u16, slabs: u16) -> Sample {
+fn ground_sample(top: f32, terrain: u16, fluid: i16, biome: u16, (cover, cover_under): (u16, u16), objects: u16, annotation: u16, understory: u16, size: u16, pockets: u16, slabs: u16) -> Sample {
     let fluid = if fluid != NO_FLUID && fluid as i32 > block_top(top) {
         fluid
     } else {
@@ -126,6 +131,7 @@ fn ground_sample(top: f32, terrain: u16, fluid: i16, biome: u16, cover: u16, obj
         fluid,
         biome,
         cover,
+        cover_under,
         objects,
         annotation: annotation as u8,
         understory,
@@ -153,7 +159,7 @@ impl ColumnSampler {
                 g.terrain.get(cell),
                 g.fluid.get(cell),
                 g.biome.get(cell),
-                g.cover.get(cell),
+                (g.cover.get(cell), if g.stacked.has(cell) { g.stacked.covers_under(cell).last().copied().unwrap_or(0) } else { 0 }),
                 g.objects.get(cell),
                 g.annotations.get(cell),
                 g.understory.get(cell),
@@ -227,6 +233,7 @@ impl ColumnSampler {
             fluid,
             biome,
             cover: stack.surface_cover(cell, &top),
+            cover_under: stack.surface_under(cell, &top).last().copied().unwrap_or(0),
             objects: stack.surface_objects(cell, &top),
             annotation: stack.ground().annotations.get(cell) as u8,
             understory: stack.surface_understory(cell, &top),
@@ -333,7 +340,10 @@ impl SurfaceGrid {
             let (fluid, biome, cover, objects) = (g.fluid.dense(), g.biome.dense(), g.cover.dense(), g.objects.dense());
             let (annotations, understory, sizes, pockets, slabs) = (g.annotations.dense(), g.understory.dense(), g.sizes.dense(), g.pockets.dense(), g.slabs.dense());
             (0..TILE_AREA)
-                .map(|i| ground_sample(top[i], terrain[i], fluid[i], biome[i], cover[i], objects[i], annotations[i], understory[i], sizes[i], pockets[i], slabs[i]))
+                .map(|i| {
+                    let under = if g.stacked.has(i) { g.stacked.covers_under(i).last().copied().unwrap_or(0) } else { 0 };
+                    ground_sample(top[i], terrain[i], fluid[i], biome[i], (cover[i], under), objects[i], annotations[i], understory[i], sizes[i], pockets[i], slabs[i])
+                })
                 .collect()
         } else {
             let mut sampler = ColumnSampler::default();
@@ -804,6 +814,13 @@ impl<'a> Colorizer<'a> {
         }
     }
 
+    /// The cover sample `c` shows: its own, or where that one is hidden, the
+    /// one lying under it.
+    fn shown_cover(&self, c: &Sample) -> Option<&massif_core::registry::CoverDef> {
+        let shown = |n: u16| n.checked_sub(1).and_then(|k| self.covers.get(k as usize)).and_then(Option::as_ref);
+        shown(c.cover).or_else(|| shown(c.cover_under))
+    }
+
     /// The colour of the column of sample `c` in True Colour: at `at`, the
     /// very block on its top; from afar, its terrain's surface blocks by
     /// their weights.
@@ -839,7 +856,7 @@ impl<'a> Colorizer<'a> {
     /// ([`BARE`]); from afar (`None`), as thick as it grows. Nothing where it
     /// does not grow: off soil, or in the air for a cover of the water.
     fn with_cover(&self, ground: Rgb, c: &Sample, at: Option<(i32, i32)>) -> Rgb {
-        let Some(def) = c.cover.checked_sub(1).and_then(|k| self.covers.get(k as usize)).and_then(Option::as_ref) else { return ground };
+        let Some(def) = self.shown_cover(c) else { return ground };
         let wet = c.water_depth() > 0.0;
         if def.underwater != wet || (wet && self.style.lava) || (def.soil_only && !self.soil.get(c.terrain as usize).copied().unwrap_or(false)) {
             return ground;
@@ -1000,7 +1017,7 @@ impl<'a> Colorizer<'a> {
         let depth = c.water_depth();
         if depth > 0.0 && !matches!(self.style.mode, MapMode::Slope | MapMode::Biome) {
             let t = (depth / 18.0).min(1.0);
-            let cover = c.cover.checked_sub(1).and_then(|k| self.covers.get(k as usize)).and_then(Option::as_ref);
+            let cover = self.shown_cover(c);
             let (frozen, lava) = cover.map_or((false, false), |d| (d.frost && !self.style.lava, d.lava));
             if let Some(tc) = &self.truth {
                 // The game's water, ice and lava: water seen through, more

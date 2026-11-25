@@ -55,7 +55,8 @@ const TAG_SIZES: u8 = 10;
 const TAG_POCKETS: u8 = 11;
 const TAG_SLABS: u8 = 12;
 const TAG_CAVES: u8 = 13;
-// 14 is the WorldPainter import's plane of several layers (1.1.1).
+/// Several layers of a slot on a column (see [`crate::layer_stack`]).
+const TAG_STACKED: u8 = 14;
 const TAG_CAVE_BIOMES: u8 = 15;
 
 /// The tree sizes a column may ask for (see [`Tile::sizes`]): any size,
@@ -115,6 +116,9 @@ pub struct Tile {
     /// The cave biomes painted in volume (see [`crate::caves::CaveBiomes`]):
     /// on the ground level only.
     pub cave_biomes: crate::caves::CaveBiomes,
+    /// More layers of a slot on a column, with their strengths, as a
+    /// WorldPainter map holds them (see [`crate::layer_stack`]).
+    pub stacked: crate::layer_stack::LayerStacks,
     /// Planes written by a newer version, preserved verbatim.
     pub unknown: Vec<(u8, Vec<u8>)>,
 }
@@ -137,6 +141,7 @@ impl Tile {
             slabs: Plane::Uniform(0),
             caves: Plane::Uniform(0),
             cave_biomes: Default::default(),
+            stacked: crate::layer_stack::LayerStacks::new(),
             unknown: Vec::new(),
         }
     }
@@ -158,6 +163,7 @@ impl Tile {
             slabs: Plane::Uniform(0),
             caves: Plane::Uniform(0),
             cave_biomes: Default::default(),
+            stacked: crate::layer_stack::LayerStacks::new(),
             unknown: Vec::new(),
         }
     }
@@ -203,6 +209,7 @@ impl Tile {
         self.pockets.compact();
         self.slabs.compact();
         self.caves.compact();
+        self.stacked.compact();
     }
 
     pub fn heap_bytes(&self) -> usize {
@@ -220,6 +227,7 @@ impl Tile {
             + self.slabs.heap_bytes()
             + self.caves.heap_bytes()
             + self.cave_biomes.heap_bytes()
+            + self.stacked.heap_bytes()
     }
 
     /// Encode to the compressed cold form (a zstd frame).
@@ -281,6 +289,9 @@ impl Tile {
         if !self.cave_biomes.is_empty() {
             plane(TAG_CAVE_BIOMES, &mut |o| self.cave_biomes.encode(o));
         }
+        if !self.stacked.is_empty() {
+            plane(TAG_STACKED, &mut |o| self.stacked.encode(o));
+        }
         for (tag, payload) in &self.unknown {
             plane(*tag, &mut |o| o.extend_from_slice(payload));
         }
@@ -311,6 +322,7 @@ impl Tile {
             slabs: Plane::Uniform(0),
             caves: Plane::Uniform(0),
             cave_biomes: Default::default(),
+            stacked: crate::layer_stack::LayerStacks::new(),
             unknown: Vec::new(),
         };
         loop {
@@ -338,6 +350,7 @@ impl Tile {
                 TAG_SLABS => tile.slabs = codec::decode_categorical(&mut p)?,
                 TAG_CAVES => tile.caves = codec::decode_categorical(&mut p)?,
                 TAG_CAVE_BIOMES => tile.cave_biomes = crate::caves::CaveBiomes::decode(&mut p)?,
+                TAG_STACKED => tile.stacked = crate::layer_stack::LayerStacks::decode(&mut p)?,
                 _ => tile.unknown.push((tag, payload.to_vec())),
             }
         }

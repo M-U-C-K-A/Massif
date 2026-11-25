@@ -363,6 +363,7 @@ pub fn build_road(
                     }
                     // Nothing grows on a road.
                     tile.cover.set(i, 0);
+                    tile.stacked.clear_kind(i, crate::layer_stack::Kind::Cover);
                 }
                 if d <= hw + 1.0 && lets(w, x, z) {
                     tile.objects.set(i, 0);

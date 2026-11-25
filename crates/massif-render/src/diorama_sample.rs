@@ -118,6 +118,7 @@ pub fn village() -> massif_core::World {
                 tile.terrain.set(i, path.0);
                 tile.objects.set(i, 0);
                 tile.cover.set(i, 0);
+                tile.stacked.clear_kind(i, massif_core::layer_stack::Kind::Cover);
             } else if in_field {
                 tile.terrain.set(i, field.0);
                 tile.objects.set(i, 0);

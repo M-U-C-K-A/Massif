@@ -1087,7 +1087,6 @@
  "Import objects…": "Importar objetos…",
  "Import packs": "Importar packs",
  "Imported": "Importado",
- "Imported {display_name} in {secs:.1} s: {summary}": "{display_name} importado en {secs:.1} s: {summary}",
  "Imported “{name}”": "«{name}» importado",
  "Importing {file}": "Importando {file}",
  "Import…": "Importar…",
@@ -3461,8 +3460,6 @@
  "Covers of layers: {meanwhile}, nothing was done": "Coberturas de capas: {meanwhile}, no se hizo nada",
  "Covers of layers made ground": "Coberturas de capas a suelo",
  "Covers of layers made the ground's own: {columns} columns raised and smoothed in {secs:.1} s": "Coberturas de capas convertidas en suelo: {columns} columnas elevadas y suavizadas en {secs:.1} s",
- "Covers of layers": "Coberturas de capas",
- "These ground covers are layers of a block laid over the land. Ticked, they become the ground's own: the land raised by their layers, its top that block, smoothed with layers on export, as they look now.": "Estas coberturas son capas de un bloque puestas sobre el terreno. Marcadas, pasan a ser el propio suelo: el terreno sube según sus capas, su cara superior es ese bloque, suavizado con capas al exportar, tal como se ven ahora.",
  "Make them the ground's own": "Convertirlas en suelo",
  "Contour lines: interval, strength, colour": "Curvas de nivel: intervalo, intensidad, color",
  "Crisp": "Nítidos",
@@ -3763,5 +3760,24 @@
  "Objects per 100 blocks²": "Objetos por 100 bloques²",
  "Generator": "Generador",
  "Classic graph": "Grafo clásico",
- "The terrain generator of earlier versions, for older maps": "El generador de terreno de versiones anteriores, para mapas más antiguos"
+ "The terrain generator of earlier versions, for older maps": "El generador de terreno de versiones anteriores, para mapas más antiguos",
+ "Imported {display_name} in {secs:.1} s: {summary}. See File ▸ Import Report…": "{display_name} importado en {secs:.1} s: {summary}. Ver Archivo ▸ Informe de importación…",
+ "Cover under it": "Cobertura debajo",
+ "Covers of Layers to Ground…": "Coberturas de capas a suelo…",
+ "Ground covers of layer blocks, as Conquest Reforged maps lay them, made the land's own height and smoothed with layers": "Coberturas de bloques de capas, como las ponen los mapas de Conquest Reforged, convertidas en la altura del terreno y suavizadas con capas",
+ "Covers of layers to ground": "Coberturas de capas a suelo",
+ "No ground cover of this map is made of layer blocks (a mod's _layer blocks, snow layers).": "Ninguna cobertura de este mapa está hecha de bloques de capas (bloques _layer de un mod, capas de nieve).",
+ "{n} ground covers are made of layer blocks": {
+  "one": "{n} cobertura está hecha de bloques de capas",
+  "other": "{n} coberturas están hechas de bloques de capas"
+ },
+ "As Conquest Reforged maps lay them over the land. Made the ground's own, the land rises by their layers, its top is their block, and the export lays the same layers (Smooth terrain): the map, the 3D view, the brushes and the smoothing then know the land's true height. Plants and frost painted over them stay.": "Como los mapas de Conquest Reforged las ponen sobre el terreno. Convertidas en suelo, el terreno sube según sus capas, su bloque superior es el suyo y la exportación pone las mismas capas (Terreno suavizado): el mapa, la vista 3D, los pinceles y el suavizado conocen entonces la altura real del terreno. Las plantas y la escarcha pintadas encima se quedan.",
+ "{name} — {blocks} (its other blocks stay a cover)": "{name} — {blocks} (sus otros bloques siguen siendo una cobertura)",
+ "Map colour": "Color en el mapa",
+ "{n} custom biomes, now biomes of the map (exported by their ids):": {
+  "one": "{n} bioma personalizado, ahora un bioma del mapa (exportado por su id):",
+  "other": "{n} biomas personalizados, ahora biomas del mapa (exportados por sus ids):"
+ },
+ "Import Report…": "Informe de importación…",
+ "What the import of the WorldPainter world brought in, what it left out, and its covers of layers to make the ground's own": "Lo que trajo la importación del mundo de WorldPainter, lo que dejó fuera y sus coberturas de capas para convertir en suelo"
 }

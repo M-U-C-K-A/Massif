@@ -72,8 +72,10 @@ impl ImportProgress {
     }
 }
 
-/// What was imported, and what could not be.
-#[derive(Debug, Default, Clone)]
+/// What was imported, and what could not be. Kept with the map
+/// ([`massif_core::world::WorldMeta::import_report`]), its picture left out.
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct ImportReport {
     pub name: String,
     /// WorldPainter version that saved the file.
@@ -94,6 +96,7 @@ pub struct ImportReport {
     pub terrains: Vec<(String, u64)>,
     pub custom_terrains: usize,
     /// The JPEG thumbnail stored in the file, if any.
+    #[serde(skip)]
     pub thumbnail: Option<Vec<u8>>,
     /// The surface's overlay images, now reference images.
     pub overlays: usize,
@@ -103,6 +106,8 @@ pub struct ImportReport {
     /// The ground covers made of the world's custom ground covers, by
     /// number.
     pub ground_covers: Vec<u16>,
+    /// The world's custom biomes, by name: biomes of the map now.
+    pub custom_biomes: Vec<String>,
 }
 
 impl ImportReport {
@@ -419,20 +424,15 @@ impl TileHook<'_> {
                     _ => Vec::new(),
                 };
                 let strength = if parts.is_empty() { None } else { crate::layers::strengths(arena, value) };
+                let order = crate::layers::export_order(arena, key, &class);
                 match strength {
                     Some(strength) => {
                         // A combined layer's parts, each as strong as its
                         // factor says.
                         for (conv, factor) in parts {
                             let strength = if factor == 1.0 { strength.clone() } else { strength.iter().map(|&s| (s as f32 * factor).round().clamp(0.0, 255.0) as u8).collect() };
-                            let priority = match conv {
-                                Conv::Cover(n) if self.mapper.registry.cover(n).is_some_and(|c| c.changes_water()) => 0,
-                                // Custom ground covers before plants: their
-                                // blocks are where plants would grow.
-                                Conv::Laid { .. } => 1,
-                                _ => 2,
-                            };
-                            painted.push(Painted { conv, strength, priority });
+                            let order = self.converter.orders.get(&conv).cloned().unwrap_or_else(|| order.clone());
+                            painted.push(Painted { conv, strength, order });
                         }
                         *self.converted.entry(name).or_default() += 1;
                     }
@@ -495,7 +495,7 @@ impl TileHook<'_> {
             water,
             biome,
             painted: {
-                painted.sort_by_key(|p| p.priority);
+                painted.sort_by(|a, b| a.order.cmp(&b.order));
                 painted
             },
         })
@@ -535,8 +535,12 @@ fn encode(raw: RawTile, beaches: &crate::terrains::Beaches) -> (Handle, TilePos,
     }
     if !raw.painted.is_empty() {
         let (ox, oz) = raw.pos.origin();
-        let (mut covers, mut objects, mut under) = (vec![0u16; TILE_AREA], vec![0u16; TILE_AREA], vec![0u16; TILE_AREA]);
-        let (mut best, mut best_under) = (vec![0u32; TILE_AREA], vec![0u32; TILE_AREA]);
+        // Every layer of a column, as WorldPainter keeps them (see
+        // `massif_core::layer_stack`): its covers, each in the order
+        // WorldPainter lays them (custom ground covers, then plants, then
+        // frost and lava), and its tree layers with their strengths.
+        let mut stacks: Vec<Vec<u16>> = vec![Vec::new(); TILE_AREA];
+        let mut trees: Vec<Vec<(u16, u8, bool)>> = vec![Vec::new(); TILE_AREA];
         for p in &raw.painted {
             for (i, &strength) in p.strength.iter().enumerate() {
                 if strength == 0 {
@@ -544,28 +548,52 @@ fn encode(raw: RawTile, beaches: &crate::terrains::Beaches) -> (Handle, TilePos,
                 }
                 let (x, z) = (ox + (i & 127) as i32, oz + (i >> 7) as i32);
                 match p.conv {
-                    Conv::Cover(n) if covers[i] == 0 && crate::layers::kept(strength, Curve::Linear, x, z, n as u64) => covers[i] = n,
+                    Conv::Cover(n) if !stacks[i].contains(&n) && crate::layers::kept(strength, Curve::Linear, x, z, n as u64) => stacks[i].push(n),
                     // A custom ground cover that takes the place of the top
                     // of the land: the ground goes down under its blocks.
-                    Conv::Laid { cover, sink } if covers[i] == 0 => {
-                        covers[i] = cover;
-                        if sink > 0 {
+                    Conv::Laid { cover, sink } if !stacks[i].contains(&cover) => {
+                        stacks[i].push(cover);
+                        if sink > 0 && !raw.painted.iter().any(|q| matches!(q.conv, Conv::Laid { cover: c, sink: s } if s > 0 && c != cover && q.strength[i] > 0 && stacks[i].contains(&c))) {
                             tile.top.set(i, tile.top.get(i) - sink as f32);
                         }
                     }
-                    // One base object layer a column, and one sub-canopy
-                    // one: where several overlap, each of them in a share
-                    // of the columns as large as its strength, so that all
-                    // of them stand mixed (WorldPainter stands them all).
-                    Conv::Objects(n, curve, under_canopy) if crate::layers::kept(strength, curve, x, z, 0x10000 | n as u64) => {
-                        let (layer, total) = if under_canopy { (&mut under[i], &mut best_under[i]) } else { (&mut objects[i], &mut best[i]) };
-                        *total += strength as u32;
-                        if massif_core::compose::hash2(x, z, 0x6d69_7800 ^ n as u64) % *total < strength as u32 {
-                            *layer = n;
-                        }
-                    }
+                    // Every tree layer at its strength (several of them a
+                    // column, as WorldPainter stands them all).
+                    Conv::Objects(n, _, under_canopy) => match trees[i].iter_mut().find(|t| t.0 == n && t.2 == under_canopy) {
+                        Some(t) => t.1 = t.1.max(strength),
+                        None => trees[i].push((n, strength, under_canopy)),
+                    },
                     _ => {}
                 }
+            }
+        }
+        use massif_core::layer_stack::{Entry, Kind};
+        let (mut covers, mut objects, mut under) = (vec![0u16; TILE_AREA], vec![0u16; TILE_AREA], vec![0u16; TILE_AREA]);
+        let mut entries = Vec::new();
+        for i in 0..TILE_AREA {
+            entries.clear();
+            // In the order WorldPainter exports them, the last on top.
+            let stack = &mut stacks[i];
+            if let Some(top) = stack.pop() {
+                covers[i] = top;
+                entries.extend(stack.iter().map(|&n| Entry::new(Kind::Cover, n, 255)));
+            }
+            // The strongest tree layer of each slot in its plane; all of them
+            // stacked, with their strengths, where there are several or one
+            // at less than full strength.
+            for (under_canopy, plane, kind) in [(false, &mut objects, Kind::Objects), (true, &mut under, Kind::Understory)] {
+                let mut slot: Vec<(u16, u8)> = trees[i].iter().filter(|t| t.2 == under_canopy).map(|t| (t.0, t.1)).collect();
+                if slot.is_empty() {
+                    continue;
+                }
+                slot.sort_by_key(|t| std::cmp::Reverse(t.1));
+                plane[i] = slot[0].0;
+                if slot.len() > 1 || slot[0].1 < 255 {
+                    entries.extend(slot.iter().map(|&(n, s)| Entry::new(kind, n, s)));
+                }
+            }
+            if !entries.is_empty() {
+                tile.stacked.set(i, &entries);
             }
         }
         tile.cover = Plane::from_vec(covers);
@@ -586,6 +614,17 @@ fn encode(raw: RawTile, beaches: &crate::terrains::Beaches) -> (Handle, TilePos,
         if let Some(p) = raw.painted.iter().find(|p| p.conv == Conv::Annotations) {
             // Strengths are nibbles × 17: back to the colour.
             tile.annotations = Plane::from_vec(p.strength.iter().map(|&s| (s / 17) as u16).collect());
+        }
+        // Custom annotation layers: their colour where nothing else is noted.
+        for p in &raw.painted {
+            let Conv::Note(color) = p.conv else { continue };
+            let mut notes = tile.annotations.dense().to_vec();
+            for (i, &s) in p.strength.iter().enumerate() {
+                if s > 0 && notes[i] == 0 {
+                    notes[i] = color;
+                }
+            }
+            tile.annotations = Plane::from_vec(notes);
         }
         // A combined layer's terrain and biome, where it is painted at half
         // strength or more, and at random a share of the rest.
@@ -644,6 +683,21 @@ fn overlays(arena: &Arena, dimension: Value) -> Vec<massif_core::reference::Refe
 /// The palettes WorldPainter hid (`Dimension.hiddenPalettes`) and the one it
 /// showed alone (`soloedPalette`): their layers are hidden on the map as
 /// they were, every other layer too while a palette is soloed.
+/// A dimension's custom biomes: WorldPainter's number for each, its name
+/// and colour.
+fn custom_biomes(arena: &Arena, dimension: Value) -> Vec<(u8, String, Option<[u8; 3]>)> {
+    let items = arena.field(dimension, "customBiomes").and_then(|l| arena.list_items(l)).unwrap_or_default();
+    items
+        .into_iter()
+        .filter_map(|b| {
+            let id = arena.field(b, "id").and_then(|v| arena.int(v)).filter(|id| (0..255).contains(id))? as u8;
+            let name = arena.field(b, "name").and_then(|v| arena.string(v)).map(str::trim).filter(|n| !n.is_empty())?.to_owned();
+            let color = arena.field(b, "colour").and_then(|c| arena.int(c)).map(|c| [(c >> 16) as u8, (c >> 8) as u8, c as u8]);
+            Some((id, name, color))
+        })
+        .collect()
+}
+
 fn palette_visibility(arena: &Arena, dimension: Value, reg: &mut Registry) {
     let hidden: Vec<String> = arena
         .field(dimension, "hiddenPalettes")
@@ -989,6 +1043,7 @@ pub fn import_stream<R: Read + Send>(reader: R, progress: &ImportProgress) -> Re
         .map_or(sea_level + 1, block_top);
 
     palette_visibility(&arena, main, &mut mapper.registry);
+    report.custom_biomes = mapper.name_custom_biomes(&custom_biomes(&arena, main));
     report.overlays = references.len();
     report.ground_covers = converter.laid.clone();
     report.layers = layers.into_iter().collect();
@@ -1032,6 +1087,7 @@ pub fn import_stream<R: Read + Send>(reader: R, progress: &ImportProgress) -> Re
             palette: Default::default(),
             smooth: Default::default(),
             references,
+            import_report: serde_json::to_value(&report).ok(),
             ..Default::default()
         },
         registry: mapper.registry,
@@ -1854,14 +1910,16 @@ mod tests {
         assert_eq!(spruces.name, "Tall spruces");
         assert!((0..128).all(|i| tall.objects.get(i) == tall.objects.get(0)));
         assert!((128..384).all(|i| tall.objects.get(i) == 0));
-        let forest: Vec<u16> = (384..TILE_AREA).map(|i| tall.objects.get(i)).filter(|&n| n != 0).collect();
-        let deciduous = reg.object_layer(forest[0]).unwrap();
+        let n = tall.objects.get(384);
+        let deciduous = reg.object_layer(n).unwrap();
         assert_eq!(deciduous.name, "Deciduous");
-        assert!(forest.iter().all(|&n| n == forest[0]));
-        let share = forest.len() as f32 / (TILE_AREA - 384) as f32;
-        // Painted at about half strength: WorldPainter's forest is still
-        // half as dense as at full, its trees soon meeting.
-        assert!((0.4..0.65).contains(&share), "{share}");
+        assert!((384..TILE_AREA).all(|i| tall.objects.get(i) == n), "every column painted keeps the forest");
+        // Painted at about half strength, which every column keeps:
+        // WorldPainter's forest is still about half as dense as at full,
+        // its trees soon meeting.
+        let strength = tall.stacked.strength(384, massif_core::layer_stack::Kind::Objects, n).expect("its strength kept");
+        let share = deciduous.share_at(strength) as f32 / 255.0;
+        assert!((0.4..0.65).contains(&share), "{strength} → {share}");
         assert_eq!(deciduous.objects.iter().filter(|o| o.1 > 0).count(), 16, "big oaks and birches, eight of each");
         assert_eq!(deciduous.objects.len(), 32, "and their bushes and small ones, for Tree sizes");
         assert_eq!(short.cover.get(0), 0);

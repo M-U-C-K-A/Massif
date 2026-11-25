@@ -25,8 +25,29 @@ pub struct SurfaceCover {
     pub cover: u16,
     pub name: String,
     /// For each of its plants, the full block its layers are of and how
-    /// many eighths of a block they are.
-    pub plants: Vec<(String, u8)>,
+    /// many eighths of a block they are; `None` for a plant that is not
+    /// layers (small stones among the layers of forest floor), which stays
+    /// a cover where it grows.
+    pub plants: Vec<Option<(String, u8)>>,
+}
+
+impl SurfaceCover {
+    /// Whether all its plants are layers: turned into ground, nothing is
+    /// left of it.
+    pub fn all_layers(&self) -> bool {
+        self.plants.iter().all(Option::is_some)
+    }
+
+    /// The full blocks of its layers, each once.
+    pub fn blocks(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = Vec::new();
+        for (b, _) in self.plants.iter().flatten() {
+            if !out.contains(&b.as_str()) {
+                out.push(b);
+            }
+        }
+        out
+    }
 }
 
 /// The full block a layer block state is of, and its eighths: the block
@@ -40,18 +61,27 @@ pub fn full_block_of(state: &str, known: &Known) -> Option<(String, u8)> {
     let (ns, path) = name.split_once(':')?;
     let base = path.strip_suffix("_layer").or_else(|| path.strip_suffix("_layers"))?;
     let candidates = [format!("{ns}:{base}"), format!("{ns}:{base}_block"), format!("minecraft:{base}"), format!("minecraft:{base}_block")];
-    candidates.into_iter().find(|c| known.exists(c) && crate::shapes::family(c, known).get(Shape::Layers) == Some(name)).map(|c| (c, eighths))
+    if let Some(c) = candidates.into_iter().find(|c| known.exists(c) && crate::shapes::family(c, known).get(Shape::Layers) == Some(name)) {
+        return Some((c, eighths));
+    }
+    // Layers with no full block of their own (Conquest's grass and sand,
+    // grassy gravel…): eight of them are one.
+    (known.exists(name) && crate::shapes::family(name, known).get(Shape::Layers) == Some(name)).then(|| (format!("{name}[layers=8]"), eighths))
 }
 
-/// The map's ground covers that are layers of full blocks, in their order.
+/// The map's ground covers whose plants are layers of full blocks, all or
+/// some of them, in their order. The mods' blocks the map uses count as
+/// known, the mod read or not.
 pub fn surface_covers(reg: &Registry, known: &Known) -> Vec<SurfaceCover> {
+    let merged = crate::shapes::with_map_blocks(reg, known.mods);
+    let known = Known { vanilla: known.vanilla, mods: merged.as_ref().unwrap_or(known.mods) };
     let mut out = Vec::new();
     for (k, def) in reg.covers.iter().enumerate() {
         if def.removed || def.changes_water() || def.underwater || def.plants.is_empty() {
             continue;
         }
-        let plants: Option<Vec<(String, u8)>> = def.plants.iter().map(|(s, _)| full_block_of(s, known)).collect();
-        if let Some(plants) = plants {
+        let plants: Vec<Option<(String, u8)>> = def.plants.iter().map(|(s, _)| full_block_of(s, &known)).collect();
+        if plants.iter().any(Option::is_some) {
             out.push(SurfaceCover { cover: k as u16 + 1, name: def.name.clone(), plants });
         }
     }
@@ -87,9 +117,12 @@ pub fn to_ground(dimension: &Dimension, meta: &WorldMeta, registry: &Registry, c
     let mut columns = 0;
     let positions: Vec<TilePos> = dim.ground().positions().collect();
     for pos in positions {
-        let has = dim.ground().view(pos).is_some_and(|t| match t.cover.uniform_value() {
-            Some(v) => by_cover.contains_key(&v),
-            None => t.cover.dense().iter().any(|v| by_cover.contains_key(v)),
+        let has = dim.ground().view(pos).is_some_and(|t| {
+            by_cover.keys().any(|&c| t.stacked.holds(crate::layer_stack::Kind::Cover, c))
+                || match t.cover.uniform_value() {
+                    Some(v) => by_cover.contains_key(&v),
+                    None => t.cover.dense().iter().any(|v| by_cover.contains_key(v)),
+                }
         });
         if !has {
             continue;
@@ -97,12 +130,14 @@ pub fn to_ground(dimension: &Dimension, meta: &WorldMeta, registry: &Registry, c
         let Some(tile) = dim.ground_mut().tile_mut(pos) else { continue };
         let (ox, oz) = pos.origin();
         for i in 0..crate::TILE_AREA {
-            let Some(cover) = by_cover.get(&tile.cover.get(i)) else { continue };
+            // The lowest cover of layers of the column's stack, the one
+            // lying on the ground.
+            let Some(cover) = tile.stacked.covers_under(i).iter().chain(std::iter::once(&tile.cover.get(i))).find_map(|c| by_cover.get(c)) else { continue };
             let (x, z) = (ox + (i & 127) as i32, oz + (i >> 7) as i32);
             let Some(def) = reg.cover(cover.cover) else { continue };
             let color = def.color;
             let Some(growth) = def.growth(x, z, seed) else { continue };
-            let Some((full, eighths)) = cover.plants.get(growth.plant) else { continue };
+            let Some(Some((full, eighths))) = cover.plants.get(growth.plant) else { continue };
             let base = tile.terrain.get(i);
             let terrain = *terrains.entry((base, full.clone())).or_insert_with(|| {
                 if crate::shapes::top_block(&reg, TerrainId(base)).is_some_and(|b| reg.block(b).name() == full) {
@@ -122,7 +157,12 @@ pub fn to_ground(dimension: &Dimension, meta: &WorldMeta, registry: &Registry, c
             let top = block_top(tile.top.get(i)) as f32;
             tile.top.set(i, top + *eighths as f32 / 8.0);
             tile.terrain.set(i, terrain);
-            tile.cover.set(i, 0);
+            if tile.cover.get(i) == cover.cover {
+                let next = tile.stacked.pop_cover(i).unwrap_or(0);
+                tile.cover.set(i, next);
+            } else {
+                tile.stacked.remove(i, crate::layer_stack::Kind::Cover, cover.cover);
+            }
             if *eighths < 8 {
                 tile.slabs.set(i, crate::shapes::value(None, false));
             }
@@ -142,7 +182,9 @@ pub fn to_ground(dimension: &Dimension, meta: &WorldMeta, registry: &Registry, c
             meta.smooth.terrains.insert(reg.terrain(TerrainId(t)).name.clone(), shapes);
         }
     }
-    for c in chosen {
+    // A cover all of layers is gone; one with other plants stays where
+    // those grow.
+    for c in chosen.iter().filter(|c| c.all_layers()) {
         if let Some(def) = reg.covers.get_mut(c.cover as usize - 1) {
             def.removed = true;
         }
@@ -229,5 +271,57 @@ mod tests {
         assert_eq!((made.name.as_str(), g.registry.block(made.strata[0].blocks[0].0).name()), ("Thick grass", "minecraft:grass_block"));
         assert!(g.registry.covers[thin as usize - 1].removed && g.registry.covers[full as usize - 1].removed && !g.registry.covers[stones as usize - 1].removed);
         assert!(g.meta.smooth.shapes_of(&g.registry, TerrainId(grass)).has(Shape::Layers));
+    }
+
+    /// A WorldPainter map of Conquest Reforged, the mod not read: its covers
+    /// of layers are found by the blocks the map uses itself. A cover mixing
+    /// layers and small stones is offered, and turned into ground where its
+    /// layers grow, the stones staying a cover; layers with no full block
+    /// of their own use eight of them; a cover lying under plants is turned
+    /// into ground, the plants staying on top.
+    #[test]
+    fn covers_of_layers_are_found_without_the_mod_mixed_and_stacked() {
+        use crate::layer_stack::{Entry, Kind};
+        let none = HashMap::new();
+        let k = Known { vanilla: &|id: &str| matches!(id, "minecraft:grass_block" | "minecraft:snow_block" | "minecraft:snow" | "minecraft:dirt"), mods: &none };
+        let mut world = crate::generate::generate(&crate::generate::GenParams { tiles_x: 1, tiles_z: 1, ..Default::default() });
+        let reg = &mut world.registry;
+        let grass = reg.terrain_by_name("Grass").unwrap().0;
+        let mut def = |name: &str, plants: &[(&str, u16)]| {
+            let mut c = CoverDef::new(name, [90, 140, 60], plants, 1.0);
+            c.soil_only = false;
+            reg.add_cover(c)
+        };
+        let mixed = def("Forest floor", &[("conquest:grass_block_layer[layers=2]", 1), ("conquest:small_stones", 1)]);
+        let sand = def("Grass and sand", &[("conquest:grass_and_sand_layer[layers=4]", 1)]);
+        let flowers = def("Flowers", &[("minecraft:poppy", 1)]);
+        let found = surface_covers(&world.registry, &k);
+        let get = |n: u16| found.iter().find(|c| c.cover == n).unwrap_or_else(|| panic!("cover {n} found: {found:?}"));
+        assert!(!get(mixed).all_layers() && get(mixed).blocks() == ["minecraft:grass_block"]);
+        assert_eq!(get(sand).blocks(), ["conquest:grass_and_sand_layer[layers=8]"]);
+        assert!(found.iter().all(|c| c.cover != flowers));
+        let pos = world.dims[0].ground().positions().next().unwrap();
+        let mut tile = Tile::ground(70.0, grass, NO_FLUID);
+        for i in 0..crate::TILE_AREA {
+            if i / 128 < 64 {
+                tile.cover.set(i, mixed);
+            } else {
+                // Grass and sand under flowers.
+                tile.cover.set(i, flowers);
+                tile.stacked.set(i, &[Entry::new(Kind::Cover, sand, 255)]);
+            }
+        }
+        world.dims[0].ground_mut().insert(pos, tile);
+        let chosen: Vec<SurfaceCover> = found.into_iter().filter(|c| c.cover == mixed || c.cover == sand).collect();
+        let g = to_ground(&world.dims[0], &world.meta, &world.registry, &chosen);
+        let t = g.dimension.ground().view(pos).unwrap();
+        let (layered, stones) = (0..64 * 128).partition::<Vec<usize>, _>(|&i| t.cover.get(i) == 0);
+        assert!(layered.len() > 2000 && stones.len() > 2000, "{} {}", layered.len(), stones.len());
+        assert!(layered.iter().all(|&i| t.top.get(i) == 70.25) && stones.iter().all(|&i| t.top.get(i) == 70.0 && t.cover.get(i) == mixed));
+        let i = 100 * 128;
+        assert_eq!((t.top.get(i), t.cover.get(i), t.stacked.covers_under(i)), (70.5, flowers, vec![]), "the flowers stay on the raised ground");
+        let top = crate::shapes::top_block(&g.registry, TerrainId(t.terrain.get(i))).unwrap();
+        assert_eq!(g.registry.block(top).state, "conquest:grass_and_sand_layer[layers=8]");
+        assert!(!g.registry.covers[mixed as usize - 1].removed && g.registry.covers[sand as usize - 1].removed);
     }
 }

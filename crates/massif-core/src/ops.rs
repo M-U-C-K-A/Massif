@@ -521,6 +521,22 @@ fn paint_plane_over(
     let footprint = BlockRect::around(cx, cz, brush.reach());
     edit.par_tiles(footprint.tiles(), footprint, false, |_, clip, tile| {
         let slab = tile.bottom.is_some();
+        // Which slot's stacked layers the plane is, if any.
+        let stacked = {
+            use crate::layer_stack::Kind;
+            let at = plane(tile) as *const Plane<u16>;
+            if tile.stacked.is_empty() {
+                None
+            } else if std::ptr::eq(at, &tile.cover) {
+                Some(Kind::Cover)
+            } else if std::ptr::eq(at, &tile.objects) {
+                Some(Kind::Objects)
+            } else if std::ptr::eq(at, &tile.understory) {
+                Some(Kind::Understory)
+            } else {
+                None
+            }
+        };
         for z in clip.z0..clip.z1 {
             for x in dab.row(z, &clip) {
                 let w = dab.weight(x, z);
@@ -535,6 +551,41 @@ fn paint_plane_over(
                 let i = local_index(x, z);
                 if slab && !tile.present(i) {
                     continue;
+                }
+                // The layers stacked on a column (see `layer_stack`):
+                // rubbing one out takes it alone out, uncovering the cover
+                // under it or leaving the next tree layer; painting over
+                // takes the place of all of the slot's, none locked.
+                if let Some(kind) = stacked
+                    && tile.stacked.has(i)
+                {
+                    use crate::layer_stack::Kind;
+                    let here = plane(tile).get(i);
+                    if let Some(o) = over {
+                        if kind == Kind::Cover {
+                            if here == o {
+                                let next = tile.stacked.pop_cover(i).unwrap_or(0);
+                                plane(tile).set(i, next);
+                            } else {
+                                tile.stacked.remove(i, kind, o);
+                            }
+                        } else {
+                            tile.stacked.remove(i, kind, o);
+                            if here == o {
+                                let next = tile.stacked.layers_of(i, kind, 0).first().map_or(0, |l| l.0);
+                                plane(tile).set(i, next);
+                            }
+                        }
+                        continue;
+                    }
+                    if let Some((slot, locks)) = &locks
+                        && tile.stacked.entries(i).any(|e| e.kind == kind && locks.holds(*slot, e.layer))
+                    {
+                        continue;
+                    }
+                    if !locks.as_ref().is_some_and(|(slot, locks)| locks.holds(*slot, here)) {
+                        tile.stacked.clear_kind(i, kind);
+                    }
                 }
                 if let Some((slot, locks)) = &locks
                     && locks.holds(*slot, plane(tile).get(i))
@@ -3084,5 +3135,41 @@ mod tests {
         h.commit();
         let t = w.dims[0].ground().view(TilePos::new(0, 0)).unwrap();
         assert_eq!((t.caves.get(local_index(3, 3)), t.caves.get(local_index(4, 3))), (2, 1));
+    }
+
+    /// Stacked covers and tree layers (a WorldPainter map's): rubbing out the
+    /// cover on top uncovers the one under it, rubbing out a tree layer
+    /// leaves the others, and painting a cover takes the place of the whole
+    /// stack.
+    #[test]
+    fn brushes_rub_out_one_stacked_layer_and_paint_over_all() {
+        use crate::layer_stack::{Entry, Kind};
+        let mut w = crate::generate::generate(&crate::generate::GenParams { tiles_x: 1, tiles_z: 1, ..Default::default() });
+        let pos = w.dims[0].ground().positions().next().unwrap();
+        {
+            let tile = w.dims[0].ground_mut().tile_mut(pos).unwrap();
+            for i in 0..crate::TILE_AREA {
+                tile.cover.set(i, 3);
+                tile.objects.set(i, 1);
+                tile.stacked.set(i, &[Entry::new(Kind::Cover, 2, 255), Entry::new(Kind::Objects, 1, 128), Entry::new(Kind::Objects, 4, 40)]);
+            }
+        }
+        let (ox, oz) = pos.origin();
+        let brush = hard_brush(4.0);
+        let mut history = History::new(2);
+        history.begin("Erase", 0);
+        erase_cover(&mut history.edit(&mut w, 0), &brush, ox as f32 + 20.5, oz as f32 + 20.5, 3, 1);
+        erase_objects(&mut history.edit(&mut w, 0), &brush, ox as f32 + 20.5, oz as f32 + 20.5, 1, 1);
+        paint_cover(&mut history.edit(&mut w, 0), &brush, ox as f32 + 60.5, oz as f32 + 60.5, 5, 1);
+        history.commit();
+        let t = w.dims[0].ground().view(pos).unwrap();
+        let i = local_index(ox + 20, oz + 20);
+        assert_eq!((t.cover.get(i), t.stacked.covers_under(i)), (2, vec![]), "the cover under it shows");
+        assert_eq!((t.objects.get(i), t.stacked.layers_of(i, Kind::Objects, t.objects.get(i))), (4, vec![(4, 40)]), "the other tree layer stays at its strength");
+        let j = local_index(ox + 60, oz + 60);
+        assert_eq!((t.cover.get(j), t.stacked.covers_under(j)), (5, vec![]), "painting takes the place of the stack");
+        assert_eq!(t.stacked.layers_of(j, Kind::Objects, 1), vec![(1, 128), (4, 40)], "the trees are another slot");
+        let k = local_index(ox + 100, oz + 100);
+        assert_eq!((t.cover.get(k), t.stacked.covers_under(k)), (3, vec![2]), "untouched");
     }
 }

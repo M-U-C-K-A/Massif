@@ -240,6 +240,34 @@ impl Known<'_> {
     }
 }
 
+/// The mods' blocks map `reg` uses itself (its terrains', its covers'),
+/// with the properties their states name, that `mods` does not list: a map
+/// of a mod's blocks knows them whether or not the mod is read (a
+/// WorldPainter map of Conquest Reforged, without its jar). `None` when it
+/// uses none that `mods` lacks.
+pub fn with_map_blocks(reg: &Registry, mods: &HashMap<String, Vec<String>>) -> Option<HashMap<String, Vec<String>>> {
+    let mut extra: HashMap<String, Vec<String>> = HashMap::new();
+    let states = reg.blocks.iter().map(|b| b.state.as_str()).chain(reg.covers.iter().filter(|c| !c.removed).flat_map(|c| c.plants.iter().map(|p| p.0.as_str())));
+    for state in states {
+        let (name, props) = state.split_once('[').map_or((state, ""), |(n, p)| (n, p.trim_end_matches(']')));
+        if name.starts_with("minecraft:") || !name.contains(':') || mods.contains_key(name) {
+            continue;
+        }
+        let list = extra.entry(name.to_owned()).or_default();
+        for key in props.split(',').filter_map(|kv| kv.split_once('=').map(|p| p.0.trim())) {
+            if !list.iter().any(|k| k == key) {
+                list.push(key.to_owned());
+            }
+        }
+    }
+    if extra.is_empty() {
+        return None;
+    }
+    let mut all = mods.clone();
+    all.extend(extra);
+    Some(all)
+}
+
 /// The partial blocks of one block: for each shape, the block (by name).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Family {
@@ -305,6 +333,11 @@ pub fn family(name: &str, known: &Known) -> Family {
     let find = |shape: Shape| -> Option<String> {
         if shape == Shape::Layers && ns == "minecraft" && (path == "snow_block" || path == "snow") {
             return Some("minecraft:snow".into());
+        }
+        // A block of layers (whole at eight of them: a mod's layers with no
+        // full block of their own) lays its own.
+        if shape == Shape::Layers && known.exists(name) && profiles.iter().filter(|(pns, _)| *pns == ns).any(|(_, p)| p.suffixes.get(&Shape::Layers).into_iter().flatten().any(|s| path.ends_with(s.as_str()))) {
+            return Some(name.to_owned());
         }
         for base in bases(path) {
             // The block's own namespace first, then the others'.
