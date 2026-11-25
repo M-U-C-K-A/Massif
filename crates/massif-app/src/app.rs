@@ -13244,7 +13244,7 @@ mod tests {
         let rock = grid.0.iter().filter(|s| s.flags & crate::map_render::FLAG_CUT_ROCK != 0).count();
         assert!(caves > 200 && rock > caves, "{caves} columns of caves, {rock} of rock at y 0");
         // The X-ray: floors and ceilings of caves under the ground.
-        let style = crate::view3d::Style { mode: crate::map_render::MapMode::Terrain, water: true, lava: false, notes: None, caves: massif_core::compose::Caves::All, xray: true };
+        let style = crate::view3d::Style { mode: crate::map_render::MapMode::Terrain, water: true, lava: false, notes: None, caves: massif_core::compose::Caves::All, xray: true, objects: true, density: false };
         let built = crate::view3d::build_tile(dim, &h.state().doc.world.registry, 63.0, 0, pos, style);
         assert!(built.faces.xray.len() > 500, "{} x-ray faces", built.faces.xray.len());
         let Some(dir) = dir else { return };
@@ -13521,6 +13521,65 @@ mod tests {
                 assert!(frames < 3000, "the map never finished");
             }
             h.run_steps(4);
+            h.render().unwrap().save(dir.join(format!("{name}-{ppp}x.png"))).unwrap();
+        }
+    }
+
+    /// The 3D view's Density overlay over a painted forest, with its legend,
+    /// and the forest hidden by the Objects button.
+    #[test]
+    fn view3d_objects_and_density() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else { return };
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        {
+            let app = h.state_mut();
+            let w = &mut app.doc.world;
+            let palette = vec!["minecraft:air".to_owned(), "minecraft:oak_log[axis=y]".to_owned(), "minecraft:oak_leaves[distance=1,persistent=true,waterlogged=false]".to_owned()];
+            let mut blocks = vec![0u16; 5 * 7 * 5];
+            for y in 0..7 {
+                for z in 0..5 {
+                    for x in 0..5 {
+                        blocks[x + z * 5 + y * 25] = if x == 2 && z == 2 && y < 4 { 1 } else if y >= 3 && (x as i32 - 2).abs() + (z as i32 - 2).abs() <= 3 { 2 } else { 0 };
+                    }
+                }
+            }
+            let k = w.registry.objects.len() as u32;
+            w.registry.objects.push(massif_core::objects::ObjectDef::new("Oak", [5, 7, 5], palette, blocks));
+            let mut def = massif_core::objects::ObjectLayerDef::new("Forest", &[k], &w.registry);
+            def.spacing = 7;
+            def.density = 1.0;
+            def.soil_only = false;
+            let layer = w.registry.add_object_layer(def);
+            let mut dense = massif_core::objects::ObjectLayerDef::new("Thicket", &[k], &w.registry);
+            dense.spacing = 3;
+            dense.density = 1.0;
+            dense.soil_only = false;
+            let thick = w.registry.add_object_layer(dense);
+            let dim = app.doc.dim;
+            app.doc.history.begin("forest", dim);
+            {
+                let brush = |r: f32| massif_core::Brush { shape: massif_core::BrushShape::Circle, radius: r, profile: massif_core::Profile::Constant, strength: 1.0, rotation: 0.0, mask: None, filter: None };
+                let mut e = app.doc.history.edit(&mut app.doc.world, 0);
+                massif_core::ops::paint_objects(&mut e, &brush(150.0), -120.0, -60.0, layer, 1);
+                massif_core::ops::paint_objects(&mut e, &brush(70.0), 140.0, 90.0, thick, 2);
+            }
+            app.doc.commit();
+            app.view3d.density = true;
+        }
+        let k = h.state().layout.workspaces.iter().position(|w| w.root.shows(EditorKind::View3d) && !w.root.shows(EditorKind::Map)).unwrap_or(3);
+        h.state_mut().layout.active = k;
+        let ppp = std::env::var("MASSIF_SNAPSHOT_PPP").unwrap_or_else(|_| "1".into());
+        for (name, objects, density) in [("view3d-density", true, true), ("view3d-objects", true, false), ("view3d-objects-hidden", false, false)] {
+            h.state_mut().view3d.objects = objects;
+            h.state_mut().view3d.density = density;
+            let mut frames = 0;
+            while frames < 6 || h.state().view3d.pending() > 0 {
+                h.step();
+                frames += 1;
+                assert!(frames < 4000, "the 3D view never finished");
+            }
+            h.run_steps(6);
             h.render().unwrap().save(dir.join(format!("{name}-{ppp}x.png"))).unwrap();
         }
     }

@@ -3824,5 +3824,8 @@
  "The village's theme is no longer offered: add its pack again": "Le thème du village n'est plus proposé : ajoutez de nouveau son pack",
  "Villages and the game's structures: pick one in Tool Settings, click on the map to place it or drag a rectangle for a village. Click one placed to select it: drag it to move it, its corners to resize it. Right button: take it away.": "Villages et structures du jeu : choisissez-en un dans les réglages de l'outil, cliquez sur la carte pour le placer ou glissez un rectangle pour un village. Cliquez sur un élément placé pour le sélectionner : glissez-le pour le déplacer, ses coins pour le redimensionner. Bouton droit : le retirer.",
  "Walls": "Remparts",
- "{name} selected: drag it to move it, its corners to resize it": "{name} sélectionné : glissez-le pour le déplacer, ses coins pour le redimensionner"
+ "{name} selected: drag it to move it, its corners to resize it": "{name} sélectionné : glissez-le pour le déplacer, ses coins pour le redimensionner",
+ "Objects: the trees, bushes and rocks of the layers, shown or hidden": "Objets : les arbres, buissons et rochers des calques, affichés ou masqués",
+ "Density: the land coloured by how many objects its layers will place, from few (blue) to many (red); the objects step aside meanwhile": "Densité : le terrain coloré selon le nombre d'objets que ses calques poseront, de peu (bleu) à beaucoup (rouge) ; les objets s'effacent pendant ce temps",
+ "Objects per 100 blocks²": "Objets pour 100 blocs²"
 }

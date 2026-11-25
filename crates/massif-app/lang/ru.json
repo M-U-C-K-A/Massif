@@ -3780,5 +3780,8 @@
   "few": "Выбрано {n} объекта",
   "many": "Выбрано {n} объектов",
   "other": "Выбрано {n} объекта"
- }
+ },
+ "Objects: the trees, bushes and rocks of the layers, shown or hidden": "Объекты: деревья, кусты и камни слоёв, показаны или скрыты",
+ "Density: the land coloured by how many objects its layers will place, from few (blue) to many (red); the objects step aside meanwhile": "Плотность: земля окрашена по числу объектов, которые поставят её слои, от малого (синий) до большого (красный); объекты пока скрыты",
+ "Objects per 100 blocks²": "Объектов на 100 блоков²"
 }

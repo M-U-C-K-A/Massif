@@ -1189,6 +1189,17 @@ see-through, warm near the surface and cold deep down: where the cave
 layers carve, how deep, how the networks run. Walking or flying in the land
 (the Player, its Ghost) shows every cave as it is, to go into.
 
+
+### Objects and their density in the 3D views
+
+**Objects** in the header of the 3D views (the tree) shows or hides the
+trees, bushes and rocks the object layers place; the structures placed stay.
+**Density** (the grid) colours the land by how many objects its layers will
+place around each column, counted over cells of 8 blocks and shown as
+objects per 100 blocks², from few (blue) to many (red), with its scale at
+the bottom left. Land where nothing is placed keeps its colours, and the
+objects step aside while the density shows, so that how thick each forest,
+thicket or scree will be can be seen before exporting.
 ### Underground on the 2D map
 
 **Underground** in the 2D map's header (the split square) cuts the map

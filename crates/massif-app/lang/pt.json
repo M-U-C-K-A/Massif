@@ -3760,5 +3760,8 @@
  "The village's theme is no longer offered: add its pack again": "O tema da aldeia já não é oferecido: adicione o pack de novo",
  "Villages and the game's structures: pick one in Tool Settings, click on the map to place it or drag a rectangle for a village. Click one placed to select it: drag it to move it, its corners to resize it. Right button: take it away.": "Aldeias e estruturas do jogo: escolha uma nas definições da ferramenta, clique no mapa para colocá-la ou arraste um retângulo para uma aldeia. Clique numa colocada para selecioná-la: arraste-a para movê-la, os cantos para redimensioná-la. Botão direito: removê-la.",
  "Walls": "Muralhas",
- "{name} selected: drag it to move it, its corners to resize it": "{name} selecionado: arraste para mover, os cantos para redimensionar"
+ "{name} selected: drag it to move it, its corners to resize it": "{name} selecionado: arraste para mover, os cantos para redimensionar",
+ "Objects: the trees, bushes and rocks of the layers, shown or hidden": "Objetos: as árvores, arbustos e rochas das camadas, mostrados ou ocultos",
+ "Density: the land coloured by how many objects its layers will place, from few (blue) to many (red); the objects step aside meanwhile": "Densidade: o terreno colorido segundo quantos objetos as suas camadas vão colocar, de poucos (azul) a muitos (vermelho); os objetos afastam-se entretanto",
+ "Objects per 100 blocks²": "Objetos por 100 blocos²"
 }

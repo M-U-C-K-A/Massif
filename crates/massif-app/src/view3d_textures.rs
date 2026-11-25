@@ -74,7 +74,7 @@ struct Scene {
 
 fn scene(device: &wgpu::Device, queue: &wgpu::Queue, name: &'static str, mut world: World, cat: &massif_assets::Catalogue, focus: Option<(i32, i32)>) -> Scene {
     massif_assets::apply_colors(&mut world.registry, cat);
-    let style = Style { mode: MapMode::Terrain, water: true, lava: world.meta.lava, notes: None, caves: massif_core::compose::Caves::Openings, xray: false };
+    let style = Style { mode: MapMode::Terrain, water: true, lava: world.meta.lava, notes: None, caves: massif_core::compose::Caves::Openings, xray: false, objects: true, density: false };
     let dim = &world.dims[0];
     let shape = GridShape::of(dim, PAGE_BUDGET).unwrap();
     assert_eq!(shape.stride, 1, "every block");

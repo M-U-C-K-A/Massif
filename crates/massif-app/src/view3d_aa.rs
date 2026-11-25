@@ -55,7 +55,7 @@ fn a_coast_far_off_does_not_alias() {
     let sea = world.meta.sea_level as f32;
     let (eye, yaw) = shore(dim, sea);
     eprintln!("eye at {eye:?}, yaw {yaw:.2}");
-    let style = Style { mode: MapMode::Terrain, water: true, lava: false, notes: None, caves: massif_core::compose::Caves::Openings, xray: false };
+    let style = Style { mode: MapMode::Terrain, water: true, lava: false, notes: None, caves: massif_core::compose::Caves::Openings, xray: false, objects: true, density: false };
     let shape = GridShape::of(dim, PAGE_BUDGET).unwrap();
     let tiles: Vec<TilePos> = dim.ground().positions().collect();
     let built: Vec<(TilePos, TileBuild)> = tiles.iter().map(|&t| (t, build_tile(dim, &world.registry, sea, world.meta.seed, t, style))).collect();

@@ -234,6 +234,8 @@ struct Standing<'a> {
     reg: &'a Registry,
     seed: i64,
     lava: bool,
+    /// The objects of the layers drawn (the structures always are).
+    objects: bool,
 }
 
 /// A run of an object's blocks in a column: `[y0, y1)`, its colour and its
@@ -246,7 +248,7 @@ fn object_runs(dim: &Dimension, s: Standing, x0: i32, z0: i32, w: usize, d: usiz
     use massif_core::objects::{max_reach, tile_placements};
     let mut runs: Vec<Vec<ObjectRun>> = vec![Vec::new(); w * d];
     let reg = s.reg;
-    let objects = reg.object_layers.iter().any(|l| !l.removed && !l.hidden && !l.objects.is_empty());
+    let objects = s.objects && reg.object_layers.iter().any(|l| !l.removed && !l.hidden && !l.objects.is_empty());
     if !objects && dim.structures.is_empty() {
         return runs;
     }
@@ -560,6 +562,80 @@ pub struct Style {
     pub caves: massif_core::compose::Caves,
     /// The caves under the ground drawn through it (the X-ray).
     pub xray: bool,
+    /// The objects of the world's layers stand on the land.
+    pub objects: bool,
+    /// The land tinted by how many objects its layers place (see
+    /// [`object_density`]).
+    pub density: bool,
+}
+
+/// The colours of the density overlay, from few objects to many (objects
+/// per 100 blocks²): the scale its legend shows.
+pub const DENSITY_STOPS: [(f32, [u8; 3]); 5] = [(0.0, [52, 84, 170]), (2.0, [40, 170, 190]), (6.0, [120, 200, 80]), (14.0, [240, 196, 60]), (30.0, [232, 72, 56])];
+
+/// The colour of a density on the overlay's scale.
+pub fn density_color(v: f32) -> [u8; 3] {
+    let stops = DENSITY_STOPS;
+    if v <= stops[0].0 {
+        return stops[0].1;
+    }
+    for w in stops.windows(2) {
+        let ((a, ca), (b, cb)) = (w[0], w[1]);
+        if v <= b {
+            let t = (v - a) / (b - a);
+            return [0, 1, 2].map(|k| (ca[k] as f32 + (cb[k] as f32 - ca[k] as f32) * t).round() as u8);
+        }
+    }
+    stops[stops.len() - 1].1
+}
+
+/// Cells the density is counted in, blocks a side.
+const DENSITY_CELL: i32 = 8;
+
+/// How many objects the world's shown layers place around each column of
+/// the `n` × `n` blocks at `(x0, z0)`, as objects per 100 blocks²: counted
+/// by cells of [`DENSITY_CELL`] blocks, between cells smoothly.
+pub fn object_density(dim: &Dimension, reg: &Registry, seed: i64, lava: bool, x0: i32, z0: i32, n: usize) -> Vec<f32> {
+    use massif_core::objects::tile_placements;
+    let mut out = vec![0.0; n * n];
+    if !reg.object_layers.iter().any(|l| !l.removed && !l.hidden && !l.objects.is_empty()) {
+        return out;
+    }
+    let c = DENSITY_CELL;
+    // Cells over the area and one around, for the smoothing.
+    let cx0 = x0.div_euclid(c) - 1;
+    let cz0 = z0.div_euclid(c) - 1;
+    let cells = (n as i32).div_euclid(c) + 3;
+    let mut count = vec![0u32; (cells * cells) as usize];
+    let area = massif_core::BlockRect::new(cx0 * c, cz0 * c, (cx0 + cells) * c, (cz0 + cells) * c);
+    let mat = Materializer::new(reg, seed, dim.min_y);
+    for t in area.tiles() {
+        let Some(stack) = TileStack::from_above(dim, t, false) else { continue };
+        for p in tile_placements(reg, &mat, seed as u64, lava, &stack, t) {
+            if !reg.object_layer(p.layer).is_some_and(|l| !l.hidden) {
+                continue;
+            }
+            let (i, k) = (p.x.div_euclid(c) - cx0, p.z.div_euclid(c) - cz0);
+            if i >= 0 && k >= 0 && i < cells && k < cells {
+                count[(k * cells + i) as usize] += 1;
+            }
+        }
+    }
+    let per = 100.0 / (c * c) as f32;
+    let at = |i: i32, k: i32| count[(k.clamp(0, cells - 1) * cells + i.clamp(0, cells - 1)) as usize] as f32 * per;
+    for j in 0..n {
+        for i in 0..n {
+            // Between the centres of the four cells around.
+            let fx = (x0 + i as i32) as f32 / c as f32 - 0.5 - cx0 as f32;
+            let fz = (z0 + j as i32) as f32 / c as f32 - 0.5 - cz0 as f32;
+            let (ix, iz) = (fx.floor() as i32, fz.floor() as i32);
+            let (tx, tz) = (fx - ix as f32, fz - iz as f32);
+            let a = at(ix, iz) * (1.0 - tx) + at(ix + 1, iz) * tx;
+            let b = at(ix, iz + 1) * (1.0 - tx) + at(ix + 1, iz + 1) * tx;
+            out[j * n + i] = a * (1.0 - tz) + b * tz;
+        }
+    }
+    out
 }
 
 /// The colour of each annotation by number and how opaque it is drawn (0
@@ -876,7 +952,9 @@ fn build_tile_part(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: T
     // The water's slopes need two columns more around (what flows over a
     // neighbour, and the heights around that).
     let ring = (if style.mode == MapMode::Slope { SLOPE_REACH } else { 1 }).max(if style.water { 2 } else { 1 });
-    let standing = Standing { reg, seed, lava: style.lava };
+    // With the density shown, the objects step aside for the land's tint.
+    let standing = Standing { reg, seed, lava: style.lava, objects: style.objects && !style.density };
+    let density = if style.density { object_density(dim, reg, seed, style.lava, cx, cz, n) } else { Vec::new() };
     let mut grid = compose_area(dim, cx - ring, cz - ring, n + 2 * ring as usize, n + 2 * ring as usize, style.mode, style.water, style.caves, Some(standing));
     // Smooth terrain: the piece of each column, as the export lays it (of
     // its terrain's top block); a piece in place of its top block lowers
@@ -938,7 +1016,20 @@ fn build_tile_part(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: T
                             };
                         }
                         let on_top = Some(k) == land;
-                        colors.top(s.terrain, s.y0, s.y1, x, z, slope, &sample, if on_top { cover } else { 0 }, on_top && wet)
+                        let skin = colors.top(s.terrain, s.y0, s.y1, x, z, slope, &sample, if on_top { cover } else { 0 }, on_top && wet);
+                        match density.get(j as usize * n + i as usize) {
+                            // The land tinted by its density, its blocks'
+                            // pictures left out for the tint to show.
+                            // None: the land as it is; a little: a light
+                            // tint, then the colour of the scale.
+                            Some(&d) if on_top && d > 0.05 => {
+                                let heat = density_color(d);
+                                let a = (0.35 + d / 4.0).min(0.8);
+                                let top = [0, 1, 2].map(|k| (skin.top[k] as f32 * (1.0 - a) + heat[k] as f32 * a).round() as u8);
+                                Skin { top, top_mat: 0, ..skin }
+                            }
+                            _ => skin,
+                        }
                     })
                     .collect(),
             );
@@ -4683,6 +4774,10 @@ pub struct View3d {
     walk: Option<Walk>,
     /// The caves under the ground drawn through it.
     pub xray: bool,
+    /// The objects of the world's layers drawn.
+    pub objects: bool,
+    /// The land tinted by how many objects its layers place.
+    pub density: bool,
     /// The turn (yaw, pitch, radians a second) and the move (blocks a
     /// second) a drag let go while moving leaves the view, dying away; and
     /// when the drag last moved.
@@ -4893,6 +4988,8 @@ impl Default for View3d {
             frame_map: false,
             walk: None,
             xray: false,
+            objects: true,
+            density: false,
             spin: [0.0; 2],
             drift: [0.0; 2],
             dragged_at: 0.0,
@@ -4942,6 +5039,10 @@ impl View3d {
             .on_hover_text(tr!("Show water"));
         ui.toggle_value(&mut self.xray, theme::glyph(Icon::ScanEye).to_string())
             .on_hover_text(tr!("X-ray: the caves under the ground drawn through it, warm near the surface, cold deep down"));
+        ui.toggle_value(&mut self.objects, theme::glyph(Icon::TreePine).to_string())
+            .on_hover_text(tr!("Objects: the trees, bushes and rocks of the layers, shown or hidden"));
+        ui.toggle_value(&mut self.density, theme::glyph(Icon::Grid3x3).to_string())
+            .on_hover_text(tr!("Density: the land coloured by how many objects its layers will place, from few (blue) to many (red); the objects step aside meanwhile"));
         if ui
             .small_button(theme::glyph(Icon::Crosshair).to_string())
             .on_hover_text(tr!("Look at the middle of the map view"))
@@ -4985,6 +5086,8 @@ impl View3d {
             notes: self.notes(doc),
             caves: self.caves_drawn(),
             xray: self.xray,
+            objects: self.objects,
+            density: self.density,
         };
         let eye = self.camera.eye();
         let low = stride > 1 && ground_at(doc, eye[0], eye[2]).is_some_and(|g| eye[1] - g < NEAR_HEIGHT);
@@ -5780,6 +5883,8 @@ impl View3d {
             notes: self.notes(doc),
             caves: self.caves_drawn(),
             xray: self.xray,
+            objects: self.objects,
+            density: self.density,
         };
         let stride = self.grid.as_ref().map_or(1, |g| g.stride);
         // A builder for another map, colouring or grid stops.
@@ -6198,6 +6303,8 @@ impl View3d {
             notes: self.notes(doc),
             caves: self.caves_drawn(),
             xray: self.xray,
+            objects: self.objects,
+            density: self.density,
         };
         let smooth_changed = set_smooth(&doc.world.meta.smooth);
         if self.style != Some(style) || smooth_changed {
@@ -6904,6 +7011,9 @@ impl View3d {
             let bg = Rect::from_min_size(at - vec2(4.0, galley.size().y + 4.0), galley.size() + vec2(8.0, 6.0));
             painter.rect_filled(bg, 4, Color32::from_black_alpha(110));
             painter.galley(at - vec2(0.0, galley.size().y + 1.0), galley, Color32::WHITE);
+            if self.density {
+                density_legend(&painter, bg.left_top() - vec2(0.0, 8.0));
+            }
         }
         let back = crate::tools::unpaint_to(doc, tools).map(|t| crate::i18n::tr_name(&doc.world.registry.terrain(t).name).to_owned());
         self.player_bar(ui, rect, tools, back.as_deref(), inside);
@@ -6923,6 +7033,31 @@ impl View3d {
     }
 }
 
+/// The density overlay's scale, its bottom left at `at`: the colours from
+/// few objects to many, and what they count.
+fn density_legend(painter: &egui::Painter, at: egui::Pos2) {
+    let (w, h) = (180.0, 8.0);
+    let title = painter.layout_no_wrap(tr!("Objects per 100 blocks²").to_owned(), FontId::proportional(10.5), Color32::WHITE);
+    let height = title.size().y + h + 22.0;
+    let bg = Rect::from_min_size(at - vec2(0.0, height), vec2(w + 16.0, height));
+    painter.rect_filled(bg, 4, Color32::from_black_alpha(130));
+    painter.galley(bg.min + vec2(8.0, 4.0), title.clone(), Color32::WHITE);
+    let bar = Rect::from_min_size(bg.min + vec2(8.0, title.size().y + 8.0), vec2(w, h));
+    let top = DENSITY_STOPS[DENSITY_STOPS.len() - 1].0;
+    let steps = 60;
+    for k in 0..steps {
+        let v = top * (k as f32 + 0.5) / steps as f32;
+        let c = density_color(v);
+        let r = Rect::from_min_max(egui::pos2(bar.left() + bar.width() * k as f32 / steps as f32, bar.top()), egui::pos2(bar.left() + bar.width() * (k + 1) as f32 / steps as f32 + 0.5, bar.bottom()));
+        painter.rect_filled(r, 0, Color32::from_rgb(c[0], c[1], c[2]));
+    }
+    for (v, label) in [(0.0, "0".to_owned()), (top / 2.0, format!("{}", (top / 2.0) as u32)), (top, format!("{}+", top as u32))] {
+        let x = bar.left() + bar.width() * v / top;
+        let align = if v == 0.0 { egui::Align2::LEFT_TOP } else if v == top { egui::Align2::RIGHT_TOP } else { egui::Align2::CENTER_TOP };
+        painter.text(egui::pos2(x, bar.bottom() + 2.0), align, label, FontId::proportional(9.5), Color32::from_white_alpha(220));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6931,6 +7066,50 @@ mod tests {
     use massif_core::level::LevelKind;
     use massif_core::ops::{self, Anchor, Surface};
     use massif_core::{Brush, BrushShape, Profile, World};
+
+    /// The 3D view's Objects button hides the objects of the layers (the
+    /// structures stay), and its Density overlay counts what the layers
+    /// place: many where a forest is painted, none elsewhere.
+    #[test]
+    fn objects_hide_and_their_density_shows() {
+        let mut w = generate(&GenParams { tiles_x: 2, tiles_z: 2, landform: Landform::Flat, seed: 3, ..GenParams::default() });
+        // A little tree: a log under a block of leaves.
+        let palette = vec!["minecraft:air".to_owned(), "minecraft:oak_log[axis=y]".to_owned(), "minecraft:oak_leaves[distance=1,persistent=true,waterlogged=false]".to_owned()];
+        let mut blocks = vec![0u16; 3 * 4 * 3];
+        for y in 0..4 {
+            for z in 0..3 {
+                for x in 0..3 {
+                    blocks[x + z * 3 + y * 9] = if x == 1 && z == 1 && y < 2 { 1 } else if y >= 2 { 2 } else { 0 };
+                }
+            }
+        }
+        let k = w.registry.objects.len() as u32;
+        w.registry.objects.push(massif_core::objects::ObjectDef::new("Little tree", [3, 4, 3], palette, blocks));
+        let mut def = massif_core::objects::ObjectLayerDef::new("Trees", &[k], &w.registry);
+        def.spacing = 6;
+        def.density = 1.0;
+        def.soil_only = false;
+        let layer = w.registry.add_object_layer(def);
+        let corner = w.dims[0].bounds().expect("a tile").0;
+        let (x0, z0) = (corner.x * TILE_SIZE, corner.z * TILE_SIZE);
+        let brush = Brush { shape: BrushShape::Circle, radius: 40.0, profile: Profile::Constant, strength: 1.0, rotation: 0.0, mask: None, filter: None };
+        let mut h = History::default();
+        h.begin("forest", 0);
+        ops::paint_objects(&mut h.edit(&mut w, 0), &brush, (x0 + 64) as f32, (z0 + 64) as f32, layer, 1);
+        h.commit();
+        let (dim, reg) = (&w.dims[0], &w.registry);
+        let n = TILE_SIZE as usize;
+        let density = object_density(dim, reg, w.meta.seed, false, x0, z0, n);
+        let at = |i: usize, j: usize| density[j * n + i];
+        assert!(at(64, 64) > 1.0, "{} objects per 100 blocks² in the forest", at(64, 64));
+        assert!(at(n - 4, n - 4) < 0.01, "none far from it");
+        let shown = object_runs(dim, Standing { reg, seed: w.meta.seed, lava: false, objects: true }, x0 + 24, z0 + 24, 80, 80);
+        let hidden = object_runs(dim, Standing { reg, seed: w.meta.seed, lava: false, objects: false }, x0 + 24, z0 + 24, 80, 80);
+        assert!(shown.iter().any(|c| !c.is_empty()), "the forest stands");
+        assert!(hidden.iter().all(|c| c.is_empty()), "hidden with the button");
+        assert_eq!(density_color(0.0), DENSITY_STOPS[0].1);
+        assert_eq!(density_color(1000.0), DENSITY_STOPS[DENSITY_STOPS.len() - 1].1);
+    }
 
     /// Where the water of MASSIF_WATER_WORLD (a .massif) stands over what
     /// is beside it with nothing to hold it: a column of water whose level
@@ -7011,7 +7190,7 @@ mod tests {
         t.bottom = Some(massif_core::Plane::Uniform(150.0));
         t.terrain = massif_core::Plane::Uniform(1);
         w.dims[0].levels[slab].insert(tile, t);
-        let style = Style { mode: MapMode::Terrain, water: true, lava: false, notes: None, caves: massif_core::compose::Caves::Openings, xray: false };
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false, notes: None, caves: massif_core::compose::Caves::Openings, xray: false, objects: true, density: false };
         let dim = &w.dims[0];
         for stride in [2, 4] {
             let cell = grid_tile(tile, stride);
@@ -7072,6 +7251,8 @@ mod tests {
         notes: None,
         caves: massif_core::compose::Caves::Openings,
         xray: false,
+        objects: true,
+        density: false,
     };
 
     /// A coarse cell of the grid keeps, of each tile, the columns at the
@@ -7374,7 +7555,7 @@ mod tests {
         let w = world();
         let dim = &w.dims[0];
         let tile = TilePos::new(0, -1);
-        let b = build_tile(dim, &w.registry, 63.0, w.meta.seed, tile, Style { mode: MapMode::Height, water: false, lava: false, notes: None, caves: massif_core::compose::Caves::Openings, xray: false });
+        let b = build_tile(dim, &w.registry, 63.0, w.meta.seed, tile, Style { mode: MapMode::Height, water: false, lava: false, notes: None, caves: massif_core::compose::Caves::Openings, xray: false, objects: true, density: false });
         let grid = compose_area(dim, -1, -129, 130, 130, MapMode::Height, false, massif_core::compose::Caves::Openings, None);
         let mut expected = 0i64;
         let mut gaps = Vec::new();
@@ -7681,7 +7862,7 @@ mod perf {
         let world = massif_format::load(std::path::Path::new(&path)).unwrap();
         let dim = &world.dims[0];
         let mut renderer = Renderer3d::new(&device, &queue);
-        let style = Style { mode: MapMode::Terrain, water: true, lava: false, notes: None, caves: massif_core::compose::Caves::Openings, xray: false };
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false, notes: None, caves: massif_core::compose::Caves::Openings, xray: false, objects: true, density: false };
         let shape = GridShape::of(dim, PAGE_BUDGET).unwrap();
         renderer.set_grid(shape.stride, shape.page0, shape.pages, &shape.present).unwrap();
         let stride = shape.stride;
@@ -7766,7 +7947,7 @@ mod perf {
             massif_assets::apply_colors(&mut world.registry, cat);
         }
         let mut renderer = Renderer3d::new(&device, &queue);
-        let style = Style { mode: MapMode::Terrain, water: true, lava: false, notes: None, caves: massif_core::compose::Caves::Openings, xray: false };
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false, notes: None, caves: massif_core::compose::Caves::Openings, xray: false, objects: true, density: false };
         let dim = &world.dims[0];
         let shape = GridShape::of(dim, PAGE_BUDGET).unwrap();
         renderer.set_grid(shape.stride, shape.page0, shape.pages, &shape.present).unwrap();
@@ -7833,12 +8014,12 @@ mod perf {
         let dim = &world.dims[0];
         eprintln!("chunks sculpted: {}", dim.voxels.len());
         let tile = TilePos::new(0, 0);
-        let style = Style { mode: MapMode::Terrain, water: true, lava: false, notes: None, caves: massif_core::compose::Caves::Openings, xray: false };
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false, notes: None, caves: massif_core::compose::Caves::Openings, xray: false, objects: true, density: false };
         let reg = &world.registry;
         let n = TILE_SIZE as usize;
         let t = Instant::now();
         for _ in 0..10 {
-            let standing = Standing { reg, seed: world.meta.seed, lava: false };
+            let standing = Standing { reg, seed: world.meta.seed, lava: false, objects: true };
             std::hint::black_box(compose_area(dim, -1, -1, n + 2, n + 2, style.mode, style.water, style.caves, Some(standing)));
         }
         eprintln!("compose a tile: {:.1} ms", t.elapsed().as_secs_f32() * 100.0);
@@ -7859,7 +8040,7 @@ pub fn probe_ms(device: &wgpu::Device, queue: &wgpu::Queue) -> f32 {
     use massif_core::generate::{GenParams, Landform, generate};
     let world = generate(&GenParams { tiles_x: 8, tiles_z: 8, landform: Landform::Hills, seed: 3, ..GenParams::default() });
     let dim = &world.dims[0];
-    let style = Style { mode: MapMode::Terrain, water: true, lava: false, notes: None, caves: massif_core::compose::Caves::Openings, xray: false };
+    let style = Style { mode: MapMode::Terrain, water: true, lava: false, notes: None, caves: massif_core::compose::Caves::Openings, xray: false, objects: true, density: false };
     let mut renderer = Renderer3d::with_samples(device, queue, SAMPLES);
     let Some(shape) = GridShape::of(dim, 64) else { return 0.0 };
     if renderer.set_grid(shape.stride, shape.page0, shape.pages, &shape.present).is_err() {
@@ -7952,7 +8133,7 @@ mod graphics_perf {
             massif_assets::apply_colors(&mut world.registry, cat);
         }
         let dim = &world.dims[0];
-        let style = Style { mode: MapMode::Terrain, water: true, lava: false, notes: None, caves: massif_core::compose::Caves::Openings, xray: false };
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false, notes: None, caves: massif_core::compose::Caves::Openings, xray: false, objects: true, density: false };
         let (lo, hi) = dim.bounds().unwrap();
         let (x0, z0, x1, z1) = ((lo.x * 128) as f64, (lo.z * 128) as f64, ((hi.x + 1) * 128) as f64, ((hi.z + 1) * 128) as f64);
         let extent = (x1 - x0).max(z1 - z0);
@@ -8069,7 +8250,7 @@ mod gradient_shots {
     /// The world drawn as the game's look draws it, from `camera`.
     fn game_look(device: &wgpu::Device, queue: &wgpu::Queue, world: &World, cat: &massif_assets::Catalogue, camera: Camera, size: [u32; 2]) -> image::RgbImage {
         let mut renderer = Renderer3d::new(device, queue);
-        let style = Style { mode: MapMode::Terrain, water: true, lava: false, notes: None, caves: massif_core::compose::Caves::Openings, xray: false };
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false, notes: None, caves: massif_core::compose::Caves::Openings, xray: false, objects: true, density: false };
         let dim = &world.dims[0];
         let shape = GridShape::of(dim, PAGE_BUDGET).unwrap();
         renderer.set_grid(shape.stride, shape.page0, shape.pages, &shape.present).unwrap();
