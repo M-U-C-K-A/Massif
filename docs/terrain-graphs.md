@@ -250,12 +250,30 @@ starter graph builds at 16,384 × 16,384 in about 25 seconds and writes to a
 about 12 seconds and 2 GB. The floating mountains, with their two layers,
 take about 55 seconds and 8 GB at 16,384 × 16,384.
 
-## The new terrain generator (beta)
+## The Terrain Generator (1.2, experimental)
 
-Massif 1.3 brings a new terrain generator, in beta beside the one above,
-which stays as it is: turn it on in **Settings ▸ General ▸ New terrain
-generator (beta)**, and the Terrain side opens its graph instead. A world
-keeps both graphs; an older Massif opens it with its own.
+Massif 1.2 brings a new terrain generator. Its area, **Terrain Generator**,
+is what the Terrain side opens; its header says it is experimental. The
+graph editor described above stays in the area picker as **Classic graph**,
+for maps made with it; a graph of the classic editor opens in the new one
+migrated, node by node. A world keeps both graphs; an older Massif opens it
+with its own.
+
+**Composites.** A composite is a node that holds a graph of its own: double
+click it to open it (the path at the top of the graph takes you back), its
+inputs and outputs shown as two columns at its edges. Its settings are the
+ones its author exposed, each standing for settings of the nodes inside.
+Massif ships **Alpine Range** (a chain along a drawn crest, its rivers
+cutting valleys up every flank, snow above a line), **Cave System** and
+**Village Generator**; select nodes and choose **Make a composite** to gather
+them into one of your own, **Edit a copy** to change one of Massif's.
+Frames gather nodes under a title and a colour, and nest; a node can be
+bypassed, and renamed without its links changing.
+
+**Apply.** Apply writes what the Map Output carries into the map, window
+by window, as one step to undo: the ground, then caves and volumes, then
+villages and structures. It replaces what the graph covers: what was edited
+by hand there since the last Apply is written over (undo brings it back).
 
 **What it makes.** A graph ends in one **Map Output**, like Blender's
 Material Output: one node with an input for each thing the map can take —
