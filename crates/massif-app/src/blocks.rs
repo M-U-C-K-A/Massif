@@ -44,7 +44,13 @@ pub struct BlockLibrary {
     /// The sections the panel shows, for the catalogue, search and shapes
     /// they were made for.
     sections: Option<(usize, String, bool, Arc<Vec<Section>>)>,
+    /// The groups of blocks the Terrain panel offers, for the catalogue and
+    /// the choice of every block they were made for.
+    ground: Option<(usize, bool, GroundGroups)>,
 }
+
+/// Blocks by source and category, as indices into the catalogue's blocks.
+pub type GroundGroups = Arc<Vec<(String, Vec<u32>)>>;
 
 /// The instances installed here with mods with blocks. In tests, only
 /// those of the folder MASSIF_INSTANCES_DIR (or MASSIF_CONQUEST_DIR) names,
@@ -215,6 +221,23 @@ impl BlockLibrary {
         let sections = Arc::new(make_sections(&cat, needle, self.all));
         self.sections = Some((key, needle.to_owned(), self.all, sections.clone()));
         sections
+    }
+
+    /// The game's and the mods' blocks that make ground (or every block,
+    /// `all`) by source and category, made again only when the catalogue
+    /// changes: see `massif_assets::ground_groups`.
+    pub fn ground_groups(&mut self, all: bool) -> GroundGroups {
+        let Some(cat) = self.catalogue.clone() else { return Arc::default() };
+        let key = Arc::as_ptr(&cat) as usize;
+        if let Some((k, a, groups)) = &self.ground
+            && *k == key
+            && *a == all
+        {
+            return groups.clone();
+        }
+        let groups = Arc::new(massif_assets::ground_groups(&cat, all));
+        self.ground = Some((key, all, groups.clone()));
+        groups
     }
 
     /// The texture of a block's top, flat and tinted, made the first time:

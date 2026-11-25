@@ -4465,7 +4465,8 @@ enum GroupAction {
 /// whether the map's categories did.
 pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &mut Registry, solo: &mut bool, search: &mut String, blocks: &mut BlockLibrary) -> (bool, bool) {
     let pal = Palette::of(ui);
-    hint(ui, tr!("The map's terrains: what each part of the ground is made of, its top block and the layers under it. Click one to paint it; a block of the Blocks panel becomes a terrain when you paint with it."));
+    let mut sorted_imported = false;
+    hint(ui, tr!("The map's terrains: what each part of the ground is made of. Click one to paint it; the blocks of your game and mods are below, each a terrain once you paint with it."));
     let solo_changed = crate::widgets::checkbox(ui, solo, tr!("Solo"))
         .on_hover_text(tr!("Fade every other terrain on the map"))
         .changed();
@@ -4473,6 +4474,26 @@ pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &mut Registry, sol
         crate::widgets::search(ui, search, tr!("Search terrain"), (ui.available_width() - 34.0).max(80.0));
     });
     let needle = search.to_lowercase();
+    // A WorldPainter world's Imported terrains, sorted by the mod and the
+    // kind of their block once those blocks are read.
+    if let Some(cat) = blocks.catalogue.clone() {
+        let sortable = imported_sorting(reg, &cat);
+        if !sortable.is_empty()
+            && ui
+                .add(egui::Button::new(RichText::new(theme::with_icon(Icon::ArrowDownWideNarrow, &trn!("Sort {n} Imported terrain by mod and kind", "Sort {n} Imported terrains by mod and kind", n = sortable.len()))).size(11.5)).frame(false).truncate())
+                .on_hover_text(tr!("Each into the category of its block: Conquest Reforged · Stone, Minecraft · Wood…; those whose block is not read stay in Imported"))
+                .clicked()
+        {
+            for (t, group) in sortable {
+                reg.move_terrain(t, &group);
+            }
+            // Imported emptied: gone from the list.
+            if !reg.terrains.iter().any(|t| t.group == "Imported") {
+                reg.terrain_groups.retain(|g| g != "Imported");
+            }
+            sorted_imported = true;
+        }
+    }
     let names = reg.terrain_group_names();
     let rename_id = egui::Id::unique("terrain category rename");
     let mut renaming: Option<(String, String)> = ui.ctx().data(|d| d.get_temp(rename_id));
@@ -4480,6 +4501,11 @@ pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &mut Registry, sol
     let mut picked = None;
     let tile = |ui: &mut Ui, i: usize, reg: &Registry, blocks: &mut BlockLibrary, names: &[String], picked: &mut Option<u16>, actions: &mut Vec<GroupAction>, hidden: bool| {
         let selected = tools.terrain as usize == i;
+        // Out of sight (scrolled away): its room only.
+        if !ui.is_rect_visible(Rect::from_min_size(ui.cursor().min, vec2(36.0, 36.0))) {
+            ui.allocate_space(vec2(36.0, 36.0));
+            return;
+        }
         let (rect, response) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::click_and_drag());
         if response.drag_started() {
             egui::DragAndDrop::set_payload(ui.ctx(), TerrainDrag(i as u16));
@@ -4561,6 +4587,7 @@ pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &mut Registry, sol
                 }
                 r
             }
+            false if !ui.is_rect_visible(Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 16.0))) => ui.allocate_response(vec2(ui.available_width(), 16.0), Sense::hover()),
             false => {
                 let caret = if open { Icon::ChevronDown } else { Icon::ChevronRight };
                 let text = format!("{}  {}  ·  {}", theme::glyph(caret), category_name(group).to_uppercase(), members.len());
@@ -4653,10 +4680,13 @@ pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &mut Registry, sol
         }
     }
     ui.add_space(4.0);
-    if ui.add(egui::Button::new(RichText::new(theme::with_icon(Icon::FolderPlus, tr!("New category"))).size(11.5)).frame(false)).clicked() {
+    if !ui.is_rect_visible(Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 20.0))) {
+        ui.allocate_space(vec2(ui.available_width(), 20.0));
+    } else if ui.add(egui::Button::new(RichText::new(theme::with_icon(Icon::FolderPlus, tr!("New category"))).size(11.5)).frame(false)).clicked() {
         actions.push(GroupAction::NewGroup(None));
     }
-    let edited = actions.iter().any(|a| !matches!(a, GroupAction::Replace(_)));
+    let made = ground_blocks(ui, reg, blocks, &needle);
+    let mut edited = sorted_imported || actions.iter().any(|a| !matches!(a, GroupAction::Replace(_)));
     for action in actions {
         match action {
             GroupAction::Move(t, g) => reg.move_terrain(t, &g),
@@ -4683,6 +4713,20 @@ pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &mut Registry, sol
             GroupAction::Replace(t) => tools.replace_terrain = Some(t),
         }
     }
+    // A block of the game or a mod picked: a terrain of the map, in its
+    // category, painted with; a plant, a ground cover.
+    match made {
+        Some(Made::Terrain(t)) => {
+            picked = Some(t);
+            edited = true;
+        }
+        Some(Made::Cover(c)) => {
+            tools.cover = c;
+            tools.select(Tool::Cover);
+            edited = true;
+        }
+        None => {}
+    }
     ui.ctx().data_mut(|d| match &renaming {
         Some(r) => {
             d.insert_temp(rename_id, r.clone());
@@ -4700,6 +4744,126 @@ pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &mut Registry, sol
     ui.label(RichText::new(&reg.terrain(TerrainId(tools.terrain)).name).bold());
     hint(ui, &describe_terrain(reg, tools.terrain));
     (solo_changed || (*solo && picked.is_some()), edited)
+}
+
+/// The terrains of the Imported category (a WorldPainter world's) whose
+/// top block is read, with the category of that block to sort them into.
+pub fn imported_sorting(reg: &Registry, cat: &massif_assets::Catalogue) -> Vec<(u16, String)> {
+    reg.terrains
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.group == "Imported")
+        .filter_map(|(i, _)| {
+            let block = massif_assets::terrain_block(reg, cat, TerrainId(i as u16))?;
+            Some((i as u16, ground_group_name(&massif_assets::ground_group_of(cat, block))))
+        })
+        .collect()
+}
+
+/// What a block picked in the Terrain panel became.
+enum Made {
+    Terrain(u16),
+    Cover(u16),
+}
+
+/// A group of blocks' name as shown and kept: its source, then its
+/// category in the user's language (`Conquest Reforged · Pierre`).
+fn ground_group_name(group: &str) -> String {
+    match group.split_once(" · ") {
+        Some((source, category)) => format!("{source} · {}", crate::i18n::tr_name(category)),
+        None => group.to_owned(),
+    }
+}
+
+/// Most block tiles drawn in one group: a search narrows the rest.
+const GROUND_TILES: usize = 240;
+
+/// Under the map's terrains, the game's and the mods' blocks that make
+/// ground, by source and category, folded: a click paints with one, made a
+/// terrain of the map in its category the first time (a block already a
+/// terrain of the map is not listed again). **Every block** lists the
+/// others too (glass, lamps, furniture, plants), and a search looks
+/// through them all.
+fn ground_blocks(ui: &mut Ui, reg: &mut Registry, blocks: &mut BlockLibrary, needle: &str) -> Option<Made> {
+    let cat = blocks.catalogue.clone()?;
+    let pal = Palette::of(ui);
+    ui.add_space(10.0);
+    ui.add(egui::Label::new(RichText::new(format!("{}  {}", theme::glyph(Icon::Boxes), tr!("From your game and mods").to_uppercase())).size(10.5).strong().color(pal.weak)).truncate());
+    hint(ui, tr!("The blocks that make ground: click one to paint with it, and it becomes a terrain of the map in its category."));
+    let every_id = egui::Id::unique("terrain panel every block");
+    let mut every = ui.ctx().data_mut(|d| *d.get_persisted_mut_or_insert_with(every_id, || false));
+    if crate::widgets::checkbox(ui, &mut every, tr!("Every block")).on_hover_text(tr!("Also glass, lamps, furniture, plants and the other blocks that make no ground")).changed() {
+        ui.ctx().data_mut(|d| d.insert_persisted(every_id, every));
+    }
+    // A block already a terrain of the map, alone in its top layer: the
+    // terrain is listed above, not the block again.
+    let terrains: std::collections::HashSet<String> = reg.terrains.iter().filter_map(|t| t.strata.first().filter(|s| s.blocks.len() == 1).map(|s| reg.block(s.blocks[0].0).name().to_owned())).collect();
+    let groups = blocks.ground_groups(every || !needle.is_empty());
+    let mut chosen: Option<(u32, String)> = None;
+    for (group, members) in groups.iter() {
+        let name = ground_group_name(group);
+        let shown: Vec<u32> = members
+            .iter()
+            .copied()
+            .filter(|&i| {
+                let b = &cat.blocks[i as usize];
+                !terrains.contains(&b.id) && (needle.is_empty() || b.name.to_lowercase().contains(needle) || b.id.contains(needle) || name.to_lowercase().contains(needle))
+            })
+            .collect();
+        if shown.is_empty() {
+            continue;
+        }
+        let fold_id = egui::Id::unique(("terrain ground group open", group.as_str()));
+        let mut open = ui.ctx().data_mut(|d| *d.get_persisted_mut_or_insert_with(fold_id, || false)) || !needle.is_empty();
+        let caret = if open { Icon::ChevronDown } else { Icon::ChevronRight };
+        ui.add_space(4.0);
+        let r = ui.add(egui::Label::new(RichText::new(format!("{}  {}  ·  {}", theme::glyph(caret), name.to_uppercase(), shown.len())).size(10.5).bold().color(pal.weak)).sense(Sense::click()).truncate());
+        r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, open, &name));
+        if r.clicked() && needle.is_empty() {
+            open = !open;
+            ui.ctx().data_mut(|d| d.insert_persisted(fold_id, open));
+        }
+        if !open {
+            continue;
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+            for &i in shown.iter().take(GROUND_TILES) {
+                let block = &cat.blocks[i as usize];
+                let (rect, response) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::click());
+                if !ui.is_rect_visible(rect) {
+                    continue;
+                }
+                ui.painter().rect(rect, theme::TILE_RADIUS, if response.hovered() { pal.header } else { Color32::TRANSPARENT }, Stroke::new(1.0, pal.border), StrokeKind::Inside);
+                if let Some(texture) = blocks.icon(ui.ctx(), block) {
+                    let tint = if block.full_cube { Color32::WHITE } else { Color32::from_white_alpha(150) };
+                    ui.painter().image(texture, rect.shrink(4.0), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint);
+                }
+                response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &block.name));
+                if response.on_hover_text(format!("{}\n{}", block.name, block.id)).clicked() {
+                    chosen = Some((i, name.clone()));
+                }
+            }
+        });
+        if shown.len() > GROUND_TILES {
+            hint(ui, &trn!("{n} more: search to find them.", "{n} more: search to find them.", n = shown.len() - GROUND_TILES));
+        }
+    }
+    let (i, group) = chosen?;
+    let block = &cat.blocks[i as usize];
+    if !block.full_cube {
+        return Some(Made::Cover(block_cover(reg, block)));
+    }
+    let before = reg.terrains.len();
+    let t = massif_assets::block_terrain(reg, block);
+    if reg.terrains.len() > before {
+        // Straight into its category: no empty Blocks category left behind.
+        reg.terrains[t.0 as usize].group.clone_from(&group);
+        if !reg.terrain_groups.is_empty() && !reg.terrain_groups.contains(&group) {
+            reg.terrain_groups.push(group);
+        }
+    }
+    Some(Made::Terrain(t.0))
 }
 
 /// A category's name as shown: the game's own categories in the user's
@@ -5341,6 +5505,90 @@ mod tests {
                 h.run_steps(2);
                 h.render().unwrap().save(dir.join(format!("terrain-categories-{}.png", if dark { "dark" } else { "light" }))).unwrap();
             }
+        }
+    }
+
+    /// The Terrain panel offers the mods' blocks that make ground under the
+    /// map's terrains, by mod and category, folded; a click makes one a
+    /// terrain of the map in its category and paints with it, and it is
+    /// listed among the terrains from then on; Every block shows the rest
+    /// (a table, glass), and a search finds any block. Rendered with
+    /// MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn the_mods_ground_blocks_are_offered_in_terrain() {
+        use egui_kittest::kittest::Queryable;
+        use massif_assets::{Block, Category, Tint};
+        struct S {
+            tools: ToolState,
+            reg: Registry,
+            blocks: BlockLibrary,
+            search: String,
+        }
+        let block = |id: &str, name: &str, full: bool, translucent: bool, category: Category, color: [u8; 3]| Block { id: id.into(), name: name.into(), top: Some("block/x".into()), side: None, bottom: None, top_tint: Tint::None, side_tint: Tint::None, full_cube: full, translucent, tall: false, color, side_color: color, category, properties: Vec::new() };
+        let mut list = vec![
+            block("conquest:limestone", "Limestone", true, false, Category::Stone, [200, 196, 180]),
+            block("conquest:loamy_dirt", "Loamy Dirt", true, false, Category::Natural, [110, 80, 60]),
+            block("conquest:oak_table", "Oak Table", true, false, Category::Wood, [150, 110, 70]),
+            block("conquest:stained_glass", "Stained Glass", true, true, Category::Colored, [180, 200, 220]),
+        ];
+        list.sort_by(|a, b| a.id.cmp(&b.id));
+        let mods = vec![massif_assets::ModInfo { name: "Conquest Reforged".to_owned(), namespaces: vec!["conquest".to_owned()], kind: massif_assets::SourceKind::Mod, blocks: 4, ..Default::default() }];
+        let cat = massif_assets::Catalogue { version: "1.20.1".into(), source: std::path::PathBuf::new(), blocks: list, textures: Default::default(), mods, skipped: Vec::new(), definitions: Default::default(), registered: Default::default(), biomes: Vec::new(), colors: Default::default(), connected: Default::default(), stonecutting: Vec::new(), state_properties: Default::default() };
+        let mut lib = BlockLibrary::default();
+        lib.catalogue = Some(std::sync::Arc::new(cat));
+        let draw = |ui: &mut Ui, s: &mut S| {
+            crate::theme::install(ui.ctx());
+            let mut solo = false;
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                terrain_panel(ui, &mut s.tools, &mut s.reg, &mut solo, &mut s.search, &mut s.blocks);
+            });
+        };
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(320.0, 2400.0)).build_ui_state(draw, S { tools: ToolState { terrain: 1, ..ToolState::default() }, reg: Registry::vanilla(), blocks: lib, search: String::new() });
+        h.run_steps(2);
+        assert!(h.query_by_label("Limestone").is_none(), "folded at first");
+        h.get_by_label("Conquest Reforged · Stone").click();
+        h.run_steps(2);
+        h.get_by_label("Limestone").click();
+        h.run_steps(2);
+        let s = h.state();
+        let t = s.reg.terrains.iter().position(|t| t.name == "Limestone").expect("a terrain of the map") as u16;
+        assert_eq!((s.tools.tool, s.tools.terrain), (Tool::PaintTerrain, t));
+        assert_eq!(s.reg.terrains[t as usize].group, "Conquest Reforged · Stone");
+        assert_eq!(h.query_all_by_label("Conquest Reforged · Stone").count(), 1, "its category among the terrains, no more a group of blocks to make terrains of");
+        // The table and the glass are not ground: shown with Every block.
+        assert!(h.query_by_label("Conquest Reforged · Wood").is_none() && h.query_by_label("Oak Table").is_none());
+        h.get_by_label("Every block").click();
+        h.run_steps(2);
+        h.get_by_label("Conquest Reforged · Wood").click();
+        h.run_steps(2);
+        h.get_by_label("Oak Table");
+        h.get_by_label("Every block").click();
+        h.run_steps(2);
+        // A search finds any block.
+        h.state_mut().search = "glass".into();
+        h.run_steps(2);
+        h.get_by_label("Stained Glass");
+        h.state_mut().search.clear();
+        // A WorldPainter world's Imported terrain of a mod's block, sorted
+        // into its block's category in one click.
+        let s = h.state_mut();
+        let dirt = s.reg.intern_block("conquest:loamy_dirt", [110, 80, 60]);
+        s.reg.terrains.push(massif_core::registry::TerrainDef { name: "Custom 3".into(), group: "Imported".into(), color: [110, 80, 60], strata: vec![massif_core::registry::Stratum { blocks: vec![(dirt, 1)], depth: (3, 5), mix: Default::default() }], submerged_top: None, biome_hint: None });
+        h.run_steps(2);
+        h.get_by_label_contains("Sort 1 Imported terrain by mod and kind").click();
+        h.run_steps(2);
+        assert_eq!(h.state().reg.terrains.last().unwrap().group, "Conquest Reforged · Soil, sand and snow");
+        let names = h.state().reg.terrain_group_names();
+        assert!(!names.iter().any(|g| g == "Imported" || g == "Blocks"), "no empty category left: {names:?}");
+        assert!(h.query_by_label_contains("Imported terrain").is_none(), "nothing left to sort");
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from) {
+            h.state_mut().search.clear();
+            let s = h.state_mut();
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(320.0, 1500.0)).with_pixels_per_point(2.0).with_accessibility_check(false).wgpu().build_ui_state(draw, S { tools: ToolState { terrain: 1, ..ToolState::default() }, reg: s.reg.clone(), blocks: std::mem::take(&mut s.blocks), search: String::new() });
+            h.run_steps(2);
+            h.get_by_label("Conquest Reforged · Soil, sand and snow").click();
+            h.run_steps(3);
+            h.render().unwrap().save(dir.join("terrain-mod-blocks.png")).unwrap();
         }
     }
 

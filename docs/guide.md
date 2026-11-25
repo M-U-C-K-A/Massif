@@ -1425,6 +1425,26 @@ the lists without touching the map: it is listed under **Hidden**, at the
 end, where **Show in the list** brings it back. The map keeps its
 categories, their order and the hidden terrains.
 
+**Blocks of your game and mods, as terrains.** Under the map's terrains,
+**From your game and mods** lists the blocks that make ground, by source and
+category (Minecraft · Stone, Conquest Reforged · Soil, sand and snow…), each
+group folded at first: whole opaque cubes of stone, soil, wood or building,
+not glass, lamps, furniture, doors, slabs or plants. Click one to paint with
+it: it becomes a terrain of the map, in its group's category, and is listed
+among the terrains from then on (a block already a terrain of the map is
+not listed twice). **Every block** lists the others too, and a search looks
+through every block. When the mods are read, a WorldPainter world's
+**Imported** terrains are sorted in one click (**Sort … Imported terrains by
+mod and kind**, at the top of the panel) into the categories of their
+blocks; those whose block is not read stay in Imported. The Blocks panel
+still lists every block, for those who want the whole catalogue.
+
+**A WorldPainter world made of a mod's blocks.** The import report names
+the mods whose blocks the world is made of and that are not read yet, and
+offers to read them first (from an instance found on this computer, or
+**Game & mods…**): their real colours, the sorting of the Imported terrains
+and the covers of layers made the ground's own as the mod's blocks.
+
 ## Replace terrain
 
 **Edit ▸ Replace terrain…** paints every column of one terrain with

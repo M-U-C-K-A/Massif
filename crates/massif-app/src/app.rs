@@ -493,7 +493,7 @@ enum Dialog {
     WorldInfo,
     /// File ▸ Game & mods…: the game, mods and instances the blocks are
     /// read from.
-    GameAndMods,
+    GameAndMods(Option<Box<Dialog>>),
     /// The block palettes window.
     Palettes(Box<crate::palettes::PaletteEditor>),
     /// Edit ▸ Replace terrain…: the terrain replaced and the one put
@@ -4563,7 +4563,7 @@ impl MassifApp {
             Command::HomeScreen => self.open_home(Page::NewMap),
             Command::About => self.dialog = Some(Dialog::About),
             Command::WorldInfo => self.dialog = Some(Dialog::WorldInfo),
-            Command::GameAndMods => self.dialog = Some(Dialog::GameAndMods),
+            Command::GameAndMods => self.dialog = Some(Dialog::GameAndMods(None)),
             Command::CheckUpdates => {
                 // Asked for: whatever the setting and the day's answer.
                 if let Some(cache) = crate::update::default_cache() {
@@ -5441,7 +5441,7 @@ impl MassifApp {
                 scrolled(&mut cui, &mut |ui| {
                     feedback = panels::blocks_panel(ui, &mut self.tools, &mut self.doc, &mut self.blocks);
                     if std::mem::take(&mut self.blocks.open_setup) {
-                        self.dialog = Some(Dialog::GameAndMods);
+                        self.dialog = Some(Dialog::GameAndMods(None));
                     }
                 });
                 if feedback.is_some() {
@@ -7070,6 +7070,16 @@ impl MassifApp {
             Dialog::ImportReport(report, thumbnail, mut layers) => {
                 let mut save = false;
                 let mut ground = false;
+                // The mods whose blocks the world is made of and that are not
+                // read: offered first, before making covers the ground's own
+                // and sorting the Imported terrains.
+                let read = self.blocks.namespaces();
+                let mut needed: Vec<String> = self.doc.world.registry.blocks.iter().map(|b| massif_assets::namespace(b.name()).to_owned()).filter(|ns| ns != "minecraft" && !ns.is_empty() && !read.contains(ns)).collect();
+                needed.sort();
+                needed.dedup();
+                let offer = (!needed.is_empty()).then(|| self.blocks.instance_for(&needed.iter().map(String::as_str).collect::<Vec<_>>())).flatten();
+                let loading = self.blocks.is_loading();
+                let (mut use_offer, mut setup) = (false, false);
                 let response = modal(ctx, "import report").show(ctx, |ui| {
                     ui.set_width(520.0);
                     let pal = Palette::of(ui);
@@ -7085,7 +7095,26 @@ impl MassifApp {
                         ui.image((tex.id(), size * scale));
                         ui.add_space(6.0);
                     }
-                    // First of all: the covers of layer blocks, which a map of
+                    // First, the mods the world is made of and that are not read.
+                    if !needed.is_empty() {
+                        crate::widgets::well(ui, |ui| {
+                            ui.label(tr!("This world is made of the blocks of {mods}. Read them first: their real colours, the Terrain panel's sorting of the Imported terrains, and the covers below made the ground's own as the mod's blocks.", mods = needed.join(", ")));
+                            ui.horizontal_wrapped(|ui| {
+                                if loading {
+                                    crate::loader::loader(ui, 16.0);
+                                } else if let Some(found) = &offer
+                                    && ui.add(theme::primary_button(ui, tr!("Read them from {instance}", instance = found.name))).clicked()
+                                {
+                                    use_offer = true;
+                                }
+                                if ui.button(theme::with_icon(Icon::Puzzle, tr!("Set up the game and mods…"))).clicked() {
+                                    setup = true;
+                                }
+                            });
+                        });
+                        ui.add_space(6.0);
+                    }
+                    // Then the covers of layer blocks, which a map of
                     // Conquest Reforged wants as the ground's own.
                     if !layers.is_empty() {
                         ground |= layer_covers_ui(ui, &mut layers);
@@ -7206,15 +7235,23 @@ impl MassifApp {
                 if response.should_close() {
                     keep = false;
                 }
-                if ground {
-                    let chosen: Vec<massif_core::surface_layers::SurfaceCover> = layers.drain(..).filter(|l| l.1).map(|l| l.0).collect();
-                    let snapshot = self.doc.world.snapshot();
-                    self.jobs.push(Job::surface_layers(ctx, snapshot, self.doc.dim, chosen, self.doc.revision).on(self.doc.generation));
+                if use_offer && let Some(found) = &offer {
+                    self.blocks.use_instance(ctx, found, &mut self.settings.minecraft_jar, &mut self.settings.mod_jars);
                 }
-                if save {
-                    self.save(ctx, true);
-                } else if keep {
-                    self.dialog = Some(Dialog::ImportReport(report, thumbnail, layers));
+                if setup {
+                    // The report comes back once the mods are set up.
+                    self.dialog = Some(Dialog::GameAndMods(Some(Box::new(Dialog::ImportReport(report, thumbnail, layers)))));
+                } else {
+                    if ground {
+                        let chosen: Vec<massif_core::surface_layers::SurfaceCover> = layers.drain(..).filter(|l| l.1).map(|l| l.0).collect();
+                        let snapshot = self.doc.world.snapshot();
+                        self.jobs.push(Job::surface_layers(ctx, snapshot, self.doc.dim, chosen, self.doc.revision).on(self.doc.generation));
+                    }
+                    if save {
+                        self.save(ctx, true);
+                    } else if keep {
+                        self.dialog = Some(Dialog::ImportReport(report, thumbnail, layers));
+                    }
                 }
             }
             Dialog::LayerCovers(mut layers) => {
@@ -7339,11 +7376,16 @@ impl MassifApp {
                     self.dialog = Some(Dialog::Update);
                 }
             }
-            Dialog::GameAndMods => {
+            Dialog::GameAndMods(back) => {
+                // Opened by a click in another dialog: that click is not one
+                // outside this one.
+                let opened_id = Id::unique("game and mods opened");
+                let frame = ctx.cumulative_frame_nr();
+                let opened = ctx.data_mut(|d| *d.get_temp_mut_or_insert_with(opened_id, || frame));
                 let response = modal(ctx, "game and mods").show(ctx, |ui| {
                     ui.set_width(460.0);
                     ui.label(RichText::new(tr!("Game & mods")).bold().size(15.0));
-                    ui.label(RichText::new(tr!("Where the Blocks panel's blocks come from: the version of Minecraft installed here, and the mods, modpack instances and resource packs read with it. The terrains of the map are in the Terrain panel.")).color(Palette::of(ui).weak).size(11.5));
+                    ui.label(RichText::new(tr!("Where the blocks you paint with come from: the version of Minecraft installed here, and the mods, modpack instances and resource packs read with it. Those that make ground are offered in the Terrain panel, every block in the Blocks panel.")).color(Palette::of(ui).weak).size(11.5));
                     ui.add_space(8.0);
                     egui::ScrollArea::vertical().max_height(ctx.content_rect().height() * 0.6).show(ui, |ui| {
                         panels::game_and_mods(ui, &mut self.blocks, &mut self.settings.minecraft_jar, &mut self.settings.mod_jars);
@@ -7355,11 +7397,16 @@ impl MassifApp {
                         }
                     });
                 });
-                if response.should_close() {
+                if response.should_close() && frame > opened + 2 {
                     keep = false;
                 }
                 if keep && self.dialog.is_none() {
-                    self.dialog = Some(Dialog::GameAndMods);
+                    self.dialog = Some(Dialog::GameAndMods(back));
+                } else {
+                    ctx.data_mut(|d| d.remove::<u64>(opened_id));
+                    if self.dialog.is_none() {
+                        self.dialog = back.map(|b| *b);
+                    }
                 }
             }
             Dialog::WorldInfo => {
@@ -15257,7 +15304,8 @@ mod tests {
         if let Some(dir) = &dir {
             h.render().unwrap().save(dir.join("paint-terrain-picker-search.png")).unwrap();
         }
-        h.get_by_label("Red Sand").click();
+        // The picker's row, not the Terrain panel's tile of the same name.
+        h.query_all_by_label("Red Sand").find(|n| n.rect().width() > 40.0).expect("the picker's row").click();
         h.run_steps(3);
         let red_sand = h.state().doc.world.registry.terrain_by_name("Red Sand").unwrap();
         assert_eq!(h.state().tools.terrain, red_sand.0, "picked");
@@ -19624,7 +19672,7 @@ mod tests {
         // Its chip, in File ▸ Game & mods….
         h.state_mut().command(&ctx, Command::GameAndMods);
         h.run_steps(3);
-        assert!(h.query_by_label_contains("Conquest Reforged").is_some(), "its chip");
+        assert!(h.query_all_by_label_contains("Conquest Reforged").count() >= 1, "its chip");
         h.state_mut().dialog = None;
         h.run_steps(2);
         let bricks = cat.block("conquest:old_red_bricks").unwrap().clone();

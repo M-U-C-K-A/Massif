@@ -1977,6 +1977,9 @@ pub fn block_terrain(reg: &mut Registry, block: &Block) -> TerrainId {
         .terrains
         .iter()
         .position(|t| t.group == BLOCK_GROUP && t.strata.first().and_then(|s| s.blocks.first()).is_some_and(|b| reg.blocks[b.0.index()].name() == block.id))
+        // One the user sorted into a category of their own, or a
+        // WorldPainter world's of that block alone: the same terrain.
+        .or_else(|| reg.terrains.iter().position(|t| t.strata.first().is_some_and(|s| s.blocks.len() == 1 && reg.blocks[s.blocks[0].0.index()].name() == block.id)))
     {
         return TerrainId(i as u16);
     }
@@ -2021,6 +2024,56 @@ pub fn block_terrain(reg: &mut Registry, block: &Block) -> TerrainId {
         biome_hint,
     });
     TerrainId((reg.terrains.len() - 1) as u16)
+}
+
+/// Whether a block makes ground: a whole, opaque cube one would build a
+/// hill of — not glass, a lamp, a piece of furniture, a machine, a door,
+/// a plant or leaves, which a terrain of the map would only clutter.
+pub fn is_ground(b: &Block) -> bool {
+    if !b.full_cube || b.translucent || b.tall || b.category == Category::Plants || b.top.is_none() && b.side.is_none() {
+        return false;
+    }
+    const NOT_GROUND: [&str; 58] = [
+        "glass", "lamp", "lantern", "light", "glowstone", "door", "trapdoor", "table", "chair", "stool", "bench", "shelf", "bookshelf", "barrel", "chest", "crate", "furnace", "smoker",
+        "workbench", "crafting", "loom", "anvil", "ladder", "sign", "bed", "banner", "candle", "pane", "bars", "fence", "gate", "wall", "slab", "stairs", "button", "plate", "lever",
+        "torch", "redstone", "piston", "observer", "dispenser", "dropper", "hopper", "spawner", "command", "jigsaw", "structure", "beacon", "cabinet", "drawer", "rack", "frame",
+        "window", "curtain", "carpet", "leaves", "tnt",
+    ];
+    let n = b.id.rsplit(':').next().unwrap_or(&b.id);
+    !n.split('_').any(|w| NOT_GROUND.contains(&w))
+}
+
+/// The group a block is offered in: its source (the game, or the mod that
+/// has its namespace) then its category, `Conquest Reforged · Stone`.
+pub fn ground_group_of(cat: &Catalogue, b: &Block) -> String {
+    let ns = namespace(&b.id);
+    let source = if ns == "minecraft" {
+        MINECRAFT.to_owned()
+    } else {
+        cat.mods.iter().find(|m| m.kind == SourceKind::Mod && m.namespaces.iter().any(|n| n == ns)).map_or_else(|| display_name(ns), |m| m.name.clone())
+    };
+    format!("{source} · {}", b.category.label())
+}
+
+/// The game's and each mod's blocks that make ground (see [`is_ground`]),
+/// or every block with `all`, by source and category, each group named
+/// `<source> · <category>` (`Conquest Reforged · Stone`): what the Terrain
+/// panel offers beside the map's terrains. Indices into `cat.blocks`.
+pub fn ground_groups(cat: &Catalogue, all: bool) -> Vec<(String, Vec<u32>)> {
+    let mut groups: Vec<(String, Vec<u32>)> = Vec::new();
+    for (i, b) in cat.blocks.iter().enumerate() {
+        if !(all || is_ground(b)) {
+            continue;
+        }
+        let name = ground_group_of(cat, b);
+        match groups.iter_mut().find(|g| g.0 == name) {
+            Some(g) => g.1.push(i as u32),
+            None => groups.push((name, vec![i as u32])),
+        }
+    }
+    // The game's first, then each mod's, each by its categories' order.
+    groups.sort_by_key(|g| (!g.0.starts_with(MINECRAFT), g.0.split(" · ").next().unwrap_or("").to_owned(), Category::ALL.iter().position(|c| g.0.ends_with(c.label())).unwrap_or(99)));
+    groups
 }
 
 /// A terrain of one block state typed by hand (any mod's block, with its
@@ -2142,6 +2195,22 @@ pub fn flat_icon(cat: &Catalogue, block: &Block, size: usize) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    /// What makes ground: a whole opaque cube of stone, soil, wood or
+    /// building, not glass, a lamp, a table, a door, a slab or a plant; the
+    /// groups name the source then the category, the game's first.
+    #[test]
+    fn ground_blocks_are_told_from_the_rest() {
+        let block = |id: &str, full: bool, translucent: bool, category: Category| Block { id: id.into(), name: id.rsplit(':').next().unwrap().into(), top: Some("block/x".into()), side: None, bottom: None, top_tint: Tint::None, side_tint: Tint::None, full_cube: full, translucent, tall: false, color: [1, 2, 3], side_color: [1, 2, 3], category, properties: Vec::new() };
+        let ground = ["conquest:limestone_cobble", "conquest:loamy_dirt", "minecraft:andesite", "conquest:oak_planks"];
+        let not = [block("conquest:oak_table", true, false, Category::Wood), block("conquest:stained_glass", true, true, Category::Colored), block("conquest:fern", false, false, Category::Plants), block("conquest:limestone_slab", false, false, Category::Stone), block("conquest:iron_lamp", true, false, Category::Building), block("minecraft:oak_leaves", true, false, Category::Plants)];
+        for id in ground {
+            assert!(super::is_ground(&block(id, true, false, Category::Stone)), "{id}");
+        }
+        for b in &not {
+            assert!(!super::is_ground(b), "{}", b.id);
+        }
+    }
+
     /// A mod chosen in a CurseForge instance on any drive: the game it
     /// plays on is found beside it, under the launcher's Install/versions,
     /// newest first; snapshots and other folders are left.

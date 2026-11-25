@@ -3819,9 +3819,7 @@
   "many": "Найдено {n} сборок модпаков: «Игра и моды…» прочитает одну.",
   "other": "Найдено {n} сборки модпаков: «Игра и моды…» прочитает одну."
  },
- "Where the Blocks panel's blocks come from: the version of Minecraft installed here, and the mods, modpack instances and resource packs read with it. The terrains of the map are in the Terrain panel.": "Откуда берутся блоки панели «Блоки»: установленная здесь версия Minecraft и моды, сборки модпаков и ресурспаки, прочитанные с ней. Местности карты — в панели «Местность».",
  "The version of Minecraft, the mods, the modpack instances and the resource packs whose blocks you paint with": "Версия Minecraft, моды, сборки модпаков и ресурспаки, блоками которых вы рисуете",
- "The map's terrains: what each part of the ground is made of, its top block and the layers under it. Click one to paint it; a block of the Blocks panel becomes a terrain when you paint with it.": "Местности карты: из чего сделана каждая часть земли, её верхний блок и слои под ним. Щёлкните местность, чтобы рисовать ею; блок из панели «Блоки» становится местностью, когда вы им рисуете.",
  "Import Minecraft World…": "Импортировать мир Minecraft…",
  "A Minecraft Java world: its land, water, biomes and plants, and what stands on it": "Мир Minecraft Java: рельеф, вода, биомы и растения, и всё, что на нём стоит",
  "Import a Minecraft world…": "Импортировать мир Minecraft…",
@@ -3881,5 +3879,26 @@
  "Every column of the map painted with the first terrain is painted with the second.": "Каждый столбец карты с первой местностью перекрашивается второй.",
  "One step to undo. The terrain replaced stays among the map's terrains; hide it from the Terrain panel's lists if you no longer want it.": "Отменяется одним шагом. Заменённая местность остаётся среди местностей карты; скройте её из списков панели «Местность», если она больше не нужна.",
  "Replace it…": "Заменить…",
- "Paint every column of it with another terrain": "Перекрасить все её столбцы другой местностью"
+ "Paint every column of it with another terrain": "Перекрасить все её столбцы другой местностью",
+ "From your game and mods": "Из вашей игры и модов",
+ "The blocks that make ground: click one to paint with it, and it becomes a terrain of the map in its category.": "Блоки, из которых получается земля: щёлкните блок, чтобы рисовать им, и он станет местностью карты в своей категории.",
+ "Also glass, lamps, furniture, plants and the other blocks that make no ground": "А также стекло, лампы, мебель, растения и прочие блоки, из которых не получается земля",
+ "{n} more: search to find them.": {
+  "one": "Ещё {n}: найдите поиском.",
+  "few": "Ещё {n}: найдите поиском.",
+  "many": "Ещё {n}: найдите поиском.",
+  "other": "Ещё {n}: найдите поиском."
+ },
+ "Sort {n} Imported terrains by mod and kind": {
+  "one": "Разложить {n} импортированную местность по модам и видам",
+  "few": "Разложить {n} импортированные местности по модам и видам",
+  "many": "Разложить {n} импортированных местностей по модам и видам",
+  "other": "Разложить {n} импортированной местности по модам и видам"
+ },
+ "Each into the category of its block: Conquest Reforged · Stone, Minecraft · Wood…; those whose block is not read stay in Imported": "Каждая — в категорию своего блока: Conquest Reforged · Камень, Minecraft · Дерево…; те, чей блок не прочитан, остаются в «Импортированных»",
+ "This world is made of the blocks of {mods}. Read them first: their real colours, the Terrain panel's sorting of the Imported terrains, and the covers below made the ground's own as the mod's blocks.": "Этот мир сделан из блоков {mods}. Сначала прочитайте их: настоящие цвета, сортировка импортированных местностей в панели «Местность» и покровы ниже, ставшие землёй из блоков мода.",
+ "Read them from {instance}": "Прочитать из {instance}",
+ "The map's terrains: what each part of the ground is made of. Click one to paint it; the blocks of your game and mods are below, each a terrain once you paint with it.": "Местности карты: из чего сделана каждая часть земли. Щёлкните местность, чтобы рисовать ею; блоки вашей игры и модов — ниже, каждый становится местностью, когда вы им рисуете.",
+ "Where the blocks you paint with come from: the version of Minecraft installed here, and the mods, modpack instances and resource packs read with it. Those that make ground are offered in the Terrain panel, every block in the Blocks panel.": "Откуда берутся блоки, которыми вы рисуете: установленная здесь версия Minecraft и моды, сборки модпаков и ресурспаки, прочитанные с ней. Блоки, из которых получается земля, — в панели «Местность», все блоки — в панели «Блоки».",
+ "Set up the game and mods…": "Настроить игру и моды…"
 }

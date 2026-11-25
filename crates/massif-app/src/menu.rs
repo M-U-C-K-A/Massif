@@ -590,7 +590,6 @@ mod tests {
                 "Save Point…",
                 "World Information…",
                 "Import Report…",
-
                 "Game & mods…",
                 "Export Height Map…",
                 "Export Region…",

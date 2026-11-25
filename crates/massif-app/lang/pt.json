@@ -3831,9 +3831,7 @@
   "one": "{n} instância de modpack encontrada aqui: Jogo e mods… a lê.",
   "other": "{n} instâncias de modpacks encontradas aqui: Jogo e mods… lê uma."
  },
- "Where the Blocks panel's blocks come from: the version of Minecraft installed here, and the mods, modpack instances and resource packs read with it. The terrains of the map are in the Terrain panel.": "De onde vêm os blocos do painel Blocos: a versão do Minecraft instalada aqui e os mods, instâncias de modpacks e pacotes de recursos lidos com ela. Os terrenos do mapa estão no painel Terreno.",
  "The version of Minecraft, the mods, the modpack instances and the resource packs whose blocks you paint with": "A versão do Minecraft, os mods, as instâncias de modpacks e os pacotes de recursos com cujos blocos você pinta",
- "The map's terrains: what each part of the ground is made of, its top block and the layers under it. Click one to paint it; a block of the Blocks panel becomes a terrain when you paint with it.": "Os terrenos do mapa: de que cada parte do solo é feita, o bloco de cima e as camadas abaixo. Clique num para pintá-lo; um bloco do painel Blocos vira terreno quando você pinta com ele.",
  "Import Minecraft World…": "Importar mundo do Minecraft…",
  "A Minecraft Java world: its land, water, biomes and plants, and what stands on it": "Um mundo do Minecraft Java: o seu terreno, água, biomas e plantas, e o que está sobre ele",
  "Import a Minecraft world…": "Importar um mundo do Minecraft…",
@@ -3893,5 +3891,22 @@
  "Every column of the map painted with the first terrain is painted with the second.": "Cada coluna do mapa pintada com o primeiro terreno é pintada com o segundo.",
  "One step to undo. The terrain replaced stays among the map's terrains; hide it from the Terrain panel's lists if you no longer want it.": "Um passo para desfazer. O terreno substituído continua entre os terrenos do mapa; oculte-o das listas do painel Terreno se já não o quiser.",
  "Replace it…": "Substituí-lo…",
- "Paint every column of it with another terrain": "Pintar cada coluna dele com outro terreno"
+ "Paint every column of it with another terrain": "Pintar cada coluna dele com outro terreno",
+ "From your game and mods": "Do seu jogo e dos seus mods",
+ "The blocks that make ground: click one to paint with it, and it becomes a terrain of the map in its category.": "Os blocos que formam solo: clique num para pintar com ele, e ele torna-se um terreno do mapa na sua categoria.",
+ "Also glass, lamps, furniture, plants and the other blocks that make no ground": "Também vidro, lâmpadas, móveis, plantas e os outros blocos que não formam solo",
+ "{n} more: search to find them.": {
+  "one": "Mais {n}: pesquise para o encontrar.",
+  "other": "Mais {n}: pesquise para os encontrar."
+ },
+ "Sort {n} Imported terrains by mod and kind": {
+  "one": "Ordenar {n} terreno importado por mod e tipo",
+  "other": "Ordenar {n} terrenos importados por mod e tipo"
+ },
+ "Each into the category of its block: Conquest Reforged · Stone, Minecraft · Wood…; those whose block is not read stay in Imported": "Cada um na categoria do seu bloco: Conquest Reforged · Pedra, Minecraft · Madeira…; os de bloco não lido ficam em Importado",
+ "This world is made of the blocks of {mods}. Read them first: their real colours, the Terrain panel's sorting of the Imported terrains, and the covers below made the ground's own as the mod's blocks.": "Este mundo é feito dos blocos de {mods}. Leia-os primeiro: as cores reais, a ordenação dos terrenos importados no painel Terreno e as coberturas abaixo tornadas solo com os blocos do mod.",
+ "Read them from {instance}": "Lê-los de {instance}",
+ "The map's terrains: what each part of the ground is made of. Click one to paint it; the blocks of your game and mods are below, each a terrain once you paint with it.": "Os terrenos do mapa: de que cada parte do solo é feita. Clique num para pintá-lo; os blocos do seu jogo e mods estão abaixo, cada um vira terreno quando pinta com ele.",
+ "Where the blocks you paint with come from: the version of Minecraft installed here, and the mods, modpack instances and resource packs read with it. Those that make ground are offered in the Terrain panel, every block in the Blocks panel.": "De onde vêm os blocos com que pinta: a versão do Minecraft instalada aqui e os mods, instâncias de modpacks e pacotes de recursos lidos com ela. Os que formam solo aparecem no painel Terreno, todos os blocos no painel Blocos.",
+ "Set up the game and mods…": "Configurar o jogo e os mods…"
 }

@@ -165,6 +165,8 @@ The **Terrain** panel lists the map's terrains by category, each folding at a cl
 
 **The Eyedropper tool** (⌥Y, in the Navigate row of the Tools panel) works as WorldPainter's: click the 2D map or a 3D view, and what is there to paint with is listed by the pointer: its terrain, its biome (painted, or the one the land calls for) and every layer painted there (ground cover, trees, under the trees, tree size, pockets, annotation, combined layer). Click one to paint with it: its tool is chosen with it ready (Paint terrain, Paint biome, the layer's tool). Where there is only a terrain, it is picked at once. **Shift-click** takes the terrain, height and water there at once and goes back to the tool you had. `Esc`, or a click elsewhere, puts the list away. Alt-click while painting still picks what the tool in hand paints.
 
+Under the map's terrains, **From your game and mods** lists the blocks that make ground (no glass, lamps, furniture, doors, slabs or plants), by source and category, folded; click one to paint with it, and it becomes a terrain of the map in its category. **Every block** shows the others, and a search finds any block. Once the mods are read, **Sort … Imported terrains by mod and kind** sorts a WorldPainter world's Imported terrains into their blocks' categories in one click. A world made of a mod's blocks says so in its import report, which offers to read the mod first.
+
 **Edit ▸ Replace terrain…** paints every column of one terrain with another, over the map or in the selection, in one step to undo: to merge two terrains of the same block, such as a WorldPainter world's Imported one and a mod's.
 
 ## Block palettes

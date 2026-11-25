@@ -647,22 +647,13 @@ fn the_eyedropper_tool_paints_with_what_it_picks() {
 /// to paint with (rendered at 1× and 2×).
 #[test]
 fn the_game_and_mods_are_set_up_in_their_window() {
-
-// -------------------------------------------------------- Replace terrain --
-
-/// Edit ▸ Replace terrain…: every column of one terrain painted with
-/// another, the terrain replaced chosen by its menu or the one in hand, in
-/// one step to undo (Jack: merge an imported terrain into a mod's own).
-/// Rendered at 1× and 2×.
-#[test]
-fn a_terrain_is_replaced_by_another() {
     use egui_kittest::kittest::Queryable;
     for ppp in densities() {
         let mut h = app(ppp, Tool::PaintTerrain);
         let ctx = h.ctx.clone();
         h.state_mut().command(&ctx, Command::GameAndMods);
         h.run_steps(3);
-        assert!(matches!(h.state().dialog, Some(Dialog::GameAndMods)));
+        assert!(matches!(h.state().dialog, Some(Dialog::GameAndMods(None))));
         for label in ["Add mods…", "Instance…", "Choose…"] {
             assert!(h.query_by_label_contains(label).is_some(), "{label}");
         }
@@ -694,6 +685,18 @@ fn the_blocks_panel_says_what_it_is_for() {
     assert!(lib.open_setup);
 }
 
+// -------------------------------------------------------- Replace terrain --
+
+/// Edit ▸ Replace terrain…: every column of one terrain painted with
+/// another, the terrain replaced chosen by its menu or the one in hand, in
+/// one step to undo (Jack: merge an imported terrain into a mod's own).
+/// Rendered at 1× and 2×.
+#[test]
+fn a_terrain_is_replaced_by_another() {
+    use egui_kittest::kittest::Queryable;
+    for ppp in densities() {
+        let mut h = app(ppp, Tool::PaintTerrain);
+        let ctx = h.ctx.clone();
         let reg = &h.state().doc.world.registry;
         let (stone, gravel) = (reg.terrain_by_name("Stone").unwrap().0, reg.terrain_by_name("Gravel").unwrap().0);
         h.state_mut().command(&ctx, Command::ReplaceTerrain(Some(stone)));
@@ -717,5 +720,30 @@ fn the_blocks_panel_says_what_it_is_for() {
         h.state_mut().command(&ctx, Command::Undo);
         h.run_steps(2);
         assert_eq!(terrain_at(h.state().doc.dimension(), 300, 300), Some(stone), "one step undoes it");
+    }
+}
+
+/// A WorldPainter world made of a mod's blocks: its import report names the
+/// mod not read yet and offers to read it first; Game & mods… opens the
+/// window, and closing it comes back to the report (rendered at 1× and 2×).
+#[test]
+fn the_import_report_offers_to_read_the_worlds_mods() {
+    use egui_kittest::kittest::Queryable;
+    for ppp in densities() {
+        let mut h = app(ppp, Tool::PaintTerrain);
+        h.state_mut().doc.world.registry.intern_block("conquest:loamy_dirt", [110, 80, 60]);
+        let report = massif_legacy::ImportReport { name: "Arda".into(), ..Default::default() };
+        h.state_mut().dialog = Some(Dialog::ImportReport(Box::new(report), None, Vec::new()));
+        h.run_steps(3);
+        assert!(h.query_by_label_contains("This world is made of the blocks of conquest").is_some());
+        save(&mut h, "import-reads-mods", ppp);
+        // Through accessibility: a pointer's click is caught over the
+        // report in the test's window.
+        h.get_by_label_contains("Set up the game and mods…").click_accesskit();
+        h.run_steps(3);
+        assert!(matches!(h.state().dialog, Some(Dialog::GameAndMods(_))));
+        h.get_by_label("Close").click();
+        h.run_steps(3);
+        assert!(matches!(h.state().dialog, Some(Dialog::ImportReport(..))), "back to the report");
     }
 }
