@@ -11,7 +11,6 @@
 //! the land's true height. [`surface_covers`] finds the covers that are such
 //! layers; [`to_ground`] turns those chosen into ground.
 
-use crate::compose::block_top;
 use crate::coords::TilePos;
 use crate::registry::{Registry, Stratum, TerrainDef, TerrainId};
 use crate::shapes::{Known, Shape};
@@ -51,22 +50,46 @@ impl SurfaceCover {
 }
 
 /// The full block a layer block state is of, and its eighths: the block
-/// whose layers ([`crate::shapes::family`]) it is. `None` for anything else.
+/// whose layers or slab ([`crate::shapes::family`]) it is, as the mods'
+/// recipes or the names say (Conquest's `grass_block_layer` is the game's
+/// grass block's, its `limestone_slab[layers=3]` three eighths of stone). A
+/// block of layers with no full block of its own is whole at eight of them
+/// (`dark_mud_slab[layers=8,type=bottom]`). `None` for anything else.
 pub fn full_block_of(state: &str, known: &Known) -> Option<(String, u8)> {
     let (name, props) = state.split_once('[').map_or((state, ""), |(n, p)| (n, p.trim_end_matches(']')));
-    let eighths = props.split(',').find_map(|kv| kv.trim().strip_prefix("layers=")).and_then(|v| v.parse::<u8>().ok()).unwrap_or(1).clamp(1, 8);
+    let prop = |k: &str| props.split(',').find_map(|kv| kv.trim().strip_prefix(k).and_then(|r| r.strip_prefix('=')));
     if name == "minecraft:snow" {
+        let eighths = prop("layers").and_then(|v| v.parse::<u8>().ok()).unwrap_or(1).clamp(1, 8);
         return Some(("minecraft:snow_block".into(), eighths));
     }
-    let (ns, path) = name.split_once(':')?;
-    let base = path.strip_suffix("_layer").or_else(|| path.strip_suffix("_layers"))?;
-    let candidates = [format!("{ns}:{base}"), format!("{ns}:{base}_block"), format!("minecraft:{base}"), format!("minecraft:{base}_block")];
-    if let Some(c) = candidates.into_iter().find(|c| known.exists(c) && crate::shapes::family(c, known).get(Shape::Layers) == Some(name)) {
-        return Some((c, eighths));
+    let (shape, stem) = crate::block_families::shape_of(name)?;
+    let layered = prop("layers").is_some() || known.has_property(name, "layers");
+    let eighths = match (shape, prop("layers").and_then(|v| v.parse::<u8>().ok()), prop("type")) {
+        (Shape::Layers, n, _) => n.unwrap_or(1),
+        (Shape::Slab, _, Some("top")) => return None,
+        (Shape::Slab, _, Some("double")) => 8,
+        (Shape::Slab, Some(n), _) if layered => n,
+        (Shape::Slab, None, _) if layered => 8,
+        (Shape::Slab, _, _) => 4,
+        _ => return None,
+    }
+    .clamp(1, 8);
+    let ns = name.split_once(':').map_or("minecraft", |p| p.0);
+    let own = |c: &str| known.exists(c) && crate::shapes::family(c, known).get(shape) == Some(name);
+    if let Some(full) = known.families.full_block_of(name).filter(|c| known.exists(c)) {
+        return Some((full.to_owned(), eighths));
+    }
+    let candidates = [format!("{ns}:{stem}"), format!("{ns}:{stem}_block"), format!("{ns}:{stem}s"), format!("minecraft:{stem}"), format!("minecraft:{stem}_block"), format!("minecraft:{stem}s")];
+    if let Some(full) = candidates.into_iter().find(|c| own(c)) {
+        return Some((full, eighths));
     }
     // Layers with no full block of their own (Conquest's grass and sand,
-    // grassy gravel…): eight of them are one.
-    (known.exists(name) && crate::shapes::family(name, known).get(Shape::Layers) == Some(name)).then(|| (format!("{name}[layers=8]"), eighths))
+    // its dark mud's slab): eight of them are one.
+    match shape {
+        Shape::Layers if known.exists(name) => Some((format!("{name}[layers=8]"), eighths)),
+        Shape::Slab if layered && known.exists(name) => Some((format!("{name}[layers=8,type=bottom]"), eighths)),
+        _ => None,
+    }
 }
 
 /// The map's ground covers whose plants are layers of full blocks, all or
@@ -74,7 +97,7 @@ pub fn full_block_of(state: &str, known: &Known) -> Option<(String, u8)> {
 /// known, the mod read or not.
 pub fn surface_covers(reg: &Registry, known: &Known) -> Vec<SurfaceCover> {
     let merged = crate::shapes::with_map_blocks(reg, known.mods);
-    let known = Known { vanilla: known.vanilla, mods: merged.as_ref().unwrap_or(known.mods) };
+    let known = Known { vanilla: known.vanilla, mods: merged.as_ref().unwrap_or(known.mods), families: known.families };
     let mut out = Vec::new();
     for (k, def) in reg.covers.iter().enumerate() {
         if def.removed || def.changes_water() || def.underwater || def.plants.is_empty() {
@@ -99,7 +122,8 @@ pub struct Grounded {
 }
 
 /// Dimension `dim` of the map with the covers `chosen` turned into ground:
-/// on each column one grows on, the ground raised by its eighths, its
+/// on each column one grows on, the ground raised by its thickness (its
+/// blocks', the last one by its eighths) over its precise height, its
 /// terrain one whose top block is the full block (the column's own when it
 /// already is, else one made of that block over the column's terrain, once
 /// for each cover and block), the column smoothed with layers, the cover
@@ -136,6 +160,7 @@ pub fn to_ground(dimension: &Dimension, meta: &WorldMeta, registry: &Registry, c
             let (x, z) = (ox + (i & 127) as i32, oz + (i >> 7) as i32);
             let Some(def) = reg.cover(cover.cover) else { continue };
             let color = def.color;
+            let thickness = def.height[0].max(1) as f32;
             let Some(growth) = def.growth(x, z, seed) else { continue };
             let Some(Some((full, eighths))) = cover.plants.get(growth.plant) else { continue };
             let base = tile.terrain.get(i);
@@ -153,9 +178,13 @@ pub fn to_ground(dimension: &Dimension, meta: &WorldMeta, registry: &Registry, c
                     (reg.terrains.len() - 1) as u16
                 })
             });
-            // The ground's surface is a whole block: its layers lie on it.
-            let top = block_top(tile.top.get(i)) as f32;
-            tile.top.set(i, top + *eighths as f32 / 8.0);
+            // The cover lies on the ground, as many blocks thick as it is,
+            // the last one its eighths: WorldPainter's smooth covers from the
+            // ground's precise height (whole layers, the land's eighths), as
+            // the ground now goes by eighths.
+            let h = tile.top.get(i);
+            let thick = thickness - 1.0 + *eighths as f32 / 8.0;
+            tile.top.set(i, ((h + thick) * 8.0).round() / 8.0);
             tile.terrain.set(i, terrain);
             if tile.cover.get(i) == cover.cover {
                 let next = tile.stacked.pop_cover(i).unwrap_or(0);
@@ -163,9 +192,7 @@ pub fn to_ground(dimension: &Dimension, meta: &WorldMeta, registry: &Registry, c
             } else {
                 tile.stacked.remove(i, crate::layer_stack::Kind::Cover, cover.cover);
             }
-            if *eighths < 8 {
-                tile.slabs.set(i, crate::shapes::value(None, false));
-            }
+            tile.slabs.set(i, crate::shapes::value(None, false));
             columns += 1;
         }
         tile.compact();
@@ -208,7 +235,7 @@ mod tests {
     use crate::tile::{NO_FLUID, Tile};
 
     fn known(mods: &HashMap<String, Vec<String>>) -> Known<'_> {
-        Known { vanilla: &|id: &str| matches!(id, "minecraft:grass_block" | "minecraft:snow_block" | "minecraft:snow" | "minecraft:dirt"), mods }
+        Known { vanilla: &|id: &str| matches!(id, "minecraft:grass_block" | "minecraft:snow_block" | "minecraft:snow" | "minecraft:dirt" | "minecraft:stone"), mods, families: crate::block_families::none() }
     }
 
     fn mods() -> HashMap<String, Vec<String>> {
@@ -283,7 +310,7 @@ mod tests {
     fn covers_of_layers_are_found_without_the_mod_mixed_and_stacked() {
         use crate::layer_stack::{Entry, Kind};
         let none = HashMap::new();
-        let k = Known { vanilla: &|id: &str| matches!(id, "minecraft:grass_block" | "minecraft:snow_block" | "minecraft:snow" | "minecraft:dirt"), mods: &none };
+        let k = Known { vanilla: &|id: &str| matches!(id, "minecraft:grass_block" | "minecraft:snow_block" | "minecraft:snow" | "minecraft:dirt"), mods: &none, families: crate::block_families::none() };
         let mut world = crate::generate::generate(&crate::generate::GenParams { tiles_x: 1, tiles_z: 1, ..Default::default() });
         let reg = &mut world.registry;
         let grass = reg.terrain_by_name("Grass").unwrap().0;
@@ -323,5 +350,47 @@ mod tests {
         let top = crate::shapes::top_block(&g.registry, TerrainId(t.terrain.get(i))).unwrap();
         assert_eq!(g.registry.block(top).state, "conquest:grass_and_sand_layer[layers=8]");
         assert!(!g.registry.covers[mixed as usize - 1].removed && g.registry.covers[sand as usize - 1].removed);
+    }
+
+    /// Jack's ArdaCraft covers, as WorldPainter lays them smooth: whole
+    /// layers (the import's `layers=8`), from the ground's precise height,
+    /// as thick as the cover: the ground rises by the cover's thickness from
+    /// its precise height, by eighths, not by a whole block over its top.
+    /// A cover of Conquest slabs by eighths (`brown_moss_slab`) is found too,
+    /// and a shape the mod's recipes give another name (`limestone_slab` is
+    /// stone's) knows its full block by them.
+    #[test]
+    fn covers_rise_from_the_precise_height_and_slabs_count() {
+        let mut mods = mods();
+        mods.insert("conquest:brown_moss".into(), vec![]);
+        mods.insert("conquest:brown_moss_slab".into(), vec!["layers".into(), "type".into()]);
+        mods.insert("conquest:dark_mud_slab".into(), vec!["layers".into(), "type".into()]);
+        mods.insert("conquest:limestone_slab".into(), vec!["layers".into(), "type".into()]);
+        let name_of = |id: &str| (id == "minecraft:stone").then(|| "Limestone".to_owned());
+        let families = crate::block_families::BlockFamilies::from_recipes([("minecraft:stone", "conquest:limestone_slab")], &name_of);
+        let k = Known { families: &families, ..known(&mods) };
+        assert_eq!(full_block_of("conquest:brown_moss_slab[layers=3,type=bottom]", &k), Some(("conquest:brown_moss".into(), 3)));
+        assert_eq!(full_block_of("conquest:brown_moss_slab[layers=8,type=top]", &k), None, "a slab hanging from the block over it");
+        assert_eq!(full_block_of("conquest:limestone_slab[layers=8,type=bottom]", &k), Some(("minecraft:stone".into(), 8)));
+        assert_eq!(full_block_of("conquest:dark_mud_slab[layers=2,type=bottom]", &k), Some(("conquest:dark_mud_slab[layers=8,type=bottom]".into(), 2)), "no full block of its own");
+        let mut world = crate::generate::generate(&crate::generate::GenParams { tiles_x: 1, tiles_z: 1, ..Default::default() });
+        let grass = world.registry.terrain_by_name("Grass").unwrap().0;
+        let mut c = CoverDef::new("Forest floor", [90, 140, 60], &[("conquest:grass_block_layer[layers=8]", 1)], 1.0);
+        c.soil_only = false;
+        let floor = world.registry.add_cover(c);
+        let found: Vec<SurfaceCover> = surface_covers(&world.registry, &k).into_iter().filter(|c| c.cover == floor).collect();
+        let pos = world.dims[0].ground().positions().next().unwrap();
+        let mut tile = Tile::ground(70.0, grass, NO_FLUID);
+        for i in 0..crate::TILE_AREA {
+            // WorldPainter heights 68.7 and 69.3: tops at 69.7 and 70.3,
+            // both on the top block at 69.
+            tile.top.set(i, if i % 2 == 0 { 69.7 } else { 70.3 });
+            tile.cover.set(i, floor);
+        }
+        world.dims[0].ground_mut().insert(pos, tile);
+        let g = to_ground(&world.dims[0], &world.meta, &world.registry, &found);
+        let t = g.dimension.ground().view(pos).unwrap();
+        // WorldPainter: round((h + 1 − intHeight) × 8) eighths from intHeight + 1.
+        assert_eq!((t.top.get(0), t.top.get(1)), (70.75, 71.25), "a block over the precise height, by eighths");
     }
 }

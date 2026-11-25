@@ -3439,7 +3439,8 @@ impl MassifApp {
     /// ground's own: of those `only` names (an import's), or all of them.
     fn layer_covers(&self, only: Option<&[u16]>) -> Vec<(massif_core::surface_layers::SurfaceCover, bool)> {
         let mods = crate::blocks::mod_blocks();
-        let known = massif_core::shapes::Known { vanilla: &crate::blocks::vanilla_exists, mods: &mods };
+        let families = crate::blocks::families();
+        let known = massif_core::shapes::Known { vanilla: &crate::blocks::vanilla_exists, mods: &mods, families: &families };
         massif_core::surface_layers::surface_covers(&self.doc.world.registry, &known).into_iter().filter(|c| only.is_none_or(|o| o.contains(&c.cover))).map(|c| (c, true)).collect()
     }
 
@@ -6883,6 +6884,7 @@ impl MassifApp {
                         target: form.target.clone(),
                         selection_only: form.has_selection && form.selection_only,
                         mod_blocks: crate::blocks::mod_block_ids(self.blocks.catalogue.as_deref()),
+                        families: crate::blocks::block_families(self.blocks.catalogue.as_deref()),
                         ..ExportOptions::default()
                     };
                     // Keeping to the selection, players appear in it.
@@ -13909,7 +13911,7 @@ mod tests {
         // A catalogue with only the mod's name in it, as in
         // block_palettes_in_the_app.
         let mods = vec![massif_assets::ModInfo { name: "Conquest Reforged".to_owned(), namespaces: vec!["conquest".to_owned()], kind: massif_assets::SourceKind::Mod, ..Default::default() }];
-        let cat = massif_assets::Catalogue { version: "1.20.1".into(), source: PathBuf::new(), blocks: Vec::new(), textures: Default::default(), mods, skipped: Vec::new(), definitions: Default::default(), registered: Default::default(), biomes: Vec::new(), colors: Default::default(), connected: Default::default() };
+        let cat = massif_assets::Catalogue { version: "1.20.1".into(), source: PathBuf::new(), blocks: Vec::new(), textures: Default::default(), mods, skipped: Vec::new(), definitions: Default::default(), registered: Default::default(), biomes: Vec::new(), colors: Default::default(), connected: Default::default(), stonecutting: Vec::new(), state_properties: Default::default() };
         h.state_mut().blocks.catalogue = Some(std::sync::Arc::new(cat));
 
         // Into the whole map.
@@ -20177,7 +20179,7 @@ mod tests {
         if !h.state().blocks.namespaces().iter().any(|n| n == "conquest") {
             assert!(!h.state().all_palettes().iter().any(|p| p.name == "Conquest Reforged"), "not offered while the mod is not read");
             let mods = vec![massif_assets::ModInfo { name: "Conquest Reforged".to_owned(), namespaces: vec!["conquest".to_owned()], kind: massif_assets::SourceKind::Mod, ..Default::default() }];
-            let cat = massif_assets::Catalogue { version: "1.20.1".into(), source: PathBuf::new(), blocks: Vec::new(), textures: Default::default(), mods, skipped: Vec::new(), definitions: Default::default(), registered: Default::default(), biomes: Vec::new(), colors: Default::default(), connected: Default::default() };
+            let cat = massif_assets::Catalogue { version: "1.20.1".into(), source: PathBuf::new(), blocks: Vec::new(), textures: Default::default(), mods, skipped: Vec::new(), definitions: Default::default(), registered: Default::default(), biomes: Vec::new(), colors: Default::default(), connected: Default::default(), stonecutting: Vec::new(), state_properties: Default::default() };
             h.state_mut().blocks.catalogue = Some(std::sync::Arc::new(cat));
         }
         assert!(h.state().blocks.namespaces().iter().any(|n| n == "conquest"), "{:?}", h.state().blocks.error);
@@ -22758,7 +22760,7 @@ mod tests {
             biome("regions_unexplored:alpha_grove", "Alpha Grove", "Regions Unexplored"),
             biome("biomesoplenty:mystic_grove", "Mystic Grove", "Biomes O' Plenty"),
         ];
-        let cat = massif_assets::Catalogue { version: "1.21.1".into(), source: PathBuf::new(), blocks: Vec::new(), textures: Default::default(), mods: Vec::new(), skipped: Vec::new(), definitions: Default::default(), registered: Default::default(), biomes, colors: Default::default(), connected: Default::default() };
+        let cat = massif_assets::Catalogue { version: "1.21.1".into(), source: PathBuf::new(), blocks: Vec::new(), textures: Default::default(), mods: Vec::new(), skipped: Vec::new(), definitions: Default::default(), registered: Default::default(), biomes, colors: Default::default(), connected: Default::default(), stonecutting: Vec::new(), state_properties: Default::default() };
         h.state_mut().blocks.catalogue = Some(std::sync::Arc::new(cat));
         let mut areas = Vec::new();
         h.state().layout.current().root.areas(&mut areas);

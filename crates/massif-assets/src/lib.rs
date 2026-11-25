@@ -459,6 +459,14 @@ pub struct Catalogue {
     /// The connected textures (OptiFine's CTM, Fusion's), by the key of
     /// the texture they replace: see [`connected`].
     pub connected: Arc<connected::Table>,
+    /// The mods' stonecutter recipes, a block in, a block out (by id):
+    /// which shapes are cut from which block, for
+    /// [`massif_core::block_families`].
+    pub stonecutting: Vec<(String, String)>,
+    /// The properties of the mods' blocks, by id, as their block state
+    /// files name them (`layers`, `type`, `waterlogged`): what a mod's
+    /// blocks have when no list of them says it.
+    pub state_properties: HashMap<String, Vec<String>>,
 }
 
 /// A biome as the game or a mod defines it.
@@ -566,6 +574,67 @@ fn biome_key(name: &str) -> Option<String> {
     (!ns.is_empty() && !path.is_empty()).then(|| format!("{ns}:{path}"))
 }
 
+/// The names of the properties a block state file's variants or parts
+/// name, in their order.
+fn state_property_names(state: &Value) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut add = |k: &str| {
+        if !k.is_empty() && !out.iter().any(|o| o == k) {
+            out.push(k.to_owned());
+        }
+    };
+    if let Some(Value::Object(variants)) = state.get("variants") {
+        for key in variants.keys() {
+            key.split(',').filter_map(|kv| kv.split_once('=')).for_each(|(k, _)| add(k));
+        }
+    }
+    if let Some(Value::Array(parts)) = state.get("multipart") {
+        for part in parts {
+            let Some(when) = part.get("when") else { continue };
+            let list: Vec<&Value> = match when.get("OR").or_else(|| when.get("AND")) {
+                Some(Value::Array(a)) => a.iter().collect(),
+                _ => vec![when],
+            };
+            for w in list {
+                if let Value::Object(o) = w {
+                    o.keys().for_each(|k| add(k));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Whether a file is a recipe: `data/<ns>/recipes/…` (`recipe/` since
+/// 1.21).
+fn is_recipe(name: &str) -> bool {
+    name.strip_prefix("data/").and_then(|r| r.split_once('/')).is_some_and(|(_, r)| (r.starts_with("recipes/") || r.starts_with("recipe/")) && r.ends_with(".json"))
+}
+
+/// A stonecutter recipe's block in and block out, by id.
+pub fn stonecutting(bytes: &[u8]) -> Option<(String, String)> {
+    // Most recipes are not the stonecutter's: not parsed.
+    if !bytes.windows(12).any(|w| w == b"stonecutting") {
+        return None;
+    }
+    let v: Value = serde_json::from_slice(bytes).ok()?;
+    if v.get("type")?.as_str()? != "minecraft:stonecutting" {
+        return None;
+    }
+    let id = |s: &str| if s.contains(':') { s.to_owned() } else { format!("minecraft:{s}") };
+    let input = match v.get("ingredient")? {
+        Value::Object(o) => o.get("item")?.as_str()?.to_owned(),
+        Value::String(s) => s.clone(),
+        _ => return None,
+    };
+    let output = match v.get("result")? {
+        Value::String(s) => s.clone(),
+        Value::Object(o) => o.get("item").or_else(|| o.get("id"))?.as_str()?.to_owned(),
+        _ => return None,
+    };
+    Some((id(&input), id(&output)))
+}
+
 /// `data/<ns>/tags/block/<path>.json` (`tags/blocks/` before 1.21) →
 /// `<ns>:<path>`.
 fn block_tag_key(name: &str) -> Option<String> {
@@ -624,7 +693,7 @@ fn folder_files(dir: &Path) -> Vec<FolderFile> {
                 stack.push(p);
             } else if let Ok(rel) = p.strip_prefix(dir) {
                 let name = rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
-                if (biome_key(&name).is_some() || block_tag_key(&name).is_some()) && let Ok(bytes) = std::fs::read(&p) {
+                if (biome_key(&name).is_some() || block_tag_key(&name).is_some() || is_recipe(&name)) && let Ok(bytes) = std::fs::read(&p) {
                     out.push((name, bytes));
                 }
             }
@@ -1359,6 +1428,7 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
     // Every biome file and every block tag file, by archive.
     let mut biome_files: Vec<(String, usize, String)> = Vec::new();
     let mut tag_files: HashMap<String, Vec<(usize, String)>> = HashMap::new();
+    let mut recipe_files: Vec<(usize, String)> = Vec::new();
     let mut mod_infos = Vec::new();
     for (k, (a, mod_path)) in archives.iter().enumerate() {
         let names: Vec<String> = a.names().map(str::to_owned).collect();
@@ -1389,6 +1459,8 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
                 biome_files.push((id, k, n.clone()));
             } else if let Some(tag) = block_tag_key(n) {
                 tag_files.entry(tag).or_default().push((k, n.clone()));
+            } else if k > 0 && is_recipe(n) {
+                recipe_files.push((k, n.clone()));
             } else if n.starts_with("assets/") && n.ends_with("/lang/en_us.json") && n.matches('/').count() == 3 {
                 // A mod's names for its blocks, its biomes and its creative
                 // tabs; the game's for its biomes.
@@ -1468,18 +1540,24 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
     // two blocks high.
     // A tall block's upper half too: a tall plant's lower half may be a
     // model of its own where its upper one is the game's cross.
-    let mut states: Vec<(String, Option<String>, bool, Option<String>)> = state_files
+    // Its id, first model, whether it is two blocks high, its upper half's
+    // model, and its properties' names.
+    type StateInfo = (String, Option<String>, bool, Option<String>, Vec<String>);
+    let mut states: Vec<StateInfo> = state_files
         .into_par_iter()
         .filter_map(|(id, (k, n))| {
             let state = json(&archives[k].0, &n)?;
             let tall = two_halves(&state);
-            Some((id, first_model(&state), tall, tall.then(|| upper_model(&state)).flatten()))
+            let props = if namespace(&id) == "minecraft" { Vec::new() } else { state_property_names(&state) };
+            Some((id, first_model(&state), tall, tall.then(|| upper_model(&state)).flatten(), props))
         })
         .collect();
     states.sort_by(|a, b| a.0.cmp(&b.0));
+    // The mods' blocks' properties, as their block states name them.
+    let state_properties: HashMap<String, Vec<String>> = states.iter_mut().filter(|s| !s.4.is_empty()).map(|s| (s.0.clone(), std::mem::take(&mut s.4))).collect();
     // Those models and their parents, a generation at a time, read in
     // parallel.
-    let firsts: Vec<Option<String>> = states.iter().map(|(_, first, _, _)| first.clone()).collect();
+    let firsts: Vec<Option<String>> = states.iter().map(|(_, first, _, _, _)| first.clone()).collect();
     let mut raw: HashMap<String, Value> = HashMap::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut wanted: Vec<String> = firsts.iter().flatten().chain(states.iter().filter_map(|s| s.3.as_ref())).map(|m| key(m)).collect();
@@ -1502,7 +1580,7 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
     let mut blocks: Vec<Block> = states
         .iter()
         .zip(&firsts)
-        .map(|((id, _, tall, upper), first)| {
+        .map(|((id, _, tall, upper, _), first)| {
             let model = first.as_ref().map(|m| models.resolve(m)).unwrap_or_default();
             let particle = model.textures.get("particle").and_then(|_| model.texture("#particle"));
             let tint = tint_of(id);
@@ -1717,7 +1795,14 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
     for (dir, _) in &folders {
         mod_infos.push(ModInfo { name: dir.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(), path: dir.clone(), kind: SourceKind::Pack, ..Default::default() });
     }
+    // The mods' stonecutter recipes: which shapes are cut from which block.
+    let mut stonecutting: Vec<(String, String)> = rayon::iter::ParallelIterator::filter_map(rayon::iter::IntoParallelRefIterator::par_iter(&recipe_files), |(k, n)| stonecutting(&archives[*k].0.read(n)?.ok()?)).collect();
+    for (_, files) in &folders {
+        stonecutting.extend(files.iter().filter(|(n, _)| is_recipe(n)).filter_map(|(_, bytes)| self::stonecutting(bytes)));
+    }
     Ok(Catalogue {
+        stonecutting,
+        state_properties,
         version: version.to_owned(),
         source: path.to_owned(),
         blocks,

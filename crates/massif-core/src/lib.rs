@@ -66,6 +66,7 @@ pub mod river;
 pub mod road;
 pub mod rules;
 pub mod selection;
+pub mod block_families;
 pub mod shapes;
 pub mod surface_layers;
 pub mod stamps;

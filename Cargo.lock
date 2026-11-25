@@ -2147,6 +2147,7 @@ dependencies = [
  "libc",
  "massif-assets",
  "massif-core",
+ "massif-format",
  "massif-legacy",
  "massif-structures",
  "rayon",

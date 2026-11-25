@@ -2306,3 +2306,90 @@ fn a_test_export_writes_its_regions_as_the_whole_export() {
     let _ = std::fs::remove_dir_all(&part);
     let _ = std::fs::remove_dir_all(temp_dir("test-cancel"));
 }
+
+/// Smooth terrain with Conquest Reforged's families, as its recipes link
+/// them: the game's stone is smoothed by eighths with the mod's
+/// `limestone_slab` (the mod's name for stone), black terracotta with its
+/// `black_hardened_clay_slab`, the mod's brown moss (which has a slab by
+/// eighths and no layers) by its slab's eighths; ferns growing on grass keep
+/// the layers under them, the ferns standing on them.
+#[test]
+fn smooth_terrain_uses_the_mods_block_families() {
+    use massif_core::registry::{CoverDef, Mix, Stratum, TerrainDef, TerrainId};
+    let mut world = generate(&GenParams { tiles_x: 1, tiles_z: 1, landform: Landform::Hills, seed: 3, ..GenParams::default() });
+    world.meta.ores.on = false;
+    world.meta.smooth.on = true;
+    let terrain = |world: &mut massif_core::World, name: &str, block: &str| {
+        let reg = &mut world.registry;
+        let b = reg.intern_block(block, [128, 128, 128]);
+        reg.terrains.push(TerrainDef { name: name.into(), group: "Test".into(), color: [128, 128, 128], strata: vec![Stratum { blocks: vec![(b, 1)], depth: (3, 5), mix: Mix::Grain }], submerged_top: None, biome_hint: None });
+        TerrainId((reg.terrains.len() - 1) as u16)
+    };
+    let stone = world.registry.terrain_by_name("Stone").unwrap();
+    let grass = world.registry.terrain_by_name("Grass").unwrap();
+    let clay = terrain(&mut world, "Black terracotta", "minecraft:black_terracotta");
+    let moss = terrain(&mut world, "Brown moss", "conquest:brown_moss");
+    let ferns = world.registry.add_cover(CoverDef::new("Ferns", [60, 120, 40], &[("minecraft:fern", 1)], 1.0));
+    let meadow = world.registry.add_cover(CoverDef::new("Meadow grass", [60, 120, 40], &[("conquest:common_meadow_grass[layers=8]", 1)], 1.0));
+    let pos = world.dims[0].ground().positions().next().unwrap();
+    let (ox, oz) = pos.origin();
+    let tile = world.dims[0].ground_mut().tile_mut(pos).unwrap();
+    for i in 0..massif_core::TILE_AREA {
+        let (x, z) = (ox + (i % 128) as i32, oz + (i / 128) as i32);
+        // Five eighths over the top block's bottom at 63 everywhere.
+        tile.top.set(i, 63.6);
+        tile.fluid.set(i, massif_core::NO_FLUID);
+        let t = match z - oz {
+            ..20 => stone,
+            20..40 => clay,
+            40..60 => moss,
+            _ => grass,
+        };
+        tile.terrain.set(i, t.0);
+        tile.cover.set(i, match z - oz {
+            ..80 => 0,
+            80..104 => ferns,
+            _ => meadow,
+        });
+        tile.objects.set(i, 0);
+        let _ = x;
+    }
+    let props = |p: &str| p.split(',').map(String::from).collect::<Vec<_>>();
+    let mods: std::collections::HashMap<String, Vec<String>> = [
+        ("conquest:limestone_slab", "layers,type,waterlogged"),
+        ("conquest:black_hardened_clay_slab", "layers,type,waterlogged"),
+        ("conquest:brown_moss", ""),
+        ("conquest:brown_moss_slab", "layers,type,waterlogged"),
+        ("conquest:grass_block_layer", "layers"),
+        ("conquest:common_meadow_grass", "layers"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_owned(), if v.is_empty() { Vec::new() } else { props(v) }))
+    .collect();
+    let names = [("minecraft:stone", "Limestone"), ("minecraft:black_terracotta", "Black Hardened Clay")];
+    let name_of = |id: &str| names.iter().find(|n| n.0 == id).map(|n| n.1.to_owned());
+    let recipes = [("minecraft:stone", "conquest:limestone_slab"), ("minecraft:black_terracotta", "conquest:black_hardened_clay_slab"), ("conquest:brown_moss", "conquest:brown_moss_slab"), ("minecraft:grass_block", "conquest:grass_block_layer")];
+    let families = massif_core::block_families::BlockFamilies::from_recipes(recipes, &name_of);
+    let options = ExportOptions { target: Target::release("1.20.1").unwrap(), mod_blocks: std::sync::Arc::new(mods), families: std::sync::Arc::new(families), ..ExportOptions::default() };
+    let dir = temp_dir("smooth-families");
+    export(&world.snapshot(), &dir, &options, &Progress::default()).unwrap();
+    let mut r = Reader::new(&dir);
+    let (x, z) = (ox + 64, oz);
+    let has = |s: &str, parts: &[&str]| parts.iter().all(|p| s.contains(p));
+    let s = r.state(x, 63, z + 10);
+    assert!(has(&s, &["conquest:limestone_slab", "layers=5", "type=bottom"]), "stone by eighths: {s}");
+    let s = r.state(x, 63, z + 30);
+    assert!(has(&s, &["conquest:black_hardened_clay_slab", "layers=5"]), "black terracotta: {s}");
+    let s = r.state(x, 63, z + 50);
+    assert!(has(&s, &["conquest:brown_moss_slab", "layers=5"]), "brown moss by its slab's eighths: {s}");
+    let s = r.state(x, 63, z + 70);
+    assert!(has(&s, &["conquest:grass_block_layer", "layers=5"]), "grass: {s}");
+    // Under the ferns: the layers, the ferns on them.
+    let s = r.state(x, 63, z + 90);
+    assert!(has(&s, &["conquest:grass_block_layer", "layers=5"]), "grass under ferns: {s}");
+    assert_eq!(r.block(x, 64, z + 90), "minecraft:fern");
+    // Conquest's plants sit as high as the layers under them.
+    let s = r.state(x, 64, z + 110);
+    assert!(has(&s, &["conquest:common_meadow_grass", "layers=5"]), "meadow grass on five eighths: {s}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

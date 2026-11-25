@@ -71,6 +71,9 @@ pub struct ExportOptions {
     /// properties: Smooth terrain's partial blocks are found among them and
     /// the game's.
     pub mod_blocks: std::sync::Arc<std::collections::HashMap<String, Vec<String>>>,
+    /// The shapes the mods' recipes link to full blocks: Smooth terrain
+    /// finds a block's layers and slabs among them too.
+    pub families: std::sync::Arc<massif_core::block_families::BlockFamilies>,
 }
 
 impl Default for ExportOptions {
@@ -95,6 +98,7 @@ impl Default for ExportOptions {
             regions: None,
             target: Target::default(),
             mod_blocks: Default::default(),
+            families: Default::default(),
         }
     }
 }
@@ -152,7 +156,7 @@ pub fn export(
         .dims
         .get(options.dimension)
         .ok_or_else(|| ExportError::Unsupported("no such dimension".into()))?;
-    let ctx = ExportContext::with_mods(world, dim, &options.target, &options.mod_blocks).map_err(ExportError::Unsupported)?;
+    let ctx = ExportContext::with_mods(world, dim, &options.target, &options.mod_blocks, &options.families).map_err(ExportError::Unsupported)?;
 
     // Group the map's tiles by region file.
     let mut regions: HashMap<(i32, i32), Vec<TilePos>> = HashMap::new();

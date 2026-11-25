@@ -1729,7 +1729,9 @@ grass as sand makes the smoothing follow.
 - **Layers** (eighths of a block, as snow's): the land's height between two
   blocks picks how many, in place of the top block or over it.
 - **Slabs**: a half step, by the same height — by eighths for a mod's slabs
-  that have them (Conquest Reforged's).
+  that have them (Conquest Reforged's). A block whose slab goes by eighths
+  but has no layers (Conquest's brown moss, dark mud) takes its slab where
+  layers are asked for.
 - **Stairs**: at the foot of a one-block step, a stair facing it; in an
   inner corner an inner stair, at an outer corner an outer one.
 - **Vertical slabs**, at the foot of a cliff of two blocks or more, against
@@ -1741,16 +1743,26 @@ block has none in the game or the mods read. Those you change are in bold;
 the others take the defaults of their block, from the game (slabs and stairs
 for stone, bricks and planks, layers for snow) and from the mods' profiles —
 Conquest Reforged's gives its soils, sands and gravels layers and its rock
-and masonry the whole range. **Back to the defaults** forgets the changes;
+and masonry the whole range. A block no rule names takes its height in
+layers or slabs, where it has them. **Back to the defaults** forgets the changes;
 **Apply** is one step to undo.
 
 The pieces are found by name, as the Blocks panel finds the shapes of a
 block, among the blocks of the version exported to and of the mods read: a
 mod's profile adds its suffixes as data (`_layer`, `_vertical_slab`,
 `_corner_slab`…), in its own namespace or for the game's blocks (Conquest's
-`grass_block_layer` for the game's grass). A block without a piece stays
-whole. A piece only goes in the air or in still water over the top block (in
-water it is waterlogged), never under a plant, snow or an object.
+`grass_block_layer` for the game's grass). The mods' stonecutter recipes say
+the rest: which block each shape is cut from, so that a shape a mod names
+otherwise is found too — Conquest calls the game's stone Limestone and cuts it
+into `limestone_slab`, its black terracotta is Black Hardened Clay with a
+`black_hardened_clay_slab`. A slab by eighths from them wins over the game's
+half slab (stone is smoothed by eighths of limestone slab when Conquest is
+read). Only a block's own shapes count: a recipe that cuts sand into grass and
+sand layers makes another block, not sand's layers. A block without a piece
+stays whole. A piece only goes in the air or in still water over the top block
+(in water it is waterlogged), never under an object. Under a ground cover's
+plants (or snow), the land keeps its height in layers or slabs and the plants
+stand on them, as on WorldPainter's layers.
 
 The **Smoothing** brush (Decor group) paints over the map's setting: **On**
 here, **Off** here, or **A slab** of your choice at the steps with its

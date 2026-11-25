@@ -254,6 +254,12 @@ impl Converter {
                 if thickness == 0 {
                     return Vec::new();
                 }
+                // A smooth cover lays its blocks' layers by the ground's
+                // precise height, `thickness` blocks over it, whatever
+                // `layers` its blocks say: kept whole (8), the eighths are
+                // the land's (see massif_core::surface_layers).
+                let smooth = arena.field(key, "smooth").and_then(|v| arena.bool(v)).unwrap_or(false);
+                let blocks = if smooth && thickness > 0 { blocks.into_iter().map(|(state, n)| (whole_layers(&state), n)).collect() } else { blocks };
                 let cover = GroundCover { name, blocks, thickness };
                 if self.lay_covers {
                     let mut def = cover_def(&cover);
@@ -1182,6 +1188,14 @@ pub fn dig_painted_rivers(dim: &mut Dimension, tiles: &[(TilePos, &Vec<u8>)], re
         let rect = massif_core::coords::BlockRect::new(lo.x * 128 - 1, lo.z * 128 - 1, (hi.x + 1) * 128 + 1, (hi.z + 1) * 128 + 1);
         massif_core::water::seal_level(dim.ground_mut(), rect, &|x, z| dug.get(&(x, z)).copied().unwrap_or(f32::MIN), &|x, z| river(x, z), i16::MIN);
     }
+}
+
+/// A block state with a `layers` property made whole (`layers=8`); others
+/// as they are.
+pub fn whole_layers(state: &str) -> String {
+    let Some((name, props)) = state.split_once('[') else { return state.to_owned() };
+    let props: Vec<String> = props.trim_end_matches(']').split(',').map(|kv| if kv.trim().starts_with("layers=") { "layers=8".to_owned() } else { kv.to_owned() }).collect();
+    format!("{name}[{}]", props.join(","))
 }
 
 /// A custom ground cover as a ground cover of Massif: its blocks, one

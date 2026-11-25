@@ -54,9 +54,10 @@ impl SmoothForm {
         let mut used: Vec<TerrainId> = (0..counts.len()).filter(|&k| counts[k] > 0).map(|k| TerrainId(k as u16)).collect();
         used.sort_by_key(|t| std::cmp::Reverse(counts[t.index()]));
         let mods = crate::blocks::mod_blocks();
-        let known = massif_core::shapes::Known { vanilla: &crate::blocks::vanilla_exists, mods: &mods };
+        let families = crate::blocks::families();
+        let known = massif_core::shapes::Known { vanilla: &crate::blocks::vanilla_exists, mods: &mods, families: &families };
         let has = (0..reg.terrains.len())
-            .map(|k| massif_core::shapes::top_block(reg, TerrainId(k as u16)).map_or(ShapeSet::NONE, |b| massif_core::shapes::family(reg.block(b).name(), &known).shapes()))
+            .map(|k| massif_core::shapes::top_block(reg, TerrainId(k as u16)).map_or(ShapeSet::NONE, |b| massif_core::shapes::usable(ShapeSet::of(&Shape::ALL), &massif_core::shapes::family(reg.block(b).name(), &known))))
             .collect();
         Self { settings, used, all: false, has }
     }

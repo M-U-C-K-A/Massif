@@ -17,6 +17,7 @@ serde_json.workspace = true
 massif-structures.workspace = true
 massif-assets.workspace = true
 massif-legacy.workspace = true
+massif-format.workspace = true
 fastanvil = { version = "0.32", default-features = false }
 fastnbt = "2.6"
 libc = "0.2"

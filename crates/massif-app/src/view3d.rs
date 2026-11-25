@@ -339,7 +339,8 @@ fn smooth_pieces(dim: &Dimension, reg: &Registry, tile: TilePos, grid: &mut Grid
         return Vec::new();
     }
     let mods = crate::blocks::mod_blocks();
-    let known = massif_core::shapes::Known { vanilla: &crate::blocks::vanilla_exists, mods: &mods };
+    let families = crate::blocks::families();
+        let known = massif_core::shapes::Known { vanilla: &crate::blocks::vanilla_exists, mods: &mods, families: &families };
     let mut families: HashMap<u16, massif_core::shapes::Family> = HashMap::new();
     let (cx, cz) = tile.origin();
     let n = TILE_SIZE as usize;
@@ -349,18 +350,25 @@ fn smooth_pieces(dim: &Dimension, reg: &Registry, tile: TilePos, grid: &mut Grid
         let (x, z) = (cx + i as i32, cz + j as i32);
         let Some(block) = c.block.or_else(|| top_block(reg, c.terrain)) else { continue };
         let f = families.entry(block.0).or_insert_with(|| family(reg.block(block).name(), &known));
-        let may = match c.block {
-            Some(_) => ShapeSet::of(&[Shape::Slab, Shape::Stairs]),
-            None => settings.shapes_of(reg, c.terrain),
-        }
-        .and(f.shapes());
-        let Some(piece) = choose(&c, may, f.slab_layers) else { continue };
+        let mut may = massif_core::shapes::usable(
+            match c.block {
+                Some(_) => ShapeSet::of(&[Shape::Slab, Shape::Stairs]),
+                None => settings.shapes_of(reg, c.terrain),
+            },
+            f,
+        );
         // Only on the ground's top, in the air (as the export: never under
-        // an object or a level over it).
+        // an object or a level over it); under a cover's plants, its height
+        // only, in the cover's colour.
         let cell = grid.cell(x, z);
+        let cover = reg.cover(grid.cover[cell]);
+        if cover.is_some() {
+            may = may.and(ShapeSet::of(&[Shape::Layers, Shape::Slab]));
+        }
+        let Some(piece) = choose(&c, may, f.slab_layers) else { continue };
         let (a, b) = (grid.offsets[cell] as usize, grid.offsets[cell + 1] as usize);
         let Some(last) = grid.spans[a..b].last().copied() else { continue };
-        if last.y1 != c.y1 || last.color.is_some() || grid.cover[cell] != 0 {
+        if last.y1 != c.y1 || last.color.is_some() {
             continue;
         }
         if piece.replaces {
@@ -370,7 +378,7 @@ fn smooth_pieces(dim: &Dimension, reg: &Registry, tile: TilePos, grid: &mut Grid
                 continue;
             }
         }
-        let (color, mat) = (reg.block(block).color, material(block.0 as u32));
+        let (color, mat) = (cover.map_or(reg.block(block).color, |d| d.color), material(block.0 as u32));
         out.push((i, j, piece.y, piece.kind.eighths(), color, mat));
     }
     out
@@ -8326,6 +8334,66 @@ mod gradient_shots {
             game_look(&device, &queue, &world, &cat, camera, size).save(dir.join(format!("3d-smooth-{tag}-off-{ppp}.png"))).unwrap();
             set_smooth(&massif_core::shapes::SmoothSettings { on: true, ..Default::default() });
             game_look(&device, &queue, &world, &cat, camera, size).save(dir.join(format!("3d-smooth-{tag}-on-{ppp}.png"))).unwrap();
+        }
+        set_smooth(&massif_core::shapes::SmoothSettings::default());
+    }
+
+    /// Smooth terrain over Conquest Reforged's ground, on a slope
+    /// (MASSIF_SNAPSHOT_DIR, Minecraft and MASSIF_CONQUEST_JAR): the game's
+    /// grass with meadow grass growing on half of it, the game's stone
+    /// (Conquest's limestone), its dirt (Loamy Dirt) and Conquest's brown
+    /// moss, which has a slab by eighths and no layers. Off; on, the shapes
+    /// found by name only (before); on, with the mod's recipes (after).
+    #[test]
+    fn smooth_conquest_families_in_3d_renders() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from) else {
+            return;
+        };
+        let Some((_, Some(cat))) = shots::catalogues() else {
+            eprintln!("needs Minecraft and MASSIF_CONQUEST_JAR: skipping");
+            return;
+        };
+        let shared = std::sync::Arc::new(cat.clone());
+        crate::blocks::note_catalogue(Some(&shared));
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("no GPU adapter: skipping");
+            return;
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+        let mut world = generate(&GenParams { tiles_x: 2, tiles_z: 2, landform: Landform::Hills, seed: 21, ..GenParams::default() });
+        let mut terrain = |id: &str| {
+            let reg = &mut world.registry;
+            let b = reg.intern_block(id, [128, 128, 128]);
+            reg.terrains.push(massif_core::registry::TerrainDef { name: id.into(), group: "Test".into(), color: [128, 128, 128], strata: vec![massif_core::registry::Stratum { blocks: vec![(b, 1)], depth: (3, 5), mix: massif_core::registry::Mix::Grain }], submerged_top: None, biome_hint: None });
+            (reg.terrains.len() - 1) as u16
+        };
+        let (dirt, moss) = (terrain("minecraft:dirt"), terrain("conquest:brown_moss"));
+        let (grass, stone) = (world.registry.terrain_by_name("Grass").unwrap().0, world.registry.terrain_by_name("Stone").unwrap().0);
+        let meadow = world.registry.add_cover(massif_core::registry::CoverDef::new("Meadow grass", [70, 130, 50], &[("conquest:common_meadow_grass[layers=8]", 1)], 0.6));
+        massif_assets::apply_colors(&mut world.registry, &cat);
+        let quarter = Brush { strength: 1.0, ..Brush::symmetric(BrushShape::Square, Profile::Constant, 32.0) };
+        edit(&mut world, |e| {
+            ops::paint_terrain(e, &quarter, -32.0, -32.0, TerrainId(grass), 1);
+            ops::paint_terrain(e, &quarter, 32.0, -32.0, TerrainId(stone), 2);
+            ops::paint_terrain(e, &quarter, -32.0, 32.0, TerrainId(dirt), 3);
+            ops::paint_terrain(e, &quarter, 32.0, 32.0, TerrainId(moss), 4);
+        });
+        edit(&mut world, |e| ops::paint_cover(e, &Brush { strength: 1.0, ..Brush::symmetric(BrushShape::Square, Profile::Constant, 16.0) }, -48.0, -32.0, meadow, 5));
+        let h = ops::height_at(&world.dims[0], 0, 0, 0, Surface::Top).unwrap_or(70.0) as f64;
+        let camera = Camera { target: [0.0, h, 0.0], yaw: 0.75, pitch: 0.5, distance: 70.0 };
+        let families = crate::blocks::families();
+        for (scale, ppp) in [(1, "1x"), (2, "2x")] {
+            let size = [1200 * scale, 760 * scale];
+            set_smooth(&massif_core::shapes::SmoothSettings::default());
+            game_look(&device, &queue, &world, &cat, camera, size).save(dir.join(format!("3d-conquest-families-off-{ppp}.png"))).unwrap();
+            set_smooth(&massif_core::shapes::SmoothSettings { on: true, ..Default::default() });
+            crate::blocks::set_families(Default::default());
+            game_look(&device, &queue, &world, &cat, camera, size).save(dir.join(format!("3d-conquest-families-by-name-{ppp}.png"))).unwrap();
+            crate::blocks::set_families(families.clone());
+            set_smooth(&massif_core::shapes::SmoothSettings { on: false, ..Default::default() });
+            set_smooth(&massif_core::shapes::SmoothSettings { on: true, ..Default::default() });
+            game_look(&device, &queue, &world, &cat, camera, size).save(dir.join(format!("3d-conquest-families-recipes-{ppp}.png"))).unwrap();
         }
         set_smooth(&massif_core::shapes::SmoothSettings::default());
     }

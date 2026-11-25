@@ -92,6 +92,10 @@ pub struct ExportContext<'a> {
     /// layer of snow, which a plant takes the place of (WorldPainter's
     /// plants do).
     snowy: Vec<bool>,
+    /// The plants with a `layers` property (Conquest Reforged's, which sit
+    /// that many eighths high, on the layers under them): of each of their
+    /// states, the same with `layers` 1 to 8.
+    plant_layers: HashMap<u16, [u16; 8]>,
     /// The states of each object's palette as it stands each way: index
     /// `turn + 4` when mirrored, `turn` otherwise; [`SKIP`] for a block the
     /// version has nothing like. Empty for objects no layer uses.
@@ -151,8 +155,7 @@ pub struct ExportContext<'a> {
 /// water (the same state twice for a block that holds no water).
 #[derive(Debug, Clone)]
 struct Pieces {
-    shapes: massif_core::shapes::ShapeSet,
-    slab_layers: bool,
+    family: massif_core::shapes::Family,
     states: HashMap<massif_core::shapes::Kind, [u16; 2]>,
 }
 
@@ -160,13 +163,14 @@ impl<'a> ExportContext<'a> {
     /// Fails with a description if the registry or the build limits cannot be
     /// exported.
     pub fn new(world: &'a World, dim: &Dimension, target: &Target) -> Result<Self, String> {
-        Self::with_mods(world, dim, target, &HashMap::new())
+        Self::with_mods(world, dim, target, &HashMap::new(), massif_core::block_families::none())
     }
 
-    /// [`Self::new`], knowing the blocks of the mods read (`mods`, by id):
-    /// the slabs and stairs that smooth the land's steps are found among
-    /// them and the version's own.
-    pub fn with_mods(world: &'a World, dim: &Dimension, target: &Target, mods: &HashMap<String, Vec<String>>) -> Result<Self, String> {
+    /// [`Self::new`], knowing the blocks of the mods read (`mods`, by id)
+    /// and the shapes their recipes link to full blocks (`families`): the
+    /// layers, slabs and stairs that smooth the land are found among them
+    /// and the version's own.
+    pub fn with_mods(world: &'a World, dim: &Dimension, target: &Target, mods: &HashMap<String, Vec<String>>, families: &massif_core::block_families::BlockFamilies) -> Result<Self, String> {
         let reg = &world.registry;
         let era = target.era();
         let (min_y, max_y) = target.heights(dim.min_y, dim.max_y);
@@ -219,6 +223,7 @@ impl<'a> ExportContext<'a> {
         let first_plant = states.len();
         let mut frosted = Vec::new();
         let mut snowy = Vec::new();
+        let mut plant_layers: HashMap<u16, [u16; 8]> = HashMap::new();
         for def in &reg.covers {
             // A cover of blocks laid on the ground (a custom ground cover)
             // is solid, its own colour on the map.
@@ -261,6 +266,20 @@ impl<'a> ExportContext<'a> {
                 };
                 frosted.resize(states.len() - first_plant, frost);
                 snowy.resize(states.len() - first_plant, short == "snow");
+                // A plant that sits on layers: each height, for Smooth
+                // terrain's layers under it.
+                if era != Era::Numbered && props.iter().any(|(k, _)| k == "layers") {
+                    for (half, state) in [(tall.then_some("lower"), Some(lower)), (Some("upper"), upper)] {
+                        let Some(state) = state else { continue };
+                        let heights = std::array::from_fn(|n| {
+                            let mut p: Vec<(String, String)> = props.iter().map(|(k, v)| (k.clone(), if k == "layers" { (n + 1).to_string() } else { v.clone() })).collect();
+                            p.extend(half.map(|h| ("half".to_owned(), h.to_owned())));
+                            states.push((name.to_owned(), p));
+                            (states.len() - 1) as u16
+                        });
+                        plant_layers.insert(state, heights);
+                    }
+                }
                 plants.push(Some(Plant { lower, upper }));
             }
             covers.push(plants);
@@ -468,7 +487,7 @@ impl<'a> ExportContext<'a> {
             let vanilla = |id: &str| id.strip_prefix("minecraft:").is_some_and(|short| target.has_block(short));
             // The mods' blocks the map uses are known, read or not.
             let merged = massif_core::shapes::with_map_blocks(reg, mods);
-            let known = massif_core::shapes::Known { vanilla: &vanilla, mods: merged.as_ref().unwrap_or(mods) };
+            let known = massif_core::shapes::Known { vanilla: &vanilla, mods: merged.as_ref().unwrap_or(mods), families };
             let mut tops: std::collections::HashSet<usize> = reg.terrains.iter().flat_map(|t| t.strata.iter().flat_map(|s| s.blocks.iter().map(|b| b.0.index())).chain(t.submerged_top.map(|b| b.index()))).collect();
             tops.extend(reg.blocks.iter().enumerate().filter(|(_, b)| b.name().ends_with("_slab")).map(|(k, _)| k));
             let mut add = |name: &str, props: Vec<(String, String)>| {
@@ -539,7 +558,7 @@ impl<'a> ExportContext<'a> {
                         };
                         out.insert(kind, [dry, in_water]);
                     }
-                    Some(Pieces { shapes, slab_layers: f.slab_layers, states: out })
+                    Some(Pieces { family: f, states: out })
                 })
                 .collect()
         };
@@ -631,6 +650,7 @@ impl<'a> ExportContext<'a> {
             soil,
             frosted,
             snowy,
+            plant_layers,
             objects,
             shaped,
             first_extra: reg.blocks.len() as u16,
@@ -1515,9 +1535,12 @@ fn fill_chunk(
     // ---- smooth terrain ----------------------------------------------------
     // The top of the land in partial blocks, last: only in the air or the
     // still water over the top block (or in place of it, with air or water
-    // over it), so never under what grows or stands there.
+    // over it), so never under what stands there. Where a cover's plants
+    // grow on the top, the land keeps its height in layers or slabs, the
+    // plants on them (as WorldPainter lays plants on its layers).
     if !smooth.is_empty() && !ctx.pieces.is_empty() {
-        use massif_core::shapes::{Shape, ShapeSet, choose};
+        use massif_core::shapes::{Shape, ShapeSet, choose, usable};
+        let grown = |b: u16| b >= ctx.first_extra && b < ctx.first_object;
         for c in smooth {
             let (lx, lz) = (c.cell as usize % massif_core::TILE_SIZE as usize, c.cell as usize / massif_core::TILE_SIZE as usize);
             if lx / 16 != cx || lz / 16 != cz || c.y1 - 1 <= min_y || c.y1 + 1 >= max_y {
@@ -1529,19 +1552,44 @@ fn fill_chunk(
             // The slab chosen by hand, or the pieces of the top block.
             let source = c.block.map_or(top_block, |b| b.0);
             let Some(Some(pieces)) = ctx.pieces.get(source as usize) else { continue };
-            let may = match c.block {
-                Some(_) => ShapeSet::of(&[Shape::Slab, Shape::Stairs]),
-                None => ctx.terrain_shapes.get(c.terrain.index()).copied().unwrap_or_default(),
+            let mut may = usable(
+                match c.block {
+                    Some(_) => ShapeSet::of(&[Shape::Slab, Shape::Stairs]),
+                    None => ctx.terrain_shapes.get(c.terrain.index()).copied().unwrap_or_default(),
+                },
+                &pieces.family,
+            );
+            // Plants on the top: its height only, under them.
+            let plants = grown(blocks[at(c.y1)]);
+            if plants {
+                may = may.and(ShapeSet::of(&[Shape::Layers, Shape::Slab]));
             }
-            .and(pieces.shapes);
-            let Some(piece) = choose(c, may, pieces.slab_layers) else { continue };
+            let Some(piece) = choose(c, may, pieces.family.slab_layers) else { continue };
             let Some(states) = pieces.states.get(&piece.kind) else { continue };
             // Where it goes must be air or still water; in place of the top,
-            // with air or water over it.
+            // with air, water or plants over it; on the top under plants,
+            // they rise a block (into the air).
             let over = blocks[at(piece.y + 1)];
             let here = blocks[at(piece.y)];
             let free = |b: u16| b == 0 || (b == ctx.water && !ctx.lava);
-            let ok = if piece.replaces { here == top_block && free(over) } else { free(here) };
+            let ok = if piece.replaces {
+                here == top_block && (free(over) || grown(over))
+            } else if plants {
+                let mut t = c.y1;
+                while t < max_y && grown(blocks[at(t)]) {
+                    t += 1;
+                }
+                if t + 1 >= max_y || blocks[at(t)] != 0 {
+                    continue;
+                }
+                for y in (c.y1..t).rev() {
+                    blocks[at(y + 1)] = blocks[at(y)];
+                }
+                top = top.max(t + 1);
+                true
+            } else {
+                free(here)
+            };
             if !ok {
                 continue;
             }
@@ -1552,6 +1600,14 @@ fn fill_chunk(
             }
             blocks[at(piece.y)] = state;
             top = top.max(piece.y + 1);
+            // Plants that sit on layers, on this piece: as high as it is.
+            if plants && let massif_core::shapes::Kind::Layers(n) | massif_core::shapes::Kind::Slab(n) = piece.kind {
+                let mut y = piece.y + 1;
+                while y < max_y && let Some(heights) = ctx.plant_layers.get(&blocks[at(y)]) {
+                    blocks[at(y)] = heights[n.clamp(1, 8) as usize - 1];
+                    y += 1;
+                }
+            }
         }
     }
 

@@ -136,6 +136,18 @@ impl SmoothSettings {
     }
 }
 
+/// The shapes a column may take of a block's `family`, those asked for
+/// (`may`) that it has: layers asked of a block whose slab goes by eighths
+/// (Conquest's `*_slab[layers=N]`, of blocks with no `*_layer`) are its
+/// slab.
+pub fn usable(may: ShapeSet, family: &Family) -> ShapeSet {
+    let mut s = may.and(family.shapes());
+    if may.has(Shape::Layers) && family.layers.is_none() && family.slab_layers {
+        s.set(Shape::Slab, true);
+    }
+    s
+}
+
 /// The block at the top of a terrain: the first of its first stratum.
 pub fn top_block(reg: &Registry, t: TerrainId) -> Option<BlockId> {
     reg.terrain(t).strata.first().and_then(|s| s.blocks.first()).map(|b| b.0)
@@ -189,7 +201,9 @@ fn profiles() -> Vec<(&'static str, &'static SmoothProfile)> {
     out
 }
 
-/// The shapes a block (without properties) may use by default.
+/// The shapes a block (without properties) may use by default: those of
+/// the first rule with a word of its name, else its height in layers or
+/// slabs (where its family has them: a block with none is left whole).
 pub fn default_shapes(name: &str) -> ShapeSet {
     let path = name.rsplit(':').next().unwrap_or(name);
     let words: Vec<&str> = path.split('_').collect();
@@ -200,16 +214,37 @@ pub fn default_shapes(name: &str) -> ShapeSet {
             }
         }
     }
-    ShapeSet::NONE
+    ShapeSet::of(&[Shape::Layers, Shape::Slab])
+}
+
+/// The suffixes of each shape's blocks, of every profile (the mods' and
+/// the game's), each once.
+pub fn suffixes() -> &'static [(Shape, String)] {
+    static S: std::sync::OnceLock<Vec<(Shape, String)>> = std::sync::OnceLock::new();
+    S.get_or_init(|| {
+        let mut out: Vec<(Shape, String)> = Vec::new();
+        for (_, p) in profiles() {
+            for (shape, list) in &p.suffixes {
+                for suffix in list {
+                    if !out.iter().any(|(k, s)| k == shape && s == suffix) {
+                        out.push((*shape, suffix.clone()));
+                    }
+                }
+            }
+        }
+        out
+    })
 }
 
 // -------------------------------------------------------------- families --
 
 /// What blocks are known to exist, and their properties: the game's (by
-/// `vanilla`), the mods' (by id, with their properties' names).
+/// `vanilla`), the mods' (by id, with their properties' names), and the
+/// shapes the mods' recipes link to full blocks ([`crate::block_families`]).
 pub struct Known<'a> {
     pub vanilla: &'a dyn Fn(&str) -> bool,
     pub mods: &'a HashMap<String, Vec<String>>,
+    pub families: &'a crate::block_families::BlockFamilies,
 }
 
 impl Known<'_> {
@@ -304,7 +339,7 @@ impl Family {
 /// The names a block's shapes may grow from: its own and shorter forms
 /// (`stone_bricks` → `stone_brick`, `oak_planks` → `oak`, `quartz_block`
 /// → `quartz`).
-fn bases(path: &str) -> Vec<String> {
+pub fn bases(path: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut push = |p: &str| {
         if !p.is_empty() && !out.iter().any(|o| o == p) {
@@ -324,19 +359,40 @@ fn bases(path: &str) -> Vec<String> {
 }
 
 /// The family of block `name` (without properties) among the blocks
-/// `known`. A block that is itself a slab (a slab chosen by hand) is its
-/// own slab, and its stairs those of its base.
+/// `known`: by name, then by the mods' recipes ([`Known::families`]: a
+/// slab by eighths of theirs wins over the game's by halves, as Conquest's
+/// `limestone_slab` over `stone_slab`). A block that is itself a slab (a
+/// slab chosen by hand, or a cover's turned into ground) is its own slab,
+/// and its stairs those of its base; a block of layers is its own layers.
 pub fn family(name: &str, known: &Known) -> Family {
-    let (ns, path) = name.split_once(':').unwrap_or(("minecraft", name));
-    let path = path.strip_suffix("_slab").unwrap_or(path);
+    let (ns, own_path) = name.split_once(':').unwrap_or(("minecraft", name));
+    let own_shape = crate::block_families::shape_of(name).map(|s| s.0);
+    // The full block a shape is of, for its other shapes.
+    let base_name = match own_shape {
+        Some(Shape::Slab | Shape::Layers) => known.families.full_block_of(name).map(str::to_owned),
+        _ => None,
+    };
+    let path = match (&base_name, own_shape) {
+        (Some(b), _) => b.split_once(':').map_or(b.as_str(), |p| p.1),
+        (None, Some(Shape::Slab | Shape::Layers)) => crate::block_families::shape_of(name).map_or(own_path, |s| s.1),
+        _ => own_path,
+    };
+    let ns = base_name.as_deref().and_then(|b| b.split_once(':')).map_or(ns, |p| p.0);
     let profiles = profiles();
+    let by_recipe = |shape: Shape| -> Option<String> {
+        let full = base_name.as_deref().unwrap_or(name);
+        let mut it = known.families.shapes_of(full, shape).filter(|s| known.exists(s));
+        match shape {
+            // A slab by eighths first.
+            Shape::Slab => known.families.shapes_of(full, shape).find(|s| known.exists(s) && known.has_property(s, "layers")).or_else(|| it.next()).map(str::to_owned),
+            _ => it.next().map(str::to_owned),
+        }
+    };
     let find = |shape: Shape| -> Option<String> {
         if shape == Shape::Layers && ns == "minecraft" && (path == "snow_block" || path == "snow") {
             return Some("minecraft:snow".into());
         }
-        // A block of layers (whole at eight of them: a mod's layers with no
-        // full block of their own) lays its own.
-        if shape == Shape::Layers && known.exists(name) && profiles.iter().filter(|(pns, _)| *pns == ns).any(|(_, p)| p.suffixes.get(&Shape::Layers).into_iter().flatten().any(|s| path.ends_with(s.as_str()))) {
+        if own_shape == Some(shape) && shape == Shape::Layers && known.exists(name) {
             return Some(name.to_owned());
         }
         for base in bases(path) {
@@ -350,9 +406,17 @@ pub fn family(name: &str, known: &Known) -> Family {
                 }
             }
         }
-        None
+        by_recipe(shape)
     };
-    let slab = if name.ends_with("_slab") && known.exists(name) { Some(name.to_owned()) } else { find(Shape::Slab) };
+    let slab = if own_shape == Some(Shape::Slab) && known.exists(name) {
+        Some(name.to_owned())
+    } else {
+        let named = find(Shape::Slab);
+        match (named, by_recipe(Shape::Slab)) {
+            (Some(n), Some(r)) if !known.has_property(&n, "layers") && known.has_property(&r, "layers") => Some(r),
+            (n, r) => n.or(r),
+        }
+    };
     let slab_layers = slab.as_deref().is_some_and(|s| known.has_property(s, "layers"));
     Family {
         layers: find(Shape::Layers),
@@ -698,7 +762,7 @@ mod tests {
     #[test]
     fn families_are_found_by_name_in_every_namespace() {
         let m = mods();
-        let known = Known { vanilla: &vanilla, mods: &m };
+        let known = Known { vanilla: &vanilla, mods: &m, families: crate::block_families::none() };
         let f = family("minecraft:stone", &known);
         assert_eq!((f.slab.as_deref(), f.stairs.as_deref(), f.layers.as_deref()), (Some("minecraft:stone_slab"), Some("minecraft:stone_stairs"), None));
         assert_eq!(family("minecraft:oak_planks", &known).slab.as_deref(), Some("minecraft:oak_slab"));
@@ -749,7 +813,8 @@ mod tests {
         let rock = default_shapes("minecraft:stone");
         assert!(rock.has(Shape::Slab) && rock.has(Shape::Stairs), "{rock:?}");
         assert!(default_shapes("minecraft:snow_block").has(Shape::Layers));
-        assert!(default_shapes("minecraft:glowstone").is_empty());
+        // A block no rule names: its height, where it has layers or a slab.
+        assert_eq!(default_shapes("minecraft:glowstone"), ShapeSet::of(&[Shape::Layers, Shape::Slab]));
         // Written as their names.
         let json = serde_json::to_string(&SmoothSettings { on: true, terrains: BTreeMap::from([("Grass".into(), ShapeSet::of(&[Shape::Layers, Shape::Stairs]))]) }).unwrap();
         assert_eq!(json, r#"{"on":true,"terrains":{"Grass":["layers","stairs"]}}"#);
