@@ -16,6 +16,7 @@ pub enum Command {
     NewWorld,
     Open,
     ImportWorld,
+    ImportMinecraft,
     /// Another `.massif` (a part of the map sent to someone, or a copy of
     /// it) merged into the map, reviewed first (see `collab`).
     MergeMap,
@@ -264,6 +265,7 @@ pub fn menus(state: &State) -> Vec<Menu> {
         item(Command::NewWorld, Icon::FilePlus2, tr!("New World…"), free),
         item(Command::Open, Icon::FolderOpen, tr!("Open…"), free),
         item(Command::ImportWorld, Icon::Import, tr!("Import WorldPainter World…"), free),
+        tipped(Command::ImportMinecraft, Icon::Import, tr!("Import Minecraft World…"), free, tr!("A Minecraft Java world: its land, water, biomes and plants, and what stands on it")),
         tipped(Command::MergeMap, Icon::GitMerge, tr!("Merge Massif Map…"), map, tr!("Bring in the work done on a copy or a region of this map, reviewed on the map before anything changes")),
         item(Command::FromHeightMap, Icon::ImageUp, tr!("New World from Height Map…"), free),
         item(Command::FromRealPlace, Icon::Earth, tr!("New World from a Real Place…"), free),
@@ -572,6 +574,7 @@ mod tests {
                 "New World…",
                 "Open…",
                 "Import WorldPainter World…",
+                "Import Minecraft World…",
                 "Merge Massif Map…",
                 "New World from Height Map…",
                 "New World from a Real Place…",
@@ -612,7 +615,7 @@ mod tests {
         for command in [Command::Save, Command::SaveAs, Command::Export, Command::ExportPack, Command::ExportHeightMap, Command::ExportRegion, Command::Undo, Command::Ores, Command::Analyse, Command::HomeScreen, Command::WholeMap(WholeOp::Rivers), Command::Caves, Command::ImportMask, Command::RealTerrain, Command::SavePoint, Command::MergeMap] {
             assert!(!enabled(&home, &command), "{command:?} needs a map");
         }
-        for command in [Command::NewWorld, Command::Open, Command::ImportWorld, Command::ImportPack, Command::FromRealPlace, Command::OpenRecent(recent[0].clone()), Command::Settings, Command::Help, Command::About, Command::Quit, Command::Theme(ThemeChoice::Light)] {
+        for command in [Command::NewWorld, Command::Open, Command::ImportWorld, Command::ImportMinecraft, Command::ImportPack, Command::FromRealPlace, Command::OpenRecent(recent[0].clone()), Command::Settings, Command::Help, Command::About, Command::Quit, Command::Theme(ThemeChoice::Light)] {
             assert!(enabled(&home, &command), "{command:?} works on the home screen");
         }
         let busy = menus(&State { idle: false, ..state(&recent) });

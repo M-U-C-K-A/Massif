@@ -690,6 +690,12 @@ const NUMBERED_BLOCKS: &[(&str, u8, u8)] = &[
     ("bone_block", 216, 0),
 ];
 
+/// The biome numbered `n` before 1.18, by its name of today (without
+/// `minecraft:`): the first listed of that number.
+pub fn biome_of_number(n: i32) -> Option<&'static str> {
+    BIOME_NUMBERS.iter().find(|b| b.1 == n).map(|b| b.0)
+}
+
 /// Biomes by their number before 1.18; later ones take the number of the
 /// closest biome of old.
 const BIOME_NUMBERS: &[(&str, i32)] = &[

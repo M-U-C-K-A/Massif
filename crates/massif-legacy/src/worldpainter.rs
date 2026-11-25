@@ -108,11 +108,29 @@ pub struct ImportReport {
     pub ground_covers: Vec<u16>,
     /// The world's custom biomes, by name: biomes of the map now.
     pub custom_biomes: Vec<String>,
+    /// What was kept as it stood (a Minecraft world's buildings in
+    /// sculpted chunks), one line each.
+    pub kept: Vec<String>,
+    /// Blocks left out, by block, with their counts.
+    pub dropped: Vec<(String, u64)>,
+    /// The terrains made for the import.
+    pub created_terrains: Vec<String>,
+    /// Imported from a Minecraft world (not a WorldPainter one).
+    pub minecraft: bool,
 }
 
 impl ImportReport {
     /// A short human summary.
     pub fn summary(&self) -> String {
+        if self.minecraft {
+            let mut s = self.dimensions.join(", ");
+            let (covers, layers) = self.converted.iter().partition::<Vec<_>, _>(|c| c.0.ends_with("(ground cover)"));
+            s += &format!("; {} terrains made, {} ground covers, {} object layers", self.created_terrains.len(), covers.len(), layers.len());
+            if let Some(k) = self.kept.first() {
+                s += &format!("; {k}");
+            }
+            return s;
+        }
         let mut s = format!("{} tiles", self.tiles);
         if !self.dimensions.is_empty() {
             s += &format!(" in {}", self.dimensions.join(", "));

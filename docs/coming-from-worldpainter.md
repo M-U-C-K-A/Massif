@@ -40,6 +40,7 @@ top left.
 | Open a `.world` | **Open…** (`⌘O`) or **Import WorldPainter World…** | File menu, top bar, home screen. The `.world` is only read: save your work as a `.massif` |
 | New World | **New World…** (`⌘N`) | File menu, home screen |
 | Import ▸ Height map | **New World from Height Map…** | File menu, home screen |
+| Import ▸ Existing Minecraft map | **Import Minecraft World…**: see [Importing a Minecraft world](import-minecraft.md) | File menu, home screen |
 | Height (`⌥H`), Raise Mountain (`⌥M`), Raise Pyramid | **Raise / Lower**; the brush gives the shape | Tools ▸ Sculpt terrain; shapes in Brushes |
 | Smooth (`⌥S`), Flatten (`⌥A`) | **Smooth**, **Flatten** | Tools ▸ Sculpt terrain |
 | Path | **Road** | Tools ▸ Sculpt terrain |

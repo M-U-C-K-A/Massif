@@ -20,6 +20,7 @@ USAGE
   massif-cli export <world.massif> <folder> [--version V] [--void] [--survival] [--no-ores] [--overwrite] [--rules frozen|survival-safe|vanilla|map] [--regions x,z:x,z]
   massif-cli rules <frozen|survival-safe|vanilla> [--version V]
   massif-cli import <old.world> <out.massif>
+  massif-cli import-minecraft <world folder> <out.massif> [--above keep|trees|drop] [--area X0,Z0,X1,Z1 (chunks)] [--nether|--end] [--mixes] [--caves] [--no-covers]
   massif-cli probe <world.massif> [<x> <z>…] [--random N]
   massif-cli analyse <world.massif>
   massif-cli water <world.massif>
@@ -351,6 +352,62 @@ fn cmd_export(mut args: Args) -> Res<()> {
         human(stats.bytes)
     );
     println!("loaded in {loaded:.2?}, exported in {:.2?}", stats.elapsed);
+    Ok(())
+}
+
+/// Import a Minecraft world, saying how long it took and the memory it
+/// took at most.
+fn cmd_import_minecraft(mut args: Args) -> Res<()> {
+    use massif_legacy::minecraft::{Above, Options, import, scan};
+    let above = args.option("--above")?;
+    let area = args.option("--area")?;
+    let kind = if args.flag("--nether") {
+        massif_core::world::DimensionKind::Nether
+    } else if args.flag("--end") {
+        massif_core::world::DimensionKind::End
+    } else {
+        massif_core::world::DimensionKind::Overworld
+    };
+    let (mixes, caves, no_covers) = (args.flag("--mixes"), args.flag("--caves"), args.flag("--no-covers"));
+    let [input, out] = args.positional(["<world folder>", "<out.massif>"])?;
+    let t = Instant::now();
+    let world = scan(std::slice::from_ref(&input)).map_err(|e| e.to_string())?;
+    let mut opts = Options::new(&world, kind);
+    opts.above = match above.as_deref() {
+        None | Some("keep") => Above::Keep,
+        Some("trees") => Above::Trees,
+        Some("drop") => Above::Drop,
+        Some(o) => return Err(format!("--above keep, trees or drop, not {o}")),
+    };
+    if let Some(a) = area {
+        let v: Vec<i32> = a.split(',').map(|n| n.trim().parse::<i32>()).collect::<Result<_, _>>().map_err(|e| e.to_string())?;
+        let [x0, z0, x1, z1] = v[..] else { return Err("--area X0,Z0,X1,Z1".into()) };
+        opts.area = Some([x0, z0, x1, z1]);
+    }
+    opts.mixes = mixes;
+    opts.caves = caves;
+    opts.covers = !no_covers;
+    let (world, report) = import(&world, &opts, None).map_err(|e| e.to_string())?;
+    let imported = t.elapsed();
+    let stats = massif_format::save(&world, &out).map_err(|e| e.to_string())?;
+    println!("{} → {} ({})", input.display(), out.display(), report.platform.as_deref().unwrap_or("?"));
+    for d in report.dimensions.iter().chain(&report.kept) {
+        println!("  imported     {d}");
+    }
+    for d in &report.skipped_dimensions {
+        println!("  skipped      {d}");
+    }
+    println!("  terrains     {} kinds, {} made", report.terrains.len(), report.created_terrains.len());
+    let columns: u64 = report.terrains.iter().map(|t| t.1).sum::<u64>().max(1);
+    for (name, n) in report.terrains.iter().take(8) {
+        println!("    {name:<36} {:5.1} %", *n as f64 * 100.0 / columns as f64);
+    }
+    println!("  covers, layers {}", report.converted.iter().map(|c| c.0.as_str()).collect::<Vec<_>>().join(", "));
+    if !report.dropped.is_empty() {
+        println!("  left out     {}", report.dropped.iter().take(8).map(|(n, c)| format!("{n} ({c})")).collect::<Vec<_>>().join(", "));
+    }
+    println!("  sculpted     {} chunks", world.dims[0].voxels.len());
+    println!("  import {:.2} s, save {:.2} s, {:.1} MB", imported.as_secs_f32(), t.elapsed().as_secs_f32() - imported.as_secs_f32(), stats.file_len as f64 / 1e6);
     Ok(())
 }
 
@@ -1390,6 +1447,7 @@ fn main() -> ExitCode {
         "verify" => cmd_verify(args),
         "export" => cmd_export(args),
         "import" => cmd_import(args),
+        "import-minecraft" => cmd_import_minecraft(args),
         "probe" => cmd_probe(args),
         "rules" => cmd_rules(args),
         "water" => cmd_water(args),

@@ -2,7 +2,7 @@
 Massif makes Minecraft maps. Shape the land, paint it, decorate it, then write it to a Minecraft world.
 
 ## The home screen
-The home screen opens with Massif. On the left are the ways in: **New map**, **From a height map**, **From a real place**, **Open a map…** (a `.massif` file), **Import from WorldPainter…** (a `.world` file), and the maps opened lately. In the middle are the settings of a new map, with a preview of the whole map.
+The home screen opens with Massif. On the left are the ways in: **New map**, **From a height map**, **From a real place**, **Open a map…** (a `.massif` file), **Import from WorldPainter…** (a `.world` file), **Import a Minecraft world…** (a world's folder), and the maps opened lately. In the middle are the settings of a new map, with a preview of the whole map.
 - **Size**: width × depth in blocks, in steps of 128. Type any number: when you press Enter or leave the field, it becomes the nearest step (5000 becomes 4992), and a note under it says so. The chain between them links the two sides: linked (at first), typing one sets the other to it, for a square map; click it to set them apart.
 - **Height**: Minecraft's own (−64 to 320) or taller, up to 2032 blocks.
 - **Land**: a landform (flat, plains, hills, mountains, islands) or a template of the terrain generator, and how the ground is painted.
@@ -27,6 +27,13 @@ Before it, the very first start asks **Coming from WorldPainter?** **Yes** opens
 The picture under the map shows the ground it makes and the heights it reaches. Gaps, spikes and pits of the data are filled from the heights around them; sand lies only along the water, snow only above the snow line of the latitude. Tiles are kept on disk: a place seen once works offline. The ground is painted by the automatic paint; in the map it is one step to undo. Elevation: Terrain Tiles by Mapzen on AWS Open Data (SRTM, GMTED2010, ETOPO1, 3DEP, EU-DEM and others; **All the sources** in the dialog lists them); search: Nominatim, © OpenStreetMap contributors.
 
 Behind the home screen is the background chosen in **Settings ▸ Appearance ▸ Home background**: **Ridges** (ranges of mountains under a glow, made of dots, the default, with a **Palette**, **Height**, **Glow** and **Ranges**), **Waves** (smooth bands of colour rising and melting into each other, with a **Palette**, **Scale**, **Melt**, **Speed** and **Direction**), **Pixel** (the waves in large square pixels, with a **Pixel size**) or **Prism** (crisp columns of colour drawing a **Shape**, with a **Direction**, a **Motion** and their own palettes). A picture shows it alive above its settings. The words over it stay legible whatever you choose; over Waves, Pixel and Prism the new map's settings sit on a solid surface. **Animate the background** stops it, and so does Reduce motion.
+
+## A Minecraft world
+**File ▸ Import Minecraft World…** (or **Import a Minecraft world…** on the home screen) makes a map of a Minecraft Java world: pick its folder, or drop it, its `level.dat` or a region file on the window. Worlds of every version Massif exports are read, 1.12 and older to 26.x, and mods' blocks and biomes keep their ids. The dialog asks:
+- **Dimension**, and the **Area**: the whole world, or drawn on the map of its chunks (drag; a click picks a region of 512 × 512 blocks); the **Heights** kept.
+- **Above the ground**: **Keep it** keeps buildings, trees and overhangs block for block as sculpted chunks, so they come back unchanged on export; **Trees as layers** makes each kind of tree an object layer of the world's own trees, painted where they grew; **Drop it** brings the land alone.
+- Plants, snow and carpets as ground covers; ground of mixed blocks as terrains mixing them; biomes; caves and the underground as sculpted chunks (much memory).
+Each column gets the height of its ground, its top block as terrain (a terrain of the map with that block on top, or a new one in the **Imported** group), its water or lava, and its biome. The import report lists what came in, the terrains made and the blocks left out.
 
 ## Saving and exporting
 - `⌘S` saves the map as a `.massif` file. The Finder and Explorer show the map as the file's picture.

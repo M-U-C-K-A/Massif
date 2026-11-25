@@ -4397,7 +4397,22 @@ pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &Registry, solo: &
             continue;
         }
         ui.add_space(4.0);
-        ui.label(RichText::new(group.to_uppercase()).size(10.5).bold().color(pal.weak));
+        // The blocks of a Minecraft world's buildings, one terrain each
+        // (hundreds), folded until asked for or searched.
+        if group == massif_legacy::minecraft::BLOCKS_GROUP && needle.is_empty() {
+            let id = ui.scope_id().with("imported blocks open");
+            let mut open = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+            let text = format!("{} {} · {}", if open { "▾" } else { "▸" }, group.to_uppercase(), members.len());
+            if ui.add(egui::Label::new(RichText::new(text).size(10.5).bold().color(pal.weak)).sense(Sense::click())).clicked() {
+                open = !open;
+                ui.data_mut(|d| d.insert_temp(id, open));
+            }
+            if !open {
+                continue;
+            }
+        } else {
+            ui.label(RichText::new(group.to_uppercase()).size(10.5).bold().color(pal.weak));
+        }
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
             for (i, def) in members {
@@ -4414,8 +4429,9 @@ pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &Registry, solo: &
                 let stroke = if selected { Stroke::new(1.5, pal.accent) } else { Stroke::new(1.0, pal.border) };
                 painter.rect(rect, theme::TILE_RADIUS, fill, stroke, StrokeKind::Inside);
                 terrain_icon(ui, rect.shrink(4.0), reg, i as u16, blocks);
-                let tip = describe_terrain(reg, i as u16);
-                if response.on_hover_text(tip).clicked() {
+                if response.on_hover_ui(|ui| {
+                    ui.label(describe_terrain(reg, i as u16));
+                }).clicked() {
                     picked = Some(i as u16);
                 }
                 let _ = &def;

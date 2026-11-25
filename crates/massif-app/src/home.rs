@@ -155,6 +155,8 @@ pub enum HomeAction {
     Open,
     /// Import a WorldPainter world.
     Import,
+    /// Import a Minecraft world.
+    ImportMinecraft,
     OpenRecent(PathBuf),
     /// Take a map off the list of recent ones.
     Forget(PathBuf),
@@ -383,6 +385,9 @@ impl Home {
         }
         if nav(ui, Icon::Import, tr!("Import from WorldPainter…"), false).on_hover_text(tr!("A WorldPainter world (.world)")).clicked() {
             *action = Some(HomeAction::Import);
+        }
+        if nav(ui, Icon::Import, tr!("Import a Minecraft world…"), false).on_hover_text(tr!("A Minecraft Java world: its folder, or its region files (.mca)")).clicked() {
+            *action = Some(HomeAction::ImportMinecraft);
         }
         ui.add_space(20.0);
         ui.horizontal(|ui| {

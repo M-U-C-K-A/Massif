@@ -6,6 +6,7 @@
 pub mod javaser;
 pub mod layer_file;
 pub mod layers;
+pub mod minecraft;
 pub mod placement;
 mod tables;
 pub mod terrains;

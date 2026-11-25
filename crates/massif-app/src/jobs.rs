@@ -340,6 +340,18 @@ impl Job {
         })
     }
 
+    /// Import a Minecraft world.
+    pub fn import_minecraft(ctx: &egui::Context, world: massif_legacy::minecraft::McWorld, opts: massif_legacy::minecraft::Options) -> Job {
+        let progress = Arc::new(ImportProgress::default());
+        let label = tr!("Importing {file}", file = world.name.clone());
+        let p = progress.clone();
+        Job::spawn(JobKind::Import, label, Some(progress as Arc<dyn JobProgress>), ctx, move || match massif_legacy::minecraft::import(&world, &opts, Some(&p)) {
+            Ok((imported, report)) => Outcome::Imported { world: imported, report: Box::new(report), source: world.root.clone() },
+            Err(massif_legacy::ImportError::Cancelled) => Outcome::Cancelled,
+            Err(e) => Outcome::Failed(tr!("Could not import {file}: {e}", file = world.name.clone(), e)),
+        })
+    }
+
     /// Open a Massif world, or import a WorldPainter one.
     pub fn open(ctx: &egui::Context, path: PathBuf) -> Job {
         if is_worldpainter(&path) {

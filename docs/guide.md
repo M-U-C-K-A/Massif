@@ -2,7 +2,7 @@
 
 [← Back to the README](../README.md)
 
-The editor, part by part: the home screen, the window, brushes and their options, painting, decorating, water, height maps, 3D sculpting and the controls. The terrain generator has [a page of its own](terrain-graphs.md); how Massif works inside is in [internals](internals.md). Coming from WorldPainter? [Where each of its tools is](coming-from-worldpainter.md).
+The editor, part by part: the home screen, the window, brushes and their options, painting, decorating, water, height maps, 3D sculpting and the controls. The terrain generator has [a page of its own](terrain-graphs.md); how Massif works inside is in [internals](internals.md). Coming from WorldPainter? [Where each of its tools is](coming-from-worldpainter.md). A Minecraft world to start from? [Importing a Minecraft world](import-minecraft.md).
 
 - [The home screen](#the-home-screen)
 - [The window](#the-window)

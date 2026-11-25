@@ -9,9 +9,12 @@ description = "Import of WorldPainter .world files into Massif worlds"
 [dependencies]
 massif-core.workspace = true
 massif-objects.workspace = true
+massif-anvil.workspace = true
+serde.workspace = true
+fastnbt = "2.6"
+lz4-java-wrc = "0.2"
 flate2.workspace = true
 rayon.workspace = true
 thiserror.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 log.workspace = true

@@ -34,6 +34,7 @@ mod layout;
 mod loader;
 mod map_render;
 mod map_view;
+mod mc_import;
 mod menu;
 mod menubar;
 mod notify;

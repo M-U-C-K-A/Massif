@@ -2265,8 +2265,11 @@ dependencies = [
 name = "massif-legacy"
 version = "1.2.0"
 dependencies = [
+ "fastnbt",
  "flate2",
  "log",
+ "lz4-java-wrc",
+ "massif-anvil",
  "massif-core",
  "massif-objects",
  "rayon",

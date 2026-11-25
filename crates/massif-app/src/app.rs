@@ -255,6 +255,8 @@ enum Pending {
     /// A save point of the map, opened as a map of its own: read-only, or
     /// as a copy.
     OpenPoint { world: std::sync::Arc<massif_core::World>, name: String, read_only: bool },
+    /// A Minecraft world imported as the options say.
+    ImportMinecraft(Box<(massif_legacy::minecraft::McWorld, massif_legacy::minecraft::Options)>),
     Quit,
 }
 
@@ -437,6 +439,8 @@ enum Dialog {
     /// Edit ▸ Covers of Layers to Ground…: the map's ground covers of layer
     /// blocks, each ticked to become the ground's own.
     LayerCovers(Vec<(massif_core::surface_layers::SurfaceCover, bool)>),
+    /// What of a Minecraft world to import.
+    McImport(Box<crate::mc_import::McImportForm>),
     /// The help, at a topic.
     Help(crate::help::HelpState),
     /// A filter over the whole map: its settings, the map before and after.
@@ -972,6 +976,11 @@ impl MassifApp {
                     self.request(ctx, Pending::Open(Some(path)));
                 }
             }
+            HomeAction::ImportMinecraft => {
+                if let Some(dir) = rfd::FileDialog::new().set_title(tr!("Import a Minecraft world: pick its folder")).set_directory(massif_anvil::export::default_saves_dir().unwrap_or_default()).pick_folder() {
+                    self.scan_minecraft(ctx, vec![dir]);
+                }
+            }
             HomeAction::OpenRecent(path) => {
                 if path.exists() {
                     self.request(ctx, Pending::Open(Some(path)));
@@ -996,11 +1005,22 @@ impl MassifApp {
                 match ext.as_str() {
                     "png" | "jpg" | "jpeg" | "r16" | "r32" | "raw" => self.take_heightmap(ctx, path),
                     "world" => self.request(ctx, Pending::Open(Some(path))),
+                    "mca" | "dat" => self.scan_minecraft(ctx, vec![path]),
+                    _ if path.is_dir() => self.scan_minecraft(ctx, vec![path]),
                     e if e == massif_format::EXTENSION => self.request(ctx, Pending::Open(Some(path))),
                     e if e == massif_core::pack_file::EXTENSION => self.pack_inbox.push(path),
                     _ => self.say(ctx, tr!("Massif opens .massif maps, WorldPainter .world worlds, height maps and .massifpack packs"), true, None),
                 }
             }
+        }
+    }
+
+    /// Read what a Minecraft world holds, for the dialog that says what of
+    /// it to import.
+    fn scan_minecraft(&mut self, ctx: &egui::Context, picked: Vec<PathBuf>) {
+        match massif_legacy::minecraft::scan(&picked) {
+            Ok(world) => self.dialog = Some(Dialog::McImport(Box::new(crate::mc_import::McImportForm::new(world)))),
+            Err(e) => self.say(ctx, tr!("Could not import {file}: {e}", file = picked.first().map(|p| jobs::display_name(p)).unwrap_or_default(), e), true, None),
         }
     }
 
@@ -3370,6 +3390,10 @@ impl MassifApp {
     fn run(&mut self, ctx: &egui::Context, pending: Pending) {
         match pending {
             Pending::New(params) => self.jobs.push(Job::generate(ctx, params)),
+            Pending::ImportMinecraft(what) => {
+                let (world, opts) = *what;
+                self.jobs.push(Job::import_minecraft(ctx, world, opts));
+            }
             Pending::Open(path) => {
                 let path = path.or_else(|| {
                     rfd::FileDialog::new()
@@ -3816,7 +3840,9 @@ impl MassifApp {
                     self.rename = None;
                     self.home = None;
                     self.has_map = true;
-                    self.remember(source.clone());
+                    if !source.is_dir() {
+                        self.remember(source.clone());
+                    }
                     let msg = tr!("Imported {display_name} in {secs:.1} s: {summary}. See File ▸ Import Report…", display_name = jobs::display_name(&source), summary = report.summary(), secs);
                     self.task_done(ctx, Cue::Ready, tr!("Import done"), &msg, secs);
                     self.say(ctx, msg, false, None);
@@ -4413,6 +4439,7 @@ impl MassifApp {
             Command::Open if self.home.is_some() => self.home_action(ctx, HomeAction::Open),
             Command::Open => self.request(ctx, Pending::Open(None)),
             Command::ImportWorld => self.home_action(ctx, HomeAction::Import),
+            Command::ImportMinecraft => self.home_action(ctx, HomeAction::ImportMinecraft),
             Command::ImportPack => self.pick_pack(),
             Command::MergeMap => self.merge_map(ctx),
             Command::ExportPack => {
@@ -6984,7 +7011,11 @@ impl MassifApp {
                             ui.label(RichText::new(tr!("Terrains")).color(pal.weak));
                             let total: u64 = report.terrains.iter().map(|t| t.1).sum::<u64>().max(1);
                             ui.vertical(|ui| {
-                                ui.label(trn!("{kinds} kinds, {n} custom terrain rebuilt from their materials", "{kinds} kinds, {n} custom terrains rebuilt from their materials", n = report.custom_terrains, kinds = report.terrains.len()));
+                                if !report.minecraft {
+                                    ui.label(trn!("{kinds} kinds, {n} custom terrain rebuilt from their materials", "{kinds} kinds, {n} custom terrains rebuilt from their materials", n = report.custom_terrains, kinds = report.terrains.len()));
+                                } else {
+                                    ui.label(trn!("{kinds} kinds, {n} made for the blocks the map's terrains did not have", "{kinds} kinds, {n} made for the blocks the map's terrains did not have", n = report.created_terrains.len(), kinds = report.terrains.len()));
+                                }
                                 for (name, columns) in report.terrains.iter().take(10) {
                                     let pretty = if name.chars().all(|c| c.is_ascii_uppercase() || c == '_') {
                                         let lower = name.replace('_', " ").to_lowercase();
@@ -7005,8 +7036,31 @@ impl MassifApp {
                                 ui.label(RichText::new(tr!("Layers")).color(pal.weak));
                                 ui.vertical(|ui| {
                                     ui.label(tr!("Imported as object layers, ground covers, terrains, levels and caves:"));
-                                    let names: Vec<String> = report.converted.iter().map(|(n, t)| tr!("{n} ({t} tiles)", n, t)).collect();
+                                    let names: Vec<String> = report.converted.iter().map(|(n, t)| if *t == 0 { n.clone() } else { tr!("{n} ({t} tiles)", n, t) }).collect();
                                     ui.label(RichText::new(names.join(", ")).size(11.5).color(pal.weak));
+                                });
+                                ui.end_row();
+                            }
+                            if !report.kept.is_empty() {
+                                ui.label(RichText::new(tr!("Kept")).color(pal.weak));
+                                ui.vertical(|ui| {
+                                    for k in &report.kept {
+                                        ui.label(k);
+                                    }
+                                });
+                                ui.end_row();
+                            }
+                            if !report.dropped.is_empty() {
+                                ui.label(RichText::new(tr!("Left out")).color(pal.weak));
+                                ui.vertical(|ui| {
+                                    ui.label(tr!("Blocks above the ground not imported:"));
+                                    let names: Vec<String> = report.dropped.iter().take(12).map(|(n, c)| format!("{n} ({c})")).collect();
+                                    let more = report.dropped.len().saturating_sub(12);
+                                    let mut text = names.join(", ");
+                                    if more > 0 {
+                                        text += &tr!(" and {more} more", more);
+                                    }
+                                    ui.label(RichText::new(text).size(11.5).color(pal.weak));
                                 });
                                 ui.end_row();
                             }
@@ -7098,6 +7152,19 @@ impl MassifApp {
                     self.jobs.push(Job::surface_layers(ctx, snapshot, self.doc.dim, chosen, self.doc.revision).on(self.doc.generation));
                 } else if keep {
                     self.dialog = Some(Dialog::LayerCovers(layers));
+                }
+            }
+            Dialog::McImport(mut form) => {
+                let mut action = None;
+                let response = modal(ctx, "minecraft import").show(ctx, |ui| action = form.ui(ui));
+                match action {
+                    Some(crate::mc_import::McImportAction::Import) => {
+                        let opts = form.opts.clone();
+                        self.request(ctx, Pending::ImportMinecraft(Box::new((form.world, opts))));
+                    }
+                    Some(crate::mc_import::McImportAction::Cancel) => {}
+                    None if response.should_close() => {}
+                    None => self.dialog = Some(Dialog::McImport(form)),
                 }
             }
             Dialog::Origin => {
@@ -15981,6 +16048,75 @@ mod tests {
         }
         let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
         image::save_buffer(dir.join("import-3d-close.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+    }
+
+    /// A Minecraft world through the editor: the dialog over its map of
+    /// chunks, the import, the report, the map in 3D. The world is a small
+    /// map exported, or MASSIF_MC_WORLD (an area of it with MASSIF_MC_AREA
+    /// = "x0,z0,x1,z1" in chunks); pictures go to MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn minecraft_worlds_import_through_the_editor() {
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let made = std::env::temp_dir().join(format!("massif-mc-ui-{}", std::process::id()));
+        let world = match std::env::var_os("MASSIF_MC_WORLD") {
+            Some(w) => PathBuf::from(w),
+            None => {
+                let w = massif_core::generate::generate(&massif_core::generate::GenParams { tiles_x: 2, tiles_z: 2, seed: 5, ..Default::default() });
+                let options = massif_anvil::ExportOptions { target: massif_anvil::Target::release("1.21.11").unwrap(), ..Default::default() };
+                massif_anvil::export(&w.clone().snapshot(), &made, &options, &massif_anvil::Progress::default()).unwrap();
+                made.clone()
+            }
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let ctx = h.ctx.clone();
+        h.state_mut().scan_minecraft(&ctx, vec![world]);
+        h.run_steps(5);
+        let area = std::env::var("MASSIF_MC_AREA").ok().map(|a| a.split(',').filter_map(|n| n.trim().parse::<i32>().ok()).collect::<Vec<i32>>());
+        let Some(Dialog::McImport(form)) = &mut h.state_mut().dialog else { panic!("the dialog is shown") };
+        if let Some([x0, z0, x1, z1]) = area.as_deref() {
+            form.opts.area = Some([*x0, *z0, *x1, *z1]);
+        }
+        h.run_steps(3);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("ui-mc-import.png")).unwrap();
+        }
+        let Some(Dialog::McImport(form)) = h.state_mut().dialog.take() else { panic!("the dialog is shown") };
+        let opts = form.opts.clone();
+        h.state_mut().request(&ctx, Pending::ImportMinecraft(Box::new((form.world, opts))));
+        h.run_steps(3);
+        let started = std::time::Instant::now();
+        while !h.state().jobs.is_empty() {
+            assert!(started.elapsed().as_secs() < 600, "import timed out");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        eprintln!("imported through the editor in {:.1} s", started.elapsed().as_secs_f32());
+        h.run_steps(20);
+        assert!(matches!(h.state().dialog, Some(Dialog::ImportReport(..))), "the import report is shown");
+        assert!(!h.state().doc.dimension().ground().is_empty());
+        let _ = std::fs::remove_dir_all(&made);
+        let Some(dir) = dir else { return };
+        h.render().unwrap().save(dir.join("ui-mc-import-report.png")).unwrap();
+        h.state_mut().dialog = None;
+        h.run_steps(20);
+        h.render().unwrap().save(dir.join("ui-mc-imported-map.png")).unwrap();
+        {
+            let app = h.state_mut();
+            app.layout.active = 3;
+            app.view3d.camera.distance = 260.0;
+            app.view3d.camera.pitch = 0.45;
+        }
+        h.run_steps(5);
+        let started = std::time::Instant::now();
+        while h.state().view3d.pending() > 0 && started.elapsed().as_secs() < 120 {
+            h.step();
+        }
+        for _ in 0..60 {
+            h.step();
+        }
+        let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
+        image::save_buffer(dir.join("mc-import-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
     }
 
     /// Step until the terrain graph's preview has caught up with the graph.
