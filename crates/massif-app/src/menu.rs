@@ -625,7 +625,7 @@ mod tests {
         assert!(!enabled(&menus(&state(&recent)), &Command::OpenRecent(PathBuf::from("/elsewhere.massif"))));
         // No recent map: Open Recent is greyed.
         let none = menus(&state(&[]));
-        assert!(matches!(&none[1].entries[6], Entry::Submenu { label, enabled: false, .. } if label == "Open Recent"));
+        assert!(none[1].entries.iter().any(|e| matches!(e, Entry::Submenu { label, enabled: false, .. } if label == "Open Recent")));
     }
 
     /// The shortcuts shown are the ones `MassifApp::shortcuts` handles, as
