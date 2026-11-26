@@ -347,6 +347,7 @@ Its panels are editors as on the other sides (the **Render** section of an area'
 - **Atmosphere**: **Air**, **Haze**, a **Fog** filling low ground first, **Shafts of light**, a **Sea around the map**. **Clouds**: cover, height, thickness, density, size, wind; they shade the land.
 - **Camera**: angle, aperture, focus; the point it looks at, turn, tilt, distance; **Frame the whole map**. **Render Output**: glow, bounces, **Clamp indirect** (the most light a bounce brings: fewer bright specks), **Denoise** (on at first: the grain of the first samples smoothed away, the textures kept sharp; it fades as the samples add up), exposure.
 - **Timeline**: move the playhead, place the camera, **Add keyframe**; again elsewhere. The view follows the playhead along a smooth path; **Play** runs it. Drag a keyframe to move it; **Remove** takes it away. Keyframes are saved with the map.
+- **Grass**: **Blocks** (the game's) or **Blades**: a field of thin blades of grass over the grass blocks, in place of the short and tall grass, their **Density** and **Height**; slower to draw.
 - **Image to save**: a size (the view's, HD, 4K, 8K), samples a pixel and **Denoise**, then **Save image…** writes a PNG, drawn a band at a time, with its progress and **Cancel**.
 
 # Terrain graphs

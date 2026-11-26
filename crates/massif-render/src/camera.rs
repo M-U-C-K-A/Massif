@@ -112,6 +112,9 @@ pub struct Light {
     /// The most light a bounce brings, in its brightest channel (0: no
     /// limit): rare bright paths cut down, so that the image settles sooner.
     pub clamp: f32,
+    /// The detailed grass's blades a block, and their height (blocks).
+    pub grass_blades: u32,
+    pub grass_height: f32,
     pub exposure: f32,
 }
 
@@ -153,6 +156,8 @@ impl Default for Light {
             focus: 100.0,
             bounces: 2,
             clamp: 10.0,
+            grass_blades: 24,
+            grass_height: 0.8,
             exposure: 1.0,
         }
     }

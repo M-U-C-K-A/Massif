@@ -737,3 +737,75 @@ fn the_denoiser_settles_the_image_sooner() {
     let best_trace = trace.iter().min().unwrap();
     eprintln!("  at 1920 × 1080: a denoising {:.2} ms best, {:.2} ms middle; a sample {:.1} ms best", times[0].as_secs_f64() * 1000.0, times[10].as_secs_f64() * 1000.0, best_trace.as_secs_f64() * 1000.0);
 }
+
+/// The detailed grass: the village map's meadows path-traced with the
+/// game's grass, then with blades of grass, at the grass's height and from
+/// higher up, with what a sample costs each way at 1280 × 720
+/// (MASSIF_SNAPSHOT_DIR: the images; MASSIF_PERF: the timings).
+#[test]
+fn blades_of_grass() {
+    let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+    let perf = std::env::var_os("MASSIF_PERF").is_some();
+    if dir.is_none() && !perf {
+        return;
+    }
+    let Some((device, queue)) = device() else {
+        eprintln!("no GPU adapter: skipping");
+        return;
+    };
+    let cat = massif_assets::load_newest().and_then(Result::ok).map(Arc::new);
+    let world = diorama::sample::village();
+    let sea = world.meta.sea_level as f64;
+    let target = map_source::target_for(cat.as_ref().map(|c| c.version.as_str()));
+    let extent = Extent::of_map(&world, 0, &target).unwrap();
+    let (vx, vz) = diorama::sample::VILLAGE;
+    let (w, h) = (1280, 720);
+    for blades in [false, true] {
+        let materials = Arc::new(Materials::new(cat.clone(), device.limits().max_texture_array_layers as usize));
+        materials.set_blades(blades);
+        let tiles = map_source::tiles_by_distance(&world, 0, vx as f64, vz as f64);
+        let mut builder = MapBuilder::start(world.copy_unfrozen(), 0, target.clone(), materials.clone(), tiles);
+        let built = builder.wait_all();
+        let mut r = Renderer::new(&device, &queue, extent);
+        r.sea_level = sea;
+        r.sync_materials(&materials);
+        for b in built {
+            assert!(r.put(b.chunks));
+        }
+        let mut light = Light { haze: 1.5, ..Light::default() };
+        light.set_time(15.5, 172.0, 45.0, 0.0);
+        if let Some(n) = std::env::var("MASSIF_BLADES").ok().and_then(|v| v.parse().ok()) {
+            light.grass_blades = n;
+        }
+        if let Some(n) = std::env::var("MASSIF_BOUNCES").ok().and_then(|v| v.parse().ok()) {
+            light.bounces = n;
+        }
+        r.resize(w, h);
+        let (mx, mz) = (vx as f64 + 80.0, vz as f64 + 60.0);
+        let ground = r.surface(mx, mz).unwrap_or(sea);
+        let views = [
+            ("low", Camera::orbit([mx, ground + 1.4, mz], 0.8, -0.05, 18.0, 55f32.to_radians())),
+            ("high", Camera::orbit([mx, ground, mz], 0.8, -0.45, 45.0, 50f32.to_radians())),
+        ];
+        for (view, camera) in views {
+            r.restart();
+            let mut times = Vec::new();
+            while r.samples < 64 {
+                let t = Instant::now();
+                let cmd = r.render(&camera, &light, false).unwrap();
+                queue.submit([cmd]);
+                device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+                times.push(t.elapsed());
+            }
+            times.sort();
+            let name = if blades { "blades" } else { "blocks" };
+            eprintln!("  grass as {name}, {view}: a sample {:.1} ms best, {:.1} ms middle", times[0].as_secs_f64() * 1000.0, times[times.len() / 2].as_secs_f64() * 1000.0);
+            if let Some(dir) = &dir {
+                let cmd = r.denoise(1.0).unwrap();
+                queue.submit([cmd]);
+                let (iw, ih, rgba) = r.read_image().unwrap();
+                image::save_buffer(dir.join(format!("grass-{view}-{name}.png")), &rgba, iw, ih, image::ColorType::Rgba8).unwrap();
+            }
+        }
+    }
+}

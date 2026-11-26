@@ -3150,6 +3150,17 @@ area draws the viewport at a time; a second one says where it is.
   less it smooths, until past some 128 samples a pixel it leaves them be.
   Measured on a hilly map late in the day, against 1024 samples: 1 sample
   denoised is as near as 4 raw ones, 7 as near as 16, 40 as near as 64.
+- **Grass**: as the game's **Blocks**, or as **Blades** of grass: over
+  every grass block (not snowy), in the place of the short and tall grass
+  and the ferns, a field of thin blades made up as the image is drawn,
+  each its own height and lean, in tufts, darker at their foot and lighter
+  and yellower to the tip, in the grass block's colours, shading each other
+  and taking the sun's shadows. The flowers stay as they are. **Density**:
+  blades a block (24 at first); **Height** (0.8 of a block at first). Far
+  off, where a blade is smaller than a pixel, the field thins out to the
+  grass blocks under it. Blades cost time: a sample at the grass's height
+  took some twice as long as with the game's grass. Changing between
+  Blocks and Blades builds the scene again.
 - **Image to save**: a **Size** (the view's, HD, 4K or 8K), the
   **Samples a pixel** (more: cleaner and slower) and **Denoise** (for an
   image of few samples: past some 128 it changes nothing), then **Save image…**

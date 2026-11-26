@@ -134,6 +134,8 @@ struct Scene {
     around: Option<([f64; 2], f64)>,
     generation: u64,
     catalogue: Option<usize>,
+    /// Built with blades of grass over the grass blocks.
+    blades: bool,
     dim: usize,
 }
 
@@ -178,6 +180,8 @@ pub struct RenderSide {
     /// The view shown denoised, and the stills saved so.
     denoise: bool,
     still_denoise: bool,
+    /// The grass drawn as blades of grass (detailed), not as the game's.
+    blades: bool,
     still: Option<Still>,
     writing: Option<Receiver<Result<String, String>>>,
     saved: Option<Result<String, String>>,
@@ -213,6 +217,7 @@ impl Default for RenderSide {
             still_samples: 256,
             denoise: true,
             still_denoise: true,
+            blades: false,
             still: None,
             writing: None,
             saved: None,
@@ -356,6 +361,11 @@ impl RenderSide {
         {
             self.scene = None;
         }
+        // The grass drawn the other way: the scene built again, the camera
+        // where it is.
+        if self.scene.as_ref().is_some_and(|s| s.blades != self.blades) && self.still.is_none() && self.writing.is_none() {
+            self.scene = None;
+        }
         // Tiles edited out of the map the scene was made for (the map grew):
         // a scene of the whole map as it is now.
         if let Some(s) = &self.scene
@@ -391,6 +401,7 @@ impl RenderSide {
             }
             .unwrap_or(map);
             let materials = Arc::new(Materials::new(catalogue.clone(), device.limits().max_texture_array_layers as usize));
+            materials.set_blades(self.blades);
             let tiles = wanted(doc, &extent, orbit.target);
             let count = tiles.len();
             let builder = MapBuilder::start(doc.world.copy_unfrozen(), doc.dim, target, materials.clone(), tiles);
@@ -407,6 +418,7 @@ impl RenderSide {
                 around,
                 generation: doc.generation,
                 catalogue: cat_key,
+                blades: self.blades,
                 dim: doc.dim,
             });
             self.dirty.clear();
@@ -836,6 +848,23 @@ impl RenderSide {
             row(ui, tr!("Exposure"), |ui| {
                 ui.add(Field::new(&mut light.exposure, 0.1..=16.0).logarithmic(true).max_decimals(2));
             });
+        });
+        title(ui, tr!("Grass"));
+        well(ui, |ui| {
+            row(ui, tr!("Grass"), |ui| {
+                let labels = [tr!("Blocks"), tr!("Blades")];
+                if let Some(k) = crate::widgets::button_group(ui, "render grass", &labels, &[!self.blades, self.blades]) {
+                    self.blades = k == 1;
+                }
+            });
+            if self.blades {
+                row(ui, tr!("Density"), |ui| {
+                    ui.add(Field::new(&mut self.light.grass_blades, 3..=60)).on_hover_text(tr!("Blades of grass a block: more, a fuller field and a slower image"));
+                });
+                row(ui, tr!("Height"), |ui| {
+                    ui.add(Field::new(&mut self.light.grass_height, 0.2..=1.0).max_decimals(2).suffix(" blocks"));
+                });
+            }
         });
         title(ui, tr!("Image to save"));
         let mut start = false;

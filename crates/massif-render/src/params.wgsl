@@ -19,7 +19,7 @@ struct Params {
     size: vec4<u32>,     // width, height, seed of the frame, sample (0: start over)
     grid: vec4<i32>,     // chunks across, chunks down, height in blocks, sections
     info: vec4<u32>,     // words a chunk's record, pyramid levels, bounces, shift (pixels per side of a ray: 1 << shift)
-    flags: vec4<u32>,    // the image left to the denoiser (not written here); unused
+    flags: vec4<u32>,    // the image left to the denoiser (not written here), blades of grass a block, their height (f32 bits); unused
     level_off: array<vec4<u32>, 4>,
     level_w: array<vec4<u32>, 4>,
 }

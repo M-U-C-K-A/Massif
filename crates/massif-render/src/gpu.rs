@@ -945,7 +945,7 @@ impl Renderer {
             size: [w, h, self.frame.wrapping_mul(2654435761).wrapping_add(1), self.samples],
             grid: [e.width as i32, e.depth as i32, e.height(), e.sections as i32],
             info: [self.stride(), self.pyramid.levels.len() as u32, light.bounces, coarse as u32],
-            flags: [self.denoising() as u32, 0, 0, 0],
+            flags: [self.denoising() as u32, light.grass_blades, light.grass_height.clamp(0.1, 1.0).to_bits(), 0],
             level_off,
             level_w,
         };

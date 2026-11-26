@@ -174,7 +174,8 @@ impl MapBuilder {
                                     for cz in 0..TILE_CHUNKS as usize {
                                         for cx in 0..TILE_CHUNKS as usize {
                                             let nbt = build_chunk(&ctx, &stack, pos, cx, cz, &objects, &steady, &slabs, &caves, scratch);
-                                            if let Some(c) = chunk::decode(&nbt, &materials, lookup, ctx.min_y, sections) {
+                                            if let Some(mut c) = chunk::decode(&nbt, &materials, lookup, ctx.min_y, sections) {
+                                                materials.grow_blades(&mut c);
                                                 patch.put(c);
                                             }
                                         }

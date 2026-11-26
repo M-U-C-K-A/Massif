@@ -4046,5 +4046,7 @@
  "Denoise": "Remover ruído",
  "The most light a bounce brings: lower settles sooner, with fewer bright specks and a little less light; 0 for no limit": "A maior luz que um ressalto traz: mais baixo, a imagem assenta mais cedo, com menos pontos brilhantes e um pouco menos de luz; 0 para sem limite",
  "Smooth the grain of the first samples away while they add up, the textures kept sharp": "Suavizar o grão das primeiras amostras enquanto se somam, mantendo as texturas nítidas",
- "Denoise the image before it is saved": "Remover o ruído da imagem antes de a guardar"
+ "Denoise the image before it is saved": "Remover o ruído da imagem antes de a guardar",
+ "Blades": "Folhas",
+ "Blades of grass a block: more, a fuller field and a slower image": "Folhas de erva por bloco: mais, um prado mais cheio e uma imagem mais lenta"
 }

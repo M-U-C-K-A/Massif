@@ -4109,5 +4109,7 @@
  "The layer {name} is hidden on the map: it is painted all the same, and shows once shown again in the Layers panel.": "Le calque {name} est masqué sur la carte : il est bien peint, et s'affichera une fois réaffiché dans le panneau Calques.",
  "The ground cover {name} lies over the terrain here: a terrain painted here stays under it.": "Le couvert du sol {name} recouvre le terrain ici : un terrain peint ici reste dessous.",
  "The level {name} stands over the one painted here.": "Le niveau {name} se trouve au-dessus de celui peint ici.",
- "The layer {name} is locked here: brushes leave it as it is.": "Le calque {name} est verrouillé ici : les pinceaux le laissent tel quel."
+ "The layer {name} is locked here: brushes leave it as it is.": "Le calque {name} est verrouillé ici : les pinceaux le laissent tel quel.",
+ "Blades": "Brins",
+ "Blades of grass a block: more, a fuller field and a slower image": "Brins d'herbe par bloc : plus, un pré plus fourni et une image plus lente"
 }

@@ -11,6 +11,21 @@ use massif_assets::{Catalogue, Texture, Tint};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
+/// Block `i` (the game's order) of a section set to `m`, the section made
+/// mixed if it was one material.
+fn set(section: &mut crate::chunk::Section, i: usize, m: u16) {
+    use crate::chunk::Section;
+    if let Section::Uniform(u) = *section {
+        if u == m {
+            return;
+        }
+        *section = Section::Mixed(Box::new([u; crate::chunk::VOLUME]));
+    }
+    if let Section::Mixed(b) = section {
+        b[i] = m;
+    }
+}
+
 /// Pixels on a side of a texture layer: the game's blocks are 16 × 16.
 pub const SIDE: usize = 16;
 /// Bytes of a layer, RGBA.
@@ -36,6 +51,9 @@ pub enum Class {
     /// A block drawn by its model's faces (a slab, a fence, a torch, a
     /// plant): light goes around them.
     Shaped = 5,
+    /// Blades of grass made up by the shader over a grass block (the
+    /// Render side's detailed grass): light goes around them.
+    Blades = 6,
 }
 
 impl Class {
@@ -44,7 +62,7 @@ impl Class {
     /// and anything but itself and opaque blocks.
     pub fn shows_to(self, next: Class) -> bool {
         match next {
-            Class::Air | Class::Cutout | Class::Shaped => true,
+            Class::Air | Class::Cutout | Class::Shaped | Class::Blades => true,
             Class::Opaque => false,
             Class::Water | Class::Lava => next != self,
         }
@@ -130,8 +148,21 @@ struct Inner {
     revision: u64,
 }
 
+/// The detailed grass: over which materials (grass blocks) blades grow,
+/// as which material, and the plants they take the place of.
+#[derive(Default)]
+struct Blades {
+    on: bool,
+    of: HashMap<u16, u16>,
+    /// Short grass and ferns, and the lower halves of the tall ones; their
+    /// upper halves.
+    lower: std::collections::HashSet<u16>,
+    upper: std::collections::HashSet<u16>,
+}
+
 /// The materials of every block state met so far.
 pub struct Materials {
+    blades: RwLock<Blades>,
     cat: Option<Arc<Catalogue>>,
     /// The game's models and the textures the catalogue does not keep.
     library: Option<crate::models::Library>,
@@ -156,7 +187,7 @@ impl Materials {
     /// Materials whose models and packs come from `library`.
     pub fn with_library(cat: Option<Arc<Catalogue>>, library: Option<crate::models::Library>, most_layers: usize) -> Self {
         let inner = Inner { by_state: HashMap::new(), list: vec![Material::AIR], quads: Vec::new(), layers: vec![[255; LAYER_BYTES]], normals: vec![FLAT], speculars: vec![[0; LAYER_BYTES]], pbr: false, layer_of: HashMap::new(), revision: 1 };
-        Self { cat, library, inner: Mutex::new(inner), classes: RwLock::new(vec![Class::Air]), lights: RwLock::new(vec![0]), most_layers: most_layers.clamp(1, u16::MAX as usize) }
+        Self { blades: RwLock::new(Blades::default()), cat, library, inner: Mutex::new(inner), classes: RwLock::new(vec![Class::Air]), lights: RwLock::new(vec![0]), most_layers: most_layers.clamp(1, u16::MAX as usize) }
     }
 
     /// The material of a block state: `name` with its properties.
@@ -187,7 +218,105 @@ impl Materials {
             AIR
         };
         inner.by_state.insert(key.to_owned(), id);
+        self.note_grass(&mut inner, name, properties, id);
         id
+    }
+
+    /// Grow blades of grass over grass blocks, in the place of the short
+    /// and tall grass and ferns (see [`Self::grow_blades`]): before any
+    /// chunk is read.
+    pub fn set_blades(&self, on: bool) {
+        self.blades.write().unwrap().on = on;
+    }
+
+    pub fn blades(&self) -> bool {
+        self.blades.read().unwrap().on
+    }
+
+    /// Notes what a block state is to the detailed grass: a grass block
+    /// (blades grow over it, a material of their own, of its colours), a
+    /// plant they replace.
+    fn note_grass(&self, inner: &mut Inner, name: &str, properties: &[(&str, &str)], id: u16) {
+        let short = name.rsplit(':').next().unwrap_or(name);
+        let prop = |p: &str| properties.iter().find(|(k, _)| *k == p).map(|(_, v)| *v);
+        match short {
+            "grass_block" if prop("snowy") != Some("true") && id != AIR => {
+                let mut b = self.blades.write().unwrap();
+                if b.of.contains_key(&id) || inner.list.len() >= u16::MAX as usize {
+                    return;
+                }
+                let g = inner.list[id as usize];
+                let blades = Material { class: Class::Blades, top: g.top, side: g.top, bottom: g.top, top_tint: g.top_tint, side_tint: g.top_tint, roughness: 0.6, ..Material::AIR };
+                let k = match inner.list.iter().position(|m| *m == blades) {
+                    Some(k) => k as u16,
+                    None => {
+                        inner.list.push(blades);
+                        inner.revision += 1;
+                        self.classes.write().unwrap().push(Class::Blades);
+                        self.lights.write().unwrap().push(0);
+                        (inner.list.len() - 1) as u16
+                    }
+                };
+                b.of.insert(id, k);
+            }
+            "short_grass" | "grass" | "fern" => {
+                self.blades.write().unwrap().lower.insert(id);
+            }
+            "tall_grass" | "large_fern" => {
+                let mut b = self.blades.write().unwrap();
+                if prop("half") == Some("upper") { b.upper.insert(id) } else { b.lower.insert(id) };
+            }
+            _ => {}
+        }
+    }
+
+    /// Blades of grass over the grass blocks of `chunk`, in the cell above
+    /// each where there is air or grass (the tall grass's upper half gone
+    /// with it), when the detailed grass is on.
+    pub fn grow_blades(&self, chunk: &mut crate::chunk::Chunk) {
+        let b = self.blades.read().unwrap();
+        if !b.on || b.of.is_empty() {
+            return;
+        }
+        use crate::chunk::{Section, VOLUME};
+        let n = chunk.sections.len();
+        let mut changes: Vec<(usize, usize, u16)> = Vec::new();
+        for k in 0..n {
+            let Section::Mixed(blocks) = &chunk.sections[k] else {
+                if let Section::Uniform(m) = chunk.sections[k]
+                    && b.of.contains_key(&m)
+                {
+                    // A section all of grass blocks: only its top can show.
+                    for i in 0..256 {
+                        let (x, z) = (i % 16, i / 16);
+                        changes.push((k, (15 * 16 + z) * 16 + x, m));
+                    }
+                }
+                continue;
+            };
+            for i in 0..VOLUME {
+                if b.of.contains_key(&blocks[i]) {
+                    changes.push((k, i, blocks[i]));
+                }
+            }
+        }
+        let at = |sections: &Vec<Section>, k: usize, i: usize| sections[k].get(i % 16, i / 256, (i / 16) % 16);
+        for (k, i, grass) in changes {
+            // The cell above, in this section or the next.
+            let (k1, i1) = if i / 256 == 15 { (k + 1, i % 256) } else { (k, i + 256) };
+            if k1 >= n {
+                continue;
+            }
+            let above = at(&chunk.sections, k1, i1);
+            if above != AIR && !b.lower.contains(&above) {
+                continue;
+            }
+            set(&mut chunk.sections[k1], i1, b.of[&grass]);
+            let (k2, i2) = if i1 / 256 == 15 { (k1 + 1, i1 % 256) } else { (k1, i1 + 256) };
+            if k2 < n && b.upper.contains(&at(&chunk.sections, k2, i2)) {
+                set(&mut chunk.sections[k2], i2, AIR);
+            }
+        }
     }
 
     /// The class of every material so far, by number.
@@ -705,6 +834,53 @@ mod tests {
         assert_eq!(m.classes()[seagrass as usize], Class::Water, "a plant under water shows the water");
     }
 
+    /// Blades of grass grow in the cell over a grass block, across the top
+    /// of a section too, in the place of short grass and of tall grass's
+    /// two halves, not over a snowy grass block nor under another block.
+    #[test]
+    fn blades_grow_over_grass_blocks() {
+        use crate::chunk::{Chunk, Section, VOLUME};
+        let m = Materials::new(None, 64);
+        m.set_blades(true);
+        let grass = m.id("minecraft:grass_block", &[("snowy", "false")]);
+        let snowy = m.id("minecraft:grass_block", &[("snowy", "true")]);
+        let stone = m.id("minecraft:stone", &[]);
+        let short = m.id("minecraft:short_grass", &[]);
+        let upper = m.id("minecraft:tall_grass", &[("half", "upper")]);
+        assert_ne!(grass, AIR);
+        let at = |x: usize, y: usize, z: usize| (y * 16 + z) * 16 + x;
+        let mut b = Box::new([AIR; VOLUME]);
+        b[at(1, 3, 1)] = grass;
+        b[at(2, 3, 2)] = grass;
+        b[at(2, 4, 2)] = short;
+        b[at(2, 5, 2)] = upper;
+        b[at(3, 3, 3)] = snowy;
+        b[at(4, 3, 4)] = grass;
+        b[at(4, 4, 4)] = stone;
+        b[at(5, 15, 5)] = grass;
+        let mut chunk = Chunk { x: 0, z: 0, sections: vec![Section::Mixed(b), Section::EMPTY] };
+        m.grow_blades(&mut chunk);
+        let blades = chunk.sections[0].get(1, 4, 1);
+        assert_eq!(m.classes()[blades as usize], Class::Blades);
+        assert_eq!(chunk.sections[0].get(2, 4, 2), blades, "in place of short grass");
+        assert_eq!(chunk.sections[0].get(2, 5, 2), AIR, "the tall grass's upper half gone with it");
+        // (Without the game's textures, a snowy grass block is drawn as the
+        // other and is the same material.)
+        if snowy != grass {
+            assert_eq!(chunk.sections[0].get(3, 4, 3), AIR, "not over snow");
+        }
+        assert_eq!(chunk.sections[0].get(4, 4, 4), stone, "not under a block");
+        assert_eq!(chunk.sections[1].get(5, 0, 5), blades, "into the section above");
+        // Off: nothing grows.
+        let off = Materials::new(None, 64);
+        let g = off.id("minecraft:grass_block", &[]);
+        let mut b = Box::new([AIR; VOLUME]);
+        b[at(1, 3, 1)] = g;
+        let mut chunk = Chunk { x: 0, z: 0, sections: vec![Section::Mixed(b)] };
+        off.grow_blades(&mut chunk);
+        assert_eq!(chunk.sections[0].get(1, 4, 1), AIR);
+    }
+
     #[test]
     fn faces_show_through_air_holes_and_other_fluids() {
         use Class::*;
@@ -797,7 +973,7 @@ fn top_view(m: &Material, quads: &[GpuQuad], layers: &[Layer]) -> TopView {
         Class::Water => TopKind::Water,
         Class::Lava => TopKind::Lava,
         Class::Opaque | Class::Cutout => TopKind::Block,
-        Class::Shaped => TopKind::Overlay,
+        Class::Shaped | Class::Blades => TopKind::Overlay,
     };
     if kind != TopKind::Overlay {
         let mut v = TopView { kind, layer: m.top, tint: m.top_tint, uv: whole, area: whole, mean: [0; 4], light: m.light };

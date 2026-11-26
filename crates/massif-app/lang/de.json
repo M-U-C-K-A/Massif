@@ -4049,5 +4049,7 @@
  "Denoise": "Entrauschen",
  "The most light a bounce brings: lower settles sooner, with fewer bright specks and a little less light; 0 for no limit": "Das meiste Licht, das ein Abprall bringt: niedriger beruhigt sich das Bild schneller, mit weniger hellen Punkten und etwas weniger Licht; 0 für keine Grenze",
  "Smooth the grain of the first samples away while they add up, the textures kept sharp": "Das Rauschen der ersten Samples glätten, während sie sich summieren, die Texturen bleiben scharf",
- "Denoise the image before it is saved": "Das Bild vor dem Speichern entrauschen"
+ "Denoise the image before it is saved": "Das Bild vor dem Speichern entrauschen",
+ "Blades": "Halme",
+ "Blades of grass a block: more, a fuller field and a slower image": "Grashalme je Block: mehr ergibt eine dichtere Wiese und ein langsameres Bild"
 }

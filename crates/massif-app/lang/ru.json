@@ -4014,5 +4014,7 @@
  "The layer {name} is hidden on the map: it is painted all the same, and shows once shown again in the Layers panel.": "Слой {name} скрыт на карте: он всё равно рисуется и появится, когда его снова покажут на панели «Слои».",
  "The ground cover {name} lies over the terrain here: a terrain painted here stays under it.": "Покров {name} лежит здесь поверх ландшафта: нарисованный здесь ландшафт остаётся под ним.",
  "The level {name} stands over the one painted here.": "Уровень {name} находится здесь над закрашиваемым.",
- "The layer {name} is locked here: brushes leave it as it is.": "Слой {name} здесь заблокирован: кисти оставляют его как есть."
+ "The layer {name} is locked here: brushes leave it as it is.": "Слой {name} здесь заблокирован: кисти оставляют его как есть.",
+ "Blades": "Стебли",
+ "Blades of grass a block: more, a fuller field and a slower image": "Стеблей травы на блок: больше — гуще луг и медленнее изображение"
 }

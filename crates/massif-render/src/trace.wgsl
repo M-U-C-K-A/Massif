@@ -38,6 +38,7 @@ const UNIFORM: u32 = 0x80000000u;
 const CLASS_CUTOUT: u32 = 2u;
 const CLASS_WATER: u32 = 3u;
 const CLASS_SHAPED: u32 = 5u;
+const CLASS_BLADES: u32 = 6u;
 const MAX_STEPS: i32 = 1536;
 const EPS: f32 = 0.004;
 // How far a ray that leaves the scene goes through the fog.
@@ -97,6 +98,134 @@ struct Hit {
     cell: vec3<i32>,
     // A shadow ray: how far it went before meeting water (-1: none).
     water: f32,
+    // A blade of grass (axis -2): its normal, how far up it (0 to 1).
+    normal: vec3<f32>,
+    up: f32,
+}
+
+// ---- blades of grass ----------------------------------------------------------
+
+// A random number for each sample, for the blades' level of detail.
+var<private> LOD_U: f32;
+// Whether the rays traced now are the eyes' (and their shadow rays): the
+// bounces after go through the blades, to the ground under them.
+var<private> SHARP: bool;
+
+fn unit(h: u32) -> f32 {
+    return f32(h & 0xffffu) / 65535.0;
+}
+
+// The ray (o: in the cell's space) against triangle a b c, past t0 and
+// before t1: its distance, or -1.
+fn triangle(o: vec3<f32>, rd: vec3<f32>, a: vec3<f32>, b: vec3<f32>, c: vec3<f32>, t0: f32, t1: f32) -> f32 {
+    let e1 = b - a;
+    let e2 = c - a;
+    let pv = cross(rd, e2);
+    let det = dot(e1, pv);
+    if (abs(det) < 1e-10) {
+        return -1.0;
+    }
+    let inv = 1.0 / det;
+    let tv = o - a;
+    let u = dot(tv, pv) * inv;
+    if (u < 0.0 || u > 1.0) {
+        return -1.0;
+    }
+    let qv = cross(tv, e1);
+    let v = dot(rd, qv) * inv;
+    if (v < 0.0 || u + v > 1.0) {
+        return -1.0;
+    }
+    let t = dot(e2, qv) * inv;
+    if (t <= max(t0, 1e-4) || t >= t1) {
+        return -1.0;
+    }
+    return t;
+}
+
+// Blades of grass in `cell`, made up from its place (the same each
+// sample): so many, as high (P.flags.y, P.flags.z), in tufts of three from
+// one root, each leaning its own way, a ribbon of three triangles
+// narrowing to its tip. The first one the ray meets between t0 and t1,
+// into `h`.
+fn blades_hit(cell: vec3<i32>, ro: vec3<f32>, rd: vec3<f32>, t0: f32, t1: f32, h: ptr<function, Hit>) -> bool {
+    let o = ro - vec3<f32>(cell);
+    let height = bitcast<f32>(P.flags.z);
+    // Over the blades all along: nothing to meet.
+    if (min(o.y + rd.y * t0, o.y + rd.y * t1) > height) {
+        return false;
+    }
+    let seed = pcg(u32(cell.x) * 73856093u ^ u32(cell.y) * 19349663u ^ u32(cell.z) * 83492791u);
+    let inv = 1.0 / select(rd, select(vec3<f32>(-1e-12), vec3<f32>(1e-12), rd >= vec3<f32>(0.0)), abs(rd) < vec3<f32>(1e-12));
+    var best = t1;
+    var found = false;
+    let tufts = (P.flags.y + 2u) / 3u;
+    for (var c = 0u; c < tufts; c++) {
+        let hc = pcg(seed + c * 0x9e3779b9u);
+        let root = vec2<f32>(unit(hc), unit(hc >> 16u)) * 0.8 + 0.1;
+        // The box the tuft's blades lean within: most rays pass by.
+        let lo = vec3<f32>(max(root.x - 0.36, 0.0), 0.0, max(root.y - 0.36, 0.0));
+        let hi = vec3<f32>(min(root.x + 0.36, 1.0), height, min(root.y + 0.36, 1.0));
+        let ta = (lo - o) * inv;
+        let tb = (hi - o) * inv;
+        let near = max(max(min(ta.x, tb.x), min(ta.y, tb.y)), min(ta.z, tb.z));
+        let far = min(min(max(ta.x, tb.x), max(ta.y, tb.y)), max(ta.z, tb.z));
+        if (far < max(near, t0) || near > best) {
+            continue;
+        }
+        for (var k = 0u; k < 3u; k++) {
+            let h1 = pcg(hc + k * 0x85ebca6bu);
+            let h2 = pcg(h1);
+            let base = root + (vec2<f32>(unit(h1), unit(h1 >> 16u)) - 0.5) * 0.12;
+            let tall = height * (0.55 + 0.45 * unit(h2));
+            let lean_a = unit(h2 >> 16u) * 6.2831853;
+            let lean = (0.08 + 0.27 * unit(h1 ^ h2)) * tall;
+            let dir = vec2<f32>(cos(lean_a), sin(lean_a));
+            let tip_xz = clamp(base + dir * lean, vec2<f32>(0.01), vec2<f32>(0.99));
+            // The blade's own box.
+            let blo = vec3<f32>(min(base, tip_xz).x - 0.05, 0.0, min(base, tip_xz).y - 0.05);
+            let bhi = vec3<f32>(max(base, tip_xz).x + 0.05, tall, max(base, tip_xz).y + 0.05);
+            let ba = (blo - o) * inv;
+            let bb = (bhi - o) * inv;
+            let bnear = max(max(min(ba.x, bb.x), min(ba.y, bb.y)), min(ba.z, bb.z));
+            let bfar = min(min(max(ba.x, bb.x), max(ba.y, bb.y)), max(ba.z, bb.z));
+            if (bfar < max(bnear, t0) || bnear > best) {
+                continue;
+            }
+            let mid_xz = base + dir * (lean * 0.3);
+            // Its flat side across its lean, a little turned.
+            let face = lean_a + 1.5707963 + (unit(h2 >> 8u) - 0.5) * 0.8;
+            let side = vec3<f32>(cos(face), 0.0, sin(face));
+            let s0 = side * 0.05;
+            let s1 = side * 0.032;
+            let p0 = vec3<f32>(base.x, 0.0, base.y);
+            let p1 = vec3<f32>(mid_xz.x, tall * 0.55, mid_xz.y);
+            let p2 = vec3<f32>(tip_xz.x, tall, tip_xz.y);
+            var t = triangle(o, rd, p0 - s0, p0 + s0, p1 + s1, t0, best);
+            var e = cross(s0 * 2.0, p1 + s1 - p0 + s0);
+            let tq = triangle(o, rd, p0 - s0, p1 + s1, p1 - s1, t0, best);
+            if (tq > 0.0) {
+                t = tq;
+                e = cross(p1 + s1 - p0 + s0, s1 * -2.0);
+            }
+            let tt = triangle(o, rd, p1 - s1, p1 + s1, p2, t0, best);
+            if (tt > 0.0) {
+                t = tt;
+                e = cross(s1 * 2.0, p2 - p1 + s1);
+            }
+            if (t > 0.0) {
+                best = t;
+                found = true;
+                (*h).normal = normalize(e);
+                (*h).up = clamp((o.y + rd.y * t) / tall, 0.0, 1.0);
+                (*h).quad = c * 3u + k;
+            }
+        }
+    }
+    if (found) {
+        (*h).t = best;
+    }
+    return found;
 }
 
 // ---- shaped blocks ------------------------------------------------------------
@@ -372,7 +501,22 @@ fn trace(ro: vec3<f32>, rd: vec3<f32>, tmax: f32, mode: u32) -> Hit {
                 }
             }
         }
-        if (mat != 0u && class_of(materials[mat * 3u]) == CLASS_SHAPED) {
+        if (mat != 0u && class_of(materials[mat * 3u]) == CLASS_BLADES) {
+            // Blades of grass, fewer far off (where they are smaller than
+            // a pixel: the ground under them shows their colours).
+            let pixel = t * P.up.w;
+            let keep = clamp((0.25 - pixel) / 0.15, 0.0, 1.0);
+            if (P.flags.y > 0u && SHARP && LOD_U < keep) {
+                let exit = (select(vec3<f32>(v), vec3<f32>(v + 1), rd > vec3<f32>(0.0)) - ro) * inv;
+                if (blades_hit(v, ro, rd, t, min(min(exit.x, exit.y), exit.z) + 1e-4, &h)) {
+                    h.found = true;
+                    h.mat = mat;
+                    h.axis = -2;
+                    h.cell = v;
+                    return h;
+                }
+            }
+        } else if (mat != 0u && class_of(materials[mat * 3u]) == CLASS_SHAPED) {
             // A model's faces, inside the cell.
             let exit = (select(vec3<f32>(v), vec3<f32>(v + 1), rd > vec3<f32>(0.0)) - ro) * inv;
             let q = shaped_hit(mat, ro, rd, v, t, min(min(exit.x, exit.y), exit.z) + 1e-4);
@@ -1082,7 +1226,25 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
         // The texture's directions on the face, for a pack's normal maps.
         var tangent = vec3<f32>(1.0, 0.0, 0.0);
         var bitangent = vec3<f32>(0.0, 0.0, 1.0);
-        if (hit.axis >= 0) {
+        var blade = 1.0;
+        if (hit.axis == -2) {
+            // A blade of grass: seen from either side, a little rounded
+            // toward the sky; the grass block's texture under it, darker
+            // at its foot, lighter and yellower to its tip.
+            n = hit.normal;
+            if (dot(n, rd) > 0.0) {
+                n = -n;
+            }
+            n = normalize(n + vec3<f32>(0.0, 0.35, 0.0));
+            if (dot(n, rd) > -0.05) {
+                n = normalize(n - rd * (dot(n, rd) + 0.05));
+            }
+            uvl = vec3<f32>(fract(p.xz), f32(m.x & 0xffffu));
+            tint = unpack_rgb(m.z);
+            let shade = 0.82 + 0.36 * unit(pcg(hit.quad * 2654435761u ^ u32(hit.cell.x * 7 + hit.cell.z * 13)));
+            blade = shade * mix(0.42, 1.08, hit.up);
+            tint = mix(tint, tint * vec3<f32>(1.3, 1.18, 0.55), hit.up * hit.up * 0.55);
+        } else if (hit.axis >= 0) {
             n[hit.axis] = -sign(rd[hit.axis]);
             uvl = face_uv(m, p, hit.axis, rd);
             let top = hit.axis == 1 && rd.y < 0.0;
@@ -1136,7 +1298,7 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
         let lod = clamp(log2(max(hit.t * P.up.w * 16.0, 1e-6)), 0.0, 4.0);
         let tex = textureSampleLevel(atlas, atlas_sampler, uvl.xy, i32(uvl.z), lod);
         var surf: Surface;
-        surf.albedo = tex.rgb * tint;
+        surf.albedo = min(tex.rgb * tint * blade, vec3<f32>(1.0));
         var metal = bitcast<f32>(look.y);
         var rough = bitcast<f32>(look.x);
         // A pack's LabPBR maps: the normal (and its occlusion), the
@@ -1245,6 +1407,8 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
             mirror = false;
         }
         bounce += 1u;
+        // Past a diffuse bounce, the blades are left out (see SHARP).
+        SHARP = mirror;
         if (bounce >= 2u) {
             let q = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.05, 1.0);
             if (rand(seed) > q) {
@@ -1285,6 +1449,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Fireflies of a rare path are clipped: the image settles sooner. A
     // sample gone infinite or not a number counts as dark: added up, it
     // would leave the pixel black (or white) until the view moves.
+    LOD_U = rand(&seed);
+    SHARP = true;
     G_SET = false;
     var l = min(radiance(eye, dir, &seed), vec3<f32>(32.0));
     if (!finite(l)) {
