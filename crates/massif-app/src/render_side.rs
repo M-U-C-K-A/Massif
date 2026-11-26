@@ -242,6 +242,18 @@ impl RenderSide {
         self.scene.as_ref().map_or(0, |s| s.renderer.samples)
     }
 
+    /// Forget the scene, the camera kept: it is built afresh (tests).
+    #[cfg(test)]
+    pub fn rebuild(&mut self) {
+        self.scene = None;
+    }
+
+    /// The image as the renderer holds it (tests).
+    #[cfg(test)]
+    pub fn image(&self) -> Option<(u32, u32, Vec<u8>)> {
+        self.scene.as_ref()?.renderer.read_image()
+    }
+
     /// Draw a still now, without asking where: for tests.
     #[cfg(test)]
     pub fn save_still(&mut self, path: PathBuf, size: [u32; 2], samples: u32) {
@@ -337,6 +349,18 @@ impl RenderSide {
         {
             self.scene = None;
         }
+        // Tiles edited out of the map the scene was made for (the map grew):
+        // a scene of the whole map as it is now.
+        if let Some(s) = &self.scene
+            && self.dirty.iter().any(|p| {
+                let (x, z) = (p.x * massif_render::map_source::TILE_CHUNKS, p.z * massif_render::map_source::TILE_CHUNKS);
+                x < s.map.x0 || z < s.map.z0 || x >= s.map.x0 + s.map.width as i32 || z >= s.map.z0 + s.map.depth as i32
+            })
+            && self.still.is_none()
+            && self.writing.is_none()
+        {
+            self.scene = None;
+        }
         if self.scene.is_none() {
             let target = target_for(catalogue.as_ref().map(|c| c.version.as_str()));
             let Some(map) = Extent::of_map(&doc.world, doc.dim, &target) else {
@@ -380,6 +404,8 @@ impl RenderSide {
             });
             self.dirty.clear();
             self.last = None;
+            // A new renderer, a new image: shown from it even at the same size.
+            self.texture_size = [0; 2];
             // The fog and the clouds where they belong on this map.
             let sea = doc.world.meta.sea_level as f32;
             self.light.fog_height = sea + 8.0;

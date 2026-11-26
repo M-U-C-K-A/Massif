@@ -10960,6 +10960,131 @@ mod tests {
         assert_eq!(h.state().layout.side(), Side::Terrain);
     }
 
+    /// Edited on the World side while the Render side waits, the map comes
+    /// back drawn as it is now: the image after the edit is the one a scene
+    /// built afresh from the edited map draws (MASSIF_SNAPSHOT_DIR: before,
+    /// after and afresh).
+    #[test]
+    fn the_render_side_shows_edits_made_elsewhere() {
+        use crate::layout::Side;
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(ThemeChoice::Light);
+        h.run_steps(4);
+        let label = |icon, name| theme::with_icon(icon, name);
+        let built = |h: &mut egui_kittest::Harness<'static, MassifApp>| {
+            let started = std::time::Instant::now();
+            while h.state().render_side.building() && started.elapsed().as_secs() < 120 {
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert!(!h.state().render_side.building(), "the scene was built");
+            settle_render(h);
+        };
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let differ = |a: &[u8], b: &[u8]| a.iter().zip(b).map(|(x, y)| (*x as f64 - *y as f64).abs()).sum::<f64>() / a.len() as f64;
+        let view = |h: &mut egui_kittest::Harness<'static, MassifApp>, name: &str| {
+            let shown = (0..3).find_map(|_| h.render().ok()).expect("the picture is read back");
+            if let Some(dir) = &dir {
+                shown.save(dir.join(format!("render-edit-{name}.png"))).unwrap();
+            }
+            let areas: Vec<(crate::layout::AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+            let ppp = h.ctx.pixels_per_point();
+            let area = areas.iter().find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::RenderView)).map(|(_, r)| *r).unwrap();
+            let r = Rect::from_min_max(area.min * ppp, area.max * ppp).shrink(8.0 * ppp);
+            // What the view shows, and what the renderer holds there.
+            // (The image fills the area under its header and inside its
+            // margins: the offset where it matches best, a few pixels from
+            // its bottom right.)
+            let (w, ih, held) = h.state().render_side.image().expect("an image");
+            let (ex, ey) = ((area.max.x * ppp).round() as i64 - w as i64, (area.max.y * ppp).round() as i64 - ih as i64);
+            let at = |ox: i64, oy: i64| {
+                let (mut px, mut own) = (Vec::new(), Vec::new());
+                for y in (r.top() as i64).max(ey + 8)..(r.bottom() as i64).min(ey + ih as i64 - 8) {
+                    for x in (r.left() as i64).max(ex + 8)..(r.right() as i64).min(ex + w as i64 - 8) {
+                        px.extend_from_slice(&shown.get_pixel(x as u32, y as u32).0[..3]);
+                        own.extend_from_slice(&held[(((y - oy) * w as i64 + x - ox) * 4) as usize..][..3]);
+                    }
+                }
+                (px, own)
+            };
+            (-6..=0i64).flat_map(|dy| (-6..=0i64).map(move |dx| (dx, dy))).map(|(dx, dy)| at(ex + dx, ey + dy)).min_by(|a, b| differ(&a.0, &a.1).total_cmp(&differ(&b.0, &b.1))).unwrap()
+        };
+        // With the game's textures, when the game is installed here.
+        if let Some(Ok(cat)) = massif_assets::load_newest() {
+            h.state_mut().blocks.catalogue = Some(std::sync::Arc::new(cat));
+        }
+        h.get_by_label_contains(&label(Icon::Aperture, "Render")).click();
+        h.run_steps(3);
+        built(&mut h);
+        let (before, _) = view(&mut h, "before");
+        // On the World side: a plateau raised in the middle of the map,
+        // half of it painted another terrain, woods planted on it (blocks
+        // the scene had not met: new materials and textures).
+        h.get_by_label_contains(&label(Icon::Map, "World")).click();
+        h.run_steps(3);
+        assert_eq!(h.state().layout.side(), Side::World);
+        let (lo, hi) = h.state().doc.dimension().bounds().unwrap();
+        let t = massif_core::coords::TILE_SIZE;
+        let (cx, cz) = (((lo.x + hi.x + 1) * t / 2) as f32, ((lo.z + hi.z + 1) * t / 2) as f32);
+        let square = |radius: f32| massif_core::Brush { shape: massif_core::BrushShape::Square, radius, profile: massif_core::Profile::Constant, strength: 1.0, rotation: 0.0, mask: None, filter: None };
+        {
+            let app = h.state_mut();
+            let doc = &mut app.doc;
+            let top = doc.world.meta.sea_level as f32 + 60.0;
+            let oaks = massif_core::treepack::TreeKind::BigOak.install(&mut doc.world.registry);
+            let other = ["Red Sand", "Mycelium", "Snow", "Stone"].iter().find_map(|n| doc.world.registry.terrain_by_name(n)).expect("a terrain");
+            let disc = massif_core::Brush { shape: massif_core::BrushShape::Circle, ..square(70.0) };
+            doc.history.begin("Plateau", 0);
+            {
+                let mut e = doc.history.edit(&mut doc.world, 0);
+                massif_core::ops::set_height(&mut e, &square(160.0), cx, cz, top, massif_core::ops::Surface::Top);
+                massif_core::ops::paint_terrain(&mut e, &disc, cx - 80.0, cz, other, 5);
+                massif_core::ops::paint_objects(&mut e, &disc, cx + 80.0, cz, oaks, 6);
+            }
+            doc.commit();
+        }
+        h.run_steps(4);
+        h.get_by_label_contains(&label(Icon::Aperture, "Render")).click();
+        h.run_steps(3);
+        built(&mut h);
+        let (after, _) = view(&mut h, "after");
+        // The same map built afresh, from the same camera.
+        h.state_mut().render_side.rebuild();
+        h.run_steps(2);
+        built(&mut h);
+        let (fresh, _) = view(&mut h, "fresh");
+        let (edit, stale) = (differ(&before, &fresh), differ(&after, &fresh));
+        eprintln!("render side after an edit: {stale:.2} from a fresh scene's image, the edit itself {edit:.2}");
+        assert!(edit > 4.0, "the plateau shows: {edit:.2}");
+        assert!(stale < edit / 4.0, "the image after the edit is the fresh scene's: {stale:.2} against {edit:.2}");
+        // Another edit, and a new scene made on the way back (as when the
+        // game's textures were read again, or the camera went far on a large
+        // map): the view shows the new renderer's image, not the last one
+        // of the old renderer, frozen.
+        h.get_by_label_contains(&label(Icon::Map, "World")).click();
+        h.run_steps(3);
+        {
+            let doc = &mut h.state_mut().doc;
+            let low = doc.world.meta.sea_level as f32 + 4.0;
+            doc.history.begin("Lower", 0);
+            {
+                let mut e = doc.history.edit(&mut doc.world, 0);
+                massif_core::ops::set_height(&mut e, &square(160.0), cx, cz, low, massif_core::ops::Surface::Top);
+            }
+            doc.commit();
+        }
+        h.run_steps(4);
+        h.state_mut().render_side.rebuild();
+        h.get_by_label_contains(&label(Icon::Aperture, "Render")).click();
+        h.run_steps(3);
+        built(&mut h);
+        let (again, held) = view(&mut h, "again");
+        let (frozen, moved) = (differ(&again, &held), differ(&again, &fresh));
+        eprintln!("render side after a new scene: {frozen:.2} from the renderer's image, {moved:.2} from the last");
+        assert!(frozen < 2.0, "the view shows the new renderer's image: {frozen:.2}");
+        assert!(moved > 4.0, "the plateau lowered shows: {moved:.2}");
+    }
+
     /// Let the Render side's image settle, with less motion (it stops at
     /// 64 samples a pixel), so that a snapshot does not wait on the graphics
     /// card path-tracing frame after frame (at 2x, it would time out).
