@@ -1879,6 +1879,55 @@ mod tests {
         assert_eq!((held.spills, held.floating), (0, 0), "{held:?}");
     }
 
+    /// A lake whose two halves come from two tiles of its sources, at 176.0
+    /// and 176.8 m, the seam between them read across a hundred metres (the
+    /// tiles' edges resampled): no line of land a hair over the water runs
+    /// along the seam, every column of the lake is under water.
+    #[test]
+    fn a_seam_between_tiles_of_a_lake_stays_water() {
+        let area = Area { lat: 45.77, lon: -84.94, blocks_per_metre: 0.2, width: 2048, depth: 1536 };
+        let lake = |e: f64, s: f64| (e / 4200.0).powi(2) + (s / 3000.0).powi(2) < 1.0;
+        let field = Field(move |e: f64, s: f64| {
+            if lake(e, s) {
+                // West at 176.0 m, east at 176.8 m, a ramp 100 m wide between.
+                let t = ((e + 50.0) / 100.0).clamp(0.0, 1.0) as f32;
+                Some(176.0 + 0.8 * t)
+            } else {
+                let out = ((e / 4200.0).powi(2) + (s / 3000.0).powi(2)).sqrt() - 1.0;
+                Some((178.0 + out * 400.0 + 0.3 * (e / 70.0).sin() * (s / 90.0).cos()) as f32)
+            }
+        });
+        let mut samples = Samples::read(&area, &field, 5.0);
+        samples.prepare_at(area.blocks_per_metre, None, Some(176.0));
+        assert!(!samples.lakes.levels.is_empty());
+        let fit = Vertical { datum: 176.0, sea_level: 63, exaggeration: 3.0, low: -64, high: 320, fit: true }.fit(samples.span().unwrap(), area.blocks_per_metre);
+        let rect = BlockRect::new(-1024, -768, 1024, 768);
+        let mut world = World::new(Default::default());
+        world.meta.sea_level = 63;
+        world.dims[0].resize(rect, || crate::tile::Tile::ground(70.0, 0, NO_FLUID));
+        let theme = crate::generate::Theme::new(&world.registry);
+        let mut history = crate::history::History::new(1);
+        history.begin("real", 0);
+        write_ground(&mut history.edit(&mut world, 0), &samples, &fit, rect, Some((&area, theme)), &Steps::default());
+        drop(history);
+        let mut dry = Vec::new();
+        for z in rect.z0..rect.z1 {
+            for x in rect.x0..rect.x1 {
+                let (e, s) = ((x - rect.x0) as f64 / 0.2 - 5120.0, (z - rect.z0) as f64 / 0.2 - 3840.0);
+                if !lake(e * 1.03, s * 1.03) {
+                    continue;
+                }
+                let (top, fluid, _, _) = column(&world, x, z);
+                if fluid == NO_FLUID || fluid as f32 <= top {
+                    dry.push((x, z));
+                }
+            }
+        }
+        assert!(dry.is_empty(), "{} dry columns in the lake, as {:?}", dry.len(), &dry[..dry.len().min(8)]);
+        let held = crate::water::check(&world.dims[0]);
+        assert_eq!((held.spills, held.floating), (0, 0), "{held:?}");
+    }
+
     /// A great lake that meets other data as often as its shore: its flat
     /// surface at 176.9 m runs off the area's east edge, and its middle is
     /// a bathymetry 20 to 30 m lower (as the Straits of Mackinac in the

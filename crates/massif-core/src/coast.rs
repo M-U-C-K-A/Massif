@@ -269,18 +269,15 @@ pub fn find_lakes(grid: &[f32], nx: usize, nz: usize, metres_per_sample: f64, wa
             continue;
         }
         // A sample read between two flats: across it, a flat on each side
-        // (one or two samples away), and its height about theirs.
+        // (up to half SEAM_REACH samples away: the tiles' edges are
+        // resampled over a few), and its height about theirs.
         let m = grid[k];
         if !m.is_finite() {
             continue;
         }
-        let at = |di: isize, dj: isize| {
-            let (x, z) = (i as isize + di, j as isize + dj);
-            if x < 0 || z < 0 || x >= nx as isize || z >= nz as isize { 0 } else { flat_of[z as usize * nx + x as usize] }
-        };
-        for (d1, d2) in [((1, 0), (-1, 0)), ((0, 1), (0, -1))] {
-            let a = [at(d1.0, d1.1), at(2 * d1.0, 2 * d1.1)].into_iter().find(|&f| f != 0).unwrap_or(0);
-            let b = [at(d2.0, d2.1), at(2 * d2.0, 2 * d2.1)].into_iter().find(|&f| f != 0).unwrap_or(0);
+        for (di, dj) in [(1, 0), (0, 1)] {
+            let a = across(&flat_of, nx, nz, i, j, di, dj, SEAM_REACH / 2);
+            let b = across(&flat_of, nx, nz, i, j, -di, -dj, SEAM_REACH / 2);
             if a == 0 || b == 0 || a == b {
                 continue;
             }
@@ -388,8 +385,45 @@ pub fn find_lakes(grid: &[f32], nx: usize, nz: usize, metres_per_sample: f64, wa
     }
     if !lakes.levels.is_empty() {
         lakes.of = lake_of.iter().map(|&g| number[g as usize]).collect();
+        // What is left between two lakes, a seam of their sources too short
+        // or too steep to make them one, read about their levels: water, not
+        // a line of land a hair over it. The higher lake's, whose shore it is.
+        let of = &lakes.of;
+        let seams: Vec<(usize, u16)> = (0..grid.len())
+            .into_par_iter()
+            .filter_map(|k| {
+                let m = grid[k];
+                if of[k] != 0 || !m.is_finite() {
+                    return None;
+                }
+                let (i, j) = (k % nx, k / nx);
+                [(1, 0), (0, 1)].into_iter().find_map(|(di, dj)| {
+                    let (a, b) = (across(of, nx, nz, i, j, di, dj, SEAM_REACH), across(of, nx, nz, i, j, -di, -dj, SEAM_REACH));
+                    if a == 0 || b == 0 {
+                        return None;
+                    }
+                    let (la, lb) = (lakes.levels[a as usize - 1], lakes.levels[b as usize - 1]);
+                    (m <= la.max(lb) + SEAM_RING).then_some((k, if la >= lb { a } else { b }))
+                })
+            })
+            .collect();
+        for (k, n) in seams {
+            lakes.of[k] = n;
+        }
     }
     lakes
+}
+
+/// The first number other than 0 in `of` from sample `(i, j)` on, step
+/// `(di, dj)`, within `reach` samples; 0 when there is none.
+#[allow(clippy::too_many_arguments)]
+fn across<T: Copy + Default + PartialEq>(of: &[T], nx: usize, nz: usize, i: usize, j: usize, di: isize, dj: isize, reach: usize) -> T {
+    (1..=reach as isize)
+        .map(|s| (i as isize + di * s, j as isize + dj * s))
+        .take_while(|&(x, z)| x >= 0 && z >= 0 && x < nx as isize && z < nz as isize)
+        .map(|(x, z)| of[z as usize * nx + x as usize])
+        .find(|&f| f != T::default())
+        .unwrap_or_default()
 }
 
 /// Flats that meet along a seam are one lake when their levels are no
@@ -410,6 +444,14 @@ const WIDE_RIM: f32 = 0.5;
 /// How far a sample read across a seam between two flats may stray from
 /// their levels, in metres (the tiles' edges are cleaned and resampled).
 const SEAM_SLACK: f32 = 1.0;
+/// How many samples a seam between two flats may be wide on each side of a
+/// sample: the tiles' edges are cleaned and read between pixels, and the
+/// transition from one flat to the other spans a few samples, ringing a
+/// metre or so under and over them (Kitt's Straits of Mackinac: 8 samples).
+const SEAM_REACH: usize = 8;
+/// How far over the higher of two lakes a sample left between them may
+/// stand and be their water, in metres.
+const SEAM_RING: f32 = 1.5;
 
 /// Give the lakes floors under their surfaces, deepening from their shores.
 pub fn dig_lakes(grid: &mut [f32], nx: usize, nz: usize, metres_per_sample: f64, lakes: &Lakes) {
