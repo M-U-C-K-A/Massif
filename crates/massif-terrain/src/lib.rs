@@ -21,6 +21,7 @@
 //! assert_eq!(preview.data.len(), 256 * 256);
 //! ```
 
+pub mod bench;
 pub mod compile;
 pub mod components;
 pub mod engine;
