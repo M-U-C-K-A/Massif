@@ -10912,7 +10912,7 @@ mod tests {
         settle_render(&mut h);
         // The picture read back from the card: under the load of the other
         // tests drawing at once, a read-back can time out; it is asked again.
-        let shown = (0..3).find_map(|_| h.render().ok()).expect("the render side's picture is read back");
+        let shown = (0..6).find_map(|k| { if k > 0 { std::thread::sleep(std::time::Duration::from_secs(2)); } h.render().ok() }).expect("the render side's picture is read back");
         if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
             shown.save(dir.join("render-side.png")).unwrap();
         }
@@ -10983,7 +10983,7 @@ mod tests {
         let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
         let differ = |a: &[u8], b: &[u8]| a.iter().zip(b).map(|(x, y)| (*x as f64 - *y as f64).abs()).sum::<f64>() / a.len() as f64;
         let view = |h: &mut egui_kittest::Harness<'static, MassifApp>, name: &str| {
-            let shown = (0..3).find_map(|_| h.render().ok()).expect("the picture is read back");
+            let shown = (0..6).find_map(|k| { if k > 0 { std::thread::sleep(std::time::Duration::from_secs(2)); } h.render().ok() }).expect("the picture is read back");
             if let Some(dir) = &dir {
                 shown.save(dir.join(format!("render-edit-{name}.png"))).unwrap();
             }
