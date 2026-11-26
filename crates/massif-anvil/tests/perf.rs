@@ -67,3 +67,45 @@ fn exporting_a_map() {
     }
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// How long a selection of 256 × 256 columns takes to come out as a
+/// schematic: its blocks built, then each file made. The map of
+/// MASSIF_SCHEM_WORLD (a .massif), else a generated one; the selection at
+/// its middle. On every thread, the best of five runs, in wall-clock time
+/// with the processor time beside it.
+#[test]
+#[ignore]
+fn extracting_a_selection() {
+    use massif_anvil::extract::{Bottom, ExtractOptions, extract};
+    use massif_core::selection::{Selection, Shape};
+    use massif_objects::write::{Format, write};
+    let world = match std::env::var_os("MASSIF_SCHEM_WORLD") {
+        Some(path) => massif_format::load(Path::new(&path)).unwrap(),
+        None => generate(&GenParams { tiles_x: 8, tiles_z: 8, landform: Landform::Hills, seed: 7, ..GenParams::default() }),
+    };
+    let (lo, hi) = world.dims[0].bounds().unwrap();
+    let (cx, cz) = ((lo.x + hi.x + 1) * 64, (lo.z + hi.z + 1) * 64);
+    let rect = massif_core::coords::BlockRect::new(cx - 128, cz - 128, cx + 128, cz + 128);
+    let selection = Selection::shape(&Shape::Rect(rect));
+    let options = ExtractOptions { dimension: 0, target: Target::release("1.21.11").unwrap(), mod_blocks: Default::default(), families: Default::default(), bottom: Bottom::BelowGround(8), objects: true, structures: true, biomes: true };
+    let (mut best, mut cpu) = (Duration::MAX, Duration::MAX);
+    let mut got = None;
+    for _ in 0..5 {
+        let (t, c) = (Instant::now(), cpu_time());
+        got = Some(extract(&world, &selection, &options, &Progress::default()).unwrap());
+        best = best.min(t.elapsed());
+        cpu = cpu.min(cpu_time() - c);
+    }
+    let got = got.unwrap();
+    let v = &got.volume;
+    println!("blocks of {:?} ({} placed, {} objects): {best:?} ({cpu:?} of processor)", v.size, v.count(), got.objects.iter().map(|o| o.count).sum::<usize>());
+    for format in [Format::Sponge3, Format::Sponge2, Format::Litematic] {
+        let (mut best, mut size) = (Duration::MAX, 0);
+        for _ in 0..5 {
+            let t = Instant::now();
+            size = write(v, format).unwrap().len();
+            best = best.min(t.elapsed());
+        }
+        println!("{format:?}: {best:?}, {} KB", size / 1024);
+    }
+}
