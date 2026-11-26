@@ -1,3 +1,0 @@
-**WorldPainter worlds import with their mods and their layers made ground**
-
-Importing a WorldPainter world first asks for the mods it uses (the game's version, the mods' jars or a modpack's instance, remembered for next time), whether to make its covers of layers the ground's own, and whether to smooth the terrain. With both on, as they are at first, a Conquest Reforged map opens with its grass layers and Forest Floors already part of the land at its own height, the whole map smoothed with layers and no seam where a cover ended, with nothing left to do in the import report. Edit ▸ Covers of Layers to Ground… still does it later.

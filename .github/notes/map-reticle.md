@@ -1,1 +1,0 @@
-**The map's crosshair marks the middle of the view.** The crosshair chosen in Settings ▸ Appearance is now drawn at the middle of the 2D map's view, as at the middle of the player's view, to show where the view is centred, instead of under the brush. The pointer keeps the system's crosshair with a white dot, which reads on dark land as on snow.

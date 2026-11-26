@@ -2,6 +2,56 @@ Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, 
 
 ## New in 1.2.2
 
+**Erosion, rebuilt: real valleys in a fraction of a second**
+
+The Terrain Generator's **Erosion** is new (Stream erosion's second version): rivers cut valleys that branch up every slope with sharp ridges between them, the slopes creep and slide, and what the water carries fills the valley floors and spreads into fans, worked out coarse to fine over the whole terrain so that Apply window by window leaves no seams. Its settings are Gaea's: Duration, Downcutting, Erosion scale, Sediment removal, Rock softness and Base level, with Flow, Wear, Deposition and Sediment masks for colours and layers. It is about a hundred times quicker than Stream erosion (0.66 s instead of 83 s for a simulation of 2048²), and on the relief bench its valleys come twice as close to Monte Perdido's and the Grand Canyon's. The Alpine Range composite uses it. Graphs made before keep Stream erosion and their results; in MassifScript a call now makes the latest version of a node, an older one being written `Erosion@1(…)` or `Transform@1(…)`.
+
+**One terrain generator: the classic graph is converted**
+
+The Terrain Generator is now Massif's only generator: the classic graph, with its Classic graph, Graph Viewport, Classic properties and Render Settings panels and its Graph and Render workspaces, is gone. A map made with it opens with its graph converted into the Terrain Generator's, node by node, with the same settings, links and places: what ran 1.2's own code (the classic Erosion, rivers, lakes, the sea, floating islands, overhangs, tectonic plates, Auto colour) and plain arithmetic (Constant, Levels, Clamp, Combine…) make the same terrain, and the nodes built on noise keep their shape and settings with the Terrain Generator's noises, so their relief is close rather than the same. A map that has a Terrain Generator graph of its own keeps it to drive the map, the converted nodes waiting below it, unwired, in a frame titled From the classic graph; a notice says once how many nodes were converted and which are close. A new map made from a template, and the samples of the home screen, get their template as a Terrain Generator graph, applied at once. Saved layouts that showed the classic panels open with the generator's in their place.
+
+**The Generator Viewer takes over from the Graph Viewport**
+
+The Generator Viewer opens in 3D under the sky, as the classic graph's viewport did, and shows a graph's whole result there: the water of its rivers and lakes and its layers of rock over the ground, such as floating islands and overhangs. A map made from a template, or a sample, is seen as its template is best seen, with its own sun, clouds, haze and sea. The viewer is taller in the Generator workspace. Its settings menu gains Apply over the map, where what the graph digs and raises goes into levels of their own and the map's ground stays as it was, and Height map: Save…, which saves the terrain as a 16-bit PNG height map without writing it into the map.
+
+**Mountain, Transform and a Combine with as many inputs as you connect**
+
+The Terrain Generator gains light pieces to build a landscape from, as in Gaea. **Mountain** makes one mountain from six settings (Scale, Height, Style, Bulk, Reduce details, Seed), at about half the cost of Alpine mountains. **Transform** now moves, turns, scales, stretches and deforms a relief at full detail instead of at the simulations' resolution (graphs made with the earlier Transform keep it and their results). **Combine** takes any number of reliefs: an empty input appears as soon as the last one is connected, each with a mask of its own, combined by one of eleven modes; in MassifScript it is `Mixer(a, b, c, mode: "max")`. A relief bench, `tools/relief_bench.sh`, measures the generator's shapes against real mountains, canyons, hills and a volcano.
+
+**Grow your own trees.** Objects ▸ **Grow trees…** grows trees from a few settings instead of schematic files: start from an oak, spruce, birch, cherry, palm, willow, acacia, dead tree or one of two giants (a giant sequoia about a hundred blocks tall, a great oak), then change its height, trunk, limbs, how much they droop or reach for the sun, the shape of the crown, the leaves and the blocks. Trunks flare into roots smoothed with stairs and slabs, branches thin from logs to walls to fences into crowns with gaps, and leaves gather where the twigs end and never decay; **Survival friendly** keeps to logs and leaves. A picture shows the tree and the next seeds' beside it, and a click adds as many variants as you like to a new object layer or to the one picked, with their bushes and small trees for Tree sizes. Trees taller than the room left under the top of the world are no longer cut off there: they are left out.
+
+**A part of the map as a schematic.** File ▸ Export Selection as Schematic… (or Export as Schematic… under the selection in a selection tool's settings) writes the selected columns as a WorldEdit `.schem` (Sponge version 3, or version 2 for WorldEdit 7.2) or a Litematica `.litematic`, with the blocks the export to Minecraft writes there: the ground, the water, the caves, the plants, the trees and the structures with their chests and signs, from a depth under the lowest ground (or the world's floor) to the highest block, biomes included. Before anything is saved, the dialog shows the box's size, the file's size, the materials it holds, the most first with their icons, and the trees of each object layer, and copies them as text. In an object layer's list, Export as .schem… writes the objects picked, a file each, and Grow trees… its trees.
+
+**Share a picture of your map in one click.** File ▸ Share Image… draws pictures of the open map ready to post on Discord or Reddit, and shows them as a carousel: the map as a diorama block, a low-sun view of its most dramatic relief, the map from above with a scale and a north arrow, and the map beside its relief. A slim band gives the map's name, its size and the version of Minecraft, with Massif's mark; it can be light, dark or left out. Pick 16:9, square or 4K, then Copy the picture to paste it anywhere, or Save it as a PNG.
+
+**WorldPainter worlds import with their mods and their layers made ground**
+
+Importing a WorldPainter world first asks for the mods it uses (the game's version, the mods' jars or a modpack's instance, remembered for next time), whether to make its covers of layers the ground's own, and whether to smooth the terrain. With both on, as they are at first, a Conquest Reforged map opens with its grass layers and Forest Floors already part of the land at its own height, the whole map smoothed with layers and no seam where a cover ended, with nothing left to do in the import report. Edit ▸ Covers of Layers to Ground… still does it later.
+
+**Covers of layers made ground leave no seam**
+
+Making a WorldPainter map's covers of layers the ground's own (Conquest Reforged's grass layers, a Forest Floor) no longer raises the covered ground a block over the ground beside it. The layers take the place of the top of the land at its own precise height, and the whole map is smoothed with layers, the ground that had no cover too, so the two meet level as one layered terrain, with no step where a cover ended.
+
+**Layers are sorted by dragging.** In the Layers panel, drag a layer onto another of its kind to put it above or below it, a line in the accent showing where it will go: in a palette, to put the layers a WorldPainter import brought in scattered back in order, or in a section. Dropped on a layer of another palette, it joins that palette at that place. Each move is one step to undo and is saved with the map; the order only changes the list, never the export. Move up and Move down in a layer's menu are steps to undo too.
+
+**Annotation layers in palettes follow their palette.** An annotation layer sorted into a palette is listed there only, no longer among the Annotations' colours too, and the palette's eye shows or hides it even while all the annotations are hidden: a Placeholders palette shown draws its layers. The eye of all the annotations shows or hides the colours and the layers in no palette. As in WorldPainter, the layer you start painting with (a ground cover, trees, an annotation colour or layer) is made visible, whichever eye hid it. An annotation layer can now be removed from its menu, its marks with it, as one step to undo.
+
+**Lua scripts make terrains, ground covers and object layers, and a busy graphics card no longer closes Massif.** A Lua script can now make the map's own terrains from strata of blocks (`map:add_terrain`), ground covers of the plants it names (`map:add_cover`) and object layers of the schematics in its folder (`map:add_objects`, which also retunes an existing layer, a tree pack's included, without its files), each redefined when its name is given again, and read or move the spawn with `map.spawn`; all of it is one step to undo, as anything else a script changes. When the graphics card is busy with another program and does not give the window its image in time, Massif skips that frame and sets the window up again on the next one, instead of closing; it writes this in its log.
+
+**The 3D View keeps its colours when the graphics preset changes**
+
+Picking another preset in Settings ▸ Graphics while a 3D View was open turned its land black, only the water and the outlines still drawn, until the map was opened again. The view now sends the blocks' colours and textures to the graphics card again whenever the preset makes it start its drawing anew.
+
+**The map's crosshair marks the middle of the view.** The crosshair chosen in Settings ▸ Appearance is now drawn at the middle of the 2D map's view, as at the middle of the player's view, to show where the view is centred, instead of under the brush. The pointer keeps the system's crosshair with a white dot, which reads on dark land as on snow.
+
+**Palette blocks can be removed, and a Noise preset is named at once**
+
+In a block palette of your own (Edit palettes…, as when importing a world), the ✕ beside a block of a layer removes it again, as does Remove in its right-click menu; before, the click picked the layer instead, and the same went for the layer's own ✕ and its fields. Saving a Noise pattern as a preset now puts the cursor in its name field as soon as the menu opens, so you can type the name straight away; Enter saves it and Escape leaves without saving.
+
+**Pictures in the manual, and a box gone from the Terrain Generator**
+
+The manual now shows the app in 58 pictures where it named them, from the workspaces and tools to the Terrain Generator. In the Terrain Generator, a setting driven by a mask is listed among the node's inputs under its own name with its diamond socket, instead of a sign that showed as an empty box.
+
 ## New in 1.2.1
 
 **The Generator Viewer's 3D looks like the Graph Viewport**
