@@ -46,6 +46,8 @@ struct Still {
     samples: u32,
     camera: Camera,
     light: Light,
+    /// Denoised before it is saved.
+    denoise: bool,
     row: u32,
     started: Instant,
 }
@@ -173,6 +175,9 @@ pub struct RenderSide {
     /// the last.
     still_size: usize,
     still_samples: u32,
+    /// The view shown denoised, and the stills saved so.
+    denoise: bool,
+    still_denoise: bool,
     still: Option<Still>,
     writing: Option<Receiver<Result<String, String>>>,
     saved: Option<Result<String, String>>,
@@ -206,6 +211,8 @@ impl Default for RenderSide {
             since: None,
             still_size: 2,
             still_samples: 256,
+            denoise: true,
+            still_denoise: true,
             still: None,
             writing: None,
             saved: None,
@@ -259,7 +266,7 @@ impl RenderSide {
     pub fn save_still(&mut self, path: PathBuf, size: [u32; 2], samples: u32) {
         let fov = self.fov;
         if let Some(orbit) = self.orbit {
-            self.still = Some(Still { path, size, samples, camera: orbit.camera(fov), light: self.light, row: 0, started: Instant::now() });
+            self.still = Some(Still { path, size, samples, camera: orbit.camera(fov), light: self.light, denoise: self.still_denoise, row: 0, started: Instant::now() });
         }
     }
 
@@ -533,6 +540,9 @@ impl RenderSide {
             if still.row == 0 && scene.renderer.samples == 0 {
                 scene.renderer.restart();
             }
+            // Drawn band by band, each sample written as it comes; denoised
+            // once done, if asked.
+            scene.renderer.denoise = false;
             if let Some(cmd) = scene.renderer.render_rows(&still.camera, &still.light, still.row, (still.row + rows).min(h)) {
                 queue.submit([cmd]);
             }
@@ -545,6 +555,11 @@ impl RenderSide {
             if scene.renderer.samples >= still.samples {
                 // Done: read it back, and write it away from the frames.
                 let still = self.still.take().expect("drawn above");
+                if still.denoise
+                    && let Some(cmd) = scene.renderer.denoise(1.0)
+                {
+                    queue.submit([cmd]);
+                }
                 let image = scene.renderer.read_image();
                 let (tx, rx) = std::sync::mpsc::channel();
                 let took = still.started.elapsed().as_secs_f64();
@@ -577,11 +592,23 @@ impl RenderSide {
             let moving = now < self.moving_until;
             // With less motion (Settings ▸ Accessibility), the image settles
             // sooner and stops there.
+            // Denoised as the samples come (the samples kept as they are);
+            // turned on or off, the image made from them again.
+            let toggled = scene.renderer.denoise != self.denoise;
+            scene.renderer.denoise = self.denoise;
+            let mut drawn = false;
             if moving || scene.renderer.samples < most {
                 if let Some(cmd) = scene.renderer.render(&orbit.camera(self.fov), &self.light, moving) {
                     queue.submit([cmd]);
+                    drawn = true;
                 }
                 ui.ctx().request_repaint();
+            }
+            // (And once more on the last sample, where the image stops.)
+            if (toggled || (drawn && (scene.renderer.denoise_due() || (self.denoise && scene.renderer.samples >= most))))
+                && let Some(cmd) = scene.renderer.denoise(if self.denoise { 1.0 } else { 0.0 })
+            {
+                queue.submit([cmd]);
             }
         }
         if let Some(rx) = &self.writing {
@@ -799,6 +826,13 @@ impl RenderSide {
             row(ui, tr!("Bounces"), |ui| {
                 ui.add(Field::new(&mut light.bounces, 0..=6));
             });
+            row(ui, tr!("Clamp indirect"), |ui| {
+                ui.add(Field::new(&mut light.clamp, 0.0..=100.0).logarithmic(true).max_decimals(1))
+                    .on_hover_text(tr!("The most light a bounce brings: lower settles sooner, with fewer bright specks and a little less light; 0 for no limit"));
+            });
+            row(ui, tr!("Denoise"), |ui| {
+                crate::widgets::switch(ui, &mut self.denoise).on_hover_text(tr!("Smooth the grain of the first samples away while they add up, the textures kept sharp"));
+            });
             row(ui, tr!("Exposure"), |ui| {
                 ui.add(Field::new(&mut light.exposure, 0.1..=16.0).logarithmic(true).max_decimals(2));
             });
@@ -818,6 +852,9 @@ impl RenderSide {
             });
             row(ui, tr!("Samples a pixel"), |ui| {
                 ui.add(Field::new(&mut self.still_samples, 16..=4096).logarithmic(true));
+            });
+            row(ui, tr!("Denoise"), |ui| {
+                crate::widgets::switch(ui, &mut self.still_denoise).on_hover_text(tr!("Denoise the image before it is saved"));
             });
         });
         let ready = self.scene.is_some() && self.orbit.is_some() && self.view_px != [0; 2];
@@ -859,7 +896,7 @@ impl RenderSide {
                 self.saved = Some(Err(tr!("This size is larger than the graphics card can draw").to_owned()));
             } else if let Some(path) = rfd::FileDialog::new().set_file_name(format!("{}.png", doc.title())).add_filter(tr!("PNG image"), &["png"]).save_file() {
                 self.saved = None;
-                self.still = Some(Still { path, size, samples: self.still_samples, camera: orbit.camera(self.fov), light: self.light, row: 0, started: Instant::now() });
+                self.still = Some(Still { path, size, samples: self.still_samples, camera: orbit.camera(self.fov), light: self.light, denoise: self.still_denoise, row: 0, started: Instant::now() });
                 scene.renderer.restart();
             }
         }

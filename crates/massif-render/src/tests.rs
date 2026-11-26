@@ -614,3 +614,126 @@ fn the_diorama_draws_the_village() {
         }
     }
 }
+
+/// The denoiser against the samples alone: the error of each image to a
+/// reference of 1024 samples a pixel, after 1, 4, 16, 64 and 256 samples,
+/// denoised and not; how many samples each takes to come within the error
+/// of 256 raw samples; and what a denoising costs at 1920 × 1080
+/// (MASSIF_SNAPSHOT_DIR: the images; MASSIF_PERF: the timings).
+#[test]
+fn the_denoiser_settles_the_image_sooner() {
+    let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+    let perf = std::env::var_os("MASSIF_PERF").is_some();
+    if dir.is_none() && !perf {
+        return;
+    }
+    let Some((device, queue)) = device() else {
+        eprintln!("no GPU adapter: skipping");
+        return;
+    };
+    let cat = massif_assets::load_newest().and_then(Result::ok).map(Arc::new);
+    let world = generate(&GenParams { tiles_x: 4, tiles_z: 4, landform: Landform::Hills, seed: 11, ..GenParams::default() });
+    let sea = world.meta.sea_level as f64;
+    let target = map_source::target_for(cat.as_ref().map(|c| c.version.as_str()));
+    let extent = Extent::of_map(&world, 0, &target).unwrap();
+    let materials = Arc::new(Materials::new(cat.clone(), device.limits().max_texture_array_layers as usize));
+    let center = extent.center();
+    let tiles = map_source::tiles_by_distance(&world, 0, center[0], center[2]);
+    let mut builder = MapBuilder::start(world, 0, target, materials.clone(), tiles);
+    let built = builder.wait_all();
+    let mut r = Renderer::new(&device, &queue, extent);
+    r.sea_level = sea;
+    r.sync_materials(&materials);
+    for b in built {
+        assert!(r.put(b.chunks));
+    }
+    let ground = r.surface(center[0], center[2]).unwrap_or(sea);
+    // Among the hills late in the day, in haze: long shadows lit by the sky
+    // and the land around, where the grain shows most.
+    let camera = Camera::orbit([center[0], ground, center[2]], 2.2, -0.25, 60.0, 50f32.to_radians());
+    let mut light = Light { haze: 3.0, exposure: 2.5, ..Light::default() };
+    light.set_time(18.6, 172.0, 45.0, 0.0);
+    let (w, h) = (960, 540);
+    r.resize(w, h);
+    let wait = |cmd: wgpu::CommandBuffer| {
+        queue.submit([cmd]);
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    };
+    // Linear light of an image's sRGB bytes.
+    let linear = |rgba: &[u8]| -> Vec<f32> { rgba.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).map(|v| (v as f32 / 255.0).powf(2.2)).collect() };
+    let error = |a: &[f32], b: &[f32]| (a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum::<f32>() / a.len() as f32).sqrt();
+    let save = |r: &Renderer, name: &str| {
+        if let Some(dir) = &dir {
+            let (iw, ih, rgba) = r.read_image().unwrap();
+            image::save_buffer(dir.join(format!("denoise-{name}.png")), &rgba, iw, ih, image::ColorType::Rgba8).unwrap();
+        }
+    };
+    r.restart();
+    while r.samples < 1024 {
+        let cmd = r.render(&camera, &light, false).unwrap();
+        wait(cmd);
+    }
+    let reference = linear(&r.read_image().unwrap().2);
+    save(&r, "reference-1024");
+    // Every sample's error, raw and denoised.
+    r.restart();
+    let mut raw = Vec::new();
+    let mut clean = Vec::new();
+    while r.samples < 256 {
+        let cmd = r.render(&camera, &light, false).unwrap();
+        wait(cmd);
+        let n = r.samples;
+        raw.push(error(&linear(&r.read_image().unwrap().2), &reference));
+        if [1, 4, 16, 64, 256].contains(&n) {
+            save(&r, &format!("{n:04}-raw"));
+        }
+        let cmd = r.denoise(1.0).unwrap();
+        wait(cmd);
+        clean.push(error(&linear(&r.read_image().unwrap().2), &reference));
+        if [1, 4, 16, 64, 256].contains(&n) {
+            save(&r, &format!("{n:04}-denoised"));
+        }
+    }
+    for n in [1usize, 4, 16, 64, 256] {
+        eprintln!("  {n:>3} samples: error {:.4} raw, {:.4} denoised", raw[n - 1], clean[n - 1]);
+    }
+    // How many samples, denoised, come within the error of so many raw.
+    let first = |e: &[f32], goal: f32| e.iter().position(|&x| x <= goal).map_or(0, |k| k + 1);
+    for n in [4usize, 16, 64] {
+        eprintln!("  the error of {n} raw samples ({:.4}) reached after {} samples denoised", raw[n - 1], first(&clean, raw[n - 1]));
+    }
+    assert!(clean[3] < raw[3], "4 samples denoised are nearer the reference than raw");
+    assert!(clean[15] < raw[15], "so are 16");
+    // The cost of a denoising at 1920 × 1080, best of 20, at 1 sample a
+    // pixel (the most passes); and of an empty submission, to take off.
+    r.resize(1920, 1080);
+    let cmd = r.render(&camera, &light, false).unwrap();
+    wait(cmd);
+    let empty = (0..20)
+        .map(|_| {
+            let t = Instant::now();
+            wait(device.create_command_encoder(&Default::default()).finish());
+            t.elapsed()
+        })
+        .min()
+        .unwrap();
+    let mut times: Vec<Duration> = (0..20)
+        .map(|_| {
+            let t = Instant::now();
+            let cmd = r.denoise(1.0).unwrap();
+            wait(cmd);
+            t.elapsed().saturating_sub(empty)
+        })
+        .collect();
+    let trace: Vec<Duration> = (0..10)
+        .map(|_| {
+            let t = Instant::now();
+            let cmd = r.render(&camera, &light, false).unwrap();
+            wait(cmd);
+            t.elapsed()
+        })
+        .collect();
+    times.sort();
+    let best_trace = trace.iter().min().unwrap();
+    eprintln!("  at 1920 × 1080: a denoising {:.2} ms best, {:.2} ms middle; a sample {:.1} ms best", times[0].as_secs_f64() * 1000.0, times[10].as_secs_f64() * 1000.0, best_trace.as_secs_f64() * 1000.0);
+}

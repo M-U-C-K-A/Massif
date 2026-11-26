@@ -109,6 +109,9 @@ pub struct Light {
     pub focus: f32,
     /// Bounces of light after the first surface met.
     pub bounces: u32,
+    /// The most light a bounce brings, in its brightest channel (0: no
+    /// limit): rare bright paths cut down, so that the image settles sooner.
+    pub clamp: f32,
     pub exposure: f32,
 }
 
@@ -149,6 +152,7 @@ impl Default for Light {
             aperture: 0.0,
             focus: 100.0,
             bounces: 2,
+            clamp: 10.0,
             exposure: 1.0,
         }
     }

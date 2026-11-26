@@ -4044,5 +4044,10 @@
  "The layer {name} is hidden on the map: it is painted all the same, and shows once shown again in the Layers panel.": "Die Ebene {name} ist auf der Karte ausgeblendet: Sie wird trotzdem gemalt und erscheint, sobald sie im Ebenen-Panel wieder eingeblendet wird.",
  "The ground cover {name} lies over the terrain here: a terrain painted here stays under it.": "Der Bodenbewuchs {name} liegt hier über dem Terrain: Ein hier gemaltes Terrain bleibt darunter.",
  "The level {name} stands over the one painted here.": "Die Stufe {name} liegt hier über der bemalten.",
- "The layer {name} is locked here: brushes leave it as it is.": "Die Ebene {name} ist hier gesperrt: Pinsel lassen sie, wie sie ist."
+ "The layer {name} is locked here: brushes leave it as it is.": "Die Ebene {name} ist hier gesperrt: Pinsel lassen sie, wie sie ist.",
+ "Clamp indirect": "Indirektes begrenzen",
+ "Denoise": "Entrauschen",
+ "The most light a bounce brings: lower settles sooner, with fewer bright specks and a little less light; 0 for no limit": "Das meiste Licht, das ein Abprall bringt: niedriger beruhigt sich das Bild schneller, mit weniger hellen Punkten und etwas weniger Licht; 0 für keine Grenze",
+ "Smooth the grain of the first samples away while they add up, the textures kept sharp": "Das Rauschen der ersten Samples glätten, während sie sich summieren, die Texturen bleiben scharf",
+ "Denoise the image before it is saved": "Das Bild vor dem Speichern entrauschen"
 }

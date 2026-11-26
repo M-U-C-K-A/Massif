@@ -5,27 +5,6 @@
 // Scene coordinates: blocks from the corner of the scene's first chunk and
 // the bottom of the world, so every block of the scene is at x, y, z >= 0.
 
-struct Params {
-    eye: vec4<f32>,      // xyz; w: tan(fov / 2)
-    right: vec4<f32>,    // w: width / height
-    up: vec4<f32>,       // w: the angle of a pixel, radians
-    forward: vec4<f32>,  // w: exposure
-    sun: vec4<f32>,      // direction toward the sun; w: cos of its radius
-    sun_light: vec4<f32>,  // the sun's illuminance above the air (tinted); w: the sky's strength
-    air: vec4<f32>,      // the air's scattering, the haze's, its anisotropy, the eyes' height (km)
-    fog: vec4<f32>,      // extinction a block at its base, base height (scene), falloff (blocks), anisotropy
-    media: vec4<f32>,    // shafts on, sea level (scene), emission strength, the lens's radius
-    lens: vec4<f32>,     // focus distance, a sea around the map, where the shaped blocks' faces start, the first row drawn
-    clouds: vec4<f32>,   // cover (0..1), base height (scene), thickness, extinction a block (0: none)
-    wind: vec4<f32>,     // how far the wind moved them (x, z), 1 / the size of their shapes
-    water: vec4<f32>,    // the waves' slope, 1 / their size, time (s), how much light water takes (0: water as the game's texture)
-    wet: vec4<f32>,      // wetness, puddles, 1 / the puddles' size, a pack's LabPBR maps on
-    size: vec4<u32>,     // width, height, seed of the frame, sample (0: start over)
-    grid: vec4<i32>,     // chunks across, chunks down, height in blocks, sections
-    info: vec4<u32>,     // words a chunk's record, pyramid levels, bounces, shift (pixels per side of a ray: 1 << shift)
-    level_off: array<vec4<u32>, 4>,
-    level_w: array<vec4<u32>, 4>,
-}
 
 @group(0) @binding(0) var<uniform> P: Params;
 @group(0) @binding(1) var<storage, read> grid: array<u32>;
@@ -34,7 +13,13 @@ struct Params {
 @group(0) @binding(4) var<storage, read> voxels: array<u32>;
 @group(0) @binding(5) var<storage, read> pyramid: array<u32>;
 @group(0) @binding(6) var<storage, read> materials: array<vec4<u32>>;
-@group(0) @binding(7) var<storage, read_write> accum: array<vec4<f32>>;
+// Two entries a pixel: the samples' light added up (f32 bits) and their
+// count; then what the eyes' rays first met, for the denoiser, a running
+// mean over the samples: the albedo (r, g; b and the distance) as halves,
+// the mean square of the light's luminance over the albedo (f32: the
+// variance is its difference to the square of the mean, which halves
+// would drown), the normal (octahedral).
+@group(0) @binding(7) var<storage, read_write> accum: array<vec4<u32>>;
 @group(0) @binding(8) var out_image: texture_storage_2d<rgba8unorm, write>;
 @group(0) @binding(9) var atlas: texture_2d_array<f32>;
 @group(0) @binding(10) var atlas_sampler: sampler;
@@ -60,6 +45,46 @@ const FAR: f32 = 30000.0;
 
 // The sun's light at the scene (through the air), set once a pixel.
 var<private> SUN_LIGHT: vec3<f32>;
+// What the eyes' ray met first (see `guides`), once a pixel's sample.
+var<private> G_SET: bool;
+var<private> G_ALBEDO: vec3<f32>;
+var<private> G_NORMAL: vec3<f32>;
+var<private> G_DEPTH: f32;
+
+fn guide(albedo: vec3<f32>, n: vec3<f32>, t: f32) {
+    if (!G_SET) {
+        G_SET = true;
+        G_ALBEDO = albedo;
+        G_NORMAL = n;
+        G_DEPTH = t;
+    }
+}
+
+// The light a bounce brings, at most the Clamp setting in its brightest
+// channel (Cycles' "clamp indirect"): rare bright paths, the fireflies,
+// cut down, a little light lost for an image that settles much sooner.
+fn capped(c: vec3<f32>, bounce: u32) -> vec3<f32> {
+    let most = P.wind.w;
+    if (bounce == 0u || most <= 0.0) {
+        return c;
+    }
+    let m = max(c.r, max(c.g, c.b));
+    return c * min(1.0, most / max(m, 1e-9));
+}
+
+// Neither infinite nor not a number (by the bits: fast maths may drop isnan).
+fn finite(c: vec3<f32>) -> bool {
+    let b = bitcast<vec3<u32>>(c) & vec3<u32>(0x7f800000u);
+    return all(b != vec3<u32>(0x7f800000u));
+}
+
+fn oct_encode(n: vec3<f32>) -> vec2<f32> {
+    let p = n.xy / max(abs(n.x) + abs(n.y) + abs(n.z), 1e-9);
+    if (n.z < 0.0) {
+        return (1.0 - abs(p.yx)) * select(vec2<f32>(-1.0), vec2<f32>(1.0), p >= vec2<f32>(0.0));
+    }
+    return p;
+}
 
 struct Hit {
     found: bool,
@@ -669,11 +694,8 @@ fn unpack_rgb(u: u32) -> vec3<f32> {
     return srgb_to_linear(vec3<f32>(f32(u & 255u), f32((u >> 8u) & 255u), f32((u >> 16u) & 255u)) / 255.0);
 }
 
-// ACES, fitted (Narkowicz).
 fn tonemap(c: vec3<f32>) -> vec3<f32> {
-    let x = c * P.forward.w;
-    let mapped = clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3<f32>(0.0), vec3<f32>(1.0));
-    return pow(mapped, vec3<f32>(1.0 / 2.2));
+    return tone(c, P.forward.w);
 }
 
 // ---- clouds ---------------------------------------------------------------
@@ -1001,6 +1023,7 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
             // A cloud before what the eyes would see: its light ends the path.
             let cloud = cloud_hit(ro, rd, t_end, seed);
             if (cloud.t >= 0.0) {
+                guide(vec3<f32>(1.0), vec3<f32>(0.0), FAR);
                 let m = through_media(ro, rd, cloud.t, true, seed);
                 return m.light + m.transmittance * cloud.light;
             }
@@ -1015,7 +1038,7 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
             if (!hit.found) {
                 d = 64.0;
             }
-            sum += throughput * water_glow(d);
+            sum += capped(throughput * water_glow(d), bounce);
             throughput *= water_through(d);
         }
         if (sea_t > 0.0) {
@@ -1034,7 +1057,8 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
                 mirrored += SUN_LIGHT * 40.0;
             }
             let deep = vec3<f32>(0.012, 0.045, 0.075) * (sky(vec3<f32>(0.0, 1.0, 0.0)) + SUN_LIGHT * max(P.sun.y, 0.0) * 0.1);
-            sum += throughput * mix(deep, mirrored, f);
+            guide(vec3<f32>(1.0), n, sea_t);
+            sum += capped(throughput * mix(deep, mirrored, f), bounce);
             break;
         }
         if (!hit.found) {
@@ -1044,7 +1068,8 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
                 // firefly once added up.
                 s += SUN_LIGHT * 40.0;
             }
-            sum += throughput * s;
+            guide(vec3<f32>(1.0), vec3<f32>(0.0), FAR);
+            sum += capped(throughput * s, bounce);
             break;
         }
         let m = materials[hit.mat * 3u];
@@ -1090,6 +1115,7 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
                 let w = wave_normal(p.xz);
                 n = select(-w, w, n.y > 0.0);
             }
+            guide(vec3<f32>(1.0), n, hit.t);
             let c = clamp(-dot(rd, n), 0.0, 1.0);
             let eta = select(1.0 / 1.33, 1.33, in_water);
             let f = fresnel(c, eta);
@@ -1153,8 +1179,9 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
         surf.alpha = max(rough * rough, 0.002);
         surf.f0 = mix(vec3<f32>(mix(f0, 0.02, pud)), surf.albedo, metal);
         surf.diffuse = surf.albedo * (1.0 - metal) * occlusion;
+        guide(surf.albedo, ns, hit.t);
         if (emission > 0.0) {
-            sum += throughput * surf.albedo * emission * 4.0 * P.media.z;
+            sum += capped(throughput * surf.albedo * emission * 4.0 * P.media.z, bounce);
         }
         if (((m.y >> 21u) & 1u) != 0u) {
             // A glowing block seen: by the eyes, or by a bounce from too far
@@ -1164,7 +1191,7 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
                 // Its bright pixels glow (a torch's flame, not its stick).
                 let level = f32(glow >> 24u) / 15.0;
                 let bright = smoothstep(0.35, 0.7, max(tex.r, max(tex.g, tex.b)));
-                sum += throughput * surf.albedo * (8.0 * level * bright * P.media.z);
+                sum += capped(throughput * surf.albedo * (8.0 * level * bright * P.media.z), bounce);
             }
         }
         let v = -rd;
@@ -1172,7 +1199,7 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
         // are coarser.
         let pos = p + n * max(EPS, max(abs(p.x), max(abs(p.y), abs(p.z))) * 3e-7);
         // The glowing blocks around, one drawn among them.
-        sum += throughput * block_light(pos, ns, v, surf, seed);
+        sum += capped(throughput * block_light(pos, ns, v, surf, seed), bounce);
         last_chunk = vec2<i32>(floor(pos.xz / 16.0));
         // The sun, straight (through water, if under it).
         let l = sun_sample(seed);
@@ -1187,7 +1214,7 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
                 if (in_water && shadow.water >= 0.0) {
                     light *= water_through(shadow.water) * (1.0 - fresnel(max(P.sun.y, 0.05), 1.0 / 1.33));
                 }
-                sum += throughput * brdf(surf, ns, v, l, light);
+                sum += capped(throughput * brdf(surf, ns, v, l, light), bounce);
             }
         }
         if (bounce == P.info.z) {
@@ -1255,8 +1282,20 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         eye += P.right.xyz * (r * cos(a)) + P.up.xyz * (r * sin(a));
         dir = normalize(focus - eye);
     }
-    // Fireflies of a rare path are clipped: the image settles sooner.
-    let l = min(radiance(eye, dir, &seed), vec3<f32>(32.0));
+    // Fireflies of a rare path are clipped: the image settles sooner. A
+    // sample gone infinite or not a number counts as dark: added up, it
+    // would leave the pixel black (or white) until the view moves.
+    G_SET = false;
+    var l = min(radiance(eye, dir, &seed), vec3<f32>(32.0));
+    if (!finite(l)) {
+        l = vec3<f32>(0.0);
+    }
+    if (!G_SET) {
+        guide(vec3<f32>(1.0), vec3<f32>(0.0), FAR);
+    }
+    let albedo = clamp(G_ALBEDO, vec3<f32>(0.0), vec3<f32>(1.0));
+    let lum = luminance(l / max(albedo, vec3<f32>(0.02)));
+    let gn = oct_encode(select(G_NORMAL, vec3<f32>(0.0, 0.0, 1.0), dot(G_NORMAL, G_NORMAL) < 0.5));
     let n = 1u << shift;
     for (var dy = 0u; dy < n; dy++) {
         for (var dx = 0u; dx < n; dx++) {
@@ -1266,11 +1305,26 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
             let i = q.y * w + q.x;
             var a = vec4<f32>(l, 1.0);
+            var g_albedo = albedo;
+            var g_m2 = lum * lum;
+            var g_depth = G_DEPTH;
+            var g_normal = gn;
             if (P.size.w != 0u) {
-                a += accum[i];
+                a += bitcast<vec4<f32>>(accum[i * 2u]);
+                // Running means: the new sample's share is 1 / samples.
+                let g = accum[i * 2u + 1u];
+                let k = 1.0 / a.w;
+                let bd = unpack2x16float(g.y);
+                g_albedo = mix(vec3<f32>(unpack2x16float(g.x), bd.x), albedo, k);
+                g_depth = mix(bd.y, G_DEPTH, k);
+                g_m2 = mix(bitcast<f32>(g.z), g_m2, k);
+                g_normal = mix(unpack2x16snorm(g.w), gn, k);
             }
-            accum[i] = a;
-            textureStore(out_image, vec2<i32>(q), vec4<f32>(tonemap(a.rgb / a.w), 1.0));
+            accum[i * 2u] = bitcast<vec4<u32>>(a);
+            accum[i * 2u + 1u] = vec4<u32>(pack2x16float(g_albedo.rg), pack2x16float(vec2<f32>(g_albedo.b, min(g_depth, 60000.0))), bitcast<u32>(g_m2), pack2x16snorm(g_normal));
+            if (P.flags.x == 0u) {
+                textureStore(out_image, vec2<i32>(q), vec4<f32>(tonemap(a.rgb / a.w), 1.0));
+            }
         }
     }
 }

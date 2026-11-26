@@ -3137,9 +3137,22 @@ area draws the viewport at a time; a second one says where it is.
   the point it **looks at**, its **Turn**, **Tilt** and **Distance**, and
   **Frame the whole map**.
 - **Image**: how much the glowing blocks **Glow**, the light's
-  **Bounces**, and the **Exposure**.
-- **Image to save**: a **Size** (the view's, HD, 4K or 8K) and the
-  **Samples a pixel** (more: cleaner and slower), then **Save image…**
+  **Bounces**, **Clamp indirect** (the most light a bounce brings, 10 at
+  first: rare bright paths cut down, so that the image settles sooner with
+  fewer bright specks, for a little less light; 0 for no limit),
+  **Denoise** and the **Exposure**.
+- **Denoise** (on at first) smooths the grain of the first samples away
+  while they add up, as Cycles' viewport denoising does: an edge-avoiding
+  filter guided by what each pixel's rays first meet (its colour, which
+  way it faces, how far it is), which keeps the textures and the edges of
+  the blocks sharp. The samples themselves are kept as they are: the
+  filter only draws the image shown from them, and the more samples, the
+  less it smooths, until past some 128 samples a pixel it leaves them be.
+  Measured on a hilly map late in the day, against 1024 samples: 1 sample
+  denoised is as near as 4 raw ones, 7 as near as 16, 40 as near as 64.
+- **Image to save**: a **Size** (the view's, HD, 4K or 8K), the
+  **Samples a pixel** (more: cleaner and slower) and **Denoise** (for an
+  image of few samples: past some 128 it changes nothing), then **Save image…**
   asks where and draws the image a band of rows at a time, the view showing
   it as it comes, with its progress and **Cancel**; it is written as a PNG.
   A size larger than the graphics card can draw is refused.

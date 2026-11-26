@@ -4041,5 +4041,10 @@
  "The layer {name} is hidden on the map: it is painted all the same, and shows once shown again in the Layers panel.": "A camada {name} está oculta no mapa: é pintada mesmo assim, e aparece quando for mostrada de novo no painel Camadas.",
  "The ground cover {name} lies over the terrain here: a terrain painted here stays under it.": "A cobertura do solo {name} está sobre o terreno aqui: um terreno pintado aqui fica por baixo.",
  "The level {name} stands over the one painted here.": "O nível {name} está sobre o pintado aqui.",
- "The layer {name} is locked here: brushes leave it as it is.": "A camada {name} está bloqueada aqui: os pincéis deixam-na como está."
+ "The layer {name} is locked here: brushes leave it as it is.": "A camada {name} está bloqueada aqui: os pincéis deixam-na como está.",
+ "Clamp indirect": "Limitar indireta",
+ "Denoise": "Remover ruído",
+ "The most light a bounce brings: lower settles sooner, with fewer bright specks and a little less light; 0 for no limit": "A maior luz que um ressalto traz: mais baixo, a imagem assenta mais cedo, com menos pontos brilhantes e um pouco menos de luz; 0 para sem limite",
+ "Smooth the grain of the first samples away while they add up, the textures kept sharp": "Suavizar o grão das primeiras amostras enquanto se somam, mantendo as texturas nítidas",
+ "Denoise the image before it is saved": "Remover o ruído da imagem antes de a guardar"
 }

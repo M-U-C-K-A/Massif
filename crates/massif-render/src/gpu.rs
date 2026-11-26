@@ -17,6 +17,8 @@ use std::num::NonZeroU64;
 pub const IMAGE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// Levels of detail of a texture layer: 16, 8, 4, 2 and 1 pixels across.
 pub(crate) const MIPS: u32 = 5;
+/// The frame's parameters and the tone mapping, shared by the shaders.
+const PARAMS: &str = include_str!("params.wgsl");
 /// Levels the pyramid of heights may have (16: 2^15 chunks across).
 const LEVELS: usize = 16;
 
@@ -40,6 +42,7 @@ struct Params {
     size: [u32; 4],
     grid: [i32; 4],
     info: [u32; 4],
+    flags: [u32; 4],
     level_off: [u32; LEVELS],
     level_w: [u32; LEVELS],
 }
@@ -178,8 +181,39 @@ struct Image {
     texture: wgpu::Texture,
     storage: wgpu::TextureView,
     view: wgpu::TextureView,
+    /// The samples added up, and what the eyes' rays first met, for the
+    /// denoiser (see `trace.wgsl`).
     accum: wgpu::Buffer,
+    /// The denoiser's passes, ping-ponged between two buffers: the one
+    /// that reads the first and writes the second, and the other way.
+    denoise: [wgpu::BindGroup; 2],
 }
+
+/// The denoiser's passes at most: prepare, five of the filter, write the
+/// image.
+const DENOISE_PASSES: u32 = 7;
+
+/// How the denoiser smooths an image of `samples` samples a pixel: its
+/// passes of the filter, and the share of the denoised image in the one
+/// shown. Measured against 1024 samples (`the_denoiser_settles_the_image_
+/// sooner`): five passes help most up to 4 samples, fewer after; past some
+/// 64 samples the samples alone are nearer, and the filter fades out.
+fn denoise_schedule(samples: u32) -> (u32, f32) {
+    let passes = match samples {
+        0..=4 => 5,
+        5..=16 => 4,
+        17..=64 => 3,
+        _ => 2,
+    };
+    let fade = ((7.0 - (samples as f32).log2()) / 3.0).clamp(0.0, 1.0);
+    (passes, fade)
+}
+/// The bytes between two passes' parameters (the alignment of uniforms
+/// at a dynamic offset).
+const DENOISE_STRIDE: u64 = 256;
+/// Bytes a pixel takes on the graphics card: the samples added up, the
+/// guides, the denoiser's guides and its two buffers, the image.
+const PIXEL_BYTES: u64 = 16 + 16 + 8 + 8 + 8 + 4;
 
 /// The renderer of one scene.
 pub struct Renderer {
@@ -189,6 +223,10 @@ pub struct Renderer {
     pipeline: wgpu::ComputePipeline,
     layout: wgpu::BindGroupLayout,
     params: wgpu::Buffer,
+    denoise_pipeline: wgpu::ComputePipeline,
+    denoise_layout: wgpu::BindGroupLayout,
+    /// The denoiser's passes' parameters, [`DENOISE_STRIDE`] apart.
+    denoise_params: wgpu::Buffer,
     sampler: wgpu::Sampler,
     grid: Mirror,
     records: Mirror,
@@ -230,6 +268,9 @@ pub struct Renderer {
     full: bool,
     /// Samples added up in the image so far.
     pub samples: u32,
+    /// The image shown denoised: drawn by [`Self::denoise`] (see
+    /// [`Self::denoise_due`]), not by each sample.
+    pub denoise: bool,
     frame: u32,
     max_binding: u64,
 }
@@ -244,7 +285,7 @@ fn storage(device: &wgpu::Device, label: &str, bytes: u64) -> wgpu::Buffer {
 
 impl Renderer {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, extent: Extent) -> Self {
-        let source = format!("{}\n{}", crate::sky::ATMOSPHERE, include_str!("trace.wgsl"));
+        let source = format!("{}\n{}\n{}", crate::sky::ATMOSPHERE, PARAMS, include_str!("trace.wgsl"));
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("massif render trace"), source: wgpu::ShaderSource::Wgsl(source.into()) });
         let lut = |binding: u32| wgpu::BindGroupLayoutEntry {
             binding,
@@ -316,6 +357,8 @@ impl Renderer {
             cache: None,
         });
         let params = device.create_buffer(&wgpu::BufferDescriptor { label: Some("massif render params"), size: size_of::<Params>() as u64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let (denoise_pipeline, denoise_layout) = Self::make_denoiser(device);
+        let denoise_params = device.create_buffer(&wgpu::BufferDescriptor { label: Some("massif render denoise params"), size: DENOISE_STRIDE * DENOISE_PASSES as u64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("massif render atlas"),
             address_mode_u: wgpu::AddressMode::Repeat,
@@ -337,6 +380,9 @@ impl Renderer {
             pipeline,
             layout,
             params,
+            denoise_pipeline,
+            denoise_layout,
+            denoise_params,
             sampler,
             grid: Mirror::new(device, "massif render grid", cells as usize),
             records: Mirror::new(device, "massif render records", stride as usize * 64),
@@ -366,6 +412,7 @@ impl Renderer {
             garbage: 0,
             full: false,
             samples: 0,
+            denoise: false,
             frame: 0,
             max_binding,
         };
@@ -375,6 +422,54 @@ impl Renderer {
 
     pub fn extent(&self) -> Extent {
         self.extent
+    }
+
+    fn make_denoiser(device: &wgpu::Device) -> (wgpu::ComputePipeline, wgpu::BindGroupLayout) {
+        let source = format!("{PARAMS}\n{}", include_str!("denoise.wgsl"));
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("massif render denoise"), source: wgpu::ShaderSource::Wgsl(source.into()) });
+        let buffer = |binding: u32, read_only: bool| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only }, has_dynamic_offset: false, min_binding_size: None },
+            count: None,
+        };
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("massif render denoise"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: NonZeroU64::new(size_of::<Params>() as u64) },
+                    count: None,
+                },
+                buffer(1, true),
+                buffer(2, false),
+                buffer(3, true),
+                buffer(4, false),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture { access: wgpu::StorageTextureAccess::WriteOnly, format: IMAGE_FORMAT, view_dimension: wgpu::TextureViewDimension::D2 },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: true, min_binding_size: NonZeroU64::new(16) },
+                    count: None,
+                },
+            ],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("massif render denoise"), bind_group_layouts: &[Some(&layout)], immediate_size: 0 });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("massif render denoise"),
+            layout: Some(&pipeline_layout),
+            module: &module,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        (pipeline, layout)
     }
 
     fn make_atlas(device: &wgpu::Device, layers: u32) -> (wgpu::Texture, wgpu::TextureView) {
@@ -706,8 +801,27 @@ impl Renderer {
         let storage_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         // Shown through a view of the same bytes that only samples.
         let view = texture.create_view(&wgpu::TextureViewDescriptor { usage: Some(wgpu::TextureUsages::TEXTURE_BINDING), ..Default::default() });
-        let accum = storage(&self.device, "massif render accumulation", size[0] as u64 * size[1] as u64 * 16);
-        self.image = Some(Image { size, texture, storage: storage_view, view, accum });
+        let pixels = size[0] as u64 * size[1] as u64;
+        let accum = storage(&self.device, "massif render accumulation", pixels * 32);
+        let ping = [storage(&self.device, "massif render denoise a", pixels * 8), storage(&self.device, "massif render denoise b", pixels * 8)];
+        let geo = storage(&self.device, "massif render denoise guides", pixels * 8);
+        let group = |from: usize| {
+            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("massif render denoise"),
+                layout: &self.denoise_layout,
+                entries: &[
+                    entry(0, &self.params),
+                    entry(1, &accum),
+                    entry(2, &geo),
+                    entry(3, &ping[from]),
+                    entry(4, &ping[1 - from]),
+                    wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(&storage_view) },
+                    wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding { buffer: &self.denoise_params, offset: 0, size: NonZeroU64::new(16) }) },
+                ],
+            })
+        };
+        let denoise = [group(0), group(1)];
+        self.image = Some(Image { size, texture, storage: storage_view, view, accum, denoise });
         self.bind_group = None;
         self.samples = 0;
     }
@@ -753,7 +867,7 @@ impl Renderer {
     /// Whether an image of `width` × `height` fits the graphics card (its
     /// buffer of samples is the largest).
     pub fn fits(&self, width: u32, height: u32) -> bool {
-        width as u64 * height as u64 * 16 <= self.max_binding && width <= self.device.limits().max_texture_dimension_2d && height <= self.device.limits().max_texture_dimension_2d
+        width as u64 * height as u64 * 32 <= self.max_binding && width <= self.device.limits().max_texture_dimension_2d && height <= self.device.limits().max_texture_dimension_2d
     }
 
     fn encode(&mut self, camera: &Camera, light: &Light, coarse: bool, y0: u32, y1: u32) -> Option<wgpu::CommandBuffer> {
@@ -825,12 +939,13 @@ impl Renderer {
             media: [light.shafts as u8 as f32, sea, light.emission, light.aperture],
             lens: [light.focus.max(0.1), light.sea as u8 as f32, self.quad_base as f32, y0 as f32],
             clouds: [light.cloud_cover, light.cloud_height - origin[1] as f32, light.cloud_thickness.max(1.0), if light.cloud_cover > 0.0 { light.cloud_density } else { 0.0 }],
-            wind: [light.wind[0], light.wind[1], 1.0 / light.cloud_size.max(1.0), 0.0],
+            wind: [light.wind[0], light.wind[1], 1.0 / light.cloud_size.max(1.0), light.clamp.max(0.0)],
             water: [light.waves, 1.0 / light.wave_size.max(0.5), light.time, if light.real_water { light.water_clarity.max(0.01) } else { 0.0 }],
             wet: [light.wetness, light.puddles, 1.0 / light.puddle_size.max(1.0), (self.pbr_layers > 0) as u8 as f32],
             size: [w, h, self.frame.wrapping_mul(2654435761).wrapping_add(1), self.samples],
             grid: [e.width as i32, e.depth as i32, e.height(), e.sections as i32],
             info: [self.stride(), self.pyramid.levels.len() as u32, light.bounces, coarse as u32],
+            flags: [self.denoising() as u32, 0, 0, 0],
             level_off,
             level_w,
         };
@@ -844,6 +959,67 @@ impl Renderer {
             pass.dispatch_workgroups((w >> shift).max(1).div_ceil(8) + shift, (rows >> shift).max(1).div_ceil(8) + shift, 1);
         }
         self.frame = self.frame.wrapping_add(1);
+        Some(encoder.finish())
+    }
+
+    /// Denoise the image last drawn, in place: the samples added up stay as
+    /// they are, the image shown is made from them anew, `strength` (0 to 1)
+    /// of it the denoised one. Run after [`Self::render`] (or the last band
+    /// of a sample), whose parameters it reads.
+    ///
+    /// The more samples, the less it smooths: as their noise fades, so does
+    /// the filter, which would otherwise smooth away the soft changes of the
+    /// light (shade in corners, half-shadows) the samples have found.
+    /// Whether the image is left to the denoiser: on, and not faded out
+    /// for the next sample.
+    fn denoising(&self) -> bool {
+        self.denoise && denoise_schedule(self.samples + 1).1 > 0.0
+    }
+
+    /// Whether to denoise after the sample just drawn: after every one of
+    /// the first 16 (where it helps most), then every 8th (the image changes
+    /// less, and a denoising costs some 40 % of a sample at 1080p), until the
+    /// filter fades out.
+    pub fn denoise_due(&self) -> bool {
+        self.denoise && denoise_schedule(self.samples.max(1)).1 > 0.0 && (self.samples <= 16 || self.samples.is_multiple_of(8))
+    }
+
+    pub fn denoise(&mut self, strength: f32) -> Option<wgpu::CommandBuffer> {
+        let image = self.image.as_ref()?;
+        let [w, h] = image.size;
+        let (passes, fade) = denoise_schedule(self.samples.max(1));
+        let strength = (strength * fade).clamp(0.0, 1.0);
+        // Prepare; the filter's passes; write the image.
+        let mut steps = vec![(0u32, 1u32)];
+        steps.extend((0..passes).map(|k| (1, 1 << k)));
+        steps.push((6, 1));
+        let mut words = vec![0u8; (DENOISE_STRIDE * steps.len() as u64) as usize];
+        for (k, &(kind, step)) in steps.iter().enumerate() {
+            let d = [kind, step, (strength * 65535.0).round() as u32, 0];
+            words[k * DENOISE_STRIDE as usize..][..16].copy_from_slice(bytemuck::cast_slice(&d));
+        }
+        self.queue.write_buffer(&self.denoise_params, 0, &words);
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("massif render denoise") });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("massif render denoise"), timestamp_writes: None });
+            pass.set_pipeline(&self.denoise_pipeline);
+            // Prepare into the first buffer; the filter's passes from one to
+            // the other; the last reads the one written last.
+            let mut written = 0;
+            for (k, &(kind, _)) in steps.iter().enumerate() {
+                let group = match kind {
+                    0 => 1,
+                    6 => written,
+                    _ => {
+                        let from = written;
+                        written = 1 - written;
+                        from
+                    }
+                };
+                pass.set_bind_group(0, &image.denoise[group], &[(k as u64 * DENOISE_STRIDE) as u32]);
+                pass.dispatch_workgroups(w.div_ceil(8), h.div_ceil(8), 1);
+            }
+        }
         Some(encoder.finish())
     }
 
@@ -964,7 +1140,7 @@ impl Renderer {
             let s = self.atlas.size();
             (s.width as u64 * s.height as u64 * 4 * s.depth_or_array_layers as u64) * 4 / 3
         };
-        let image = self.image.as_ref().map_or(0, |i| i.size[0] as u64 * i.size[1] as u64 * (16 + 4));
+        let image = self.image.as_ref().map_or(0, |i| i.size[0] as u64 * i.size[1] as u64 * PIXEL_BYTES);
         Memory { scene, textures: textures + self.sky.bytes(), image }
     }
 
