@@ -5265,16 +5265,24 @@ impl View3d {
         let now = ctx.input(|i| i.time);
         if self.renderer.is_some() && now - self.shown_at > HIDDEN_RELEASE {
             log::info!("3D view out of sight for {HIDDEN_RELEASE} s: {} tiles and {} MB of the graphics card given back", self.tiles.len(), self.gpu_bytes() / 1_000_000);
-            self.renderer = None;
-            self.tiles.clear();
-            self.near = None;
-            self.near_next = None;
-            self.grid = None;
-            self.look_key = None;
-            self.look_seen = None;
-            self.pairs.dirty = true;
-            self.needs_render = true;
+            self.drop_renderer();
         }
+    }
+
+    /// The renderer and all it holds on the graphics card gone, with what
+    /// says what was sent to it: the next frame makes a new one and sends
+    /// it everything again, the blocks' colours and textures included.
+    fn drop_renderer(&mut self) {
+        self.renderer = None;
+        self.tiles.clear();
+        self.near = None;
+        self.near_next = None;
+        self.grid = None;
+        self.look_key = None;
+        self.look_seen = None;
+        self.last_globals = None;
+        self.pairs.dirty = true;
+        self.needs_render = true;
     }
 
     pub fn invalidate_all(&mut self) {
@@ -6312,11 +6320,7 @@ impl View3d {
         // Edges smoothed or not (Settings ▸ Graphics): another renderer,
         // everything sent to the graphics card again.
         if self.renderer.as_ref().is_some_and(|r| r.samples != graphics.samples()) {
-            self.renderer = None;
-            self.tiles.clear();
-            self.grid = None;
-            self.look_key = None;
-            self.needs_render = true;
+            self.drop_renderer();
         }
         let mut renderer = self
             .renderer

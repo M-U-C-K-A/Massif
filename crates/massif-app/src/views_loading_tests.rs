@@ -226,3 +226,43 @@ fn loading_a_real_world_around_the_view() {
         eprintln!("a minute after: {cpu:.1} % of a core, {frames} frames in 50 s; {} MB in use", crate::devtools::memory_in_use().unwrap_or(0) >> 20);
     }
 }
+
+/// The pixels of `image` near black: the 3D view's land drawn without its
+/// colours shows as such.
+fn dark_pixels(image: &image::RgbaImage) -> usize {
+    image.pixels().filter(|p| p.0[0] < 12 && p.0[1] < 12 && p.0[2] < 12).count()
+}
+
+/// A graphics preset picked while the 3D view is shown (Low draws without
+/// smoothed edges, Medium and High with): the view draws the land as
+/// before, in its colours, not black.
+#[test]
+fn the_3d_view_keeps_its_colours_through_a_graphics_preset() {
+    use crate::graphics::{Graphics, Preset};
+    let mut h = harness(generate(&GenParams { tiles_x: 4, tiles_z: 4, ..GenParams::default() }));
+    crate::graphics::set(Graphics::of(Preset::Medium));
+    let (both, _) = workspaces(&h);
+    h.state_mut().layout.active = both;
+    let settle = |h: &mut H| {
+        until(h, 120.0, &|app| app.view3d.pending() == 0 && !app.view3d.building());
+        h.run_steps(10);
+        h.render().unwrap()
+    };
+    let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+    let save = |k: usize, image: &image::RgbaImage| {
+        if let Some(dir) = &dir {
+            std::fs::create_dir_all(dir).unwrap();
+            image.save(dir.join(format!("graphics-preset-{k}.png"))).unwrap();
+        }
+    };
+    let first = settle(&mut h);
+    save(0, &first);
+    let dark0 = dark_pixels(&first);
+    for (k, preset) in [Preset::Low, Preset::Medium, Preset::High, Preset::Low].into_iter().enumerate() {
+        crate::graphics::set(Graphics::of(preset));
+        let image = settle(&mut h);
+        save(k + 1, &image);
+        let dark = dark_pixels(&image);
+        assert!(dark <= dark0 + (first.width() * first.height()) as usize / 200, "{preset:?}: {dark} pixels near black, {dark0} before");
+    }
+}
