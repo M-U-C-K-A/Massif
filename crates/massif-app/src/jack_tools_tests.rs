@@ -809,3 +809,70 @@ fn a_worldpainter_import_makes_its_covers_of_layers_ground() {
         assert!(app.doc.history.can_undo(), "one step to undo");
     }
 }
+
+// ------------------------------------------------------------ the Measure --
+
+/// The Measure tool driven on the map: a line dragged, its results and
+/// profile in the Info panel; an area clicked corner by corner and closed
+/// on its first one, its area, volume and cover; kept on screen with
+/// another tool; Esc clears it (rendered at 1× and 2×).
+#[test]
+fn the_measure_tool_measures_lines_and_areas() {
+    use egui_kittest::kittest::Queryable;
+    for ppp in densities() {
+        let mut h = app(ppp, Tool::Measure);
+        look(&mut h, 300.0, 300.0, 2.0);
+        // A line, dragged.
+        let (a, b) = (map(&h).screen_of(240.5, 280.5), map(&h).screen_of(380.5, 330.5));
+        h.event(egui::Event::PointerMoved(a));
+        h.step();
+        press(&mut h, a, true, Modifiers::NONE);
+        for k in 1..=8 {
+            h.event(egui::Event::PointerMoved(a + (b - a) * (k as f32 / 8.0)));
+            h.step();
+        }
+        press(&mut h, b, false, Modifiers::NONE);
+        h.run_steps(4);
+        let m = &h.state().tools.measure;
+        assert!(m.done && !m.closed && m.points.len() == 2, "{m:?}");
+        let length = 140f32.hypot(50.0);
+        let measured = (m.points[1].0 - m.points[0].0).hypot(m.points[1].1 - m.points[0].1);
+        assert!((measured - length).abs() < 1.0, "{measured}");
+        assert!(h.query_by_label("Along the ground").is_some(), "the line's results in the Info panel");
+        assert!(h.query_by_label("Steepest").is_some());
+        save(&mut h, "measure-line", ppp);
+        // An area: its corners clicked, closed on the first.
+        h.state_mut().tools.measure_kind = crate::measure::Kind::Area;
+        h.state_mut().tools.measure.clear();
+        let corners = [(250.5, 260.5), (360.5, 270.5), (350.5, 350.5), (260.5, 340.5), (250.5, 260.5)];
+        for (x, z) in corners {
+            let p = map(&h).screen_of(x, z);
+            h.event(egui::Event::PointerMoved(p));
+            h.step();
+            press(&mut h, p, true, Modifiers::NONE);
+            press(&mut h, p, false, Modifiers::NONE);
+            h.run_steps(6);
+        }
+        let m = &h.state().tools.measure;
+        assert!(m.done && m.closed && m.points.len() == 4, "{m:?}");
+        assert!(h.query_by_label("Perimeter").is_some(), "the area's results");
+        assert!(h.query_by_label_contains("Oak wood").is_some() || h.query_by_label("Terrains").is_some(), "what covers it");
+        save(&mut h, "measure-area", ppp);
+        // Kept on screen, another tool: still in the Info panel.
+        h.state_mut().tools.measure.pinned = true;
+        h.state_mut().tools.select(Tool::Pan);
+        h.run_steps(4);
+        assert!(h.query_by_label("Perimeter").is_some(), "pinned");
+        // Unpinned, it goes with the tool; back, Esc clears it.
+        h.state_mut().tools.measure.pinned = false;
+        h.run_steps(3);
+        assert!(h.query_by_label("Perimeter").is_none(), "only with the tool in hand");
+        h.state_mut().tools.select(Tool::Measure);
+        h.run_steps(3);
+        let p = map(&h).screen_of(300.5, 300.5);
+        h.event(egui::Event::PointerMoved(p));
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(h.state().tools.measure.is_empty(), "Esc clears it");
+    }
+}

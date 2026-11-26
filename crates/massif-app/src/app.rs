@@ -5668,7 +5668,9 @@ impl MassifApp {
                 }
                 let info = self.inspected.as_ref().and_then(|(_, i)| i.as_ref());
                 let reg = &self.doc.world.registry;
-                scrolled(&mut cui, &mut |ui| crate::inspect::panel(ui, info, reg));
+                let measure = crate::measure::shown(&self.tools).then(|| crate::measure::report(cui.ctx(), &self.doc, &self.tools)).flatten();
+                let drawing = self.tools.measure.drawing();
+                scrolled(&mut cui, &mut |ui| crate::inspect::panel(ui, info, reg, measure.as_deref().map(|r| (r, drawing))));
             }
             EditorKind::RenderView => {
                 let catalogue = self.blocks.catalogue.clone();

@@ -305,6 +305,9 @@ pub struct MapView {
     ping: Option<([f64; 2], Option<f64>)>,
     /// The selection: the shape being drawn, its outline.
     select: crate::select::SelectView,
+    /// Where the button went down for the measure, on the screen: how far
+    /// the pointer goes from it tells a drag from a click.
+    measure_from: Option<Pos2>,
     /// The mark of the 3D view is held: the 3D view follows the pointer.
     view3d_grab: bool,
     /// The terrain generator's Live preview, drawn over the map without
@@ -369,6 +372,7 @@ impl Default for MapView {
             last_view: ([0.0, 0.0], 1.0),
             ping: None,
             select: Default::default(),
+            measure_from: None,
             view3d_grab: false,
             live: Vec::new(),
             live_note: None,
@@ -1601,6 +1605,20 @@ impl MapView {
                     }
                     _ => {}
                 }
+            } else if tools.tool == Tool::Measure {
+                // A point of the measure; dragged from a new start, a line
+                // or a lasso in one go. The right button clears it.
+                if secondary {
+                    if !tools.measure.is_empty() {
+                        tools.measure.clear();
+                        *feedback = Some(tr!("Measure cleared").into());
+                    }
+                } else if let Some(p) = pointer {
+                    let near = tools.measure.points.first().is_some_and(|f| self.to_screen(canvas, f.0 as f64, f.1 as f64).distance(p) <= 8.0);
+                    let kind = tools.measure_kind;
+                    tools.measure.press((x as f32, z as f32), kind, near);
+                    self.measure_from = Some(p);
+                }
             } else if tools.tool.is_select() {
                 let op = crate::select::combine_of(modifiers, secondary, tools.select_mode);
                 self.select.begin(tools.tool, (x, z), op, secondary, &tools.brush);
@@ -1790,6 +1808,46 @@ impl MapView {
             } else if let Some((hold, _)) = self.water.take() {
                 *feedback = tools::release_water(doc, hold).or(feedback.take());
             }
+        }
+
+        // The measure: held, it follows the pointer (a line, a lasso); let
+        // go, a drag is done, a click goes on to the next point, which the
+        // pointer is meanwhile. A double-click or Enter ends it, Backspace
+        // takes back its last point, Esc clears it.
+        if tools.tool == Tool::Measure {
+            let kind = tools.measure_kind;
+            let at = world_pointer.map(|(x, z)| (x as f32, z as f32));
+            if let Some(from) = self.measure_from {
+                if down[0] {
+                    if let (Some(p), Some(at)) = (pointer, at) {
+                        tools.measure.drag(at, p.distance(from), self.zoom, kind);
+                    }
+                    ui.ctx().request_repaint();
+                } else {
+                    self.measure_from = None;
+                    let end = at.or(tools.measure.live).or(tools.measure.points.last().copied());
+                    if let Some(end) = end {
+                        tools.measure.release(end, kind);
+                    }
+                }
+            } else if tools.measure.drawing() && response.hovered()
+                && let Some(at) = at
+            {
+                tools.measure.live = Some(at);
+            }
+            let keys = !ui.ctx().egui_wants_keyboard_input();
+            if response.double_clicked() || (keys && tools.measure.drawing() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+                tools.measure.finish(kind);
+            } else if keys && tools.measure.drawing() && ui.input(|i| i.key_pressed(egui::Key::Backspace)) {
+                tools.measure.undo_point();
+            }
+            if !tools.measure.is_empty() && crate::keymap::peek(ui.ctx(), crate::keymap::Action::Cancel) {
+                tools.measure.clear();
+                self.measure_from = None;
+                *feedback = Some(tr!("Measure cleared").into());
+            }
+        } else {
+            self.measure_from = None;
         }
 
         // A selection being drawn follows the pointer; let go, it is made.
@@ -2002,6 +2060,8 @@ impl MapView {
             select.draw(ui, &painter, &land, canvas, &|x, z| self.to_screen(canvas, x, z), view, self.zoom, doc.dimension().selection.as_ref());
             self.select = select;
         }
+        // The measure, over the map.
+        crate::measure::draw_map(ui, &painter, &|x, z| self.to_screen(canvas, x, z), doc, tools);
 
         // The world's origin (x 0, z 0), where the game counts blocks
         // from, with the grid only (alone, it was taken for the pointer): a

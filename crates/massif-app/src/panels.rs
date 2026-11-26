@@ -674,11 +674,12 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
             }
         }
         Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush => crate::select::settings(ui, tools, doc, blocks),
+        Tool::Measure => crate::measure::settings(ui, tools, doc),
         Tool::Eyedropper | Tool::Smooth | Tool::EraseSlab | Tool::Pan => {}
     }
 
     // Which level the tool edits.
-    if !matches!(tool, Tool::Pan | Tool::Flood | Tool::Eyedropper | Tool::Structure | Tool::Building | Tool::Village) && !tool.is_sculpt() && !tool.is_select() {
+    if !matches!(tool, Tool::Pan | Tool::Measure | Tool::Flood | Tool::Eyedropper | Tool::Structure | Tool::Building | Tool::Village) && !tool.is_sculpt() && !tool.is_select() {
         section(ui, Icon::Layers, tr!("Level"));
         let levels: Vec<(String, LevelKind)> = doc.dimension().levels.iter().map(|l| (crate::i18n::tr_name(&l.name).to_owned(), l.kind)).collect();
         let pick = |ui: &mut Ui, doc: &mut Document| {

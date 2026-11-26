@@ -239,81 +239,99 @@ pub fn swatch(ui: &mut Ui, color: [u8; 3]) {
     ui.painter().rect_filled(rect, theme::TILE_RADIUS / 4, theme::rgb(color));
 }
 
-/// The Info panel: the column under the cursor, all it holds.
-pub fn panel(ui: &mut Ui, info: Option<&ColumnInfo>, reg: &massif_core::registry::Registry) {
+/// The Info panel: the column under the cursor, all it holds, in four
+/// parts: where it is, its ground, the layers painted on it, and the
+/// measure when there is one (see `measure`).
+pub fn panel(ui: &mut Ui, info: Option<&ColumnInfo>, reg: &massif_core::registry::Registry, measure: Option<(&crate::measure::Report, bool)>) {
+    use crate::panels::{hint, section};
+    use crate::widgets::{row, well};
     let pal = Palette::of(ui);
-    let Some(c) = info else {
-        crate::panels::section(ui, Icon::Crosshair, tr!("Under the cursor"));
-        crate::panels::hint(ui, tr!("Hover the map or the 3D view: what is there shows here."));
-        crate::panels::hint(ui, tr!("The world's name, seed, size and memory are in File ▸ World Information…"));
-        return;
+    let mono = |ui: &mut Ui, text: String| {
+        ui.label(RichText::new(text).monospace());
     };
-    crate::panels::section(ui, Icon::Crosshair, tr!("Under the cursor"));
-    crate::widgets::well(ui, |ui| {
-        crate::widgets::row(ui, tr!("Coordinates"), |ui| {
-            ui.label(RichText::new(format!("{}, {}", c.x, c.z)).monospace());
-        });
-        crate::widgets::row(ui, tr!("Height"), |ui| {
-            ui.label(RichText::new(c.height.map_or_else(|| "—".to_owned(), |h| h.to_string())).monospace());
-        });
-        crate::widgets::row(ui, tr!("Water"), |ui| {
-            let text = match c.water {
-                Some((top, depth)) => tr!("{top}, {depth} deep", top, depth),
-                None => tr!("None").to_owned(),
-            };
-            ui.label(text);
-        });
-        crate::widgets::row(ui, tr!("Terrain"), |ui| match c.terrain {
-            Some(t) => {
-                ui.label(&reg.terrain(t).name);
-                swatch(ui, reg.terrain(t).color);
-            }
-            None => {
-                ui.label("—");
-            }
-        });
-        crate::widgets::row(ui, tr!("Biome"), |ui| match (c.biome, c.auto_biome) {
-            (Some(b), _) => {
-                ui.label(&reg.biome(b).name);
-            }
-            (None, Some(b)) => {
-                ui.label(RichText::new(tr!("{name} (automatic)", name = reg.biome(b).name)));
-            }
-            (None, None) => {
-                ui.label(tr!("Automatic"));
-            }
-        });
-        crate::widgets::row(ui, tr!("Selection"), |ui| {
-            let text = match c.selected {
-                None => tr!("No selection").to_owned(),
-                Some(w) if w >= 1.0 => tr!("Selected").to_owned(),
-                Some(w) if w > 0.0 => tr!("{value:.0} % selected", value = w * 100.0),
-                Some(_) => tr!("Not selected").to_owned(),
-            };
-            ui.label(text);
-        });
-        if c.levels.len() > 1 {
-            crate::widgets::row(ui, tr!("Levels"), |ui| {
-                ui.label(c.levels.join(", "));
-            });
+    match info {
+        None => {
+            section(ui, Icon::Crosshair, tr!("Position"));
+            hint(ui, tr!("Hover the map or the 3D view: what is there shows here."));
+            hint(ui, tr!("The world's name, seed, size and memory are in File ▸ World Information…"));
         }
-    });
-    crate::panels::section(ui, Icon::Layers, tr!("Layers here"));
-    if c.layers.is_empty() {
-        crate::panels::hint(ui, tr!("No layer is painted here."));
-        return;
-    }
-    crate::widgets::well(ui, |ui| {
-        for l in &c.layers {
-            crate::widgets::row(ui, l.kind, |ui| {
-                if let Some(v) = l.intensity {
-                    ui.label(RichText::new(format!("{:.0} %", v * 100.0)).color(pal.weak).monospace());
+        Some(c) => {
+            section(ui, Icon::Crosshair, tr!("Position"));
+            well(ui, |ui| {
+                row(ui, tr!("Coordinates"), |ui| mono(ui, format!("{}, {}", c.x, c.z)));
+                row(ui, tr!("Chunk"), |ui| mono(ui, format!("{}, {}", c.x.div_euclid(16), c.z.div_euclid(16))));
+                row(ui, tr!("Region"), |ui| mono(ui, format!("{}, {}", c.x.div_euclid(512), c.z.div_euclid(512))));
+                if c.levels.len() > 1 {
+                    row(ui, tr!("Levels"), |ui| {
+                        ui.add(egui::Label::new(c.levels.join(", ")).truncate());
+                    });
                 }
-                ui.label(&l.name);
-                swatch(ui, l.color);
+                if let Some(w) = c.selected {
+                    row(ui, tr!("Selection"), |ui| {
+                        let text = match w {
+                            w if w >= 1.0 => tr!("Selected").to_owned(),
+                            w if w > 0.0 => tr!("{value:.0} % selected", value = w * 100.0),
+                            _ => tr!("Not selected").to_owned(),
+                        };
+                        ui.label(text);
+                    });
+                }
             });
+            ui.add_space(6.0);
+            section(ui, Icon::Mountain, tr!("Ground"));
+            well(ui, |ui| {
+                row(ui, tr!("Height"), |ui| mono(ui, c.height.map_or_else(|| "—".to_owned(), |h| h.to_string())));
+                if let Some((top, depth)) = c.water {
+                    row(ui, tr!("Water"), |ui| {
+                        ui.label(tr!("{top}, {depth} deep", top, depth));
+                    });
+                }
+                row(ui, tr!("Terrain"), |ui| match c.terrain {
+                    Some(t) => {
+                        ui.add(egui::Label::new(crate::i18n::tr_name(&reg.terrain(t).name)).truncate());
+                        swatch(ui, reg.terrain(t).color);
+                    }
+                    None => {
+                        ui.label("—");
+                    }
+                });
+                row(ui, tr!("Biome"), |ui| match (c.biome, c.auto_biome) {
+                    (Some(b), _) => {
+                        ui.add(egui::Label::new(&reg.biome(b).name).truncate());
+                    }
+                    (None, Some(b)) => {
+                        ui.add(egui::Label::new(RichText::new(tr!("{name} (automatic)", name = reg.biome(b).name))).truncate());
+                    }
+                    (None, None) => {
+                        ui.label(tr!("Automatic"));
+                    }
+                });
+            });
+            ui.add_space(6.0);
+            section(ui, Icon::Layers, tr!("Layers here"));
+            if c.layers.is_empty() {
+                hint(ui, tr!("No layer is painted here."));
+            } else {
+                well(ui, |ui| {
+                    for l in &c.layers {
+                        row(ui, l.kind, |ui| {
+                            if let Some(v) = l.intensity {
+                                ui.label(RichText::new(format!("{:.0} %", v * 100.0)).color(pal.weak).monospace());
+                            }
+                            ui.add(egui::Label::new(&l.name).truncate());
+                            swatch(ui, l.color);
+                        });
+                    }
+                });
+            }
         }
-    });
+    }
+    ui.add_space(6.0);
+    section(ui, Icon::RulerDimensionLine, tr!("Measure"));
+    match measure {
+        Some((r, drawing)) => crate::measure::results(ui, r, drawing),
+        None => hint(ui, tr!("Pick the Measure tool (Navigate) to measure a line or an area: its results show here.")),
+    }
 }
 
 /// What the filters' eyedropper offers at a spot: its coordinates, then

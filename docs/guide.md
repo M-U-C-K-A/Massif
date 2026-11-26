@@ -269,16 +269,18 @@ the smooth shading.
 ### Info
 
 The **Info** panel (World) is WorldPainter's: it shows what is under the
-cursor, on the 2D map or in the 3D view, and follows it as it moves — the
-column's coordinates, its height (the block one stands on), the water over
-it and how deep, its terrain, its biome (painted, or the one the land calls
-for on automatic), whether the selection takes it, the levels that have it,
-and every layer painted there: its ground cover, its tree or object layer
-and the one under the trees, its tree size, its underground pockets, its
-smoothed steps, the combined layers that may have painted it, and its
-annotation, each in its colour, with its intensity where it has one (the
-share of the columns a cover grows on, of the squares a tree stands in, of
-the rock the pockets take).
+cursor, on the 2D map or in the 3D view, and follows it as it moves, in four
+parts. **Position**: the column's coordinates, its chunk and its region file,
+the levels that have it, and whether the selection takes it. **Ground**: its
+height (the block one stands on), the water over it and how deep, its
+terrain and its biome (painted, or the one the land calls for on automatic).
+**Layers here**: every layer painted there — its ground cover, its tree or
+object layer and the one under the trees, its tree size, its underground
+pockets, its smoothed steps, the combined layers that may have painted it,
+and its annotations — each in its colour, with its intensity where it has
+one (the share of the columns a cover grows on, of the squares a tree stands
+in, of the rock the pockets take). **Measure**: the results of the
+[Measure tool](#measure), while there is a measure.
 
 ![The Info panel reading the column under the pointer](images/info-panel.png)
 
@@ -350,6 +352,7 @@ The **Tools** panel holds every tool of the World side, a row for each theme. Ho
 | **Levels** | **Stamp slab**, **Erase slab** | Add rock to the active level, or erase it. See [Levels](#levels). |
 | **Navigate** | **Pan** | Move the map (also: middle button, Space). |
 | | **Eyedropper** (⌥Y) | Pick what is under the cursor to paint with it. See [The eyedropper](#the-eyedropper). |
+| | **Measure** | Measure a line's length, heights and slopes, or an area's size, volume and cover. See [Measure](#measure). |
 
 The tools new in this version are marked in the panel until you first try them. In the **3D Sculpt** panel the same tools work in 3D, with three of its own: **Sculpt**, **Dig** and **Smooth** (see [3D Sculpt](#3d-sculpt)).
 
@@ -730,6 +733,38 @@ adds its terrains to the map and paints with it.
 ### The eyedropper
 
 The **Eyedropper** (⌥Y, in the Navigate group) picks what is under the cursor to paint with it, as WorldPainter's: a click lists, by the pointer, the terrain, the biome and each layer there; the one picked is put in hand with its tool (where there is only a terrain, it is picked at once). **Shift + click** takes the terrain, the height and the water at once, and goes back to the tool before. It works in the 3D views too. **Alt + click** with Paint terrain picks the terrain under the cursor without changing tools, and the small eyedropper beside a brush filter or a height field picks for that field alone.
+
+### Measure
+
+The **Measure** tool (in the Navigate group) measures the map, a block
+being a metre as in the game. Choose **Line** or **Area** in Tool Settings.
+
+- **Line**: drag across the map, or click from point to point and
+  double-click (or press Enter) to end; the pointer is the next point
+  meanwhile, and Backspace takes back the last one. A label on the line
+  says its length, its height difference and its mean slope. The Info panel
+  gives its **Distance** on the map, its length **Along the ground** (up
+  and down the slopes), its **Height** at each end, the blocks climbed and
+  come down along a path of points, its **Mean slope** and its **Steepest**
+  (over 4 blocks), as a grade and in degrees, and the **profile** of the
+  land under it, the water shown over the ground: point at the profile and
+  the map marks the spot.
+- **Area**: drag around a part of the map (a lasso), or click its corners
+  and click the first one again (or press Enter) to close it. The Info
+  panel gives its **Area** (in m², km² past a million), its **Perimeter**,
+  its lowest, highest and mean heights, the blocks of ground **over** a
+  level and the room **under** it — what levelling it would take away or
+  bring — counted from its **Lowest ground**, the **Sea level** or **A
+  height** of your choice (Tool Settings ▸ Volume counted from), the share
+  of it under water, and what covers it: its terrains, its biomes and its
+  layers, each with its share. An area of millions of blocks is read one
+  column in several, and says so.
+
+Measures work in the 3D views too: each click adds a point on the land, a
+double-click or Enter ends it. A measure is never saved with the map. It
+shows while the tool is in hand; **Keep on screen** leaves it on the map and
+in the Info panel with the other tools. **Esc**, a right-click or **Clear**
+clears it.
 
 ## Noise painting
 

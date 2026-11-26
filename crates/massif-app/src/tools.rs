@@ -85,6 +85,9 @@ pub enum Tool {
     SelectLasso,
     /// A selection painted with the brush, as WorldPainter's.
     SelectBrush,
+    /// Distances, slopes, areas and volumes, measured on the map (see
+    /// `measure`).
+    Measure,
     Pan,
 }
 
@@ -110,7 +113,7 @@ impl Tool {
         (WATER_GROUP, Icon::Droplet, &[Tool::Water, Tool::Flood, Tool::River]),
         (tn!("Underground"), Icon::Pickaxe, &[Tool::Layer, Tool::Caves, Tool::CaveBiome]),
         (tn!("Levels"), Icon::Layers, &[Tool::StampSlab, Tool::EraseSlab]),
-        (tn!("Navigate"), Icon::Compass, &[Tool::Pan, Tool::Eyedropper]),
+        (tn!("Navigate"), Icon::Compass, &[Tool::Pan, Tool::Eyedropper, Tool::Measure]),
     ];
 
     /// Tools new in this version: the Tools panel marks them until they
@@ -156,6 +159,7 @@ impl Tool {
             Tool::SelectEllipse => tr!("Ellipse selection"),
             Tool::SelectLasso => tr!("Lasso selection"),
             Tool::SelectBrush => tr!("Selection brush"),
+            Tool::Measure => tr!("Measure"),
             Tool::Pan => tr!("Pan"),
         }
     }
@@ -199,6 +203,7 @@ impl Tool {
             Tool::SelectEllipse => Icon::CircleDashed,
             Tool::SelectLasso => Icon::Lasso,
             Tool::SelectBrush => Icon::Highlighter,
+            Tool::Measure => Icon::RulerDimensionLine,
             Tool::Pan => Icon::Hand,
         }
     }
@@ -284,12 +289,13 @@ impl Tool {
             Tool::SelectEllipse => tr!("Drag an ellipse: the other tools then act only inside it. A right-click or Esc clears it."),
             Tool::SelectLasso => tr!("Draw around an area: the other tools then act only inside it. A right-click or Esc clears it."),
             Tool::SelectBrush => tr!("Paint the selection with the brush. Right button: take it out. Esc clears it."),
+            Tool::Measure => tr!("Measure distances, heights and slopes along a line, or the area, volume and cover of a part of the map."),
             Tool::Pan => tr!("Move the map (also: middle button, Space)."),
         }
     }
 
     pub const fn uses_brush(self) -> bool {
-        !matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::Structure | Tool::Building | Tool::Village)
+        !matches!(self, Tool::Eyedropper | Tool::Measure | Tool::Flood | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::Structure | Tool::Building | Tool::Village)
     }
 
     /// The tools that draw the selection.
@@ -299,7 +305,7 @@ impl Tool {
 
     /// Tools that apply once per click rather than continuously.
     pub const fn is_click(self) -> bool {
-        matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Structure | Tool::Building | Tool::Village)
+        matches!(self, Tool::Eyedropper | Tool::Measure | Tool::Flood | Tool::Structure | Tool::Building | Tool::Village)
     }
 
     pub const fn needs_slab_level(self) -> bool {
@@ -331,7 +337,7 @@ impl Tool {
             // passes): Smooth3d, from its shortcut, melts sculpted matter.
             Tool::Smooth3d => Use3d::Smooth,
             Tool::PaintTerrain => Use3d::Paint,
-            Tool::Eyedropper | Tool::Flood | Tool::Structure | Tool::Village => Use3d::Click,
+            Tool::Eyedropper | Tool::Measure | Tool::Flood | Tool::Structure | Tool::Village => Use3d::Click,
             Tool::Building => Use3d::MapOnly,
             Tool::Pan | Tool::Road | Tool::River | Tool::Annotate | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush => Use3d::MapOnly,
             Tool::Smooth
@@ -679,6 +685,14 @@ pub struct ToolState {
     pub select_mode: massif_core::selection::Combine,
     /// Blocks over which a new shape's edge fades, on either side.
     pub select_feather: i32,
+    /// The Measure tool: a line or an area, the level an area's volume is
+    /// counted from (and its height, for `Base::Height`).
+    pub measure_kind: crate::measure::Kind,
+    pub measure_base: crate::measure::Base,
+    pub measure_level: i32,
+    /// The measure on the map: never saved.
+    #[serde(skip)]
+    pub measure: crate::measure::Measure,
     /// "Select by": what, and its limits.
     pub select_by: crate::select::SelectBy,
     /// The Structure tool: what it places and how.
@@ -1305,6 +1319,10 @@ impl Default for ToolState {
             region_pick: None,
             select_mode: Default::default(),
             select_feather: 0,
+            measure_kind: Default::default(),
+            measure_base: Default::default(),
+            measure_level: 62,
+            measure: Default::default(),
             select_by: Default::default(),
             structure: Default::default(),
             village: Default::default(),
@@ -1943,7 +1961,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
                     massif_core::voxel::sculpt(&mut edit, brush, [x, y, z], strength, mode);
                 }
             }
-            Tool::Eyedropper | Tool::Flood | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush | Tool::Structure | Tool::Building | Tool::Village => {}
+            Tool::Eyedropper | Tool::Measure | Tool::Flood | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush | Tool::Structure | Tool::Building | Tool::Village => {}
         }
     }
     // A combined layer's pockets, painted from another level: the same
@@ -2779,6 +2797,20 @@ pub fn click(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, inverse:
                     None
                 }
             }
+        }
+        // A point of the measure (in the 3D views; the map has its own
+        // drags), at the column's centre. The right button clears it.
+        Tool::Measure => {
+            if inverse {
+                tools.measure.clear();
+                return None;
+            }
+            let at = (x as f32 + 0.5, z as f32 + 0.5);
+            let near = tools.measure.points.first().is_some_and(|f| (f.0 - at.0).hypot(f.1 - at.1) <= 2.0);
+            let kind = tools.measure_kind;
+            tools.measure.press(at, kind, near);
+            tools.measure.release(at, kind);
+            None
         }
         Tool::Structure => crate::structure_tool::click(doc, tools, x, z, inverse),
         Tool::Building => None,

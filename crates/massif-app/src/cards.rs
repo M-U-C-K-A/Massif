@@ -386,6 +386,12 @@ pub fn tool_card(tool: Tool) -> Card<'static> {
             Some(tr!("⌘D deselects, ⌘A selects the whole map, ⇧⌘I inverts.")),
             Some(Demo::Select),
         ),
+        Tool::Measure => card(
+            tr!("Measures the map: a line's length, heights and slopes, with the land's profile; an area's size, volume and what covers it. A block is a metre."),
+            vec![(tr!("Drag"), tr!("Measure a line, or an area in Area")), (tr!("Click"), tr!("Add a point")), (tr!("Double-click"), tr!("End it (Enter)")), (tr!("Right-click"), tr!("Clear it (Esc)"))],
+            Some(tr!("The results are in the Info panel. Keep on screen leaves the measure with the other tools.")),
+            Some(Demo::Measure),
+        ),
         Tool::Pan => card(tr!("Moves the map."), vec![(tr!("Drag"), tr!("Move the map")), (tr!("Middle-drag"), tr!("Move it with any tool")), (tr!("Space+drag"), tr!("The same"))], None, Some(Demo::Pan)),
     }
 }
@@ -433,6 +439,7 @@ pub enum Demo {
     EraseSlab,
     Select,
     Pan,
+    Measure,
     Structure,
     Building,
     Village,
@@ -1068,6 +1075,21 @@ impl Demo {
                     }
                 }
                 if progress < 0.5 { Some((x1, y1, 2.0, true)) } else { Some((92.0, 31.0, 14.0, progress < 0.95)) }
+            }
+            Demo::Measure => {
+                // A line dragged across the hills, a dot at each end.
+                s.add_hills(8.0);
+                let grow = smooth_step(0.05, 0.85, progress);
+                let (x0, y0) = (18.0, 46.0);
+                let (x1, y1) = (x0 + (104.0 - x0) * grow, y0 + (16.0 - y0) * grow);
+                let n = ((x1 - x0).hypot(y1 - y0).ceil() as usize).max(1);
+                for k in 0..=n {
+                    let t = k as f64 / n as f64;
+                    let (x, y) = (x0 + (x1 - x0) * t, y0 + (y1 - y0) * t);
+                    Scene::near(x, y, 0.8, |i, _| s.tint[i] = Some([250, 120, 40]));
+                }
+                s.markers = vec![(x0, y0), (x1, y1)];
+                Some((x1, y1, 2.0, progress < 0.9))
             }
             Demo::Pan => {
                 // The land slides under the hand.

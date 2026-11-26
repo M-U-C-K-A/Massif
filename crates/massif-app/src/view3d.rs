@@ -7061,6 +7061,33 @@ impl View3d {
             }
         }
 
+        // The measure, laid on the ground. With the tool in hand, clicks
+        // add its points (see `tools::click`), the pointer its next one; a
+        // double-click or Enter ends it, Esc clears it.
+        if sculpting && tools.tool == Tool::Measure {
+            let kind = tools.measure_kind;
+            if tools.measure.drawing()
+                && let Some(f) = self.frame.filter(|_| response.hovered())
+            {
+                tools.measure.live = Some((f.center[0].floor() + 0.5, f.center[2].floor() + 0.5));
+            }
+            let keys = response.hovered() && !ui.ctx().egui_wants_keyboard_input();
+            if response.double_clicked() || (keys && tools.measure.drawing() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+                tools.measure.finish(kind);
+            }
+            if keys && !tools.measure.is_empty() && crate::keymap::peek(ui.ctx(), crate::keymap::Action::Cancel) {
+                tools.measure.clear();
+            }
+        }
+        {
+            let m = Mat4::from_cols_array_2d(&globals.view_proj);
+            let to_screen = |p: [f32; 3]| -> Option<egui::Pos2> {
+                let v = m * Vec4::new(p[0] - origin.0 as f32, p[1], p[2] - origin.1 as f32, 1.0);
+                (v.w > 0.1).then(|| pos2(rect.center().x + v.x / v.w * rect.width() * 0.5, rect.center().y - v.y / v.w * rect.height() * 0.5))
+            };
+            crate::measure::draw_3d(ui, &painter, &to_screen, doc, tools);
+        }
+
         drop(section);
         // ---- overlay -------------------------------------------------------
         let stride = self.grid.as_ref().map_or(1, |g| g.stride);
