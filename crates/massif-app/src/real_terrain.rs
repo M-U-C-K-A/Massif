@@ -1213,7 +1213,8 @@ pub mod tests {
             massif_core::auto::paint_over_the_map(&mut history.edit(&mut world, 0), &reader);
             massif_core::auto::biomes_over_the_map(&mut history.edit(&mut world, 0), &reader);
             drop(history);
-            eprintln!("{name}: {} columns in {} tiles; {:.1} s ({fetched:.1} s fetching), {:.1} s of processor", written.columns, written.tiles.len(), started.elapsed().as_secs_f32(), cpu_time() - cpu);
+            let processor = cpu_time().zip(cpu).map_or_else(String::new, |(now, then)| format!(", {:.1} s of processor", now - then));
+            eprintln!("{name}: {} columns in {} tiles; {:.1} s ({fetched:.1} s fetching){processor}", written.columns, written.tiles.len(), started.elapsed().as_secs_f32());
             let dim = &world.dims[0];
             let (mut wet, mut all) = (0usize, 0usize);
             for z in (rect.z0..rect.z1).step_by(16) {
@@ -1247,12 +1248,21 @@ pub mod tests {
     /// share of the map across and down.
     const MASSIF_CLOSE: (f32, f32) = (0.115, 0.36);
 
-    /// The processor time of this process, in seconds.
-    fn cpu_time() -> f64 {
+    /// The processor time of this process, in seconds, where the system
+    /// tells it the tests' way (Unix).
+    #[cfg(unix)]
+    fn cpu_time() -> Option<f64> {
+        // Safety: getrusage only fills the struct it is given.
         let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
         unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
         let t = |v: libc::timeval| v.tv_sec as f64 + v.tv_usec as f64 / 1e6;
-        t(usage.ru_utime) + t(usage.ru_stime)
+        Some(t(usage.ru_utime) + t(usage.ru_stime))
+    }
+
+    /// Elsewhere (Windows) the processor time is not measured.
+    #[cfg(not(unix))]
+    fn cpu_time() -> Option<f64> {
+        None
     }
 
     #[test]
