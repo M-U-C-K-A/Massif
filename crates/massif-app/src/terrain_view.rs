@@ -1616,11 +1616,6 @@ impl TerrainRenderer {
         Some((w, h, out))
     }
 
-    /// The image shown, read back (RGBA). Blocks.
-    #[cfg(test)]
-    pub fn read_image(&self) -> Option<(u32, u32, Vec<u8>)> {
-        self.read(self.target.as_ref()?)
-    }
 }
 
 /// Triangles of a slab: its top, an `n` × `n` grid, then its underside, the
@@ -1757,12 +1752,6 @@ impl TerrainView {
         self.data.is_some()
     }
 
-    /// The last rendered image, read back from the GPU.
-    #[cfg(test)]
-    pub fn read_back(&self) -> Option<(u32, u32, Vec<u8>)> {
-        self.renderer.as_ref()?.read_image()
-    }
-
     fn uniforms(&self, data: &ViewData, aspect: f32, quality: Quality) -> Uniforms {
         let r = &self.render;
         let size = data.size.max(1.0);
@@ -1845,13 +1834,6 @@ impl TerrainView {
                 None => [0.0; 4],
             },
         }
-    }
-
-    /// Draw the viewport into the available rectangle. Returns whether the
-    /// relief's occlusion must be worked out again (the exaggeration
-    /// changed).
-    pub fn ui(&mut self, ui: &mut Ui, frame: &eframe::Frame) -> bool {
-        self.ui_with(ui, frame.wgpu_render_state())
     }
 
     /// [`Self::ui`] with the app's graphics as they were kept.
@@ -1974,63 +1956,6 @@ impl TerrainView {
         self.render_at(size, Quality::Final)
     }
 
-    /// How long the view takes to draw at `size` while it moves, still,
-    /// and for a saved image, in milliseconds (the image read back
-    /// included).
-    #[cfg(test)]
-    pub fn time_qualities(&mut self, size: [u32; 2]) -> [f32; 3] {
-        self.render_at(size, Quality::Final);
-        let data = self.data.clone().expect("a relief");
-        let aspect = size[0] as f32 / size[1] as f32;
-        let all = [Quality::Moving, Quality::Still, Quality::Final].map(|q| self.uniforms(&data, aspect, q));
-        let sea = self.render.sea;
-        let renderer = self.renderer.as_mut().expect("a renderer");
-        let target = renderer.make_target(size);
-        all.map(|u| {
-            renderer.render_to(&target, &u, sea);
-            renderer.read(&target);
-            // Ten frames, then the image once: what the card takes a frame.
-            let started = Instant::now();
-            for _ in 0..10 {
-                renderer.render_to(&target, &u, sea);
-            }
-            renderer.read(&target);
-            started.elapsed().as_secs_f32() * 1000.0 / 10.0
-        })
-    }
-
-    /// How long a still frame takes at `size` with the graphics settings
-    /// now (their samples a pixel, light and clouds; the render scale
-    /// applied to `size`), in milliseconds: the best of ten.
-    #[cfg(test)]
-    pub fn time_still(&mut self, size: [u32; 2]) -> f32 {
-        let g = crate::graphics::get();
-        let size = [(size[0] as f32 * g.render_scale) as u32, (size[1] as f32 * g.render_scale) as u32];
-        let data = self.data.clone().expect("a relief");
-        if self.renderer.as_ref().is_some_and(|r| r.samples != g.samples()) {
-            let r = self.renderer.take().expect("a renderer");
-            self.renderer = Some(TerrainRenderer::with_samples(&r.device, &r.queue, g.samples()));
-        }
-        let renderer = self.renderer.as_mut().expect("a renderer");
-        renderer.upload(&data);
-        self.uploaded = Some(Arc::as_ptr(&data) as usize);
-        let u = self.uniforms(&data, size[0] as f32 / size[1] as f32, Quality::Still);
-        let sea = self.render.sea;
-        let renderer = self.renderer.as_mut().expect("a renderer");
-        let target = renderer.make_target(size);
-        renderer.render_to(&target, &u, sea);
-        renderer.read(&target);
-        let mut best = f32::MAX;
-        for _ in 0..10 {
-            let started = Instant::now();
-            renderer.render_to(&target, &u, sea);
-            renderer.read(&target);
-            best = best.min(started.elapsed().as_secs_f32() * 1000.0);
-        }
-        self.last = None;
-        best
-    }
-
     fn render_at(&mut self, size: [u32; 2], quality: Quality) -> Option<(u32, u32, Vec<u8>)> {
         let data = self.data.clone()?;
         let renderer = self.renderer.as_mut()?;
@@ -2054,7 +1979,7 @@ impl TerrainView {
         let before = self.render;
         let r = &mut self.render;
         // Each group of settings: its name, then its rows in a well.
-        let section = |ui: &mut Ui, icon: Icon, name: &str, note: &str| crate::graph_editor::titled(ui, icon, name, note);
+        let section = |ui: &mut Ui, icon: Icon, name: &str, note: &str| crate::graph_kit::titled(ui, icon, name, note);
         ui.spacing_mut().slider_width = (ui.available_width() - 190.0).max(ui.available_width() * 0.2).clamp(30.0, 220.0);
         section(ui, Icon::Sun, tr!("Sun"), tr!("Shift + drag in the view turns it"));
         well(ui, |ui| {

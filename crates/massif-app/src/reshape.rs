@@ -199,7 +199,7 @@ impl ReshapeForm {
                 let limits = (self.map.min_y as f32, (self.map.max_y - 1) as f32);
                 match &mut self.op {
                     Reshape::Filter(kind) => {
-                        crate::graph_editor::node_settings(ui, kind, reg, limits);
+                        crate::graph_kit::node_settings(ui, kind, reg, limits);
                     }
                     Reshape::Relief { scale, shift } => {
                         relief_settings(ui, scale, shift);

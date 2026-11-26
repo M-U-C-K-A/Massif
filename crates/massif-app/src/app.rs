@@ -698,8 +698,10 @@ pub struct MassifApp {
     /// When the brush of 3D Sculpt's header was clicked: the Brushes panel
     /// is outlined in the accent for a moment.
     brushes_called: Option<f64>,
-    /// The terrain graph editor.
-    graph: crate::graph_editor::GraphEditor,
+    /// A template whose graph to apply to the map once the generator's
+    /// panel is there (a map just made from it), its view set as it is
+    /// best seen.
+    template_apply: Option<massif_core::graph::Template>,
     /// The terrain generator of 1.3 (made the first time it is shown).
     terrain_panel: Option<crate::terrain::TerrainPanel>,
     /// The game's real blocks.
@@ -825,9 +827,6 @@ impl MassifApp {
         let world = timed("the map made up before one is opened", default_world);
         let mut app = timed("the app's state", || Self::with_world(world, layout, tools, settings));
         timed("the graphics card's share of the app", || app.start_graphics(cc));
-        if let Some(render) = cc.storage.and_then(|s| eframe::get_value(s, "massif.render")).or_else(|| backup.get("massif.render")) {
-            app.graph.view.render = render;
-        }
         app.settings_backup = backup;
         app.unified_titlebar = cfg!(target_os = "macos");
         app.menus_in_menu_bar = crate::menubar::NATIVE;
@@ -1144,7 +1143,7 @@ impl MassifApp {
     /// over the editor, and what its closing says kept.
     fn tour_ui(&mut self, ctx: &egui::Context) {
         // A sample's relief built: its map shown.
-        if self.sample == Some(SampleStage::Building) && !self.graph.converting() {
+        if self.sample == Some(SampleStage::Building) && !self.applying_terrain() {
             self.sample = None;
             // On the Terrain side, its graph and its preview: the World side
             // when asked for (Apply, the side switch).
@@ -1226,14 +1225,22 @@ impl MassifApp {
     }
 
     fn start_terrain(&mut self, t: massif_core::graph::Template) {
-        // A sample's relief is built by the classic graph, shown while it
-        // builds; the generator once it is written (see `tour_ui`).
-        let classic = self.layout.workspaces.iter().position(|w| w.terrain && w.root.shows(EditorKind::Graph));
-        match classic.filter(|_| self.sample.is_some()) {
-            Some(k) => self.layout.activate(k),
-            None => self.layout.show_generator(),
-        }
-        self.graph.use_template(&mut self.doc, t);
+        // The template, made as the Terrain Generator's graph (its nodes
+        // converted from the template's), applied to the map at the next
+        // frame (`frame_ui`).
+        self.layout.show_generator();
+        let world = &mut self.doc.world;
+        let rect = massif_terrain::world::map_rect(&world.dims[0]);
+        let side = rect.width().max(rect.depth()).max(1) as f32;
+        world.meta.graph = Some(t.graph(&world.registry, world.meta.sea_level as f32, side));
+        world.meta.terrain_graph = None;
+        massif_terrain::world::absorb_classic(world);
+        self.template_apply = Some(t);
+    }
+
+    /// Whether the generator is applying a graph to the map, or about to.
+    fn applying_terrain(&self) -> bool {
+        self.template_apply.is_some() || self.terrain_panel.as_ref().is_some_and(|p| p.apply_asked || p.applying.is_some())
     }
 
     fn with_world(world: World, layout: Layout, tools: ToolState, settings: Settings) -> Self {
@@ -1315,7 +1322,7 @@ impl MassifApp {
             brushes: BrushLibrary::default(),
             new_group: None,
             brushes_called: None,
-            graph: Default::default(),
+            template_apply: None,
             terrain_panel: None,
             blocks: BlockLibrary::default(),
             allow_close: false,
@@ -2710,7 +2717,7 @@ impl MassifApp {
     fn show_developer_panel(&mut self) {
         let mut areas = Vec::new();
         self.layout.current().root.areas(&mut areas);
-        let largest = areas.iter().find(|(_, k)| matches!(k, EditorKind::Map | EditorKind::View3d | EditorKind::Sculpt3d | EditorKind::Graph | EditorKind::GraphView)).or(areas.first()).map(|(id, _)| *id);
+        let largest = areas.iter().find(|(_, k)| matches!(k, EditorKind::Map | EditorKind::View3d | EditorKind::Sculpt3d)).or(areas.first()).map(|(id, _)| *id);
         if let Some(id) = largest {
             let new = self.layout.split_at(id, crate::layout::Dir::Row, false, 0.64);
             self.layout.current_mut().root.set_editor(new, EditorKind::Developer);
@@ -2943,7 +2950,7 @@ impl MassifApp {
         let pick = areas
             .iter()
             .find(|a| a.1 == EditorKind::ToolSettings)
-            .or_else(|| areas.iter().find(|a| !matches!(a.1, EditorKind::Map | EditorKind::View3d | EditorKind::Sculpt3d | EditorKind::GraphView)));
+            .or_else(|| areas.iter().find(|a| !matches!(a.1, EditorKind::Map | EditorKind::View3d | EditorKind::Sculpt3d)));
         if let Some(&(id, _)) = pick {
             root.set_editor(id, kind);
         }
@@ -3720,15 +3727,6 @@ impl MassifApp {
             self.say(ctx, tr!("Undid a change to the graph"), false, None);
             return;
         }
-        // On the Terrain side, the graph's changes and its conversions, in
-        // the order they were made.
-        if self.layout.terrain()
-            && let Some(done) = self.graph.undo(&mut self.doc)
-            && matches!(done, crate::graph_editor::Undone::Graph)
-        {
-            self.say(ctx, tr!("Undid a change to the graph"), false, None);
-            return;
-        }
         if let Some(label) = self.doc.undo() {
             self.say(ctx, tr!("Undid {label}", label), false, None);
             self.map_cache.invalidate_all();
@@ -3744,13 +3742,6 @@ impl MassifApp {
             && p.redo()
         {
             p.commit(&mut self.doc);
-            self.say(ctx, tr!("Redid a change to the graph"), false, None);
-            return;
-        }
-        if self.layout.terrain()
-            && let Some(done) = self.graph.redo(&mut self.doc)
-            && matches!(done, crate::graph_editor::Undone::Graph)
-        {
             self.say(ctx, tr!("Redid a change to the graph"), false, None);
             return;
         }
@@ -3847,15 +3838,9 @@ impl MassifApp {
                             // Its relief from a template: on the Terrain side.
                             if let Some(t) = self.after_create.take() {
                                 self.start_terrain(t);
-                                // A sample: its relief built at once.
-                                if self.sample == Some(SampleStage::Making)
-                                    && let Some(graph) = self.doc.world.meta.graph.clone()
-                                {
-                                    self.graph.start_build(ctx, &mut self.doc, &graph, None);
-                                    self.sample = Some(SampleStage::Building);
-                                } else {
-                                    self.sample = None;
-                                }
+                                // A sample: its map shown once its relief is
+                                // written.
+                                self.sample = (self.sample == Some(SampleStage::Making)).then_some(SampleStage::Building);
                             }
                         }
                     }
@@ -4262,7 +4247,7 @@ impl MassifApp {
         }
         // Select all, deselect and invert, but in the graph, which picks
         // its nodes with ⌘A and ⌘D.
-        let over_graph = ctx.input(|i| i.pointer.hover_pos()).and_then(|p| self.area_at(ctx, p)).and_then(|id| self.layout.current().root.editor_of(id)).is_some_and(|k| matches!(k, EditorKind::Graph | EditorKind::GraphView | EditorKind::GraphProps) || k.generator());
+        let over_graph = ctx.input(|i| i.pointer.hover_pos()).and_then(|p| self.area_at(ctx, p)).and_then(|id| self.layout.current().root.editor_of(id)).is_some_and(|k| k.generator());
         if !over_graph {
             for (action, command) in [(Action::InvertSelection, Command::InvertSelection), (Action::SelectAll, Command::SelectAll), (Action::Deselect, Command::Deselect)] {
                 if pressed(action) {
@@ -5300,7 +5285,7 @@ impl MassifApp {
         // What the area shows: every editor on one page, in columns.
         hui.menu_button(format!("{} {}", theme::glyph(editor.icon()), theme::glyph(Icon::ChevronDown)), |ui| {
             let columns = crate::picker::columns_for(ui.ctx().content_rect().width() - 32.0);
-            if let Some(kind) = crate::picker::page(ui, Some(editor), shown, self.settings.developer, self.doc.world.meta.graph.is_some(), columns) {
+            if let Some(kind) = crate::picker::page(ui, Some(editor), shown, self.settings.developer, columns) {
                 self.layout.set_editor(id, kind);
                 ui.close();
             }
@@ -5630,26 +5615,6 @@ impl MassifApp {
                 let reg = &self.doc.world.registry;
                 scrolled(&mut cui, &mut |ui| crate::inspect::panel(ui, info, reg));
             }
-            EditorKind::Graph => {
-                if let Some(msg) = self.graph.canvas_ui(&mut cui, &mut self.doc, &self.blocks) {
-                    self.feedback = Some(msg);
-                }
-                if let Some((ok, msg, secs)) = self.graph.done.take() {
-                    let ctx = cui.ctx().clone();
-                    if ok {
-                        self.task_done(&ctx, Cue::Ready, tr!("Conversion done"), &msg, secs);
-                    } else {
-                        self.task_done(&ctx, Cue::Error, tr!("Conversion failed"), &msg, secs);
-                    }
-                }
-            }
-            EditorKind::GraphView => self.graph.viewport_ui(&mut cui, frame, &self.doc),
-            EditorKind::GraphProps => {
-                egui::Frame::new()
-                    .inner_margin(egui::Margin::symmetric(10, 8))
-                    .show(&mut cui, |ui| self.graph.properties_ui(ui, &mut self.doc, &mut self.tools.pattern.saved));
-            }
-            EditorKind::RenderSettings => scrolled(&mut cui, &mut |ui| self.graph.render_ui(ui, &self.doc)),
             EditorKind::RenderView => {
                 let catalogue = self.blocks.catalogue.clone();
                 self.render_side.viewport_ui(&mut cui, id, frame, &mut self.doc, catalogue);
@@ -5690,8 +5655,7 @@ impl MassifApp {
             EditorKind::Empty => {
                 let mut picked = None;
                 let developer = self.settings.developer;
-                let classic = self.doc.world.meta.graph.is_some();
-                scrolled(&mut cui, &mut |ui| picked = panels::empty_area(ui, shown, developer, classic));
+                scrolled(&mut cui, &mut |ui| picked = panels::empty_area(ui, shown, developer));
                 if let Some(kind) = picked {
                     self.layout.set_editor(id, kind);
                 }
@@ -7674,6 +7638,19 @@ impl MassifApp {
         step("the work done in the background (opening, saving, exporting)");
         self.poll_autosave_opening();
         self.poll_jobs(&ctx);
+        // A template's graph, applied to the map just made from it.
+        if let Some(t) = self.template_apply.take() {
+            let reg = &self.doc.world.registry;
+            let p = self.terrain_panel.get_or_insert_with(|| crate::terrain::TerrainPanel::for_app(frame, reg));
+            p.sync(&mut self.doc);
+            p.apply_asked = true;
+            // Seen as the template is best seen: in 3D, its sun, sky,
+            // clouds and sea.
+            let render = crate::graph_kit::template_render(t, self.doc.world.meta.sea_level as f32, p.view3d.render.exaggeration);
+            (p.look.three_d, p.look.sky, p.look.sun) = (true, true, [render.sun_azimuth, render.sun_elevation]);
+            p.view3d.render = render;
+            p.view3d.camera = Default::default();
+        }
         self.poll_terrain_apply(&ctx);
         // A save point open read-only keeps as it is.
         if self.doc.take_back() {
@@ -7914,7 +7891,6 @@ impl eframe::App for MassifApp {
         // Until the first frame is shown, startup.log follows each step.
         crate::startup::frame_begins(ui.ctx(), frame);
         self.dev.begin();
-        self.graph.keep_tab(ui.ctx());
         // GitHub's answer about new versions, once it came.
         self.updates.poll();
         // A panic in the frame is stopped here, the map kept (see
@@ -7962,12 +7938,10 @@ impl eframe::App for MassifApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, LAYOUT_KEY, &self.layout);
         eframe::set_value(storage, "massif.settings", &self.settings);
-        eframe::set_value(storage, "massif.render", &self.graph.view.render);
         eframe::set_value(storage, "massif.tools", &self.tools);
         let b = &mut self.settings_backup;
         b.set(LAYOUT_KEY, &self.layout);
         b.set("massif.settings", &self.settings);
-        b.set("massif.render", &self.graph.view.render);
         b.set("massif.tools", &self.tools);
         b.write();
     }
@@ -7986,7 +7960,6 @@ fn editor_scope(editor: EditorKind) -> profiling::tracing::span::EnteredSpan {
         EditorKind::Sculpt3d => span!(Level::INFO, "3D Sculpt"),
         EditorKind::Diorama => span!(Level::INFO, "Diorama"),
         EditorKind::RenderView => span!(Level::INFO, "Render"),
-        EditorKind::GraphView => span!(Level::INFO, "node graph"),
         _ => span!(Level::INFO, "panels"),
     }
     .entered()
@@ -11703,7 +11676,8 @@ mod tests {
             let mut h = harness(choice);
             h.state_mut().settings.developer = true;
             h.run_steps(5);
-            // A map made with the classic graph offers its panels.
+            // A map made with the classic generator offers the Terrain
+            // Generator's panels alone, as any other.
             {
                 let app = h.state_mut();
                 assert!(app.doc.world.meta.graph.is_none(), "a new map has no classic graph");
@@ -11715,24 +11689,28 @@ mod tests {
             let header = format!("{} {}", theme::glyph(EditorKind::Map.icon()), theme::glyph(Icon::ChevronDown));
             h.query_all_by_label(&header).next().expect("the map area's header").click();
             h.run_steps(3);
-            h.get_by_label("Graph Viewport").hover();
+            h.get_by_label("Generator Viewer").hover();
             h.run_steps(3);
             if let Some(dir) = &dir {
                 h.render().unwrap().save(dir.join(format!("editor-page-{name}.png"))).unwrap();
             }
-            h.get_by_label("Classic properties").click();
+            for gone in ["Classic generator", "Classic graph", "Graph Viewport", "Classic properties", "Render Settings"] {
+                assert!(h.query_by_label(gone).is_none(), "{gone} is not offered");
+            }
+            h.get_by_label("Node Properties").click();
             h.run_steps(3);
-            assert_eq!(h.state().layout.current().root.editor_of(map), Some(EditorKind::GraphProps));
-            assert!(h.query_by_label("Render Settings").is_none(), "the page closes once an editor is chosen");
+            assert_eq!(h.state().layout.current().root.editor_of(map), Some(EditorKind::GenProps));
+            assert!(h.query_by_label("Generator Viewer").is_none(), "the page closes once an editor is chosen");
 
             h.state_mut().layout.current_mut().root.set_editor(map, EditorKind::Empty);
             h.run_steps(3);
             if let Some(dir) = &dir {
                 h.render().unwrap().save(dir.join(format!("empty-area-{name}.png"))).unwrap();
             }
-            h.get_by_label("Render Settings").click();
+            assert!(h.query_by_label("Classic generator").is_none(), "nor in an empty area");
+            h.get_by_label("Generator Viewer").click();
             h.run_steps(3);
-            assert_eq!(h.state().layout.current().root.editor_of(map), Some(EditorKind::RenderSettings));
+            assert_eq!(h.state().layout.current().root.editor_of(map), Some(EditorKind::GenViewer));
         }
     }
 
@@ -16501,135 +16479,6 @@ mod tests {
         image::save_buffer(dir.join("mc-import-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
     }
 
-    /// Step until the terrain graph's preview has caught up with the graph.
-    fn wait_for_graph(h: &mut egui_kittest::Harness<'static, MassifApp>) {
-        let started = std::time::Instant::now();
-        h.run_steps(3);
-        while !h.state().graph.is_current() {
-            assert!(started.elapsed().as_secs() < 90, "the preview did not come");
-            h.step();
-            std::thread::sleep(std::time::Duration::from_millis(15));
-        }
-        h.run_steps(4);
-    }
-
-    /// The starter graph's viewport over a small terrain and over a huge
-    /// one (a sample every hundred blocks), for the eye (MASSIF_SNAPSHOT_DIR):
-    /// the land keeps its colours whatever the size.
-    #[test]
-    fn graph_viewport_at_every_size() {
-        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
-            return;
-        };
-        for (name, side) in [("starter", 4096u32), ("starter", 46592), ("archipelago", 4096)] {
-            let mut h = harness(ThemeChoice::Dark);
-            {
-                let app = h.state_mut();
-                app.layout.activate(8); // Classic graph, on the terrain side
-                let get = |name: &str| app.doc.world.registry.terrain_by_name(name).map_or(0, |t| t.0);
-                let mut graph = match name {
-                    "starter" => massif_core::graph::Graph::starter(get("Grass"), massif_core::TerrainId::ROCK.0, get("Snow"), get("Gravel")),
-                    _ => massif_core::graph::Template::Archipelago.graph(&app.doc.world.registry, app.doc.world.meta.sea_level as f32, side as f32),
-                };
-                graph.size = Some(side);
-                app.doc.world.meta.graph = Some(graph);
-                app.graph.graph_replaced();
-            }
-            wait_for_graph(&mut h);
-            let (fw, fh, full) = h.state_mut().graph.view.render_image([960, 540]).expect("rendered");
-            image::save_buffer(dir.join(format!("graph-render-{name}-{side}.png")), &full, fw, fh, image::ColorType::Rgba8).unwrap();
-            let (w, hgt, rgba) = h.state().graph.view.read_back().expect("the viewport rendered");
-            image::save_buffer(dir.join(format!("graph-viewport-{name}-{side}.png")), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
-            // How dark the land is: the mean of the middle of the picture.
-            let (mut sum, mut count) = (0u64, 0u64);
-            for y in hgt / 3..2 * hgt / 3 {
-                for x in w / 3..2 * w / 3 {
-                    let i = ((y * w + x) * 4) as usize;
-                    sum += rgba[i] as u64 + rgba[i + 1] as u64 + rgba[i + 2] as u64;
-                    count += 3;
-                }
-            }
-            eprintln!("{name} {side} blocks: mean of the middle {}", sum / count.max(1));
-        }
-    }
-
-    /// Converting the starter graph over a map wider than deep, a sample
-    /// every few blocks (as on a very large map): every column of every tile
-    /// gets the build's height, the first rows and columns too.
-    #[test]
-    fn converting_leaves_no_column_out() {
-        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
-            return;
-        };
-        let mut h = egui_kittest::Harness::builder()
-            .with_size(vec2(1600.0, 1000.0))
-            .with_pixels_per_point(1.0)
-            .with_accessibility_check(false)
-            .wgpu()
-            .build_eframe(move |cc| {
-                theme::install(&cc.egui_ctx);
-                MassifApp::for_tests(generate(&GenParams {
-                    tiles_x: 8,
-                    tiles_z: 6,
-                    landform: Landform::Flat,
-                    ..GenParams::default()
-                }))
-            });
-        {
-            let app = h.state_mut();
-            app.layout.activate(8); // Classic graph, on the terrain side
-            let get = |name: &str| app.doc.world.registry.terrain_by_name(name).map_or(0, |t| t.0);
-            let mut starter = massif_core::graph::Graph::starter(get("Grass"), massif_core::TerrainId::ROCK.0, get("Snow"), get("Gravel"));
-            // MASSIF_GRAPH_SIDE: a square of that many blocks rather than the map.
-            starter.size = std::env::var("MASSIF_GRAPH_SIDE").ok().and_then(|v| v.parse().ok());
-            app.doc.world.meta.graph = Some(starter);
-            app.graph.graph_replaced();
-        }
-        wait_for_graph(&mut h);
-        h.state_mut().graph.draft = Some(360);
-        // MASSIF_GRAPH_OVER: over the map (levels), rather than into its ground.
-        if std::env::var_os("MASSIF_GRAPH_OVER").is_some() {
-            h.state_mut().graph.over = Some(true);
-        }
-        {
-            use egui_kittest::kittest::Queryable;
-            h.get_by_label_contains("Convert to voxels").click();
-        }
-        let started = std::time::Instant::now();
-        while h.state().doc.history.undo_label() != Some("Terrain graph") {
-            assert!(started.elapsed().as_secs() < 120, "the conversion did not finish");
-            h.step();
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        h.run_steps(5);
-        // Columns left without a height, tile by tile.
-        let ground = h.state().doc.dimension().ground();
-        let mut empty: Vec<(TilePos, usize)> = Vec::new();
-        let mut tiles: Vec<TilePos> = ground.positions().collect();
-        tiles.sort_by_key(|t| (t.z, t.x));
-        let dim = h.state().doc.dimension();
-        let mut spans = Vec::new();
-        for t in &tiles {
-            let tile = ground.view(*t).unwrap();
-            let stack = massif_core::TileStack::new(dim, *t, false).unwrap();
-            let n = (0..128 * 128)
-                .filter(|&i| {
-                    stack.spans(i, &mut spans);
-                    !tile.top.get(i).is_finite() || spans.is_empty()
-                })
-                .count();
-            if n > 0 {
-                empty.push((*t, n));
-            }
-        }
-        eprintln!("levels: {:?}", dim.levels.iter().map(|l| (l.name.clone(), l.len())).collect::<Vec<_>>());
-        eprintln!("{} tiles, those with empty columns: {empty:?}", tiles.len());
-        h.state_mut().layout.activate(0);
-        h.run_steps(20);
-        h.render().unwrap().save(dir.join("converted-map.png")).unwrap();
-        assert!(empty.is_empty(), "columns without a height: {empty:?}");
-    }
-
     /// The map that replaces the open one while it works: a small one, two
     /// tiles a side, as a new map of 256 blocks.
     fn open_another_map(app: &mut MassifApp) {
@@ -16651,38 +16500,6 @@ mod tests {
 
     fn status_text(app: &MassifApp) -> String {
         app.status.as_ref().map(|s| s.text.clone()).unwrap_or_default()
-    }
-
-    /// A conversion started on one map and done once another is open
-    /// writes nothing into the new one: its tiles landed among the new
-    /// map's, and left rows of holes between them.
-    #[test]
-    fn a_conversion_stays_with_its_map() {
-        use massif_core::graph::Template;
-        let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.activate(8);
-        h.run_steps(2);
-        let ctx = h.ctx.clone();
-        {
-            let app = h.state_mut();
-            app.graph.use_template(&mut app.doc, Template::Alpine);
-            app.graph.draft = Some(128);
-            let graph = app.doc.world.meta.graph.clone().unwrap();
-            app.graph.start_build(&ctx, &mut app.doc, &graph, None);
-            open_another_map(app);
-        }
-        let before = ground_tiles(h.state());
-        let started = std::time::Instant::now();
-        while h.state().graph.converting() {
-            assert!(started.elapsed().as_secs() < 60, "the conversion did not end");
-            h.step();
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        h.run_steps(3);
-        assert_eq!(ground_tiles(h.state()), before, "the new map's tiles, and no others");
-        assert_eq!(h.state().doc.history.undo_label(), None, "nothing written");
-        let said = status_text(h.state());
-        assert!(said.contains("Conversion stopped"), "{said}");
     }
 
     /// Auto paint worked out on one map and done once another is open, at
@@ -16723,344 +16540,6 @@ mod tests {
         wait(&mut h);
         let _ = std::fs::remove_file(&file);
         assert_eq!(h.state().doc.path, None, "the new map keeps no file of the other's");
-    }
-
-    /// The terrain graph: previews of every node and the viewport, then the
-    /// conversion to the map, with real blocks from its colours. Needs a
-    /// GPU: runs with MASSIF_SNAPSHOT_DIR.
-    #[test]
-    fn terrain_graph_previews_and_converts() {
-        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
-            return;
-        };
-        let mut h = harness(ThemeChoice::Dark);
-        {
-            let app = h.state_mut();
-            app.layout.activate(8); // Classic graph, on the terrain side
-            let reg = &app.doc.world.registry;
-            let get = |name: &str| reg.terrain_by_name(name).unwrap_or(massif_core::TerrainId::ROCK).0;
-            let starter = massif_core::graph::Graph::starter(get("Grass"), massif_core::TerrainId::ROCK.0, get("Snow"), get("Gravel"));
-            app.doc.world.meta.graph = Some(starter);
-            app.graph.graph_replaced();
-        }
-        wait_for_graph(&mut h);
-        h.render().unwrap().save(dir.join("graph.png")).unwrap();
-        // The view's settings, over it.
-        h.state_mut().graph.render_open = true;
-        h.state_mut().graph.view.render.clouds = true;
-        h.run_steps(6);
-        h.render().unwrap().save(dir.join("graph-render-popover.png")).unwrap();
-        h.state_mut().graph.render_open = false;
-        h.state_mut().graph.view.render.clouds = false;
-        wait_for_graph(&mut h);
-        let (w, hgt, rgba) = h.state().graph.view.read_back().expect("the viewport rendered");
-        image::save_buffer(dir.join("graph-viewport.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
-        // The relief fills a good part of the viewport.
-        let distinct: std::collections::HashSet<[u8; 3]> = rgba.as_chunks::<4>().0.iter().map(|p| [p[0], p[1], p[2]]).collect();
-        assert!(distinct.len() > 2000, "{} colours in the viewport", distinct.len());
-        // A mask, selected, shows on the relief.
-        let slope = h
-            .state()
-            .doc
-            .world
-            .meta
-            .graph
-            .as_ref()
-            .and_then(|g| g.nodes.iter().find(|n| matches!(n.kind, massif_core::graph::NodeKind::SelectSlope { .. })).map(|n| n.id));
-        if let Some(id) = slope {
-            h.state_mut().graph.view(Some(id));
-            wait_for_graph(&mut h);
-            h.render().unwrap().save(dir.join("graph-mask.png")).unwrap();
-        }
-        h.state_mut().graph.view(None);
-        // The Render workspace: the view, with its sun, sky and clouds.
-        h.state_mut().layout.activate(9);
-        h.run_steps(5);
-        wait_for_graph(&mut h);
-        h.render().unwrap().save(dir.join("graph-render-workspace.png")).unwrap();
-        h.state_mut().layout.activate(8);
-        h.run_steps(3);
-        {
-            use egui_kittest::kittest::Queryable;
-            h.get_by_label("every block");
-        }
-        h.state_mut().graph.draft = Some(512);
-        {
-            use egui_kittest::kittest::Queryable;
-            h.get_by_label_contains("Convert to voxels").click();
-        }
-        let started = std::time::Instant::now();
-        while h.state().doc.history.undo_label() != Some("Terrain graph") {
-            assert!(started.elapsed().as_secs() < 120, "the conversion did not finish");
-            h.step();
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        h.run_steps(10);
-        h.render().unwrap().save(dir.join("graph-applied.png")).unwrap();
-        // The colours became several kinds of ground.
-        let tile = h.state().doc.dimension().ground().view(TilePos::new(0, 0)).unwrap();
-        let kinds: std::collections::HashSet<u16> = (0..128 * 128).map(|i| tile.terrain.get(i)).collect();
-        assert!(kinds.len() >= 3, "{} terrains", kinds.len());
-        // And the map in 3D.
-        h.state_mut().layout.active = 3;
-        h.run_steps(5);
-        while h.state().view3d.pending() > 0 {
-            h.step();
-        }
-        h.run_steps(3);
-        let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
-        image::save_buffer(dir.join("graph-applied-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
-    }
-
-    /// Graphs in the manner of Gaea's examples, as the viewport shows them:
-    /// a cratered moon, a desert canyon, eroded peaks. Needs a GPU: runs
-    /// with MASSIF_SNAPSHOT_DIR.
-    #[test]
-    fn gaea_like_graphs_render() {
-        use massif_core::graph::*;
-        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
-            return;
-        };
-        let moon = {
-            let mut g = Graph::default();
-            let craters = g.add(
-                NodeKind::CraterField {
-                    count: 260,
-                    min_radius: 10.0,
-                    max_radius: 190.0,
-                    depth: 0.28,
-                    base: 90.0,
-                    seed: 4,
-                },
-                [0.0, 0.0],
-            );
-            let range = g.add(
-                NodeKind::MountainRange {
-                    angle: 35.0,
-                    width: 420.0,
-                    scale: 260.0,
-                    height: 110.0,
-                    base: 0.0,
-                    seed: 2,
-                },
-                [0.0, 200.0],
-            );
-            let add = g.add(NodeKind::Combine { op: CombineOp::Add, weight: 1.0 }, [220.0, 100.0]);
-            let eroded = g.add(
-                NodeKind::Erosion {
-                    rain: 0.8,
-                    erosion: 0.25,
-                    deposition: 0.3,
-                    capacity: 4.0,
-                    evaporation: 0.02,
-                    radius: 4.0,
-                    seed: 1,
-                },
-                [440.0, 100.0],
-            );
-            let grad = g.add(
-                NodeKind::Gradient {
-                    preset: GradientPreset::Lunar,
-                    auto_range: true,
-                    min: 0.0,
-                    max: 1.0,
-                    reverse: false,
-                    variation: 0.3,
-                    seed: 1,
-                },
-                [660.0, 160.0],
-            );
-            let occ = g.add(NodeKind::Occlusion { radius: 24.0 }, [660.0, 320.0]);
-            let dark = g.add(NodeKind::Invert, [860.0, 320.0]);
-            let tint = g.add(
-                NodeKind::Tint {
-                    color: [60, 62, 66],
-                    mode: TintMode::Multiply,
-                    strength: 0.7,
-                },
-                [880.0, 160.0],
-            );
-            let out = g.add(NodeKind::HeightOutput, [660.0, 0.0]);
-            let color = g.add(
-                NodeKind::ColorOutput {
-                    blocks: true,
-                    palette: BlockPalette::Rock,
-                },
-                [1100.0, 160.0],
-            );
-            g.connect(craters, 0, add, 0);
-            g.connect(range, 0, add, 1);
-            g.connect(add, 0, eroded, 0);
-            g.connect(eroded, 0, out, 0);
-            g.connect(eroded, 0, grad, 0);
-            g.connect(eroded, 0, occ, 0);
-            g.connect(occ, 0, dark, 0);
-            g.connect(grad, 0, tint, 0);
-            g.connect(dark, 0, tint, 1);
-            g.connect(tint, 0, color, 0);
-            g
-        };
-        let canyon = {
-            let mut g = Graph::default();
-            let canyon = g.add(
-                NodeKind::Canyon {
-                    angle: 30.0,
-                    width: 300.0,
-                    depth: 100.0,
-                    meander: 160.0,
-                    steps: 7,
-                    base: 170.0,
-                    seed: 3,
-                },
-                [0.0, 0.0],
-            );
-            let rocks = g.add(
-                NodeKind::Rocks {
-                    scale: 60.0,
-                    height: 8.0,
-                    sharpness: 0.7,
-                    seed: 2,
-                },
-                [0.0, 200.0],
-            );
-            let add = g.add(NodeKind::Combine { op: CombineOp::Add, weight: 1.0 }, [220.0, 100.0]);
-            let strata = g.add(
-                NodeKind::Stratify {
-                    layers: 18,
-                    strength: 0.6,
-                    tilt: 4.0,
-                    seed: 5,
-                },
-                [440.0, 100.0],
-            );
-            let grad = g.add(
-                NodeKind::Gradient {
-                    preset: GradientPreset::RedRock,
-                    auto_range: true,
-                    min: 0.0,
-                    max: 1.0,
-                    reverse: false,
-                    variation: 0.4,
-                    seed: 2,
-                },
-                [660.0, 160.0],
-            );
-            let out = g.add(NodeKind::HeightOutput, [660.0, 0.0]);
-            let color = g.add(
-                NodeKind::ColorOutput {
-                    blocks: true,
-                    palette: BlockPalette::Desert,
-                },
-                [880.0, 160.0],
-            );
-            g.connect(canyon, 0, add, 0);
-            g.connect(rocks, 0, add, 1);
-            g.connect(add, 0, strata, 0);
-            g.connect(strata, 0, out, 0);
-            g.connect(strata, 0, grad, 0);
-            g.connect(grad, 0, color, 0);
-            g
-        };
-        let peaks = {
-            let mut g = Graph::default();
-            let mountain = g.add(
-                NodeKind::Mountain {
-                    style: MountainStyle::Alpine,
-                    x: 0.5,
-                    z: 0.5,
-                    radius: 520.0,
-                    height: 230.0,
-                    base: 50.0,
-                    detail: 0.6,
-                    seed: 8,
-                },
-                [0.0, 0.0],
-            );
-            let eroded = g.add(
-                NodeKind::Erosion {
-                    rain: 1.2,
-                    erosion: 0.35,
-                    deposition: 0.3,
-                    capacity: 4.0,
-                    evaporation: 0.02,
-                    radius: 4.0,
-                    seed: 3,
-                },
-                [220.0, 0.0],
-            );
-            let snow = g.add(
-                NodeKind::Snow {
-                    line: 190.0,
-                    slope: 42.0,
-                    depth: 2.0,
-                    softness: 14.0,
-                },
-                [440.0, 0.0],
-            );
-            let color = g.add(
-                NodeKind::AutoColor {
-                    palette: AutoPalette::Alpine,
-                    snow_line: 185.0,
-                    rock_slope: 36.0,
-                    seed: 2,
-                },
-                [660.0, 120.0],
-            );
-            let out = g.add(NodeKind::HeightOutput, [660.0, 0.0]);
-            let color_out = g.add(
-                NodeKind::ColorOutput {
-                    blocks: true,
-                    palette: BlockPalette::Natural,
-                },
-                [880.0, 120.0],
-            );
-            g.connect(mountain, 0, eroded, 0);
-            g.connect(eroded, 0, snow, 0);
-            g.connect(snow, 0, out, 0);
-            g.connect(snow, 0, color, 0);
-            g.connect(color, 0, color_out, 0);
-            g
-        };
-        use crate::terrain_view::RenderSettings;
-        let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.active = 8;
-        let sunset = RenderSettings {
-            sun_azimuth: 250.0,
-            sun_elevation: 9.0,
-            haze: 0.4,
-            ..RenderSettings::default()
-        };
-        let cloudy = RenderSettings {
-            clouds: true,
-            cloud_base: 170.0,
-            cloud_thickness: 90.0,
-            cloud_cover: 0.5,
-            cloud_size: 260.0,
-            sea: true,
-            ..RenderSettings::default()
-        };
-        for (k, (name, graph, render)) in [("moon", moon, RenderSettings::default()), ("canyon", canyon, sunset), ("peaks", peaks, cloudy)]
-            .into_iter()
-            .enumerate()
-        {
-            {
-                let app = h.state_mut();
-                app.doc.world.meta.graph = Some(graph);
-                app.graph.graph_replaced();
-                app.graph.preview = 512;
-                app.graph.view.render = render;
-            }
-            wait_for_graph(&mut h);
-            let (w, hgt, rgba) = h.state().graph.view.read_back().expect("the viewport rendered");
-            image::save_buffer(dir.join(format!("graph-{name}.png")), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
-            if k == 0 {
-                h.render().unwrap().save(dir.join("graph-ui.png")).unwrap();
-            }
-        }
-        // A saved image, at full quality.
-        let (w, hgt, rgba) = h.state_mut().graph.view.render_image([1280, 720]).expect("an image");
-        assert_eq!((w, hgt), (1280, 720));
-        image::save_buffer(dir.join("graph-render.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
     }
 
     /// The automatic tools over the whole map: biomes read from the land,
@@ -17514,339 +16993,6 @@ mod tests {
         // Undone in one step.
         h.state_mut().doc.undo();
         assert_eq!(h.state().doc.dimension().ground().view(massif_core::TilePos::containing(end[0] as i32, end[1] as i32)).unwrap().annotations.get(massif_core::coords::local_index(end[0] as i32, end[1] as i32)), 0);
-    }
-
-    /// Rivers on the map, converted over it: the ground is left as it is,
-    /// the beds and their water are in levels of the graph's own, written
-    /// again by the next conversion. Needs a GPU: runs with
-    /// MASSIF_SNAPSHOT_DIR.
-    #[test]
-    fn rivers_are_converted_over_the_map() {
-        use massif_core::graph::Template;
-        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
-            return;
-        };
-        let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.activate(8);
-        h.run_steps(2);
-        {
-            let app = h.state_mut();
-            app.graph.preview = 512;
-            app.graph.use_template(&mut app.doc, Template::MapRivers);
-        }
-        wait_for_graph(&mut h);
-        h.render().unwrap().save(dir.join("rivers-graph.png")).unwrap();
-        // The ground, before.
-        let ground = |app: &MassifApp| -> Vec<f32> {
-            let level = app.doc.dimension().ground();
-            let mut tiles: Vec<_> = level.positions().collect();
-            tiles.sort_by_key(|p| (p.z, p.x));
-            tiles.iter().flat_map(|p| (0..128 * 128).step_by(61).map(|i| level.view(*p).unwrap().top.get(i)).collect::<Vec<_>>()).collect()
-        };
-        let before = ground(h.state());
-        let convert = |h: &mut egui_kittest::Harness<'_, MassifApp>| {
-            {
-                use egui_kittest::kittest::Queryable;
-                h.get_by_label_contains("Convert to voxels").click();
-            }
-            h.run_steps(2);
-            assert!(h.state().graph.converting(), "the conversion started");
-            let started = std::time::Instant::now();
-            while h.state().graph.converting() {
-                assert!(started.elapsed().as_secs() < 120, "the conversion did not finish");
-                h.step();
-                std::thread::sleep(std::time::Duration::from_millis(20));
-            }
-            h.run_steps(3);
-        };
-        convert(&mut h);
-        assert_eq!(h.state().doc.history.undo_label(), Some("Terrain graph"));
-        assert_eq!(ground(h.state()), before, "the ground of the map did not move");
-        let names: Vec<String> = h.state().doc.dimension().levels.iter().map(|l| l.name.clone()).collect();
-        assert_eq!(names.len(), 3, "{names:?}");
-        assert!(names.contains(&"Dug (graph 0)".to_owned()) && names.contains(&"Raised (graph 0)".to_owned()), "{names:?}");
-        // Water in the beds, above the sea.
-        let sea = h.state().doc.world.meta.sea_level as i16;
-        let wet = {
-            let dim = h.state().doc.dimension();
-            let dug = dim.levels.iter().find(|l| l.name == "Dug (graph 0)").unwrap();
-            dug.positions()
-                .map(|p| {
-                    let tile = dug.view(p).unwrap();
-                    (0..128 * 128).filter(|&i| tile.present(i) && tile.fluid.get(i) > sea).count()
-                })
-                .sum::<usize>()
-        };
-        assert!(wet > 200, "{wet} columns of river water above the sea");
-        h.render().unwrap().save(dir.join("rivers-converted.png")).unwrap();
-        // The map in 3D, with its rivers.
-        {
-            let app = h.state_mut();
-            app.layout.activate(3);
-            app.view3d.camera.distance = 520.0;
-            app.view3d.camera.pitch = 0.6;
-        }
-        h.run_steps(5);
-        while h.state().view3d.pending() > 0 {
-            h.step();
-        }
-        h.run_steps(3);
-        let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
-        image::save_buffer(dir.join("rivers-converted-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
-        // Again: the same levels, written again; and into the map when
-        // asked, the levels gone.
-        h.state_mut().layout.activate(8);
-        h.run_steps(3);
-        convert(&mut h);
-        assert_eq!(h.state().doc.dimension().levels.len(), 3);
-        assert_eq!(ground(h.state()), before);
-        h.state_mut().graph.over = Some(false);
-        h.run_steps(2);
-        convert(&mut h);
-        assert_eq!(h.state().doc.dimension().levels.len(), 1, "written into the ground: no level of the graph's left");
-        assert_ne!(ground(h.state()), before, "the beds are dug in the ground itself");
-    }
-
-    /// The two templates that start from the map, on a map with real
-    /// relief (an alpine range converted into it) and a tower of rock as a
-    /// level: the Map node sees the tower; painting paints its top and the
-    /// ground, without moving either; rivers are dug into the valleys.
-    /// Needs a GPU: runs with MASSIF_SNAPSHOT_DIR.
-    #[test]
-    fn map_templates_on_a_real_map() {
-        use massif_core::graph::Template;
-        use massif_core::level::LevelKind;
-        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
-            return;
-        };
-        let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.activate(8);
-        h.run_steps(2);
-        let convert = |h: &mut egui_kittest::Harness<'_, MassifApp>| {
-            {
-                use egui_kittest::kittest::Queryable;
-                h.get_by_label_contains("Convert to voxels").click();
-            }
-            h.run_steps(2);
-            assert!(h.state().graph.converting(), "the conversion started");
-            let started = std::time::Instant::now();
-            while h.state().graph.converting() {
-                assert!(started.elapsed().as_secs() < 180, "the conversion did not finish");
-                h.step();
-                std::thread::sleep(std::time::Duration::from_millis(20));
-            }
-            h.run_steps(3);
-        };
-        let shot_3d = |h: &mut egui_kittest::Harness<'static, MassifApp>, name: &str| {
-            {
-                let app = h.state_mut();
-                app.layout.activate(3);
-                app.view3d.camera.distance = 900.0;
-                app.view3d.camera.pitch = 0.62;
-                app.view3d.camera.yaw = 0.7;
-            }
-            h.run_steps(5);
-            while h.state().view3d.pending() > 0 {
-                h.step();
-            }
-            h.run_steps(3);
-            let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
-            image::save_buffer(dir.join(name), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
-            h.state_mut().layout.activate(8);
-            h.run_steps(3);
-        };
-        // Mountains, into the map's ground.
-        {
-            let app = h.state_mut();
-            app.graph.preview = 512;
-            app.graph.use_template(&mut app.doc, Template::Alpine);
-            app.graph.over = Some(false);
-        }
-        wait_for_graph(&mut h);
-        convert(&mut h);
-        // A tower of rock, 40 blocks wide, as a level over the ground.
-        let (tower, centre) = {
-            let app = h.state_mut();
-            let doc = &mut app.doc;
-            doc.history.begin("Tower", doc.dim);
-            let tower = doc.history.edit(&mut doc.world, 0).structure().add_level("Tower", LevelKind::Solid);
-            let (lo, _) = doc.dimension().bounds().unwrap();
-            let (cx, cz) = (lo.x * 128 + 300, lo.z * 128 + 300);
-            let ground = doc.dimension().ground().view(massif_core::TilePos::containing(cx, cz)).unwrap().top.get(massif_core::coords::local_index(cx, cz));
-            let rect = massif_core::BlockRect::new(cx - 20, cz - 20, cx + 20, cz + 20);
-            let tiles: Vec<_> = rect.tiles().collect();
-            doc.history.edit(&mut doc.world, tower).par_tiles(tiles, rect, true, |_, clip, tile| {
-                for z in clip.z0..clip.z1 {
-                    for x in clip.x0..clip.x1 {
-                        let i = massif_core::coords::local_index(x, z);
-                        tile.top.set(i, ground + 70.0);
-                        tile.bottom.as_mut().unwrap().set(i, ground - 4.0);
-                    }
-                }
-            });
-            doc.commit();
-            (tower, (cx, cz))
-        };
-        // Painted from its relief.
-        {
-            let app = h.state_mut();
-            app.graph.over = None;
-            app.graph.use_template(&mut app.doc, Template::PaintMap);
-        }
-        wait_for_graph(&mut h);
-        h.render().unwrap().save(dir.join("paint-map-graph.png")).unwrap();
-        let tower_top = |app: &MassifApp| {
-            let t = app.doc.dimension().levels[tower].view(massif_core::TilePos::containing(centre.0, centre.1)).unwrap();
-            let i = massif_core::coords::local_index(centre.0, centre.1);
-            (t.top.get(i), t.terrain.get(i))
-        };
-        let before = tower_top(h.state());
-        convert(&mut h);
-        let after = tower_top(h.state());
-        assert_eq!(after.0, before.0, "the tower stands where it was");
-        assert_ne!(after.1, before.1, "its top was painted");
-        shot_3d(&mut h, "paint-map-3d.png");
-        // Rivers in its valleys.
-        {
-            let app = h.state_mut();
-            app.graph.use_template(&mut app.doc, Template::MapRivers);
-        }
-        wait_for_graph(&mut h);
-        h.render().unwrap().save(dir.join("map-rivers-graph.png")).unwrap();
-        convert(&mut h);
-        shot_3d(&mut h, "map-rivers-3d.png");
-    }
-
-    /// A terrain larger than the map: the toolbar says its size, and
-    /// converting it makes the world that size, the new tiles built like
-    /// the others, with the sea where they lie under it. Needs a GPU: runs
-    /// with MASSIF_SNAPSHOT_DIR.
-    #[test]
-    fn a_terrain_larger_than_the_map_grows_it() {
-        use massif_core::graph::Template;
-        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
-            return;
-        };
-        let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.activate(8);
-        h.run_steps(2);
-        let before = h.state().doc.dimension().ground().len();
-        {
-            let app = h.state_mut();
-            app.graph.preview = 384;
-            app.graph.use_template(&mut app.doc, Template::Archipelago);
-            let mut graph = app.doc.world.meta.graph.clone().unwrap();
-            graph.size = Some(2048);
-            app.doc.world.meta.graph = Some(graph);
-            app.doc.mark_changed();
-        }
-        wait_for_graph(&mut h);
-        h.render().unwrap().save(dir.join("graph-size-2k.png")).unwrap();
-        {
-            use egui_kittest::kittest::Queryable;
-            h.get_by_label("every block");
-        }
-        {
-            use egui_kittest::kittest::Queryable;
-            h.get_by_label_contains("Convert to voxels").click();
-        }
-        h.run_steps(2);
-        let started = std::time::Instant::now();
-        while h.state().graph.converting() {
-            assert!(started.elapsed().as_secs() < 180, "the conversion did not finish");
-            h.step();
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        h.run_steps(3);
-        let dim = h.state().doc.dimension();
-        assert_eq!(before, 64, "a map of 1024 blocks");
-        assert_eq!(dim.ground().len(), 256, "a world of 2048 blocks");
-        let (lo, hi) = dim.bounds().unwrap();
-        assert_eq!((hi.x - lo.x + 1, hi.z - lo.z + 1), (16, 16));
-        // A new tile at a corner, built and under the sea where it is low.
-        let corner = dim.ground().view(lo).unwrap();
-        let sea = h.state().doc.world.meta.sea_level as i16;
-        let wet = (0..128 * 128).filter(|&i| corner.fluid.get(i) == sea && corner.top.get(i) < sea as f32).count();
-        let shaped = (0..128 * 128).map(|i| corner.top.get(i)).fold((f32::MAX, f32::MIN), |(a, b), v| (a.min(v), b.max(v)));
-        assert!(shaped.0 < shaped.1, "the new tile has relief: {shaped:?}");
-        assert!(wet > 0 || shaped.0 >= sea as f32, "its sea: {wet}");
-    }
-
-    /// Continents from tectonic plates with their climate: the plates to
-    /// move in the node's settings, temperature and humidity as masks, and
-    /// converted, the biomes of the game written with the ground painted
-    /// to suit. Needs a GPU: runs with MASSIF_SNAPSHOT_DIR.
-    #[test]
-    fn continents_with_climate() {
-        use massif_core::graph::{NodeKind, Template};
-        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
-            return;
-        };
-        let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.activate(8);
-        h.run_steps(2);
-        {
-            let app = h.state_mut();
-            app.graph.preview = 512;
-            let mut graph = app.doc.world.meta.graph.clone().unwrap_or_default();
-            graph.size = Some(2048);
-            app.doc.world.meta.graph = Some(graph);
-            app.graph.use_template(&mut app.doc, Template::Continents);
-        }
-        wait_for_graph(&mut h);
-        h.render().unwrap().save(dir.join("continents-graph.png")).unwrap();
-        let graph = h.state().doc.world.meta.graph.clone().unwrap();
-        assert_eq!(graph.size, Some(2048), "the template keeps the terrain's size");
-        let find = |pick: &dyn Fn(&NodeKind) -> bool| graph.nodes.iter().find(|n| pick(&n.kind)).unwrap().id;
-        for (name, id) in [
-            ("continents-plates.png", find(&|k| matches!(k, NodeKind::Tectonic { .. }))),
-            ("continents-temperature.png", find(&|k| matches!(k, NodeKind::Temperature { .. }))),
-            ("continents-humidity.png", find(&|k| matches!(k, NodeKind::Humidity { .. }))),
-        ] {
-            h.state_mut().graph.view(Some(id));
-            wait_for_graph(&mut h);
-            h.render().unwrap().save(dir.join(name)).unwrap();
-        }
-        h.state_mut().graph.view(None);
-        wait_for_graph(&mut h);
-        {
-            use egui_kittest::kittest::Queryable;
-            h.get_by_label_contains("Convert to voxels").click();
-        }
-        h.run_steps(2);
-        let started = std::time::Instant::now();
-        while h.state().graph.converting() {
-            assert!(started.elapsed().as_secs() < 240, "the conversion did not finish");
-            h.step();
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        h.run_steps(3);
-        let doc = &h.state().doc;
-        assert_eq!(doc.dimension().ground().len(), 256, "a world of 2048 blocks");
-        let mut biomes = std::collections::BTreeSet::new();
-        for p in doc.dimension().ground().positions() {
-            let tile = doc.dimension().ground().view(p).unwrap();
-            for i in (0..128 * 128).step_by(97) {
-                biomes.insert(tile.biome.get(i));
-            }
-        }
-        let names: Vec<&str> = biomes.iter().map(|&b| doc.world.registry.biome(massif_core::registry::BiomeId(b)).id.as_str()).collect();
-        eprintln!("biomes written: {names:?}");
-        assert!(!biomes.contains(&0) && biomes.len() >= 5, "climates of every kind: {names:?}");
-        {
-            let app = h.state_mut();
-            app.layout.activate(3);
-            app.view3d.camera.distance = 1900.0;
-            app.view3d.camera.pitch = 0.75;
-            app.view3d.camera.yaw = 0.5;
-        }
-        h.run_steps(5);
-        while h.state().view3d.pending() > 0 {
-            h.step();
-        }
-        h.run_steps(3);
-        let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
-        image::save_buffer(dir.join("continents-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
     }
 
     /// A click and the pointer let go at `p`.
@@ -19003,7 +18149,7 @@ mod tests {
     /// and a graph's terrain saved as a height map. No GPU needed.
     #[test]
     fn height_maps_in_and_out() {
-        use massif_core::graph::{NodeKind, Template};
+        use massif_core::graph::NodeKind;
         let dir = std::env::temp_dir().join(format!("massif-heightmaps-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         // A cone: white in the middle, black at the edges, 256 × 256.
@@ -19060,41 +18206,6 @@ mod tests {
         let y = |v: f32| -64.0 + v * 384.0;
         assert!((y(back.sample(255.5, 255.5)) - 200.0).abs() < 3.0, "{}", y(back.sample(255.5, 255.5)));
         assert!((y(back.data[0]) - 40.0).abs() < 3.0);
-        // A graph reading the picture, and saved as a height map.
-        h.state_mut().layout.activate(8);
-        h.run_steps(2);
-        {
-            let app = h.state_mut();
-            app.graph.use_template(&mut app.doc, Template::Alpine);
-            let mut g = massif_core::graph::Graph::default();
-            let pic = g.add(
-                NodeKind::FileInput {
-                    path: png.display().to_string(),
-                    low: 60.0,
-                    high: 160.0,
-                    fit: true,
-                },
-                [0.0, 0.0],
-            );
-            let out = g.add(NodeKind::HeightOutput, [220.0, 0.0]);
-            g.connect(pic, 0, out, 0);
-            app.doc.world.meta.graph = Some(g);
-            app.doc.mark_changed();
-            app.graph.draft = Some(128);
-            let graph = app.doc.world.meta.graph.clone().unwrap();
-            app.graph.start_build(&ctx, &mut app.doc, &graph, Some(dir.join("graph.png")));
-        }
-        let started = std::time::Instant::now();
-        while h.state().graph.converting() {
-            assert!(started.elapsed().as_secs() < 60);
-            h.step();
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        h.run_steps(3);
-        let saved = massif_core::heightmap::read(&dir.join("graph.png")).unwrap();
-        assert_eq!((saved.width, saved.height), (128, 128));
-        assert!((y(saved.sample(63.5, 63.5)) - 160.0).abs() < 3.0, "the cone's top, as the node maps it: {}", y(saved.sample(63.5, 63.5)));
-        assert!((y(saved.data[0]) - 60.0).abs() < 3.0);
         // A world file as input: the cone world saved, read back by the
         // node, fitted to the terrain — its peak in the middle.
         let massif = dir.join("cone.massif");
@@ -19146,206 +18257,6 @@ mod tests {
             hgt.at(1, 1)
         );
         let _ = std::fs::remove_dir_all(dir);
-    }
-
-    /// The graph canvas worked with the mouse and the keyboard: a box
-    /// selects several nodes, dragging one moves them all, ⌘D duplicates
-    /// them, Delete removes them, ⌘Z takes it all back step by step; the
-    /// wheel zooms; copied nodes paste with their wires.
-    /// The node library: Tab opens it at the pointer, typing finds nodes,
-    /// ↓ and Enter add the second one found; it stays in the window by an
-    /// edge, and lists the node added last first. Renders it with
-    /// MASSIF_SNAPSHOT_DIR, in both themes, at a normal and a small size.
-    #[test]
-    fn graph_library_searches_and_takes_keys() {
-        use massif_core::graph::Template;
-        crate::i18n::set_language(crate::i18n::Language::English);
-        for theme in [ThemeChoice::Dark, ThemeChoice::Light] {
-            let mut h = harness(theme);
-            let name = if theme == ThemeChoice::Dark { "dark" } else { "light" };
-            h.state_mut().layout.activate(8);
-            h.run_steps(2);
-            {
-                let app = h.state_mut();
-                app.graph.use_template(&mut app.doc, Template::Alpine);
-            }
-            h.run_steps(8);
-            let nodes = |h: &egui_kittest::Harness<'_, MassifApp>| h.state().doc.world.meta.graph.clone().unwrap().nodes;
-            let count = nodes(&h).len();
-            let canvas = h.state().graph.canvas_rect();
-            h.event(egui::Event::PointerMoved(canvas.center()));
-            h.step();
-            h.key_press(Key::Tab);
-            h.run_steps(3);
-            let (rect, pick) = h.state().graph.library_state().expect("Tab opens the library");
-            assert!(rect.width() >= 420.0 && rect.height() >= 380.0, "a roomy picker: {rect:?}");
-            assert!(pick.is_some(), "a row is chosen");
-            if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
-                h.render().unwrap().save(dir.join(format!("graph-library-{name}.png"))).unwrap();
-            }
-            h.event(egui::Event::Text("erosion".into()));
-            h.run_steps(3);
-            assert_eq!(h.state().graph.library_state().unwrap().1, Some("Erosion"), "the best match first");
-            h.key_press(Key::ArrowDown);
-            h.run_steps(2);
-            assert_eq!(h.state().graph.library_state().unwrap().1, Some("Thermal erosion"), "↓ chooses the next");
-            if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
-                h.render().unwrap().save(dir.join(format!("graph-library-search-{name}.png"))).unwrap();
-            }
-            h.key_press(Key::ArrowUp);
-            h.key_press(Key::ArrowDown);
-            h.key_press(Key::Enter);
-            h.run_steps(3);
-            assert!(h.state().graph.library_state().is_none(), "Enter closes it");
-            let all = nodes(&h);
-            assert_eq!(all.len(), count + 1, "Enter adds a node");
-            assert_eq!(all.last().unwrap().kind.label(), "Thermal erosion");
-            // A small window, opened near its bottom: inside it, the node added last first.
-            h.set_size(vec2(760.0, 520.0));
-            h.run_steps(4);
-            let window = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(760.0, 520.0));
-            let canvas = h.state().graph.canvas_rect().intersect(window);
-            // (The panel's right part is cut by the small window: by its bottom.)
-            h.event(egui::Event::PointerMoved(canvas.left_bottom() + vec2(120.0, -50.0)));
-            h.step();
-            h.key_press(Key::Tab);
-            h.run_steps(3);
-            let (rect, pick) = h.state().graph.library_state().expect("open again");
-            assert!(window.contains_rect(rect), "inside the window: {rect:?}");
-            assert_eq!(pick, Some("Thermal erosion"), "the node added last comes first");
-            if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
-                h.render().unwrap().save(dir.join(format!("graph-library-small-{name}.png"))).unwrap();
-            }
-            h.key_press(Key::Escape);
-            h.run_steps(2);
-            assert!(h.state().graph.library_state().is_none(), "Esc closes it");
-        }
-    }
-
-    #[test]
-    fn graph_canvas_selects_moves_and_undoes() {
-        use massif_core::graph::Template;
-        let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.activate(8);
-        h.run_steps(2);
-        {
-            let app = h.state_mut();
-            app.graph.use_template(&mut app.doc, Template::Alpine);
-        }
-        h.run_steps(8);
-        let graph = |h: &egui_kittest::Harness<'_, MassifApp>| h.state().doc.world.meta.graph.clone().unwrap();
-        let count = graph(&h).nodes.len();
-        let canvas = h.state().graph.canvas_rect();
-        assert!(canvas.width() > 100.0, "the canvas is laid out: {canvas:?}");
-        let drag = |h: &mut egui_kittest::Harness<'_, MassifApp>, from: egui::Pos2, to: egui::Pos2, modifiers: Modifiers| {
-            h.event(egui::Event::PointerMoved(from));
-            h.step();
-            h.event(egui::Event::PointerButton {
-                pos: from,
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                modifiers,
-            });
-            h.step();
-            for k in 1..=8 {
-                h.event(egui::Event::PointerMoved(from + (to - from) * (k as f32 / 8.0)));
-                h.step();
-            }
-            h.event(egui::Event::PointerButton {
-                pos: to,
-                button: egui::PointerButton::Primary,
-                pressed: false,
-                modifiers,
-            });
-            h.run_steps(3);
-        };
-        // A box around the first three nodes of the graph.
-        let g = graph(&h);
-        let rects: Vec<egui::Rect> = g.nodes.iter().take(3).map(|n| h.state().graph.screen_of(&g, n.id)).collect();
-        let around = rects.iter().fold(rects[0], |a, r| a.union(*r)).expand(12.0);
-        assert!(canvas.contains(around.min) && canvas.contains(around.max), "the nodes are in view");
-        let free = g.nodes.iter().all(|n| !h.state().graph.screen_of(&g, n.id).contains(around.min));
-        assert!(free, "the box starts on the background");
-        drag(&mut h, around.min, around.max, Modifiers::NONE);
-        let picked = h.state().graph.picked();
-        assert!(picked.len() >= 3, "a box selects several nodes: {picked:?}");
-        // Drag one: they all move.
-        let before: Vec<[f32; 2]> = picked.iter().map(|id| graph(&h).node(*id).unwrap().pos).collect();
-        let grab = h.state().graph.screen_of(&graph(&h), picked[0]).center_top() + egui::vec2(0.0, 12.0);
-        drag(&mut h, grab, grab + egui::vec2(60.0, 40.0), Modifiers::NONE);
-        let zoom = h.state().graph.zoom();
-        for (id, was) in picked.iter().zip(&before) {
-            let now = graph(&h).node(*id).unwrap().pos;
-            assert!((now[0] - was[0] - 60.0 / zoom).abs() < 2.0 && (now[1] - was[1] - 40.0 / zoom).abs() < 2.0, "node {id} moved with the others: {was:?} → {now:?}");
-        }
-        assert_eq!(h.state().graph.picked().len(), picked.len(), "and they stay selected");
-        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
-            h.render().unwrap().save(dir.join("graph-selection.png")).unwrap();
-        }
-        // Duplicate, then delete the copies.
-        h.event(egui::Event::PointerMoved(canvas.center()));
-        h.key_press_modifiers(Modifiers::COMMAND, Key::D);
-        h.run_steps(3);
-        assert_eq!(graph(&h).nodes.len(), count + picked.len(), "⌘D duplicates the selection");
-        let copies = h.state().graph.picked();
-        assert!(copies.iter().all(|id| !picked.contains(id)), "the copies are selected");
-        h.key_press(Key::Delete);
-        h.run_steps(3);
-        assert_eq!(graph(&h).nodes.len(), count, "Delete removes the selection");
-        // Undo, step by step: the copies come back, go, the move is undone.
-        h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
-        h.run_steps(3);
-        assert_eq!(graph(&h).nodes.len(), count + picked.len());
-        h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
-        h.run_steps(3);
-        assert_eq!(graph(&h).nodes.len(), count);
-        h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
-        h.run_steps(3);
-        for (id, was) in picked.iter().zip(&before) {
-            assert_eq!(graph(&h).node(*id).unwrap().pos, *was, "the move is undone");
-        }
-        h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
-        h.run_steps(3);
-        assert_ne!(graph(&h).node(picked[0]).unwrap().pos, before[0], "and redone");
-        // Copy and paste: the nodes and the wires between them.
-        let g = graph(&h);
-        let rects: Vec<egui::Rect> = picked.iter().map(|id| h.state().graph.screen_of(&g, *id)).collect();
-        let around = rects.iter().fold(rects[0], |a, r| a.union(*r)).expand(12.0);
-        drag(&mut h, around.min, around.max, Modifiers::NONE);
-        let picked = h.state().graph.picked();
-        assert!(picked.len() >= 3);
-        h.event(egui::Event::PointerMoved(canvas.center()));
-        let links = graph(&h).links.len();
-        let inner = graph(&h).links.iter().filter(|l| picked.contains(&l.from) && picked.contains(&l.to)).count();
-        h.event(egui::Event::Copy);
-        h.step();
-        let text = h
-            .output()
-            .platform_output
-            .commands
-            .iter()
-            .find_map(|c| match c {
-                egui::OutputCommand::CopyText(t) => Some(t.clone()),
-                _ => None,
-            })
-            .expect("the selection is copied");
-        assert!(text.contains("massif_nodes"), "copied as text: {text:.40}");
-        h.event(egui::Event::Paste(text));
-        h.run_steps(3);
-        assert_eq!(graph(&h).nodes.len(), count + picked.len(), "pasted");
-        assert_eq!(graph(&h).links.len(), links + inner, "with their wires");
-        // The wheel zooms around the pointer.
-        let zoom = h.state().graph.zoom();
-        h.event(egui::Event::PointerMoved(canvas.center()));
-        h.event(egui::Event::MouseWheel {
-            unit: egui::MouseWheelUnit::Line,
-            delta: egui::vec2(0.0, 3.0),
-            phase: egui::TouchPhase::Move,
-            source: egui::MouseWheelSource::Wheel,
-            modifiers: Modifiers::NONE,
-        });
-        h.run_steps(3);
-        assert!(h.state().graph.zoom() > zoom * 1.2, "the wheel zooms: {zoom} → {}", h.state().graph.zoom());
     }
 
     /// The automatic biomes over a real map, as big as they come
@@ -19408,191 +18319,6 @@ mod tests {
         h.render().unwrap().save(dir.join("auto-biome-real.png")).unwrap();
     }
 
-    /// Rivers on a real map (MASSIF_RIVER_WORLD: a .massif or .world), as a
-    /// user gets them: the template, its preview, the conversion and the
-    /// map in 3D. Needs a GPU: runs with MASSIF_SNAPSHOT_DIR.
-    #[test]
-    fn rivers_on_a_real_world() {
-        use massif_core::graph::Template;
-        let (Some(dir), Some(path)) = (
-            std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from),
-            std::env::var_os("MASSIF_RIVER_WORLD").map(PathBuf::from),
-        ) else {
-            return;
-        };
-        let mut h = harness(ThemeChoice::Dark);
-        h.run_steps(5);
-        let ctx = h.ctx.clone();
-        h.state_mut().jobs.push(Job::open(&ctx, path));
-        let started = std::time::Instant::now();
-        while !h.state().jobs.is_empty() {
-            assert!(started.elapsed().as_secs() < 120, "opening timed out");
-            h.step();
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        h.run_steps(10);
-        h.state_mut().dialog = None;
-        let sea = h.state().doc.world.meta.sea_level;
-        let (lo, hi) = h.state().doc.dimension().bounds().unwrap();
-        eprintln!("map {}x{} tiles, sea {sea}", hi.x - lo.x + 1, hi.z - lo.z + 1);
-        // The map from above with the rivers the template traces, at 2048.
-        {
-            use massif_core::graph::{Extent, GroundMap, NodeKind, Progress};
-            let doc = &mut h.state_mut().doc;
-            let g = Template::MapRivers.graph(&doc.world.registry, sea as f32, 4096.0);
-            let rect = {
-                let (lo, hi) = doc.dimension().bounds().unwrap();
-                massif_core::BlockRect::new(lo.x * 128, lo.z * 128, (hi.x + 1) * 128, (hi.z + 1) * 128)
-            };
-            let ext = Extent::covering(rect, 2048);
-            let colors: Vec<[u8; 3]> = doc.world.registry.terrains.iter().map(|t| t.color).collect();
-            let snapshot = doc.world.dims[doc.dim].snapshot();
-            let map = GroundMap::new(snapshot, 1, sea as f32 - 8.0, colors, g.own_levels());
-            let started = std::time::Instant::now();
-            let out = g.build_on(Some(&map), &ext, &std::sync::atomic::AtomicBool::new(false), &Progress::default()).unwrap();
-            eprintln!("built at 2048 in {:.1} s", started.elapsed().as_secs_f32());
-            let (hgt, water) = (out.heights.unwrap(), out.water.unwrap());
-            let n = hgt.n;
-            let mut rgb = Vec::with_capacity(n * n * 3);
-            for j in 0..n {
-                for i in 0..n {
-                    let v = hgt.at(i, j);
-                    let dx = hgt.at(i + 1, j) - hgt.at(i.saturating_sub(1), j);
-                    let dz = hgt.at(i, j + 1) - hgt.at(i, j.saturating_sub(1));
-                    let shade = (0.75 + 0.08 * (-dx + dz)).clamp(0.25, 1.2);
-                    let c = if water.at(i, j) > v + 0.25 {
-                        [40.0, 110.0, 230.0]
-                    } else if v < sea as f32 {
-                        [30.0, 50.0, 90.0]
-                    } else {
-                        let t = ((v - sea as f32) / 120.0).clamp(0.0, 1.0);
-                        [110.0 + 90.0 * t, 150.0 + 40.0 * t, 80.0 + 110.0 * t].map(|c| c * shade)
-                    };
-                    rgb.extend(c.map(|c| c.clamp(0.0, 255.0) as u8));
-                }
-            }
-            image::save_buffer(dir.join("real-rivers-top.png"), &rgb, n as u32, n as u32, image::ColorType::Rgb8).unwrap();
-            // The map as it was, to compare.
-            let read = massif_core::graph::sample_map(&doc.world.dims[doc.dim], &ext, sea as f32 - 8.0, &[], &g.own_levels());
-            let (hgt, water) = (read.heights, read.water);
-            let mut rgb = Vec::with_capacity(n * n * 3);
-            for j in 0..n {
-                for i in 0..n {
-                    let v = hgt.at(i, j);
-                    let dx = hgt.at(i + 1, j) - hgt.at(i.saturating_sub(1), j);
-                    let dz = hgt.at(i, j + 1) - hgt.at(i, j.saturating_sub(1));
-                    let shade = (0.75 + 0.08 * (-dx + dz)).clamp(0.25, 1.2);
-                    let c = if water.at(i, j) > 0.5 && v >= sea as f32 - 0.5 {
-                        [40.0, 110.0, 230.0]
-                    } else if v < sea as f32 {
-                        [30.0, 50.0, 90.0]
-                    } else {
-                        let t = ((v - sea as f32) / 120.0).clamp(0.0, 1.0);
-                        [110.0 + 90.0 * t, 150.0 + 40.0 * t, 80.0 + 110.0 * t].map(|c| c * shade)
-                    };
-                    rgb.extend(c.map(|c| c.clamp(0.0, 255.0) as u8));
-                }
-            }
-            image::save_buffer(dir.join("real-map-top.png"), &rgb, n as u32, n as u32, image::ColorType::Rgb8).unwrap();
-            let _ = NodeKind::HeightOutput;
-        }
-        h.state_mut().layout.activate(8);
-        h.run_steps(3);
-        {
-            let app = h.state_mut();
-            app.graph.preview = 768;
-            app.graph.use_template(&mut app.doc, Template::MapRivers);
-        }
-        wait_for_graph(&mut h);
-        h.render().unwrap().save(dir.join("real-rivers-graph.png")).unwrap();
-        {
-            use egui_kittest::kittest::Queryable;
-            h.get_by_label_contains("Convert to voxels").click();
-        }
-        h.run_steps(2);
-        let started = std::time::Instant::now();
-        while h.state().graph.converting() {
-            assert!(started.elapsed().as_secs() < 400, "the conversion did not finish");
-            h.step();
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-        h.run_steps(3);
-        let dim = h.state().doc.dimension();
-        let names: Vec<String> = dim.levels.iter().map(|l| l.name.clone()).collect();
-        let wet = dim
-            .levels
-            .iter()
-            .filter(|l| l.name.starts_with("Dug"))
-            .flat_map(|l| l.positions().map(move |p| (l, p)))
-            .map(|(l, p)| {
-                let t = l.view(p).unwrap();
-                (0..128 * 128).filter(|&i| t.present(i) && t.fluid.get(i) as i32 > sea).count()
-            })
-            .sum::<usize>();
-        eprintln!("levels {names:?}, {wet} columns of river water above the sea");
-        // The middle of the map in 3D, from above.
-        {
-            let app = h.state_mut();
-            app.layout.activate(3);
-            app.view3d.camera.distance = 2600.0;
-            app.view3d.camera.pitch = 0.95;
-        }
-        h.run_steps(5);
-        while h.state().view3d.pending() > 0 {
-            h.step();
-        }
-        h.run_steps(3);
-        let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
-        image::save_buffer(dir.join("real-rivers-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
-    }
-
-    /// The viewport's look, up close: the stone towers among themselves and
-    /// from above them, the floating mountains, an alpine range, at the
-    /// preview's finest (2048 samples over a map of 1024 blocks), as saved
-    /// images. Needs a GPU and takes a while: runs with MASSIF_VIEWPORT_DIR.
-    #[test]
-    fn viewport_shots() {
-        use massif_core::graph::Template;
-        let Some(dir) = std::env::var_os("MASSIF_VIEWPORT_DIR").map(PathBuf::from) else {
-            return;
-        };
-        let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.activate(8);
-        h.run_steps(2);
-        let shots: [(Template, &str, f32, f32, f32, bool); 6] = [
-            (Template::KarstTowers, "karst-among", 0.42, 0.1, 2.4, false),
-            (Template::KarstTowers, "karst-above", 0.8, 0.42, 0.7, false),
-            (Template::KarstTowers, "karst-cliffs", 0.2, 0.16, 1.2, false),
-            (Template::FloatingMountains, "floating", 0.62, 0.3, 2.2, true),
-            (Template::Alpine, "alpine", 0.9, 0.36, 0.6, false),
-            (Template::Alpine, "alpine-low", 0.42, 0.14, 2.0, false),
-        ];
-        let mut current = None;
-        for (t, name, distance, pitch, yaw, clouds) in shots {
-            if current != Some(t) {
-                let app = h.state_mut();
-                app.graph.preview = 2048;
-                app.graph.use_template(&mut app.doc, t);
-                wait_for_graph(&mut h);
-                current = Some(t);
-            }
-            let view = &mut h.state_mut().graph.view;
-            view.camera.distance = distance;
-            view.camera.pitch = pitch;
-            view.camera.yaw = yaw;
-            view.render.clouds = clouds;
-            let (w, hgt, rgba) = view.render_image([1920, 1080]).expect("an image");
-            image::save_buffer(dir.join(format!("viewport-{name}.png")), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
-            if name == "karst-among" {
-                // As large as the viewport on a Retina screen.
-                let [_, still, last] = view.time_qualities([2880, 1300]);
-                // While it moves, the view is drawn at half the size.
-                let [moving, _, _] = view.time_qualities([1440, 650]);
-                eprintln!("{name} at 2880 × 1300: moving {moving:.1} ms (at half the size), still {still:.0} ms, final {last:.0} ms");
-            }
-        }
-    }
-
     /// A preset chosen in Settings ▸ Graphics applies at once: Low draws
     /// the 3D view at one sample a pixel and two thirds of its size, keeps
     /// fewer of the map view's images on the card; High puts back four
@@ -19634,156 +18360,6 @@ mod tests {
         h.run_steps(8);
         assert_eq!(h.state().view3d.samples(), Some(4));
         assert_eq!(h.state().view3d.last_region(), full);
-    }
-
-    /// What Settings ▸ Graphics costs the Terrain viewport: a still frame
-    /// of the stone towers among themselves, under clouds, at 2,880 × 1,300
-    /// (the viewport on a Retina screen), each setting changed alone from
-    /// High, then each preset. Needs a GPU: runs with MASSIF_PERF.
-    #[test]
-    fn graphics_settings_in_the_viewport() {
-        use crate::graphics::{Graphics, Light, Preset};
-        use massif_core::graph::Template;
-        if std::env::var_os("MASSIF_PERF").is_none() {
-            return;
-        }
-        let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.activate(8);
-        h.run_steps(2);
-        let app = h.state_mut();
-        app.graph.preview = 2048;
-        app.graph.use_template(&mut app.doc, Template::KarstTowers);
-        wait_for_graph(&mut h);
-        let view = &mut h.state_mut().graph.view;
-        view.camera.distance = 0.42;
-        view.camera.pitch = 0.1;
-        view.camera.yaw = 2.4;
-        view.render.clouds = true;
-        let high = Graphics::of(Preset::High);
-        let mut runs: Vec<(String, Graphics)> = vec![("High".into(), high)];
-        runs.push(("High, no MSAA".into(), Graphics { msaa: false, ..high }));
-        runs.push(("High, scale 0.67".into(), Graphics { render_scale: 0.67, ..high }));
-        runs.push(("High, light Medium".into(), Graphics { light: Light::Medium, ..high }));
-        runs.push(("High, light Low".into(), Graphics { light: Light::Low, ..high }));
-        runs.push(("High, no clouds".into(), Graphics { clouds: false, ..high }));
-        runs.push(("Medium".into(), Graphics::of(Preset::Medium)));
-        runs.push(("Low".into(), Graphics::of(Preset::Low)));
-        for (name, g) in runs {
-            crate::graphics::set(g);
-            let ms = view.time_still([2880, 1300]);
-            eprintln!("viewport, {name}: {ms:.1} ms a still frame");
-        }
-        crate::graphics::set(Graphics::default());
-    }
-
-    /// The templates: the picker with their pictures, a card replacing the
-    /// graph, and every template in the viewport with its own sky. Needs a
-    /// GPU: runs with MASSIF_SNAPSHOT_DIR.
-    #[test]
-    fn templates_render() {
-        use massif_core::graph::{NodeKind, Template};
-        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
-            return;
-        };
-        let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.activate(8);
-        h.run_steps(2);
-        h.state_mut().graph.open_templates();
-        let started = std::time::Instant::now();
-        while h.state().graph.pictures_ready() < Template::ALL.len() {
-            assert!(started.elapsed().as_secs() < 60, "the pictures were not made");
-            h.step();
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        h.run_steps(3);
-        h.render().unwrap().save(dir.join("graph-templates.png")).unwrap();
-        {
-            use egui_kittest::kittest::Queryable;
-            h.get_by_label("Archipelago").click();
-        }
-        h.run_steps(3);
-        let graph = h.state().doc.world.meta.graph.clone().expect("a graph");
-        assert!(graph.nodes.iter().any(|n| matches!(n.kind, NodeKind::Sea { .. })), "the archipelago replaced the graph");
-        for t in Template::ALL {
-            {
-                let app = h.state_mut();
-                app.graph.preview = 512;
-                app.graph.use_template(&mut app.doc, t);
-            }
-            wait_for_graph(&mut h);
-            let (w, hgt, rgba) = h.state().graph.view.read_back().expect("the viewport rendered");
-            let name = t.label().to_lowercase().replace(' ', "-");
-            image::save_buffer(dir.join(format!("template-{name}.png")), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
-        }
-        // The floating mountains close up, as a saved image.
-        {
-            let app = h.state_mut();
-            app.graph.preview = 1024;
-            app.graph.use_template(&mut app.doc, Template::FloatingMountains);
-        }
-        wait_for_graph(&mut h);
-        let view = &mut h.state_mut().graph.view;
-        view.camera.distance = 0.62;
-        view.camera.pitch = 0.3;
-        view.camera.yaw = 2.2;
-        let (w, hgt, rgba) = view.render_image([1600, 900]).expect("an image");
-        image::save_buffer(dir.join("template-floating-mountains-close.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
-        // And from among the pillars, looking at their cliffs.
-        view.camera.distance = 0.3;
-        view.camera.pitch = 0.24;
-        view.camera.yaw = 0.9;
-        view.render.clouds = false;
-        let (w, hgt, rgba) = view.render_image([1600, 900]).expect("an image");
-        image::save_buffer(dir.join("template-floating-mountains-cliffs.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
-        view.render.clouds = true;
-        view.camera.distance = 0.62;
-        view.camera.pitch = 0.3;
-        view.camera.yaw = 2.2;
-        // Converted to voxels: a Solid level over the ground, columns of
-        // several spans, seen in the 3D view of the map.
-        h.state_mut().graph.draft = None;
-        {
-            use egui_kittest::kittest::Queryable;
-            h.get_by_label_contains("Convert to voxels").click();
-        }
-        let started = std::time::Instant::now();
-        while h.state().doc.history.undo_label() != Some("Terrain graph") {
-            assert!(started.elapsed().as_secs() < 120, "the conversion did not finish");
-            h.step();
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        let names: Vec<String> = h.state().doc.dimension().levels.iter().map(|l| l.name.clone()).collect();
-        assert!(names.iter().any(|n| n == "Floating islands (graph 1)"), "{names:?}");
-        {
-            let app = h.state_mut();
-            app.layout.activate(3);
-            app.view3d.camera.distance = 1250.0;
-            app.view3d.camera.pitch = 0.42;
-        }
-        h.run_steps(5);
-        while h.state().view3d.pending() > 0 {
-            h.step();
-        }
-        h.run_steps(3);
-        let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
-        image::save_buffer(dir.join("template-floating-mountains-voxels.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
-        // Converting again reuses the levels.
-        let levels = h.state().doc.dimension().levels.len();
-        h.state_mut().layout.activate(8);
-        h.run_steps(3);
-        {
-            use egui_kittest::kittest::Queryable;
-            h.get_by_label_contains("Convert to voxels").click();
-        }
-        h.run_steps(2);
-        assert!(h.state().graph.converting(), "the second conversion started");
-        let started = std::time::Instant::now();
-        while h.state().graph.converting() {
-            assert!(started.elapsed().as_secs() < 120, "the second conversion did not finish");
-            h.step();
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        assert_eq!(h.state().doc.dimension().levels.len(), levels, "the same levels");
     }
 
     /// A mod's blocks in the Blocks panel: in sections of their own named
@@ -20692,8 +19268,9 @@ mod tests {
         }
         h.run_steps(3);
         assert!(h.state().home.is_none());
-        assert!(h.state().layout.terrain(), "on the Terrain side");
-        assert!(h.state().doc.world.meta.graph.is_some(), "with the template's graph");
+        assert!(h.state().layout.current().terrain, "on the Terrain side");
+        let world = &h.state().doc.world;
+        assert!(world.meta.graph.is_none() && world.meta.terrain_graph.is_some(), "with the template's graph, the Terrain Generator's");
     }
 
     /// Block palettes from end to end: a new map made of Conquest
@@ -22336,31 +20913,6 @@ mod tests {
         h.render().unwrap().save(dir.join("menu-area.png")).unwrap();
     }
 
-    /// A graph whose output takes nothing says so, and starts from the
-    /// map in one click.
-    #[test]
-    fn a_graph_without_relief_says_so() {
-        use egui_kittest::kittest::Queryable;
-        use massif_core::graph::{Graph, NodeKind};
-        let mut h = harness(ThemeChoice::Dark);
-        h.run_steps(5);
-        {
-            let app = h.state_mut();
-            let mut g = Graph::default();
-            g.add(NodeKind::HeightOutput, [0.0, 0.0]);
-            app.doc.world.meta.graph = Some(g);
-            app.layout.activate(8); // the classic graph
-            app.graph.graph_replaced();
-        }
-        h.run_steps(10);
-        h.get_by_label("No relief to show");
-        h.get_by_label_contains("Start from this map").click();
-        h.run_steps(10);
-        assert!(h.query_by_label("No relief to show").is_none(), "the map is shown");
-        let g = h.state().doc.world.meta.graph.as_ref().unwrap();
-        assert!(g.nodes.iter().any(|n| n.kind == NodeKind::MapHeight));
-    }
-
     /// The help: F1 opens it, a search narrows its topics. Needs a GPU:
     /// renders with MASSIF_SNAPSHOT_DIR.
     #[test]
@@ -22806,6 +21358,53 @@ mod tests {
         }
     }
 
+    /// The Generator Viewer in 3D on three templates, for comparison with
+    /// the classic viewport it replaces (MASSIF_COMPARE_DIR): as images and
+    /// in the Generator workspace.
+    #[test]
+    fn generator_viewer_compare() {
+        use massif_core::graph::Template;
+        let Some(dir) = std::env::var_os("MASSIF_COMPARE_DIR").map(PathBuf::from) else {
+            return;
+        };
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(3);
+        for (t, name) in [(Template::Alpine, "alpine"), (Template::RiverValley, "river-valley"), (Template::FloatingMountains, "floating")] {
+            h.state_mut().start_terrain(t);
+            let started = std::time::Instant::now();
+            h.run_steps(2);
+            while h.state().applying_terrain() {
+                assert!(started.elapsed().as_secs() < 300, "Apply never finished");
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            {
+                let p = h.state_mut().terrain_panel.as_mut().unwrap();
+                p.look.resolution = 1024;
+                p.viewed = None;
+            }
+            let started = std::time::Instant::now();
+            loop {
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                let p = h.state().terrain_panel.as_ref().unwrap();
+                if p.viewer3d.as_ref().is_some_and(|v| v.sharp) && p.previews_idle() && started.elapsed().as_secs_f32() > 1.0 {
+                    break;
+                }
+                assert!(started.elapsed().as_secs() < 120, "the viewer's relief did not come");
+            }
+            h.run_steps(20);
+            h.render().unwrap().save(dir.join(format!("after-{name}-workspace.png"))).unwrap();
+            let p = h.state_mut().terrain_panel.as_mut().unwrap();
+            p.view3d.camera = Default::default();
+            let (w, hgt, rgba) = p.view3d.render_image([1600, 900]).expect("an image");
+            image::save_buffer(dir.join(format!("after-{name}.png")), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+            let r = &p.view3d.render;
+            eprintln!("{name}: exaggeration {:.2}, sun {:.0}/{:.0}, clouds {}, sea {}", r.exaggeration, r.sun_azimuth, r.sun_elevation, r.clouds, r.sea);
+        }
+    }
+
     /// A sample of the home screen opens in one click: its relief built
     /// from its template, its graph shown on the Terrain side, with nothing
     /// to save;
@@ -22862,7 +21461,7 @@ mod tests {
         }
         h.run_steps(3);
         let app = h.state();
-        assert!(app.layout.terrain() && app.layout.current().root.shows(EditorKind::GenGraph), "on the Terrain side, its graph shown");
+        assert!(app.layout.current().terrain && app.layout.current().root.shows(EditorKind::GenGraph), "on the Terrain side, its graph shown");
     }
 
     /// In the system's typeface, the interface's until another is chosen.
@@ -22928,7 +21527,7 @@ mod tests {
         let mut faults: Vec<String> = Vec::new();
         let check = |h: &egui_kittest::Harness<'_, MassifApp>, what: &str, faults: &mut Vec<String>| {
             for (_, editor, area) in areas_of(h) {
-                if matches!(editor, EditorKind::Map | EditorKind::View3d | EditorKind::Sculpt3d | EditorKind::Graph | EditorKind::GraphView) {
+                if matches!(editor, EditorKind::Map | EditorKind::View3d | EditorKind::Sculpt3d) {
                     continue;
                 }
                 for node in h.query_all_by(|_| true) {
@@ -23006,7 +21605,7 @@ mod tests {
                 }
                 save(&mut h, &format!("{tool:?}"));
             }
-            for editor in [EditorKind::Blocks, EditorKind::Info, EditorKind::Levels, EditorKind::Layers, EditorKind::Terrain, EditorKind::Biomes, EditorKind::Brushes, EditorKind::CustomBrushes, EditorKind::Packs, EditorKind::Versions, EditorKind::Tools, EditorKind::BrushSettings, EditorKind::GraphProps, EditorKind::RenderSettings, EditorKind::GenLibrary, EditorKind::GenProps] {
+            for editor in [EditorKind::Blocks, EditorKind::Info, EditorKind::Levels, EditorKind::Layers, EditorKind::Terrain, EditorKind::Biomes, EditorKind::Brushes, EditorKind::CustomBrushes, EditorKind::Packs, EditorKind::Versions, EditorKind::Tools, EditorKind::BrushSettings, EditorKind::GenLibrary, EditorKind::GenProps] {
                 // An editor shown twice clashes with itself: each checked once.
                 if h.state().layout.current().root.shows(editor) {
                     continue;

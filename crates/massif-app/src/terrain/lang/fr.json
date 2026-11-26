@@ -526,9 +526,18 @@
   "Node Library": "Bibliothèque de nœuds",
   "Generator Viewer": "Visionneuse du générateur",
   "Generator Graph": "Graphe du générateur",
-  "Classic properties": "Propriétés classiques",
   "The generator's nodes by category, to search and add": "Les nœuds du générateur par catégorie, à chercher et ajouter",
   "The selected node's terrain in 2D or 3D, Live and Apply to map": "Le terrain du nœud sélectionné en 2D ou en 3D, En direct et Appliquer à la carte",
   "The generator's nodes and wires, and its MassifScript": "Les nœuds et les liens du générateur, et son MassifScript",
-  "The settings of the generator's selected node, or of its graph": "Les réglages du nœud sélectionné du générateur, ou de son graphe"
+  "The settings of the generator's selected node, or of its graph": "Les réglages du nœud sélectionné du générateur, ou de son graphe",
+  "Apply over the map": "Appliquer par-dessus la carte",
+  "On: what the graph digs and raises goes into levels of their own, which you can hide or delete, and the map's ground stays as it was. Off: the graph replaces the ground.": "Activé : ce que le graphe creuse et élève va dans des niveaux à part, que l'on peut masquer ou supprimer, et le sol de la carte reste tel quel. Désactivé : le graphe remplace le sol.",
+  "Height map": "Carte des hauteurs",
+  "Saving…": "Enregistrement…",
+  "Save…": "Enregistrer…",
+  "Save the terrain at a block a sample as a 16-bit PNG height map, without writing it into the map": "Enregistrer le terrain, un échantillon par bloc, en carte des hauteurs PNG 16 bits, sans l'écrire dans la carte",
+  "terrain height map.png": "carte des hauteurs du terrain.png",
+  "The graph's Map Output takes no Height: nothing to save": "La Map Output du graphe ne reçoit aucune hauteur : rien à enregistrer",
+  "The height map could not be saved: {e}": "La carte des hauteurs n'a pas pu être enregistrée : {e}",
+  "Saved the terrain as a height map of {n} × {n} in {s} s: black is Y {lo}, white Y {hi}": "Terrain enregistré en carte des hauteurs de {n} × {n} en {s} s : le noir est Y {lo}, le blanc Y {hi}"
 }

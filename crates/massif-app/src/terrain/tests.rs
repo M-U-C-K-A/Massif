@@ -735,7 +735,7 @@ fn apply_writes_ground_caves_and_villages_in_one_step() {
     let env: Arc<dyn massif_terrain::kernel::Env> = Arc::new(massif_terrain::world::MapEnv::new(&doc.world, 0, 1, "."));
     let before_steps = doc.history.undo_count();
     let height_before = massif_core::ops::height_at(doc.dimension(), 0, 100, 100, massif_core::ops::Surface::Top);
-    let mut a = super::apply::Applying::start(engine.clone(), &graph, &mut doc, env.clone(), 7).unwrap();
+    let mut a = super::apply::Applying::start(engine.clone(), &graph, &mut doc, env.clone(), 7, false).unwrap();
     let t0 = std::time::Instant::now();
     let done = loop {
         if let Some(r) = a.step(&mut doc, &blocks, None) {
@@ -757,7 +757,7 @@ fn apply_writes_ground_caves_and_villages_in_one_step() {
     assert_eq!(massif_core::ops::height_at(doc.dimension(), 0, 100, 100, massif_core::ops::Surface::Top), height_before);
     // Cancelled half way: as it was, no step.
     let steps = doc.history.undo_count();
-    let mut a = super::apply::Applying::start(engine, &graph, &mut doc, env, 8).unwrap();
+    let mut a = super::apply::Applying::start(engine, &graph, &mut doc, env, 8, false).unwrap();
     let _ = a.step(&mut doc, &blocks, None);
     a.cancel(&mut doc);
     assert_eq!(doc.history.undo_count(), steps);
@@ -778,7 +778,7 @@ fn apply_goes_window_by_window_without_seams() {
         "worn": { "type": "erosion.thermal", "inputs": { "height": "land" } },
         "out": { "type": "output.map", "inputs": { "height": "worn" } } } }"#).unwrap();
     let env: Arc<dyn massif_terrain::kernel::Env> = Arc::new(massif_terrain::world::MapEnv::new(&doc.world, 0, 1, "."));
-    let mut a = super::apply::Applying::start(engine.clone(), &graph, &mut doc, env, 1).unwrap();
+    let mut a = super::apply::Applying::start(engine.clone(), &graph, &mut doc, env, 1, false).unwrap();
     assert_eq!(a.windows, 4);
     let done = loop {
         if let Some(r) = a.step(&mut doc, &blocks, None) {
@@ -1084,4 +1084,36 @@ fn the_erosion_renders() {
             p.selected = vec!["er".into()];
         });
     }
+}
+
+/// Apply over the map leaves the map's ground as it was: what the graph
+/// raises goes into a level of its own, shown over the ground, and undo
+/// takes it back.
+#[test]
+fn apply_over_the_map_keeps_its_ground() {
+    let world = massif_core::generate::generate(&massif_core::generate::GenParams { tiles_x: 4, tiles_z: 4, landform: massif_core::generate::Landform::Flat, ..Default::default() });
+    let mut doc = crate::doc::Document::new(world, None, 1);
+    let blocks = crate::blocks::BlockLibrary::default();
+    let engine = Arc::new(Engine::new(Default::default()));
+    let graph = Graph::from_json(r#"{ "nodes": {
+        "hill": { "type": "pattern.constant", "params": { "value": 120 } },
+        "out": { "type": "output.map", "inputs": { "height": "hill" } } } }"#).unwrap();
+    let env: Arc<dyn massif_terrain::kernel::Env> = Arc::new(massif_terrain::world::MapEnv::new(&doc.world, 0, 1, "."));
+    let ground = |doc: &crate::doc::Document| doc.dimension().ground().view(massif_core::TilePos::containing(10, 10)).unwrap().top.get(massif_core::coords::local_index(10, 10));
+    let (before, levels) = (ground(&doc), doc.dimension().levels.len());
+    let mut a = super::apply::Applying::start(engine, &graph, &mut doc, env, 1, true).unwrap();
+    loop {
+        if let Some(r) = a.step(&mut doc, &blocks, None) {
+            r.unwrap();
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert_eq!(ground(&doc), before, "the map's ground as it was");
+    assert_eq!(doc.dimension().levels.len(), levels + 2, "a level for what is dug, one for what is raised");
+    let raised = doc.dimension().levels.len() - 1;
+    let top = massif_core::ops::height_at(doc.dimension(), raised, 10, 10, massif_core::ops::Surface::Top).unwrap();
+    assert!((top - 120.0).abs() < 1.5, "the raised land in its level: {top}");
+    assert!(doc.undo().is_some());
+    assert_eq!(doc.dimension().levels.len(), levels);
 }

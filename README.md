@@ -236,8 +236,8 @@ cargo run --release -p massif-cli -- export world.massif ~/Library/Application\ 
   the 3D views, mods, importing, exporting, versions, scripting, the command
   line and the settings.
 - **[Terrain graphs](docs/terrain-graphs.md)**: the Terrain Generator's four
-  panels, composites, the Map Output, Live and Apply, MassifScript, and the
-  classic graph of older maps.
+  panels, composites, the Map Output, Live and Apply, MassifScript, and how
+  the classic graph of older maps is converted.
 - **[Scripting](docs/scripting.md)** and **[MassifScript](docs/massifscript.md)**:
   WorldPainter's JavaScript scripts, Massif's Lua API, and the terrain graph
   written as text.

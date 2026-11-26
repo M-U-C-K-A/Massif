@@ -25,6 +25,18 @@ pub fn picture_rect(card: Rect) -> Rect {
 
 pub fn ui(p: &mut TerrainPanel, ui: &mut Ui) {
     let pal = Palette::of(ui);
+    // A height map saved: said once.
+    if let Some(rx) = &p.heightmap {
+        match rx.try_recv() {
+            Ok(said) => {
+                p.heightmap = None;
+                let now = ui.input(|i| i.time);
+                p.say(said.unwrap_or_else(|e| e), now);
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(100)),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => p.heightmap = None,
+        }
+    }
     let card = ui.max_rect();
     // Docked, the area's header names it: the commands from the left.
     let left = if p.docked {
@@ -403,6 +415,22 @@ fn controls(p: &mut TerrainPanel, ui: &mut Ui) {
                     let colour = p.thumb_surface == Surface::Colour;
                     if let Some(k) = widgets::button_group(ui, "terrain thumbs surface", &[t!("Clay"), t!("Colours")], &[!colour, colour]) {
                         p.thumb_surface = if k == 0 { Surface::Clay } else { Surface::Colour };
+                    }
+                });
+            });
+            ui.add_space(8.0);
+            widgets::well(ui, |ui| {
+                widgets::row(ui, t!("Apply over the map"), |ui| {
+                    widgets::switch(ui, &mut p.apply_over).on_hover_text(t!("On: what the graph digs and raises goes into levels of their own, which you can hide or delete, and the map's ground stays as it was. Off: the graph replaces the ground."));
+                });
+                widgets::row(ui, t!("Height map"), |ui| {
+                    let busy = p.heightmap.is_some();
+                    let label = if busy { t!("Saving…") } else { t!("Save…") };
+                    if ui.add_enabled(!busy, egui::Button::new(label)).on_hover_text(t!("Save the terrain at a block a sample as a 16-bit PNG height map, without writing it into the map")).clicked()
+                        && let Some(path) = rfd::FileDialog::new().set_file_name(t!("terrain height map.png")).add_filter(t!("PNG image"), &["png"]).save_file()
+                    {
+                        p.save_heightmap(path);
+                        ui.close();
                     }
                 });
             });

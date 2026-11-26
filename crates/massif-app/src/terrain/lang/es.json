@@ -266,9 +266,18 @@
   "Node Library": "Biblioteca de nodos",
   "Generator Viewer": "Visor del generador",
   "Generator Graph": "Grafo del generador",
-  "Classic properties": "Propiedades clásicas",
   "The generator's nodes by category, to search and add": "Los nodos del generador por categoría, para buscar y añadir",
   "The selected node's terrain in 2D or 3D, Live and Apply to map": "El terreno del nodo seleccionado en 2D o 3D, En vivo y Aplicar al mapa",
   "The generator's nodes and wires, and its MassifScript": "Los nodos y conexiones del generador, y su MassifScript",
-  "The settings of the generator's selected node, or of its graph": "Los ajustes del nodo seleccionado del generador, o de su grafo"
+  "The settings of the generator's selected node, or of its graph": "Los ajustes del nodo seleccionado del generador, o de su grafo",
+  "Apply over the map": "Aplicar sobre el mapa",
+  "On: what the graph digs and raises goes into levels of their own, which you can hide or delete, and the map's ground stays as it was. Off: the graph replaces the ground.": "Activado: lo que el grafo excava y eleva va a niveles propios, que se pueden ocultar o borrar, y el suelo del mapa queda como estaba. Desactivado: el grafo reemplaza el suelo.",
+  "Height map": "Mapa de alturas",
+  "Saving…": "Guardando…",
+  "Save…": "Guardar…",
+  "Save the terrain at a block a sample as a 16-bit PNG height map, without writing it into the map": "Guardar el terreno, una muestra por bloque, como mapa de alturas PNG de 16 bits, sin escribirlo en el mapa",
+  "terrain height map.png": "mapa de alturas del terreno.png",
+  "The graph's Map Output takes no Height: nothing to save": "La Map Output del grafo no recibe altura: nada que guardar",
+  "The height map could not be saved: {e}": "No se pudo guardar el mapa de alturas: {e}",
+  "Saved the terrain as a height map of {n} × {n} in {s} s: black is Y {lo}, white Y {hi}": "Terreno guardado como mapa de alturas de {n} × {n} en {s} s: el negro es Y {lo}, el blanco Y {hi}"
 }

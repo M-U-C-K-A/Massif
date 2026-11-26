@@ -178,6 +178,14 @@ pub struct TerrainPanel {
     pub apply_asked: bool,
     /// Apply under way.
     pub applying: Option<super::apply::Applying>,
+    /// Apply writes over the map, its ground left as it is (levels of their
+    /// own take what the graph digs and raises), rather than into it.
+    pub apply_over: bool,
+    /// A height map being saved: what to say once it is.
+    pub heightmap: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
+    /// The world's lowest and highest Y, which a height map's black and
+    /// white stand for.
+    pub y_range: (i32, i32),
 
     undo: Vec<Snap>,
     redo: Vec<Snap>,
@@ -299,6 +307,9 @@ impl TerrainPanel {
             notice: None,
             apply_asked: false,
             applying: None,
+            apply_over: false,
+            heightmap: None,
+            y_range: (-64, 320),
             undo: Vec::new(),
             redo: Vec::new(),
             editing: false,
@@ -471,6 +482,8 @@ impl TerrainPanel {
             space.sea_level = sea;
         }
         self.space = space;
+        let dim = doc.dimension();
+        self.y_range = (dim.min_y, dim.max_y);
         // Another change to the document than the panel's own: the map may
         // have changed under the graph's Map nodes.
         if doc.revision != self.doc_seen {
@@ -496,6 +509,34 @@ impl TerrainPanel {
                 self.env_revision += 1;
             }
         }
+    }
+
+    /// Saves the graph's height over its whole terrain, a sample a block, as
+    /// a 16-bit PNG at `path` (black the world's lowest Y, white its
+    /// highest), on a thread of its own: [`Self::heightmap`] says when done.
+    pub fn save_heightmap(&mut self, path: std::path::PathBuf) {
+        let Some(engine) = self.engine().cloned() else { return };
+        let graph = self.document();
+        let (space, env, (lo, hi)) = (self.space, self.env.clone(), self.y_range);
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.heightmap = Some(rx);
+        std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            let result = (|| {
+                let (c, diags) = massif_terrain::compile::compile_in(&graph, space, space.size.min(4096), env);
+                if let Some(d) = diags.iter().find(|d| d.severity == massif_terrain::compile::Severity::Error) {
+                    return Err(d.to_string());
+                }
+                let h = c.output("height").ok_or_else(|| t!("The graph's Map Output takes no Height: nothing to save").to_owned())?;
+                let grid = engine.whole(&c, h, 0, &|| false).map_err(|e| e.to_string())?;
+                let n = grid.rect.w as usize;
+                let (lo, hi) = (lo as f32, hi as f32);
+                let samples: Vec<f32> = grid.data[..n * n].iter().map(|v| (v - lo) / (hi - lo)).collect();
+                massif_core::heightmap::write_png16(&path, n, n, &samples).map_err(|e| t!("The height map could not be saved: {e}", e = e))?;
+                Ok(t!("Saved the terrain as a height map of {n} × {n} in {s} s: black is Y {lo}, white Y {hi}", n = n, s = format!("{:.1}", started.elapsed().as_secs_f64()), lo = format!("{lo:.0}"), hi = format!("{hi:.0}")))
+            })();
+            let _ = tx.send(result);
+        });
     }
 
     /// Writes the graph, with its layout and view, into the document when

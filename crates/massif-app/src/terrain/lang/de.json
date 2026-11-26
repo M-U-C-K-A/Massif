@@ -266,9 +266,18 @@
   "Node Library": "Knotenbibliothek",
   "Generator Viewer": "Generator-Ansicht",
   "Generator Graph": "Generator-Graph",
-  "Classic properties": "Klassische Eigenschaften",
   "The generator's nodes by category, to search and add": "Die Knoten des Generators nach Kategorie, zum Suchen und Hinzufügen",
   "The selected node's terrain in 2D or 3D, Live and Apply to map": "Das Gelände des gewählten Knotens in 2D oder 3D, Live und Auf Karte anwenden",
   "The generator's nodes and wires, and its MassifScript": "Die Knoten und Verbindungen des Generators und sein MassifScript",
-  "The settings of the generator's selected node, or of its graph": "Die Einstellungen des gewählten Knotens des Generators oder seines Graphen"
+  "The settings of the generator's selected node, or of its graph": "Die Einstellungen des gewählten Knotens des Generators oder seines Graphen",
+  "Apply over the map": "Über der Karte anwenden",
+  "On: what the graph digs and raises goes into levels of their own, which you can hide or delete, and the map's ground stays as it was. Off: the graph replaces the ground.": "An: Was der Graph gräbt und aufschüttet, kommt in eigene Ebenen, die man ausblenden oder löschen kann, und der Boden der Karte bleibt, wie er war. Aus: Der Graph ersetzt den Boden.",
+  "Height map": "Höhenkarte",
+  "Saving…": "Speichern…",
+  "Save…": "Speichern…",
+  "Save the terrain at a block a sample as a 16-bit PNG height map, without writing it into the map": "Das Gelände mit einem Wert pro Block als 16-Bit-PNG-Höhenkarte speichern, ohne es in die Karte zu schreiben",
+  "terrain height map.png": "Höhenkarte des Geländes.png",
+  "The graph's Map Output takes no Height: nothing to save": "Die Map Output des Graphen erhält keine Höhe: nichts zu speichern",
+  "The height map could not be saved: {e}": "Die Höhenkarte konnte nicht gespeichert werden: {e}",
+  "Saved the terrain as a height map of {n} × {n} in {s} s: black is Y {lo}, white Y {hi}": "Gelände als Höhenkarte von {n} × {n} in {s} s gespeichert: Schwarz ist Y {lo}, Weiß Y {hi}"
 }

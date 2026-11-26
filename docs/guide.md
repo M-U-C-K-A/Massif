@@ -132,7 +132,7 @@ The words over it always stay legible: the colours are held toward the page's ow
 Massif's window has three **sides**, switched at the top left, each with its own workspaces, remembered as you left them:
 
 - **World**: the map editor, where you paint and shape the map. Its workspaces are **Layout** (tools on the left, the map in the middle, 3D view, brushes, terrains, layers, levels and info on the right), **Sculpting** (a big map with the brushes and the 3D view), **Painting** (palettes on both sides of the map), **3D** (the 3D view takes the stage), **3D Sculpt** (the world in 3D with its tools), **Maps** (two maps side by side, to compare display modes), **Minimal** (the tools and the map) and **WorldPainter** (laid out as WorldPainter is).
-- **Terrain**: the node-based terrain generator. Its **Generator** workspace holds the four panels of the [Terrain Generator](terrain-graphs.md); a map made with the earlier generator also has **Graph** and **Render**, the classic graph's.
+- **Terrain**: the node-based terrain generator. Its **Generator** workspace holds the four panels of the [Terrain Generator](terrain-graphs.md), Massif's only generator: a map made with the classic graph of earlier versions opens with it converted.
 - **Render** (Beta): the map path-traced under a real sky and saved as images, in the **Still** and **Animation** workspaces (see [Render](#render)).
 
 [![Annotated map editor showing a brush footprint, biomes, village and diorama preview.](assets/workspaces/map-editor.webp)](assets/workspaces/map-editor.webp)
@@ -154,7 +154,6 @@ A workspace is made of **areas**, as in Blender. Each area shows one panel, and 
 | **Tools** | **Tools** (every tool, a row for each theme), **Tool Settings** (the options of the tool in hand), **Brushes** (shapes for the brush, and stamps of terrain), **Custom Brushes** (brushes from greyscale images, yours and WorldPainter's), **Brush Settings** (size, intensity, rotation and where the brush paints) |
 | **Paint** | **Terrain** (the block on top of the ground), **Layers** (ground covers, objects and terrain mixes), **Packs** (ready-made trees, plants and mixes of blocks), **Blocks** (every block of the game and its mods), **Biomes** (the game's and its mods'), **Levels** (levels that add rock over the ground or carve it away) |
 | **Terrain** | **Generator Graph**, **Generator Viewer**, **Node Library**, **Node Properties** (see [the Terrain Generator](terrain-graphs.md)) |
-| **Classic generator** | **Classic graph**, **Graph Viewport**, **Classic properties**, **Render Settings**: offered only for a map made with the classic graph, or while one of them is on screen |
 | **Render** | **Render Viewport**, **Sun and Sky**, **Camera**, **Render Output**, **Timeline** |
 | **Developer** | **Developer** (frames, memory and processor, live): with Settings ▸ Developer ▸ developer mode on |
 
@@ -2367,9 +2366,10 @@ Massif brings in what you already have:
   map (stretched over the terrain, black and white set to any height), a
   WorldPainter `.world` or a `.massif` (fitted to the terrain, or read at
   its own place). Its Height, Water and Colour outputs work like the Map
-  node's, and the file is read again when it changes. **Height map…**
-  beside Convert to voxels builds the terrain at full size and saves its
-  relief as a 16-bit PNG instead of writing it to the map.
+  node's, and the file is read again when it changes. The Generator
+  Viewer's settings menu saves what a graph makes as a 16-bit PNG height
+  map (**Height map: Save…**), a block a sample, without writing it into
+  the map.
 
 ![The home screen's From a height map page](images/from-height-map.png)
 
@@ -2412,9 +2412,8 @@ A world, or a part of one, from the relief of a real place on the Earth.
   about how much memory it takes, and warns of a map that will be slow
   (over 16,384 blocks a side) or that may not fit in the computer's
   memory. Size and relief are one step: undo puts the map back as it was,
-  size and all. (In the Terrain graph, **Size** beside Convert to voxels
-  sets how much of the world the terrain covers, the world growing to
-  it.)
+  size and all. (In the Terrain Generator, the graph's **Terrain size**
+  in Node Properties sets how much of the world the terrain covers.)
 - **Source.** **Terrain Tiles** are the heights of the whole Earth, about
   30 m apart (finer where better data exists), ocean floors included,
   downloaded as needed. **A file** reads one you downloaded: a GeoTIFF

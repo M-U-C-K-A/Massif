@@ -147,25 +147,4 @@ fn noise_gradient_blends_its_blocks_in_order() {
     }
     h.run_steps(30);
     save(&mut h, "noise-gradient");
-    // The node, with the brush's presets.
-    {
-        let app = h.state_mut();
-        app.tools.pattern.save("Dirt to grass");
-        let reg = &app.doc.world.registry;
-        let ids: Vec<(u16, f32)> = ["Dirt", "Coarse Dirt", "Grass"].iter().zip([0.3, 0.3, 0.4]).map(|(n, w)| (reg.terrain_by_name(n).unwrap().0, w)).collect();
-        let mut graph = massif_core::graph::Graph::default();
-        let node = graph.add(massif_core::graph::NodeKind::NoisePaint { pattern: app.tools.pattern.pattern.clone(), terrains: ids }, [200.0, 200.0]);
-        app.doc.world.meta.graph = Some(graph);
-        app.graph.graph_replaced();
-        app.graph.selected = Some(node);
-        app.layout.switch_side(true);
-    }
-    let started = std::time::Instant::now();
-    h.run_steps(3);
-    while !h.state().graph.is_current() && started.elapsed().as_secs() < 90 {
-        h.step();
-        std::thread::sleep(std::time::Duration::from_millis(15));
-    }
-    h.run_steps(10);
-    save(&mut h, "noise-paint-node");
 }

@@ -61,6 +61,156 @@ pub fn graph_of(world: &World) -> Option<(Graph, Vec<Diagnostic>)> {
     Some(migrate::from_v1(old, &migrate::World { side, sea_level: world.meta.sea_level as f32, terrain_name: &names }))
 }
 
+/// The title of the frame that holds a classic graph's nodes added beside
+/// a terrain graph of the world's own.
+pub const CLASSIC_FRAME: &str = "From the classic graph";
+
+/// What converting a world's classic graph did.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Absorbed {
+    /// How many nodes the classic graph had.
+    pub nodes: usize,
+    /// The classic nodes made again with the same shape and settings but
+    /// a new noise or method, by label: their terrain is close, not the same.
+    pub approximated: Vec<String>,
+    /// What could not be carried over as it was, in words.
+    pub notes: Vec<String>,
+    /// Whether the world had a terrain graph of its own, which still drives
+    /// the map: the classic nodes were added beside it, in a frame of their
+    /// own and unwired ([`CLASSIC_FRAME`]).
+    pub beside: bool,
+}
+
+/// Whether the terrain graph `v` does nothing yet: no node but Map Outputs
+/// with nothing linked to them.
+fn is_blank(v: &serde_json::Value) -> bool {
+    match serde_json::from_value::<Graph>(v.clone()) {
+        Ok(g) => g.nodes.values().all(|n| n.kind == "output.map" && n.inputs.is_empty()) && g.components.is_empty(),
+        Err(_) => false,
+    }
+}
+
+/// Whether the node made for a classic `kind` gives the same terrain as
+/// before: 1.2's own code (the `legacy.*` nodes) or plain arithmetic.
+fn same_as_before(kind: &v1::NodeKind) -> bool {
+    use v1::NodeKind as K;
+    matches!(
+        kind,
+        K::Constant { .. }
+            | K::MapHeight
+            | K::FileInput { .. }
+            | K::FloatingIslands { .. }
+            | K::Rocks { .. }
+            | K::Tectonic { .. }
+            | K::Levels { .. }
+            | K::Clamp { .. }
+            | K::Normalize { .. }
+            | K::InvertHeight
+            | K::Overhang { .. }
+            | K::Erosion { .. }
+            | K::Rivers { .. }
+            | K::Lakes { .. }
+            | K::Sea { .. }
+            | K::Flow { .. }
+            | K::Combine { .. }
+            | K::Blend
+            | K::Invert
+            | K::SolidColor { .. }
+            | K::MixColors
+            | K::Tint { .. }
+            | K::AutoColor { .. }
+            | K::HeightOutput
+            | K::WaterOutput
+            | K::TerrainOutput { .. }
+            | K::ColorOutput { .. }
+            | K::LayerOutput { .. }
+            | K::BiomeOutput { .. }
+    )
+}
+
+/// `graph` with every node id prefixed by `prefix`, links and places
+/// following.
+fn prefixed(graph: Graph, prefix: &str) -> Graph {
+    let name = |id: &str| format!("{prefix}{id}");
+    let source = |s: &str| {
+        let src = crate::model::Source::parse(s);
+        match src.output {
+            Some(o) => format!("{}.{o}", name(src.node)),
+            None => name(src.node),
+        }
+    };
+    let nodes = graph
+        .nodes
+        .into_iter()
+        .map(|(id, mut n)| {
+            n.inputs = n.inputs.into_iter().map(|(k, s)| (k, source(&s))).collect();
+            (name(&id), n)
+        })
+        .collect();
+    let ui = graph.ui.into_iter().map(|(id, u)| (name(&id), u)).collect();
+    Graph { nodes, ui, ..graph }
+}
+
+/// Converts `world`'s classic graph (`meta.graph`, Massif's generator
+/// before the Terrain Generator) into its terrain graph, node by node, and
+/// drops it: the world has one generator from now on. A world whose terrain
+/// graph does nothing yet takes the converted graph as it; one with a
+/// terrain graph of its own keeps it to drive the map, the converted nodes
+/// added beside it, unwired, in a frame titled [`CLASSIC_FRAME`], so that
+/// nothing is lost. `None` when the world had no classic graph.
+pub fn absorb_classic(world: &mut World) -> Option<Absorbed> {
+    let old = world.meta.graph.take()?;
+    let nodes = old.nodes.len();
+    let approximated = old.nodes.iter().filter(|n| !same_as_before(&n.kind)).map(|n| n.kind.label().to_owned()).collect();
+    let rect = map_rect(&world.dims[0]);
+    let side = old.size.unwrap_or(rect.width().max(rect.depth()).max(1) as u32);
+    let names = |id: u16| world.registry.terrain(TerrainId(id)).name.clone();
+    let (converted, diags) = migrate::from_v1(&old, &migrate::World { side, sea_level: world.meta.sea_level as f32, terrain_name: &names });
+    let notes = diags.iter().map(|d| d.message.clone()).collect();
+    let own = world.meta.terrain_graph.as_ref().filter(|v| !is_blank(v)).and_then(|v| serde_json::from_value::<Graph>(v.clone()).ok());
+    let beside = own.is_some();
+    let graph = match own {
+        None => converted,
+        Some(mut g) => {
+            g.upgrade();
+            let mut add = prefixed(converted, "classic_");
+            // Its Map Output kept, but not the one the map takes.
+            for n in add.nodes.values_mut().filter(|n| n.kind == "output.map") {
+                n.params.insert("active".into(), serde_json::json!(false));
+            }
+            // Below the graph's own nodes, framed.
+            let bottom = g.ui.values().map(|u| u.pos[1]).fold(f32::MIN, f32::max);
+            let (left, top) = (add.ui.values().map(|u| u.pos[0]).fold(f32::MAX, f32::min), add.ui.values().map(|u| u.pos[1]).fold(f32::MAX, f32::min));
+            let (left, top) = if add.ui.is_empty() { (0.0, 0.0) } else { (left, top) };
+            let down = if g.ui.is_empty() { 0.0 } else { bottom + 400.0 - top };
+            let mut far = [left, top + down];
+            for u in add.ui.values_mut() {
+                u.pos[1] += down;
+                far = [far[0].max(u.pos[0]), far[1].max(u.pos[1])];
+            }
+            let members: Vec<String> = add.nodes.keys().cloned().collect();
+            let pad = 60.0;
+            let frame = crate::model::Frame {
+                title: CLASSIC_FRAME.to_owned(),
+                description: "The map's classic graph, converted. The graph above drives the map; link these nodes to it, or make their Map Output the active one, to use them.".to_owned(),
+                members,
+                rect: [left - pad, top + down - pad, far[0] - left + 260.0 + 2.0 * pad, far[1] - (top + down) + 200.0 + 2.0 * pad],
+                ..Default::default()
+            };
+            let mut key = "classic".to_owned();
+            while g.frames.contains_key(&key) {
+                key.push('_');
+            }
+            g.frames.insert(key, frame);
+            g.nodes.extend(add.nodes);
+            g.ui.extend(add.ui);
+            g
+        }
+    };
+    world.meta.terrain_graph = serde_json::to_value(&graph).ok();
+    Some(Absorbed { nodes, approximated, notes, beside })
+}
+
 /// A world's map as the graph reads it: its ground, water and terrains,
 /// and the files beside it.
 pub struct MapEnv {

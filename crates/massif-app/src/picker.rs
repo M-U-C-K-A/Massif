@@ -45,13 +45,10 @@ pub fn columns_for(room: f32) -> usize {
 /// world, tools, paint, terrain, render); in three, the World side's tools
 /// under its views and the Render side's beside the terrain's; in two, the
 /// World side's and the other two sides'; or one after the other.
-fn arrange(columns: usize, developer: bool, classic: bool) -> Vec<Vec<Section>> {
+fn arrange(columns: usize, developer: bool) -> Vec<Vec<Section>> {
     let mut five: Vec<Vec<Section>> = EditorKind::COLUMNS.iter().map(|c| c.to_vec()).collect();
     if developer {
         five[0].push(EditorKind::DEVELOPER);
-    }
-    if classic {
-        five[3].push(EditorKind::CLASSIC);
     }
     let mut it = five.clone().into_iter();
     let [a, b, c, d, e] = std::array::from_fn(|_| it.next().unwrap());
@@ -65,13 +62,10 @@ fn arrange(columns: usize, developer: bool, classic: bool) -> Vec<Vec<Section>> 
 
 /// The page: the editors an area showing `current` can show instead (none
 /// for an empty area), in `columns` columns; `shown` are those on screen,
-/// Developer's is offered with developer mode, the classic graph's panels
-/// with `classic` (a map made with it) or while one is on screen. Returns
-/// the one chosen.
-pub fn page(ui: &mut Ui, current: Option<EditorKind>, shown: &HashSet<EditorKind>, developer: bool, classic: bool, columns: usize) -> Option<EditorKind> {
+/// Developer's is offered with developer mode. Returns the one chosen.
+pub fn page(ui: &mut Ui, current: Option<EditorKind>, shown: &HashSet<EditorKind>, developer: bool, columns: usize) -> Option<EditorKind> {
     let developer = developer || current == Some(EditorKind::Developer);
-    let classic = classic || current.is_some_and(EditorKind::classic) || shown.iter().any(|k| k.classic());
-    let sections = arrange(columns, developer, classic);
+    let sections = arrange(columns, developer);
     let mut picked = None;
     let mut under = None;
     ui.horizontal_top(|ui| {
@@ -199,29 +193,29 @@ mod tests {
     use super::*;
 
     /// Every editor but the empty area is offered once, in whatever number
-    /// of columns, with developer mode and a classic graph; the classic
-    /// graph's panels only for a map made with it.
+    /// of columns, with developer mode; the Terrain side's are the
+    /// Terrain Generator's four panels alone.
     #[test]
     fn every_editor_is_offered_once() {
         for columns in [1, 2, 3, 5] {
-            let sections = arrange(columns, true, true);
+            let sections = arrange(columns, true);
             assert_eq!(sections.len(), columns);
             let mut offered: Vec<EditorKind> = sections.iter().flatten().flat_map(|(_, kinds)| kinds.iter().copied()).collect();
             offered.sort_by_key(|k| *k as u8);
             let before = offered.len();
             offered.dedup();
             assert_eq!(offered.len(), before, "an editor offered twice");
-            assert_eq!(offered.len(), 31, "every editor but the empty area");
+            assert_eq!(offered.len(), 27, "every editor but the empty area and the generator in one area of before");
             assert!(!offered.contains(&EditorKind::Empty));
         }
-        assert!(!arrange(5, false, false).iter().flatten().any(|(_, kinds)| kinds.contains(&EditorKind::Developer)));
+        assert!(!arrange(5, false).iter().flatten().any(|(_, kinds)| kinds.contains(&EditorKind::Developer)));
         // The Terrain side offers the generator's panels alone.
-        let new = arrange(5, false, false);
-        assert!(!new.iter().flatten().any(|(_, kinds)| kinds.iter().any(|k| k.classic())));
+        let new = arrange(5, false);
+        assert!(!new.iter().flatten().any(|(title, _)| *title != "Terrain" && title.contains("enerator")));
         let terrain = new.concat().into_iter().find(|(title, _)| *title == "Terrain").unwrap();
         assert_eq!(terrain.1, [EditorKind::GenGraph, EditorKind::GenViewer, EditorKind::GenLibrary, EditorKind::GenProps]);
         // The Render side's editors in a section of their own.
-        let render = arrange(5, false, false).concat().into_iter().find(|(title, _)| *title == "Render").unwrap();
+        let render = arrange(5, false).concat().into_iter().find(|(title, _)| *title == "Render").unwrap();
         assert_eq!(render.1, [EditorKind::RenderView, EditorKind::RenderSky, EditorKind::RenderCamera, EditorKind::RenderOutput, EditorKind::Timeline]);
     }
 

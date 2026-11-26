@@ -66,6 +66,11 @@ pub struct Applying {
     heights: bool,
     /// The levels of rock written, by slot, made at the first window.
     levels: Option<Vec<usize>>,
+    /// Over the map rather than into it: what the graph digs and raises
+    /// goes into levels of their own (dug, raised), the map's ground left
+    /// as it was. Their indices, made at the first window.
+    over: bool,
+    overlay: Option<(usize, usize)>,
     /// What went underground.
     under: Option<massif_terrain::underground::Applied>,
     /// The caves, cave biomes and volumes being worked out on a thread of
@@ -113,7 +118,8 @@ impl Done {
 impl Applying {
     /// Starts writing `graph` (the document's) over `doc`'s map: the step
     /// of the map's history opens, the thread starts.
-    pub fn start(engine: Arc<Engine>, graph: &massif_terrain::model::Graph, doc: &mut Document, env: Arc<dyn massif_terrain::kernel::Env>, revision: u64) -> Result<Self, String> {
+    /// `over`: over the map, its ground left as it is (see `over`).
+    pub fn start(engine: Arc<Engine>, graph: &massif_terrain::model::Graph, doc: &mut Document, env: Arc<dyn massif_terrain::kernel::Env>, revision: u64, over: bool) -> Result<Self, String> {
         let space = massif_terrain::world::space_of(&doc.world, doc.dim, graph);
         let sim = space.size.min(4096);
         let (c, diags) = massif_terrain::compile::compile_in(graph, space, sim, env);
@@ -142,7 +148,7 @@ impl Applying {
             .name("terrain apply".into())
             .spawn(move || work(e, c, side, per_row, tx, stop, count))
             .map_err(|e| e.to_string())?;
-        Ok(Applying { rx, cancel, made, windows, written: 0, phase: Phase::Terrain, started: Instant::now(), engine, compiled, folder, revision, geometry: None, notes: Vec::new(), heights, levels: None, under: None, prepared: None, kept })
+        Ok(Applying { rx, cancel, made, windows, written: 0, phase: Phase::Terrain, started: Instant::now(), engine, compiled, folder, revision, geometry: None, notes: Vec::new(), heights, levels: None, over: over && heights, overlay: None, under: None, prepared: None, kept })
     }
 
     /// Stops it: what was written is taken back.
@@ -250,19 +256,46 @@ impl Applying {
     /// biomes, the old sculpted chunks over it gone.
     fn write_window(&mut self, doc: &mut Document, blocks: &crate::blocks::BlockLibrary, extent: &Extent, outputs: &Outputs, tiles: &[TilePos]) {
         let palette = match &outputs.colors {
-            Some((colors, set)) => crate::graph_editor::block_palette(doc, blocks, *set, colors),
+            Some((colors, set)) => crate::graph_kit::block_palette(doc, blocks, *set, colors),
             None => Vec::new(),
         };
         if self.levels.is_none() {
-            self.levels = Some(crate::graph_editor::layer_levels(doc, &outputs.layers, false));
+            self.levels = Some(crate::graph_kit::layer_levels(doc, &outputs.layers, false));
         }
         let seed = doc.world.meta.seed as u64;
         let sea = doc.world.meta.sea_level;
         let grass = doc.world.registry.terrain_by_name("Grass").unwrap_or(TerrainId::ROCK);
         let climate = ClimateTable::new(&doc.world.registry);
         let paint = Painting { palette: &palette, climate: Some(&climate) };
-        let write = GroundWrite { tiles, create: true, map: None, sea, blank: grass };
-        {
+        if self.over {
+            // Over the map: the tiles it adds take the graph's ground, the
+            // others keep theirs, what the graph digs and raises going into
+            // levels of their own, the map's surfaces painted.
+            if self.overlay.is_none() {
+                self.overlay = crate::graph_kit::overlay_levels(doc, true);
+            }
+            let (dug, raised) = self.overlay.expect("made above");
+            let own: Vec<String> = (1..=4).map(|k| massif_core::graph::LayerOut::level_name("", k)).collect();
+            let missing: Vec<TilePos> = tiles.iter().copied().filter(|p| !doc.dimension().ground().contains(*p)).collect();
+            if !missing.is_empty() {
+                let edit = &mut doc.history.edit(&mut doc.world, 0);
+                massif_core::graph::apply(edit, extent, outputs, seed, &paint, &GroundWrite { tiles: &missing, create: true, map: None, sea, blank: grass });
+            }
+            for (index, side) in [(dug, massif_core::graph::Overlay::Dug), (raised, massif_core::graph::Overlay::Raised)] {
+                let edit = &mut doc.history.edit(&mut doc.world, index);
+                massif_core::graph::apply_overlay(edit, side, extent, outputs, seed, &paint, &own, tiles);
+            }
+            let painted: Vec<usize> = doc.dimension().levels.iter().enumerate().filter(|(k, l)| *k == 0 || massif_core::graph::reads_level(l, &own)).map(|(k, _)| k).collect();
+            for index in painted {
+                let edit = &mut doc.history.edit(&mut doc.world, index);
+                massif_core::graph::paint_surface(edit, extent, outputs, seed, &paint, tiles);
+            }
+            if outputs.biomes.is_some() {
+                let edit = &mut doc.history.edit(&mut doc.world, 0);
+                massif_core::graph::apply_biomes(edit, extent, outputs, &climate, tiles);
+            }
+        } else {
+            let write = GroundWrite { tiles, create: true, map: None, sea, blank: grass };
             let edit = &mut doc.history.edit(&mut doc.world, 0);
             massif_core::graph::apply(edit, extent, outputs, seed, &paint, &write);
             if self.heights {
@@ -275,7 +308,7 @@ impl Applying {
         let levels = self.levels.clone().unwrap_or_default();
         for (layer, index) in outputs.layers.iter().zip(&levels) {
             let layer_palette = match &layer.colors {
-                Some((colors, set)) => crate::graph_editor::block_palette(doc, blocks, *set, colors),
+                Some((colors, set)) => crate::graph_kit::block_palette(doc, blocks, *set, colors),
                 None => Vec::new(),
             };
             let edit = &mut doc.history.edit(&mut doc.world, *index);
@@ -429,7 +462,7 @@ impl TerrainPanel {
             self.apply_asked = false;
             let graph = self.document();
             let engine = self.engine().cloned()?;
-            match Applying::start(engine, &graph, doc, self.env.clone(), self.revision) {
+            match Applying::start(engine, &graph, doc, self.env.clone(), self.revision, self.apply_over) {
                 Ok(a) => self.applying = Some(a),
                 Err(e) => return Some(Err(e)),
             }

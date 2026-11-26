@@ -189,6 +189,23 @@ pub struct Document {
     shown_structures: Vec<(usize, massif_core::BlockRect)>,
 }
 
+/// What converting a map's classic graph did, in a sentence.
+pub fn classic_notice(a: &massif_terrain::world::Absorbed) -> String {
+    let mut said = trn!("Converted from the classic generator: {n} node, now in the Terrain Generator", "Converted from the classic generator: {n} nodes, now in the Terrain Generator", n = a.nodes);
+    if a.beside {
+        said = format!("{said} {}", tr!("beside the map's own graph, unwired, in the frame “From the classic graph”"));
+    }
+    if !a.approximated.is_empty() {
+        let mut labels = a.approximated.clone();
+        labels.dedup();
+        said = format!("{said}; {}", trn!("{n} approximated ({what}): same settings, a new noise", "{n} approximated ({what}): same settings, new noises", n = a.approximated.len(), what = labels.join(", ")));
+    }
+    if !a.notes.is_empty() {
+        said = format!("{said}; {}", a.notes.join("; "));
+    }
+    said
+}
+
 /// The least time between two readings of the map's own terrain
 /// ([`Document::auto_base`]) while the map changes.
 const AUTO_BASE_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
@@ -237,6 +254,17 @@ impl Document {
         if idle > 0 {
             crate::startup::note(&format!("the map's check: {idle} sculpted chunks holding nothing of their own were let go"));
             self.checked = Some(trn!("{n} sculpted block of 16³ that held nothing of its own was let go: the map's brushes work there again", "{n} sculpted blocks of 16³ that held nothing of their own were let go: the map's brushes work there again", n = idle));
+        }
+        // The classic generator is no more: its graph converted into the
+        // Terrain Generator's (see `massif_terrain::world::absorb_classic`).
+        // Not a change of the map: opened again unsaved, it converts again.
+        if let Some(a) = massif_terrain::world::absorb_classic(&mut self.world) {
+            crate::startup::note(&format!("the map's classic graph converted: {} nodes, {} approximated, {} notes", a.nodes, a.approximated.len(), a.notes.len()));
+            let said = classic_notice(&a);
+            self.checked = Some(match self.checked.take() {
+                Some(c) => format!("{c}. {said}"),
+                None => said,
+            });
         }
         self
     }

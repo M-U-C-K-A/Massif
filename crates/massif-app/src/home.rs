@@ -1099,7 +1099,7 @@ impl Home {
                 for t in SAMPLES {
                     let side = SAMPLE_SIDE as f64;
                     let extent = massif_core::graph::Extent { x0: -side / 2.0, z0: -side / 2.0, size: side, n: 64 };
-                    let image = crate::graph_editor::template_picture(t, &reg, sea, &extent, None).unwrap_or_else(|| egui::ColorImage::filled([1, 1], Color32::GRAY));
+                    let image = crate::graph_kit::template_picture(t, &reg, sea, &extent, None).unwrap_or_else(|| egui::ColorImage::filled([1, 1], Color32::GRAY));
                     if tx.send((t, image)).is_err() {
                         return;
                     }
@@ -1419,7 +1419,7 @@ fn template_preview(ui: &mut Ui, nm: &mut NewMap, t: Template, rect: Rect) {
                 size: side,
                 n: 160,
             };
-            if let Some(image) = crate::jobs::in_loading_pool(|| crate::graph_editor::template_picture(t, &reg, sea, &extent, None)) {
+            if let Some(image) = crate::jobs::in_loading_pool(|| crate::graph_kit::template_picture(t, &reg, sea, &extent, None)) {
                 let _ = tx.send(image);
                 ctx.request_repaint();
             }

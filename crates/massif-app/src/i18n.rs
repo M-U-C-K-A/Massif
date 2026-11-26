@@ -372,14 +372,6 @@ pub fn tr_name(name: &str) -> &str {
     }
 }
 
-/// A name as one language has it, whatever the language shown: for searches
-/// that find a name in any of them. `None` when that language lacks it.
-pub fn tr_name_in(language: Language, name: &str) -> Option<&'static str> {
-    match catalog(language.resolve())?.get(name)? {
-        Entry::One(s) | Entry::Plural { other: s, .. } => Some(s),
-    }
-}
-
 /// The form a count takes in a language, as CLDR names them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Form {

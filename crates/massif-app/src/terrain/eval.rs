@@ -63,7 +63,7 @@ pub struct ViewerLook {
 
 impl Default for ViewerLook {
     fn default() -> Self {
-        Self { three_d: false, surface: Surface::Colour, sun: [315.0, 40.0], yaw: 25.0, pitch: 34.0, distance: 1.0, relief: 1.0, contours: false, overlay: 0.85, size: [640, 400], back: [20, 20, 21], window: [0.0, 0.0, 1.0, 1.0], center: [0.5, 0.5], span: 1.0, sky: false, resolution: 0 }
+        Self { three_d: true, surface: Surface::Colour, sun: [315.0, 40.0], yaw: 25.0, pitch: 34.0, distance: 1.0, relief: 1.0, contours: false, overlay: 0.85, size: [640, 400], back: [20, 20, 21], window: [0.0, 0.0, 1.0, 1.0], center: [0.5, 0.5], span: 1.0, sky: true, resolution: 0 }
     }
 }
 
@@ -468,7 +468,19 @@ fn picture(engine: &Engine, c: &Compiled, what: &Shown, samples: u32, look: Opti
     if let Some(l) = look.filter(|l| l.three_d) {
         let kind = if shown_kind.is_raster() { kind } else { shown_kind };
         let exaggeration = shade::auto_exaggeration(&heights, sea) * l.relief;
-        let data = relief_3d(&heights, colors.as_ref(), ov, surface, sea, c.space.size as f32, exaggeration);
+        // The map's whole result: its rivers and lakes, and its layers of
+        // rock over the ground, as the map will have them.
+        let mut extra = Extra::default();
+        if whole_map && !field {
+            extra.water = c.output("water").map(eval).transpose()?;
+            for k in 1..=crate::terrain_view::MAX_SLABS + 2 {
+                let out = |part: &str| c.output(&format!("level.{k}.{part}"));
+                if let (Some(top), Some(bottom)) = (out("top"), out("bottom")) {
+                    extra.layers.push((eval(top)?, eval(bottom)?, out("color").map(eval).transpose()?));
+                }
+            }
+        }
+        let data = relief_3d(&heights, colors.as_ref(), ov, surface, sea, c.space.size as f32, exaggeration, &extra);
         return Ok(Some(([0, 0], Vec::new(), range, Some(kind), Some(Arc::new(data)))));
     }
     let (size, shade_look) = match look {
@@ -496,7 +508,62 @@ fn picture(engine: &Engine, c: &Compiled, what: &Shown, samples: u32, look: Opti
 /// The relief as the 3D view draws it: heights in blocks, sRGB colours
 /// (clay, the height's tints or the colours given, the mask laid over),
 /// openness to the sky for `exaggeration`.
-fn relief_3d(heights: &Grid, colors: Option<&Grid>, overlay: Option<Overlay>, surface: Surface, sea: f32, side: f32, exaggeration: f32) -> crate::terrain_view::ViewData {
+/// What the 3D view shows of the map's whole result besides its relief:
+/// the level of its water, and its layers of rock (top, bottom, colours).
+#[derive(Default)]
+struct Extra {
+    water: Option<Grid>,
+    layers: Vec<(Grid, Grid, Option<Grid>)>,
+}
+
+/// sRGB, 0 to 255, of a linear value.
+fn srgb8(v: f32) -> u8 {
+    let v = v.clamp(0.0, 1.0);
+    ((if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 }) * 255.0 + 0.5) as u8
+}
+
+/// Layers of rock as the 3D view takes them: the first ones each a slab,
+/// the others laid into the last where it has no rock.
+fn slabs_of(layers: &[(Grid, Grid, Option<Grid>)], n: usize) -> Vec<crate::terrain_view::Slab> {
+    let mut slabs: Vec<crate::terrain_view::Slab> = Vec::new();
+    for (top, bottom, colors) in layers {
+        let w = top.rect.w as usize;
+        if (top.rect.w as usize) < n || (top.rect.h as usize) < n || bottom.rect.w != top.rect.w {
+            continue;
+        }
+        let shape: Vec<[f32; 2]> = (0..n * n)
+            .map(|i| {
+                let k = (i / n) * w + i % n;
+                let (t, b) = (top.data[k], bottom.data[k]);
+                if t - b > 0.5 { [t, b] } else { [t, t] }
+            })
+            .collect();
+        let paint: Vec<[u8; 4]> = (0..n * n)
+            .map(|i| match colors {
+                Some(c) if c.rect.w == top.rect.w => {
+                    let k = (i / n) * w + i % n;
+                    [srgb8(c.plane(0)[k]), srgb8(c.plane(1.min(c.planes - 1))[k]), srgb8(c.plane(2.min(c.planes - 1))[k]), 255]
+                }
+                _ => [150, 143, 132, 255],
+            })
+            .collect();
+        if slabs.len() < crate::terrain_view::MAX_SLABS {
+            slabs.push(crate::terrain_view::Slab { top_bottom: shape, colors: paint });
+        } else if let Some(last) = slabs.last_mut() {
+            for i in 0..n * n {
+                let [t, b] = last.top_bottom[i];
+                if t - b <= 0.5 && shape[i][0] - shape[i][1] > 0.5 {
+                    last.top_bottom[i] = shape[i];
+                    last.colors[i] = paint[i];
+                }
+            }
+        }
+    }
+    slabs
+}
+
+#[allow(clippy::too_many_arguments)]
+fn relief_3d(heights: &Grid, colors: Option<&Grid>, overlay: Option<Overlay>, surface: Surface, sea: f32, side: f32, exaggeration: f32, extra: &Extra) -> crate::terrain_view::ViewData {
     let (w, h) = (heights.rect.w as usize, heights.rect.h as usize);
     let n = w.min(h);
     let at = |x: usize, z: usize| heights.data[z * w + x];
@@ -551,8 +618,14 @@ fn relief_3d(heights: &Grid, colors: Option<&Grid>, overlay: Option<Overlay>, su
         heights: hs,
         size: side,
         exaggeration,
-        slabs: Vec::new(),
-        water: Vec::new(),
+        slabs: slabs_of(&extra.layers, n),
+        // Water where it lies over the ground (far under it elsewhere).
+        water: extra
+            .water
+            .as_ref()
+            .filter(|g| g.rect.w == heights.rect.w)
+            .map(|g| (0..n * n).map(|i| { let k = (i / n) * w + i % n; if g.data[k] > heights.data[k] + 0.01 { g.data[k] } else { -1.0e4 } }).collect())
+            .unwrap_or_default(),
     }
 }
 

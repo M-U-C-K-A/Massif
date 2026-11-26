@@ -5441,7 +5441,7 @@ pub fn human(bytes: u64) -> String {
 
 /// The page of an empty area: what it can show, as the menu of an area's
 /// header offers it, centred. `shown` are the editors on screen.
-pub fn empty_area(ui: &mut Ui, shown: &HashSet<EditorKind>, developer: bool, classic: bool) -> Option<EditorKind> {
+pub fn empty_area(ui: &mut Ui, shown: &HashSet<EditorKind>, developer: bool) -> Option<EditorKind> {
     let columns = crate::picker::columns_for(ui.available_width() - 24.0);
     let width = crate::picker::width(columns);
     ui.add_space((ui.available_height() * 0.16).max(12.0));
@@ -5452,7 +5452,7 @@ pub fn empty_area(ui: &mut Ui, shown: &HashSet<EditorKind>, developer: bool, cla
     let margin = ((ui.available_width() - width) / 2.0).max(0.0);
     ui.horizontal_top(|ui| {
         ui.add_space(margin);
-        ui.vertical(|ui| crate::picker::page(ui, None, shown, developer, classic, columns)).inner
+        ui.vertical(|ui| crate::picker::page(ui, None, shown, developer, columns)).inner
     })
     .inner
 }
