@@ -1,5 +1,7 @@
 Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, with a node-based terrain generator in the spirit of Gaea, written in Rust.
 
+## New in 1.2.3
+
 ## New in 1.2.2
 
 **Erosion, rebuilt: real valleys in a fraction of a second**

@@ -2139,7 +2139,7 @@ checksum = "dae608c151f68243f2b000364e1f7b186d9c29845f7d2d85bd31b9ad77ad552b"
 
 [[package]]
 name = "massif-anvil"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "fastanvil",
  "fastnbt",
@@ -2158,7 +2158,7 @@ dependencies = [
 
 [[package]]
 name = "massif-app"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "bytemuck",
  "color_quant",
@@ -2207,7 +2207,7 @@ dependencies = [
 
 [[package]]
 name = "massif-assets"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "flate2",
  "image",
@@ -2219,7 +2219,7 @@ dependencies = [
 
 [[package]]
 name = "massif-cli"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "image",
  "massif-anvil",
@@ -2236,7 +2236,7 @@ dependencies = [
 
 [[package]]
 name = "massif-core"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "blake3",
  "flate2",
@@ -2255,7 +2255,7 @@ dependencies = [
 
 [[package]]
 name = "massif-format"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "crc32c",
  "massif-core",
@@ -2268,7 +2268,7 @@ dependencies = [
 
 [[package]]
 name = "massif-legacy"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "fastnbt",
  "flate2",
@@ -2285,7 +2285,7 @@ dependencies = [
 
 [[package]]
 name = "massif-objects"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "fastnbt",
  "flate2",
@@ -2295,7 +2295,7 @@ dependencies = [
 
 [[package]]
 name = "massif-render"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "bytemuck",
  "fastnbt",
@@ -2317,7 +2317,7 @@ dependencies = [
 
 [[package]]
 name = "massif-script"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "fastnbt",
  "image",
@@ -2337,7 +2337,7 @@ dependencies = [
 
 [[package]]
 name = "massif-structures"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "fastanvil",
  "fastnbt",
@@ -2353,7 +2353,7 @@ dependencies = [
 
 [[package]]
 name = "massif-terrain"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "bytemuck",
  "image",
@@ -2371,7 +2371,7 @@ dependencies = [
 
 [[package]]
 name = "massif-thumbnails"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "image",
  "massif-core",
