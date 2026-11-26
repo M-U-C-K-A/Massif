@@ -229,6 +229,35 @@ impl Selection {
         Some(BlockRect::new(lo.x * TILE_SIZE, lo.z * TILE_SIZE, (hi.x + 1) * TILE_SIZE, (hi.z + 1) * TILE_SIZE))
     }
 
+    /// The smallest rectangle of the columns it sets a value in (see
+    /// [`lets`]), rather than of its tiles.
+    pub fn column_bounds(&self) -> Option<BlockRect> {
+        let mut out: Option<BlockRect> = None;
+        let mut add = |r: BlockRect| {
+            out = Some(out.map_or(r, |o| BlockRect::new(o.x0.min(r.x0), o.z0.min(r.z0), o.x1.max(r.x1), o.z1.max(r.z1))));
+        };
+        for (pos, cells) in &self.tiles {
+            let (ox, oz) = pos.origin();
+            match cells {
+                Cells::Full => add(pos.rect()),
+                Cells::Part(w) => {
+                    let (mut x0, mut z0, mut x1, mut z1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+                    for z in 0..TILE_SIZE {
+                        for x in 0..TILE_SIZE {
+                            if lets(w[local_index(ox + x, oz + z)], ox + x, oz + z) {
+                                (x0, z0, x1, z1) = (x0.min(x), z0.min(z), x1.max(x + 1), z1.max(z + 1));
+                            }
+                        }
+                    }
+                    if x0 < x1 {
+                        add(BlockRect::new(ox + x0, oz + z0, ox + x1, oz + z1));
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// How many columns it holds, those of the edge counted by their weight.
     pub fn area(&self) -> f64 {
         self.tiles

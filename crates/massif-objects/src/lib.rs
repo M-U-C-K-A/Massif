@@ -13,6 +13,7 @@
 //! entities are not kept.
 
 pub mod legacy;
+pub mod write;
 
 use fastnbt::Value;
 use massif_core::objects::ObjectDef;

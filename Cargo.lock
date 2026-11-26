@@ -2149,6 +2149,7 @@ dependencies = [
  "massif-core",
  "massif-format",
  "massif-legacy",
+ "massif-objects",
  "massif-structures",
  "rayon",
  "serde_json",

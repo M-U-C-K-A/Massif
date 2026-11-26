@@ -7,6 +7,7 @@
 
 pub mod chunk;
 pub mod export;
+pub mod extract;
 pub mod level_dat;
 pub mod nbt;
 pub mod region;

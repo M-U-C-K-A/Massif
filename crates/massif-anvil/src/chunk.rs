@@ -781,6 +781,35 @@ impl<'a> ExportContext<'a> {
         ((self.max_y - self.min_y) / 16) as usize
     }
 
+    /// Leave the structures out: their blocks, block entities and
+    /// entities are not laid.
+    pub fn drop_structures(&mut self) {
+        self.structures.clear();
+    }
+
+    /// The block entities of the structures whose place is in `rect`,
+    /// within the heights written: each its NBT as a file holds it (with its
+    /// `id`) and its place, the later structure's where two meet.
+    pub fn block_entities_in(&self, rect: BlockRect) -> Vec<(&[u8], [i32; 3])> {
+        let mut out: Vec<(&[u8], [i32; 3])> = Vec::new();
+        for (s, _, _) in self.structures.iter().filter(|(s, _, _)| !s.columns().intersect(&rect).is_empty()) {
+            for be in &s.block_entities {
+                let [x, y, z] = be.pos;
+                if rect.x0 <= x && x < rect.x1 && rect.z0 <= z && z < rect.z1 && y >= self.min_y && y < self.max_y {
+                    out.retain(|(_, p)| *p != be.pos);
+                    out.push((&be.nbt, be.pos));
+                }
+            }
+        }
+        out
+    }
+
+    /// The identifier of biome `id`.
+    pub fn biome_name(&self, id: u16) -> &str {
+        self.biomes.get(id as usize).map_or("minecraft:plains", String::as_str)
+    }
+
+
     pub fn materializer(&self) -> &Materializer<'a> {
         &self.mat
     }
@@ -1109,6 +1138,18 @@ impl Scratch {
             biome_columns: vec![BiomeColumn::default(); 16],
             ores: Vec::new(),
         }
+    }
+
+    /// The blocks of the chunk [`chunk_blocks`] built last, as it gave
+    /// them.
+    pub fn chunk(&self) -> &[u16] {
+        &self.blocks[..self.dirty]
+    }
+
+    /// The biomes of the chunk built last: of each 4 × 4 cell of its
+    /// columns, `(z / 4) * 4 + x / 4`.
+    pub fn chunk_biomes(&self) -> &[BiomeColumn] {
+        &self.biome_columns
     }
 
     /// Draw the veins of the chunks of tile `tile`, whose levels are

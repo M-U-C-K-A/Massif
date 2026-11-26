@@ -2633,3 +2633,79 @@ fn seam_world_for_the_game() {
     massif_format::save(&world.snapshot(), Path::new(&out)).unwrap();
     eprintln!("columns across the border, as x,z: {}", (1..127).step_by(5).map(|x| format!("{},{} {},{}", ox + x, pos.origin().1 + 63, ox + x, pos.origin().1 + 64)).collect::<Vec<_>>().join(" "));
 }
+
+/// A part of the map taken out as a schematic holds, block for block, what
+/// the world's export writes in those columns, oaks across two tiles and
+/// their water included; the columns the selection leaves out are air;
+/// written and read back, it holds the same blocks.
+#[test]
+fn selections_are_extracted_as_the_export_writes_them() {
+    use massif_anvil::extract::{Bottom, ExtractOptions, extract};
+    use massif_core::coords::BlockRect;
+    use massif_core::selection::{Selection, Shape, lets};
+    let mut w = generate(&GenParams { tiles_x: 4, tiles_z: 2, landform: Landform::Hills, seed: 7, ..GenParams::default() });
+    let k = w.registry.objects.len() as u32;
+    w.registry.objects.push(little_oak());
+    let mut layer = ObjectLayerDef::new("Oaks", &[k], &w.registry);
+    (layer.spacing, layer.density, layer.soil_only) = (12, 1.0, false);
+    let n = w.registry.add_object_layer(layer);
+    let mut h = History::default();
+    h.begin("oaks", 0);
+    {
+        let mut e = h.edit(&mut w, 0);
+        ops::set_height(&mut e, &hard(40.0), 128.0, -40.0, 90.0, Surface::Top);
+        ops::paint_objects(&mut e, &hard(30.0), 128.0, -40.0, n, 1);
+    }
+    h.commit();
+    let snapshot = w.snapshot();
+    let target = Target::release("1.21.11").unwrap();
+    let dir = temp_dir("extract");
+    export(&snapshot, &dir, &ExportOptions { target: target.clone(), ..ExportOptions::default() }, &Progress::default()).unwrap();
+    let mut r = Reader::new(&dir);
+
+    let rect = BlockRect::new(100, -75, 160, -5);
+    let selection = Selection::shape(&Shape::Ellipse(rect));
+    let options = ExtractOptions { dimension: 0, target, mod_blocks: Default::default(), families: Default::default(), bottom: Bottom::BelowGround(6), objects: true, structures: true, biomes: true };
+    let t = std::time::Instant::now();
+    let got = extract(&snapshot, &selection, &options, &Progress::default()).unwrap();
+    eprintln!("extracted {:?} in {:?}", got.volume.size, t.elapsed());
+    let v = &got.volume;
+    let [sw, sh, sl] = v.size.map(|s| s as usize);
+    assert!((56..=60).contains(&sw) && (66..=70).contains(&sl), "{sw} × {sl}");
+    let rect = BlockRect::new(got.corner[0], got.corner[2], got.corner[0] + sw as i32, got.corner[2] + sl as i32);
+    assert_eq!(got.corner[1], got.lowest_ground - 6);
+    let trees: usize = got.objects.iter().map(|o| o.count).sum();
+    assert!(trees >= 4 && got.objects.iter().all(|o| o.layer == "Oaks" && o.object == "Little oak"), "{:?}", got.objects);
+    let mut seen = 0;
+    for z in 0..sl {
+        for x in 0..sw {
+            let (wx, wz) = (rect.x0 + x as i32, rect.z0 + z as i32);
+            let inside = lets(selection.get(wx, wz), wx, wz);
+            for y in 0..sh {
+                let state = &v.palette[v.blocks[x + z * sw + y * sw * sl] as usize];
+                if !inside {
+                    assert_eq!(state, "minecraft:air", "({wx}, {wz}) is not selected");
+                    continue;
+                }
+                let wy = got.corner[1] + y as i32;
+                let want = r.state(wx, wy, wz);
+                assert!(same_state(state, &want), "({wx}, {wy}, {wz}): the schematic holds {state}, the export {want}");
+                seen += 1;
+            }
+            // Above the box, nothing.
+            if inside {
+                assert_eq!(r.block(wx, got.corner[1] + sh as i32, wz), "minecraft:air");
+            }
+        }
+    }
+    assert!(seen > 2000 * sh);
+    // Its leaves reach the top of the box.
+    assert!(v.palette.iter().any(|s| s.starts_with("minecraft:oak_leaves")));
+    for format in [massif_objects::write::Format::Sponge3, massif_objects::write::Format::Sponge2, massif_objects::write::Format::Litematic] {
+        let bytes = massif_objects::write::write(v, format).unwrap();
+        let back = massif_objects::read_bytes("x", &bytes).unwrap();
+        assert_eq!(back.object.count(), v.count(), "{format:?}");
+        assert_eq!(back.object.size.map(|s| s as usize), [sw, sh, sl], "{format:?}");
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
