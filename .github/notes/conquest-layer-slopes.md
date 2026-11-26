@@ -1,3 +1,0 @@
-**Smooth ground covers of WorldPainter follow slopes**
-
-A custom ground cover set Smooth in WorldPainter (Conquest Reforged's grass layers, a Forest Floor mixing layers and small stones) used to come out of the export as whole blocks, a full step at every block on a slope, wherever it was not made the ground's own. It is now laid as WorldPainter lays it: as thick as it is over the ground's precise height, each block of layers in the mix ending in that height's eighths and the other blocks whole, the ground under it left whole, whether the cover lies alone or under other covers. Maps imported before keep their covers whole: import the world again to get it.

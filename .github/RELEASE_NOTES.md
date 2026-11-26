@@ -2,6 +2,38 @@ Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, 
 
 ## New in 1.2.1
 
+**The Generator Viewer's 3D looks like the Graph Viewport**
+
+In 3D, the Terrain Generator's viewer now draws the generator's output with the same renderer as the classic Graph Viewport: a sky with soft light, clouds, the sea at the world's sea level, the sides of the terrain, and a camera you turn, move and zoom freely. Its bar at the foot opens the render settings (sun, clouds, haze, exposure), turns clouds and the sea on, frames the relief and saves the view as an image. Clay or colours, the dark background or the sky, the relief and the resolution keep working as before, and Shift + drag still turns the sun.
+
+**A shorter Terrain panel list.** The panel chooser's Terrain section now lists the Terrain Generator's four panels alone: Generator Graph, Generator Viewer, Node Library and Node Properties. The classic graph's panels (Classic graph, Graph Viewport, Classic properties, Render Settings) move to a Classic generator section of their own, offered only for a map made with the classic graph or while one of them is open.
+
+**Annotation layers paint in their own colour, and placeholders import as annotations.** The Annotations brush painted every colour of the map's own (the annotation layers, as WorldPainter's custom ones, imported or made in Massif) in black, the last of WorldPainter's fifteen colours; it now paints each in its own colour, as curves already did. And a WorldPainter layer set not to be exported, a placeholder marking where something goes, now imports as an annotation layer of its name, marked where it was painted, rather than as the plants or blocks it holds.
+
+**Villages: walls round their houses, and a selected village no longer slows the app**
+
+A village's walls (fences, hedges, palisade, ramparts…) now run round the buildings it actually has, a few blocks out from them with rounded corners and a gate wherever a road leaves, instead of a ring round its area that left houses outside and crossed empty land; they follow the village when it is moved, resized, of another theme or density, or when one of its buildings is moved with the Building tool. A village selected with the Structures tool no longer brings the app down to a few frames a second: the line saying how its land suits it was read again from the whole map on every frame, and is now read once each time the map changes.
+
+**Smooth ground covers of WorldPainter follow slopes**
+
+A custom ground cover set Smooth in WorldPainter (Conquest Reforged's grass layers, a Forest Floor mixing layers and small stones) used to come out of the export as whole blocks, a full step at every block on a slope, wherever it was not made the ground's own. It is now laid as WorldPainter lays it: as thick as it is over the ground's precise height, each block of layers in the mix ending in that height's eighths and the other blocks whole, the ground under it left whole, whether the cover lies alone or under other covers. Maps imported before keep their covers whole: import the world again to get it.
+
+**A guide rewritten area by area.** The guide now has a page for each part of Massif, in the order you meet them: getting started (install, a first map, the samples), the window and its panel chooser, the map view, every tool, painting, layers, annotations and annotation layers, water, levels, caves, structures and villages with the Building tool, the 3D views, True Colour, mods and resource packs, importing, every option of the export dialog, working together, scripting and the command line. The Terrain graphs guide opens on the Terrain Generator's four panels, composites, the Map Output, Live and Apply and MassifScript, the classic graph of older maps after it, and the Lua scripting guide gains worked examples. The in-app help names the panels and workspaces as they are in 1.2.1.
+
+**Resource packs over mods' blocks.** A resource pack now goes over every mod's own look in True Colour, the Blocks panel and the 3D views, as in the game, whatever the order its chip and the mods' were added in: a pack that retextures or recolours a mod's blocks (ArdaCraft's pack over Conquest Reforged's grasses and leaves) shows its textures, models and OptiFine colour maps rather than the mod's. Packs still read in their chips' order among themselves, the last one winning, which makes it easy to try a pack across a whole map.
+
+**Annotation layers overlap, and sort into palettes, as in WorldPainter.** WorldPainter's fifteen annotation colours still take each other's place on a block, but each annotation layer (a named colour of the map's own, as WorldPainter's custom annotation layers) is now a layer of its own: several mark the same blocks, over the colours and over each other, so they work as masks for biomes, tree sizes, flow lines or the land's colours. The brush and curves paint the one picked over what is there and the right button rubs out that one alone; the map and the 3D view draw each in its colour and opacity, the Info panel lists every one on the block, and a filter's Only on finds each wherever it is. A WorldPainter map brings its custom annotation layers and its layers set not to be exported in this way, overlaps kept, each in the palette it was sorted into ("Colours", "Placeholders"), and the Layers panel shows them in their palettes with the other layers: the palette's eye and solo show and hide them too, and their menu moves them to another palette, finds them or shows them alone.
+
+**Solo in the Terrain panel works as WorldPainter's.** The Terrain panel's **Solo** now shows only the ground: every ground cover, object and annotation layer is hidden on the map and in 3D, and they come back as they were when it ends. What Solo did before, fading every terrain but the one in hand to see where it is painted, is now **Isolate this terrain**, beside it.
+
+**No more lines of land across the water of a real place**
+
+The relief of a real place no longer draws thin straight lines of land or shallow water across its sea and lakes, nor rows of dots on the open water. The elevation tiles give the water's surface in rectangles of their sources, each flat at a slightly different height, and where two of them met, the strip read between them came out a hair above the water. That strip is now water at the level of the water beside it, so the sea stays sea all the way across.
+
+**WorldPainter custom terrains keep their mix, and Only on asks for everything listed**
+
+A WorldPainter custom terrain imports as one terrain that lays its blocks as WorldPainter does: a noise mix block by block, a blob mix in patches of about the blobs' size, and a layered mix by height in the world (repeating and sloping as it was set), where it used to become a plain mix of its blocks whatever its mode, so a terrain of layers showed every block everywhere. A brush's **Only on** now works as WorldPainter's: with a layer and a terrain listed (meadow fescue and dirt), it paints only where that layer lies on that terrain, rather than wherever either is; two terrains, two biomes or two covers, which cannot share a column, still mean either.
+
 ## New in 1.2.0
 
 **The Terrain Generator: a new terrain generator, with composite nodes you can open (experimental)**

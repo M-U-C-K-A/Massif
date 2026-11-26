@@ -1,3 +1,0 @@
-**The Generator Viewer's 3D looks like the Graph Viewport**
-
-In 3D, the Terrain Generator's viewer now draws the generator's output with the same renderer as the classic Graph Viewport: a sky with soft light, clouds, the sea at the world's sea level, the sides of the terrain, and a camera you turn, move and zoom freely. Its bar at the foot opens the render settings (sun, clouds, haze, exposure), turns clouds and the sea on, frames the relief and saves the view as an image. Clay or colours, the dark background or the sky, the relief and the resolution keep working as before, and Shift + drag still turns the sun.

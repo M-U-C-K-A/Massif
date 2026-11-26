@@ -1,1 +1,0 @@
-**Solo in the Terrain panel works as WorldPainter's.** The Terrain panel's **Solo** now shows only the ground: every ground cover and object layer is hidden on the map and in 3D, and they come back as they were when it ends. What Solo did before, fading every terrain but the one in hand to see where it is painted, is now **Isolate this terrain**, beside it.
