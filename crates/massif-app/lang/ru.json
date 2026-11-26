@@ -3960,7 +3960,7 @@
   "many": "Экспорт {n} объектов в .schem…",
   "other": "Экспорт {n} объектов в .schem…"
  },
- "{n} schematic written in {place}": {
+ "{n} schematics written in {place}": {
   "one": "{n} схема записана в {place}",
   "few": "{n} схемы записаны в {place}",
   "many": "{n} схем записано в {place}",

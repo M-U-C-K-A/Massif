@@ -3997,7 +3997,7 @@
   "one": "{n} Objekt als .schem exportieren…",
   "other": "{n} Objekte als .schem exportieren…"
  },
- "{n} schematic written in {place}": {
+ "{n} schematics written in {place}": {
   "one": "{n} Schematic in {place} geschrieben",
   "other": "{n} Schematics in {place} geschrieben"
  }

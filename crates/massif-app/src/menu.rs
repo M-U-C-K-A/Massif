@@ -600,6 +600,7 @@ mod tests {
                 "Share Image…",
                 "Export Height Map…",
                 "Export Region…",
+                "Export Selection as Schematic…",
                 "Export to Minecraft…",
                 "Run Script…",
                 "Import Pack…",

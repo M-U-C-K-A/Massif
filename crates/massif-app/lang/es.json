@@ -3994,7 +3994,7 @@
   "one": "Exportar {n} objeto como .schem…",
   "other": "Exportar {n} objetos como .schem…"
  },
- "{n} schematic written in {place}": {
+ "{n} schematics written in {place}": {
   "one": "{n} schematic escrito en {place}",
   "other": "{n} schematics escritos en {place}"
  }
