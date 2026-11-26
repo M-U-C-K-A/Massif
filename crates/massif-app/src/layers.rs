@@ -918,7 +918,7 @@ fn row(ui: &mut Ui, e: &Entry, state: &mut LayersUi, names: &[String], actions: 
     // shown on the row pointed at would change it, and a drag from the
     // rows under that one would be lost.
     let (_, rect) = ui.allocate_space(size);
-    let response = ui.interact(rect, egui::Id::new(("layer row", e.kind as u8, e.id)), Sense::click_and_drag());
+    let response = ui.interact(rect, egui::Id::unique(("layer row", e.kind as u8, e.id)), Sense::click_and_drag());
     // Dragged, to a palette or out of one.
     if response.drag_started() {
         egui::DragAndDrop::set_payload(ui.ctx(), Dragged(e.kind, e.id, e.under));
