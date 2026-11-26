@@ -153,7 +153,12 @@ pub fn write(volume: &Volume, format: Format) -> Result<Vec<u8>, WriteError> {
         Format::Sponge2 => sponge(volume, 2),
         Format::Litematic => litematic(volume),
     };
-    let raw = fastnbt::to_bytes(&root).map_err(|e| WriteError::Nbt(e.to_string()))?;
+    let mut raw = fastnbt::to_bytes(&root).map_err(|e| WriteError::Nbt(e.to_string()))?;
+    // Version 2's root compound is named `Schematic`: WorldEdit tells the
+    // versions apart by it (fastnbt leaves the root unnamed).
+    if format == Format::Sponge2 && raw.starts_with(&[10, 0, 0]) {
+        raw.splice(1..3, [0u8, 9].into_iter().chain(*b"Schematic"));
+    }
     let mut gz = flate2::write::GzEncoder::new(Vec::with_capacity(raw.len() / 8), flate2::Compression::default());
     gz.write_all(&raw)?;
     Ok(gz.finish()?)
@@ -490,7 +495,10 @@ mod tests {
         assert!(data.contains_key("CustomName") && !data.contains_key("id"));
         let Some(Value::Compound(biomes)) = s.get("Biomes") else { panic!() };
         assert!(matches!(biomes.get("Data"), Some(Value::ByteArray(d)) if d.len() == 60));
-        // Sponge 2: flat, its palette's size given.
+        // Sponge 2: flat, its root named, its palette's size given.
+        let mut raw = Vec::new();
+        std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(&write(&v, Format::Sponge2).unwrap()[..]), &mut raw).unwrap();
+        assert!(raw.starts_with(b"\x0a\x00\x09Schematic"));
         let r = root(Format::Sponge2);
         assert_eq!(r.get("Version"), Some(&Value::Int(2)));
         assert!(matches!(r.get("PaletteMax"), Some(Value::Int(n)) if *n as usize == 19));
@@ -519,6 +527,67 @@ mod tests {
         let back = crate::read_bytes("b", &write(&v, Format::Sponge3).unwrap()).unwrap();
         assert_eq!(back.object.count(), 2);
         assert_eq!(back.object.name, "Bush");
+    }
+
+    /// With MASSIF_SCHEM_OUT, the sample written in each format, and the
+    /// state of each of its blocks, for tools/schem_check.py to paste in
+    /// the game with WorldEdit and compare.
+    #[test]
+    fn sample_files_for_the_game() {
+        let Some(dir) = std::env::var_os("MASSIF_SCHEM_OUT").map(std::path::PathBuf::from) else { return };
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut v = sample();
+        v.data_version = 4671;
+        std::fs::write(dir.join("massif-v3.schem"), write(&v, Format::Sponge3).unwrap()).unwrap();
+        std::fs::write(dir.join("massif-v2.schem"), write(&v, Format::Sponge2).unwrap()).unwrap();
+        std::fs::write(dir.join("massif.litematic"), write(&v, Format::Litematic).unwrap()).unwrap();
+        let [w, h, l] = v.size.map(|s| s as usize);
+        let mut blocks = Vec::new();
+        for y in 0..h {
+            for z in 0..l {
+                for x in 0..w {
+                    blocks.push(format!("[{x},{y},{z},\"{}\"]", state_at(&v, x, y, z)));
+                }
+            }
+        }
+        let chest = v.block_entities[0].pos;
+        std::fs::write(dir.join("massif.json"), format!("{{\"origin\":[{},{},{}],\"chest\":[{},{},{}],\"blocks\":[{}]}}", v.origin[0], v.origin[1], v.origin[2], chest[0], chest[1], chest[2], blocks.join(","))).unwrap();
+    }
+
+    /// With MASSIF_SCHEM_BACK, the sample as WorldEdit wrote it back after
+    /// reading what Massif wrote (see tools/schem_check.py): the same
+    /// blocks, the chest's name kept.
+    #[test]
+    fn worldedit_reads_the_sample_back() {
+        let Some(dir) = std::env::var_os("MASSIF_SCHEM_BACK").map(std::path::PathBuf::from) else { return };
+        let v = sample();
+        let mut checked = 0;
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let bytes = std::fs::read(&path).unwrap();
+            let back = crate::read_bytes("we", &bytes).unwrap();
+            let o = &back.object;
+            assert_eq!(o.size.map(u32::from), v.size, "{path:?}");
+            for y in 0..4 {
+                for z in 0..3 {
+                    for x in 0..5 {
+                        let want = state_at(&v, x, y, z);
+                        let got = &o.palette[o.at(x, y, z) as usize];
+                        assert_eq!(got, if massif_core::objects::is_nothing(want) { "minecraft:air" } else { want }, "{path:?} at {x} {y} {z}");
+                    }
+                }
+            }
+            let Value::Compound(root) = crate::parse_nbt(&bytes).unwrap() else { panic!() };
+            let s = match root.get("Schematic") {
+                Some(Value::Compound(s)) => s.clone(),
+                _ => root,
+            };
+            let text = format!("{s:?}");
+            assert!(text.contains("Loot") && text.contains("minecraft:chest"), "{path:?}: the chest's name is lost");
+            eprintln!("{path:?}: {} blocks as written", o.count());
+            checked += 1;
+        }
+        assert!(checked >= 2);
     }
 
     #[test]

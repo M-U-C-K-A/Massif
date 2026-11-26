@@ -88,7 +88,17 @@ impl GrowForm {
             if ui.button(tr!("Cancel")).clicked() {
                 choice = Choice::Close;
             }
+            if ui.button(theme::with_icon(Icon::FileBox, &trn!("Export {n} as .schem…", "Export {n} as .schem…", n = n))).on_hover_text(tr!("Each as a Sponge schematic of its own, its anchor the origin: to paste with WorldEdit or bring into another map")).clicked() {
+                let (trees, _) = trees(&self.params, self.preset.name(), n);
+                let refs: Vec<&ObjectDef> = trees.iter().collect();
+                if let Some(said) = crate::object_list::export_schematics(&refs) {
+                    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("grow trees schematics said"), said));
+                }
+            }
         });
+        if let Some(said) = ui.ctx().data(|d| d.get_temp::<String>(egui::Id::unique("grow trees schematics said"))) {
+            ui.label(RichText::new(said).size(11.5).color(pal.weak));
+        }
         choice
     }
 
