@@ -3466,7 +3466,6 @@
  "Covers of layers made the ground's own": "Schichtdecken zum eigenen Boden gemacht",
  "Covers of layers: {meanwhile}, nothing was done": "Schichtdecken: {meanwhile}, nichts wurde getan",
  "Covers of layers made ground": "Schichtdecken zu Boden",
- "Covers of layers made the ground's own: {columns} columns raised and smoothed in {secs:.1} s": "Schichtdecken zum Boden gemacht: {columns} Säulen in {secs:.1} s angehoben und geglättet",
  "Make them the ground's own": "Zum Boden machen",
  "Contour lines: interval, strength, colour": "Höhenlinien: Abstand, Stärke, Farbe",
  "Crisp": "Scharf",
@@ -3779,7 +3778,6 @@
   "one": "{n} Bodendecke besteht aus Schichtblöcken",
   "other": "{n} Bodendecken bestehen aus Schichtblöcken"
  },
- "As Conquest Reforged maps lay them over the land. Made the ground's own, the land rises by their layers, its top is their block, and the export lays the same layers (Smooth terrain): the map, the 3D view, the brushes and the smoothing then know the land's true height. Plants and frost painted over them stay.": "So, wie Conquest-Reforged-Karten sie über das Land legen. Zum Boden gemacht, steigt das Land um ihre Schichten, sein oberster Block ist ihr Block, und der Export legt dieselben Schichten (Geglättetes Gelände): Karte, 3D-Ansicht, Pinsel und Glättung kennen dann die wahre Höhe des Landes. Darüber gemalte Pflanzen und Frost bleiben.",
  "{name} — {blocks} (its other blocks stay a cover)": "{name} — {blocks} (seine anderen Blöcke bleiben eine Bodendecke)",
  "Map colour": "Kartenfarbe",
  "{n} custom biomes, now biomes of the map (exported by their ids):": {
@@ -3953,5 +3951,13 @@
  "Turn it": "Drehen",
  "Turning it…": "Wird gedreht…",
  "{kind} selected: drag it to move it, R turns it, Delete takes it away": "{kind} ausgewählt: ziehen verschiebt es, R dreht es, Entf entfernt es",
- "{n} buildings changed by hand on this map.": "{n} Gebäude auf dieser Karte von Hand geändert."
+ "{n} buildings changed by hand on this map.": "{n} Gebäude auf dieser Karte von Hand geändert.",
+ "Covers of layers made the ground's own: {columns} columns made ground and the map smoothed in {secs:.1} s": "Schichtdecken zu Boden gemacht: {columns} Spalten zu Boden und die Karte geglättet in {secs:.1} s",
+ "As Conquest Reforged maps lay them over the land. Made the ground's own, their block is the top of the land at its own height, and the whole map is smoothed with layers (Smooth terrain), so that ground with a cover and ground without one meet level: the map, the 3D view, the brushes and the smoothing then know the land's true height. Plants and frost painted over them stay.": "Wie Conquest-Reforged-Karten sie auf das Land legen. Zu Boden gemacht, ist ihr Block die Oberseite des Landes auf seiner eigenen Höhe, und die ganze Karte wird mit Schichten geglättet (Gelände glätten), sodass Boden mit und ohne Decke eben aufeinandertreffen: Karte, 3D-Ansicht, Pinsel und Glättung kennen dann die wahre Höhe des Landes. Darauf gemalte Pflanzen und Frost bleiben.",
+ "Import “{file}”": "„{file}“ importieren",
+ "A WorldPainter world. The mods it is made of are read with it: their blocks' colours, their families of layers and slabs.": "Eine WorldPainter-Welt. Die Mods, aus denen sie besteht, werden mit ihr gelesen: die Farben ihrer Blöcke, ihre Familien von Schichten und Stufen.",
+ "Make covers of layers the ground's own": "Schichtdecken zu Boden machen",
+ "Ground covers of layer blocks (Conquest Reforged's grass layers, a Forest Floor) become the land itself at its own height, and the whole map is smoothed with layers, so that ground with a cover and ground without one meet level.": "Bodendecken aus Schichtblöcken (die Grasschichten von Conquest Reforged, ein Forest Floor) werden zum Land selbst auf seiner eigenen Höhe, und die ganze Karte wird mit Schichten geglättet, sodass Boden mit und ohne Decke eben aufeinandertreffen.",
+ "The top of the land is laid in layers, slabs and stairs on export, following its precise height.": "Die Oberseite des Landes wird beim Export aus Schichten, Stufen und Treppen gelegt, nach seiner genauen Höhe.",
+ "The land is exported in whole blocks, as WorldPainter does.": "Das Land wird in ganzen Blöcken exportiert, wie WorldPainter es tut."
 }

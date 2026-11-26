@@ -747,3 +747,65 @@ fn the_import_report_offers_to_read_the_worlds_mods() {
         assert!(matches!(h.state().dialog, Some(Dialog::ImportReport(..))), "back to the report");
     }
 }
+
+/// Jack's import of a Conquest Reforged world (issue 004): opening a
+/// WorldPainter world first asks for its mods, whether to make its covers
+/// of layers the ground's own and whether to smooth it; imported so, the
+/// map opens with those covers already made ground at the land's own
+/// height and the whole map smoothed, the report offering nothing more.
+#[test]
+fn a_worldpainter_import_makes_its_covers_of_layers_ground() {
+    use egui_kittest::kittest::Queryable;
+    for ppp in densities() {
+        let mut h = app(ppp, Tool::PaintTerrain);
+        let ctx = h.ctx.clone();
+        let path = std::env::temp_dir().join("massif-no-such-map").join("Arda.world");
+        h.state_mut().run(&ctx, Pending::Open(Some(path.clone())));
+        h.run_steps(3);
+        assert!(matches!(&h.state().dialog, Some(Dialog::WpImport(p)) if *p == path), "the options first");
+        assert!(h.state().jobs.is_empty(), "nothing read yet");
+        save(&mut h, "wp-import-options", ppp);
+        h.get_by_label("Import").click_accesskit();
+        h.run_steps(2);
+        assert_eq!(h.state().wp_import, Some(WpImportOptions { ground: true, smooth: true }));
+        // The file is not there: what its import would bring instead.
+        while !h.state().jobs.is_empty() {
+            h.step();
+        }
+        h.state_mut().wp_import = Some(WpImportOptions { ground: true, smooth: false });
+        let mut world = generate(&GenParams { tiles_x: 2, tiles_z: 2, landform: Landform::Hills, seed: 3, ..GenParams::default() });
+        let mut c = massif_core::registry::CoverDef::new("Grass Layer", [60, 120, 40], &[("conquest:grass_block_layer[layers=8]", 1)], 1.0);
+        (c.soil_only, c.height, c.smooth) = (false, [1, 1], true);
+        let cover = world.registry.add_cover(c);
+        let positions: Vec<massif_core::TilePos> = world.dims[0].ground().positions().collect();
+        let mut tops = Vec::new();
+        for pos in &positions {
+            let tile = world.dims[0].ground_mut().tile_mut(*pos).unwrap();
+            for i in 0..massif_core::TILE_AREA / 2 {
+                tile.cover.set(i, cover);
+            }
+            tops.push(tile.top.get(0));
+        }
+        let report = massif_legacy::ImportReport { name: "Arda".into(), ground_covers: vec![cover], ..Default::default() };
+        let outcome = jobs::Outcome::Imported { world, report: Box::new(report), source: path.clone() };
+        h.state_mut().jobs.push(Job::ready(&ctx, jobs::JobKind::Import, outcome));
+        let started = std::time::Instant::now();
+        while started.elapsed().as_secs() < 120 {
+            h.step();
+            if h.state().jobs.is_empty() && h.state().ground_after_import.is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        h.run_steps(3);
+        let app = h.state();
+        assert!(matches!(&app.dialog, Some(Dialog::ImportReport(_, _, layers)) if layers.is_empty()), "the report offers nothing more");
+        assert!(app.doc.world.registry.covers[cover as usize - 1].removed, "the cover made ground");
+        assert!(app.doc.world.meta.smooth.on, "smoothed with the covers made ground");
+        for (pos, top) in positions.iter().zip(&tops) {
+            let t = app.doc.dimension().ground().view(*pos).unwrap();
+            assert_eq!((t.top.get(0), t.cover.get(0)), (*top, 0), "at the land's own height");
+        }
+        assert!(app.doc.history.can_undo(), "one step to undo");
+    }
+}

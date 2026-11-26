@@ -156,6 +156,25 @@ struct Settings {
     graphics_chosen_for: Option<(String, f32)>,
     /// How the views show the annotations and the contour lines.
     overlays: crate::map_view::Overlays,
+    /// What the import of a WorldPainter world does, as last chosen.
+    wp_import: WpImportOptions,
+}
+
+/// The options of a WorldPainter world's import, asked before it is read.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+struct WpImportOptions {
+    /// Make the covers of layer blocks the ground's own once the world is
+    /// read (see `massif_core::surface_layers`).
+    ground: bool,
+    /// Smooth terrain on for the map imported (always, with `ground`).
+    smooth: bool,
+}
+
+impl Default for WpImportOptions {
+    fn default() -> Self {
+        WpImportOptions { ground: true, smooth: true }
+    }
 }
 
 fn yes() -> bool {
@@ -230,6 +249,7 @@ impl Default for Settings {
             graphics_chosen_for: None,
             keys: crate::keymap::Saved::default(),
             overlays: Default::default(),
+            wp_import: WpImportOptions::default(),
         }
     }
 }
@@ -442,6 +462,9 @@ enum Dialog {
     /// The report of an import, its picture, and the ground covers of
     /// layer blocks it brought, each ticked to become the ground's own.
     ImportReport(Box<massif_legacy::ImportReport>, Option<egui::TextureHandle>, Vec<(massif_core::surface_layers::SurfaceCover, bool)>),
+    /// A WorldPainter world about to be imported: the mods it uses, its
+    /// covers of layers made ground, Smooth terrain.
+    WpImport(PathBuf),
     /// Edit ▸ Covers of Layers to Ground…: the map's ground covers of layer
     /// blocks, each ticked to become the ground's own.
     LayerCovers(Vec<(massif_core::surface_layers::SurfaceCover, bool)>),
@@ -595,6 +618,12 @@ pub struct MassifApp {
     active_map: Option<AreaId>,
     jobs: Vec<Job>,
     dialog: Option<Dialog>,
+    /// The options of the WorldPainter import under way, used once it is
+    /// read.
+    wp_import: Option<WpImportOptions>,
+    /// The generation of a map just imported whose covers of layers are to
+    /// be made the ground's own once the mods are read.
+    ground_after_import: Option<u64>,
     /// Backups of the map while it has changes not saved.
     autosave: crate::autosave::Autosave,
     /// The backups' folder, being opened on a thread of its own at the
@@ -1248,6 +1277,8 @@ impl MassifApp {
             active_map: None,
             jobs: Vec::new(),
             dialog: None,
+            wp_import: None,
+            ground_after_import: None,
             autosave: crate::autosave::Autosave::off(),
             autosave_opening: None,
             offer_recovery: false,
@@ -3437,7 +3468,13 @@ impl MassifApp {
                         .pick_file()
                 });
                 if let Some(path) = path {
-                    self.jobs.push(Job::open(ctx, path));
+                    // A WorldPainter world: the mods it uses and what to
+                    // make of its covers of layers, first.
+                    if jobs::is_worldpainter(&path) {
+                        self.dialog = Some(Dialog::WpImport(path));
+                    } else {
+                        self.jobs.push(Job::open(ctx, path));
+                    }
                 }
             }
             Pending::FromHeightmap(map, how) => {
@@ -3751,6 +3788,22 @@ impl MassifApp {
     }
 
     fn poll_jobs(&mut self, ctx: &egui::Context) {
+        // A WorldPainter world just imported whose covers of layers become
+        // the ground's own: once the mods chosen are read, so that their
+        // blocks are known.
+        if let Some(generation) = self.ground_after_import
+            && !self.blocks.is_loading()
+            && !self.doc.history.is_recording()
+        {
+            self.ground_after_import = None;
+            if generation == self.doc.generation {
+                let chosen: Vec<massif_core::surface_layers::SurfaceCover> = self.layer_covers(None).into_iter().map(|l| l.0).collect();
+                if !chosen.is_empty() {
+                    let snapshot = self.doc.world.snapshot();
+                    self.jobs.push(Job::surface_layers(ctx, snapshot, self.doc.dim, chosen, self.doc.revision).on(self.doc.generation));
+                }
+            }
+        }
         // A stroke under way: what the tasks bring waits until it ends, so
         // that their tiles, worked out before it, do not close its step
         // nor write over what it does.
@@ -3867,9 +3920,14 @@ impl MassifApp {
                     self.task_done(ctx, Cue::Error, tr!("Something failed"), &message, secs);
                     self.say(ctx, message, true, None);
                 }
-                Outcome::Imported { world, report, source } => {
+                Outcome::Imported { mut world, report, source } => {
+                    let options = self.wp_import.take().filter(|_| jobs::is_worldpainter(&source));
+                    if options.is_some_and(|o| o.smooth || o.ground) {
+                        world.meta.smooth.on = true;
+                    }
                     self.next_generation += 1;
                     self.doc = Document::new(world, None, self.next_generation);
+                    self.ground_after_import = options.filter(|o| o.ground).map(|_| self.next_generation);
                     self.rename = None;
                     self.home = None;
                     self.has_map = true;
@@ -3885,7 +3943,9 @@ impl MassifApp {
                         let color = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
                         Some(ctx.load_texture("import thumbnail", color, egui::TextureOptions::LINEAR))
                     });
-                    let layers = self.layer_covers(Some(&report.ground_covers));
+                    // Covers of layers made ground as the import asked: not
+                    // offered again in the report.
+                    let layers = if self.ground_after_import.is_some() { Vec::new() } else { self.layer_covers(Some(&report.ground_covers)) };
                     self.dialog = Some(Dialog::ImportReport(report, thumbnail, layers));
                 }
                 Outcome::SurfaceLayers { grounded, revision, dim } => {
@@ -3899,7 +3959,7 @@ impl MassifApp {
                         self.view3d.invalidate_all();
                         self.sculpt3d.invalidate_all();
                         self.extra3d.iter_mut().for_each(View3d::invalidate_all);
-                        let msg = tr!("Covers of layers made the ground's own: {columns} columns raised and smoothed in {secs:.1} s", columns, secs);
+                        let msg = tr!("Covers of layers made the ground's own: {columns} columns made ground and the map smoothed in {secs:.1} s", columns, secs);
                         self.task_done(ctx, Cue::Ready, tr!("Done"), &msg, secs);
                         self.say(ctx, msg, false, None);
                     }
@@ -7277,6 +7337,62 @@ impl MassifApp {
                     }
                 }
             }
+            Dialog::WpImport(path) => {
+                let mut import = false;
+                let mut options = self.settings.wp_import;
+                let response = modal(ctx, "wp import").show(ctx, |ui| {
+                    ui.set_width(520.0);
+                    let pal = Palette::of(ui);
+                    ui.label(RichText::new(tr!("Import “{file}”", file = jobs::display_name(&path))).bold().size(16.0));
+                    ui.label(RichText::new(tr!("A WorldPainter world. The mods it is made of are read with it: their blocks' colours, their families of layers and slabs.")).size(11.5).color(pal.weak));
+                    ui.add_space(8.0);
+                    crate::widgets::well(ui, |ui| {
+                        ui.add_space(8.0);
+                        panels::game_and_mods(ui, &mut self.blocks, &mut self.settings.minecraft_jar, &mut self.settings.mod_jars);
+                        ui.add_space(8.0);
+                    });
+                    ui.add_space(8.0);
+                    crate::widgets::well(ui, |ui| {
+                        crate::widgets::row(ui, tr!("Make covers of layers the ground's own"), |ui| {
+                            crate::widgets::switch(ui, &mut options.ground);
+                        });
+                        crate::widgets::row(ui, tr!("Smooth terrain"), |ui| {
+                            let mut on = options.smooth || options.ground;
+                            if ui.add_enabled_ui(!options.ground, |ui| crate::widgets::switch(ui, &mut on)).inner.changed() {
+                                options.smooth = on;
+                            }
+                        });
+                    });
+                    ui.add_space(4.0);
+                    let hint = if options.ground {
+                        tr!("Ground covers of layer blocks (Conquest Reforged's grass layers, a Forest Floor) become the land itself at its own height, and the whole map is smoothed with layers, so that ground with a cover and ground without one meet level.")
+                    } else if options.smooth {
+                        tr!("The top of the land is laid in layers, slabs and stairs on export, following its precise height.")
+                    } else {
+                        tr!("The land is exported in whole blocks, as WorldPainter does.")
+                    };
+                    ui.add(egui::Label::new(RichText::new(hint).size(11.5).color(pal.weak)).wrap());
+                    ui.add_space(10.0);
+                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                        if ui.add(theme::primary_button(ui, tr!("Import"))).clicked() {
+                            import = true;
+                        }
+                        if ui.button(tr!("Cancel")).clicked() {
+                            keep = false;
+                        }
+                    });
+                });
+                self.settings.wp_import = options;
+                if response.should_close() {
+                    keep = false;
+                }
+                if import {
+                    self.wp_import = Some(options);
+                    self.jobs.push(Job::open(ctx, path));
+                } else if keep && self.dialog.is_none() {
+                    self.dialog = Some(Dialog::WpImport(path));
+                }
+            }
             Dialog::LayerCovers(mut layers) => {
                 let mut ground = false;
                 let response = modal(ctx, "layer covers").show(ctx, |ui| {
@@ -7993,7 +8109,7 @@ fn layer_covers_ui(ui: &mut Ui, layers: &mut [(massif_core::surface_layers::Surf
     crate::widgets::well(ui, |ui| {
         ui.add_space(8.0);
         ui.label(RichText::new(trn!("{n} ground cover is made of layer blocks", "{n} ground covers are made of layer blocks", n = layers.len())).strong());
-        ui.label(RichText::new(tr!("As Conquest Reforged maps lay them over the land. Made the ground's own, the land rises by their layers, its top is their block, and the export lays the same layers (Smooth terrain): the map, the 3D view, the brushes and the smoothing then know the land's true height. Plants and frost painted over them stay.")).size(11.5).color(pal.weak));
+        ui.label(RichText::new(tr!("As Conquest Reforged maps lay them over the land. Made the ground's own, their block is the top of the land at its own height, and the whole map is smoothed with layers (Smooth terrain), so that ground with a cover and ground without one meet level: the map, the 3D view, the brushes and the smoothing then know the land's true height. Plants and frost painted over them stay.")).size(11.5).color(pal.weak));
         ui.add_space(4.0);
         for (c, on) in layers.iter_mut() {
             let blocks = c.blocks().join(", ");

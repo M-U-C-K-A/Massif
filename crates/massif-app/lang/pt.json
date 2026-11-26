@@ -3463,7 +3463,6 @@
  "Covers of layers made the ground's own": "Coberturas de camadas tornadas o próprio solo",
  "Covers of layers: {meanwhile}, nothing was done": "Coberturas de camadas: {meanwhile}, nada foi feito",
  "Covers of layers made ground": "Coberturas de camadas em solo",
- "Covers of layers made the ground's own: {columns} columns raised and smoothed in {secs:.1} s": "Coberturas de camadas tornadas solo: {columns} colunas elevadas e suavizadas em {secs:.1} s",
  "Make them the ground's own": "Torná-las o solo",
  "Contour lines: interval, strength, colour": "Curvas de nível: intervalo, intensidade, cor",
  "Crisp": "Nítidas",
@@ -3776,7 +3775,6 @@
   "one": "{n} cobertura é feita de blocos de camadas",
   "other": "{n} coberturas são feitas de blocos de camadas"
  },
- "As Conquest Reforged maps lay them over the land. Made the ground's own, the land rises by their layers, its top is their block, and the export lays the same layers (Smooth terrain): the map, the 3D view, the brushes and the smoothing then know the land's true height. Plants and frost painted over them stay.": "Como os mapas do Conquest Reforged as colocam sobre o terreno. Transformadas em solo, o terreno sobe com as suas camadas, o bloco do topo é o delas e a exportação coloca as mesmas camadas (Terreno suavizado): o mapa, a vista 3D, os pincéis e a suavização passam a conhecer a altura real do terreno. As plantas e a geada pintadas por cima ficam.",
  "{name} — {blocks} (its other blocks stay a cover)": "{name} — {blocks} (os outros blocos continuam uma cobertura)",
  "Map colour": "Cor no mapa",
  "{n} custom biomes, now biomes of the map (exported by their ids):": {
@@ -3950,5 +3948,13 @@
  "Turn it": "Rodá-lo",
  "Turning it…": "A rodar…",
  "{kind} selected: drag it to move it, R turns it, Delete takes it away": "{kind} selecionado: arraste para o mover, R roda-o, Delete retira-o",
- "{n} buildings changed by hand on this map.": "{n} edifícios alterados à mão neste mapa."
+ "{n} buildings changed by hand on this map.": "{n} edifícios alterados à mão neste mapa.",
+ "Covers of layers made the ground's own: {columns} columns made ground and the map smoothed in {secs:.1} s": "Coberturas de camadas transformadas em solo: {columns} colunas feitas solo e o mapa suavizado em {secs:.1} s",
+ "As Conquest Reforged maps lay them over the land. Made the ground's own, their block is the top of the land at its own height, and the whole map is smoothed with layers (Smooth terrain), so that ground with a cover and ground without one meet level: the map, the 3D view, the brushes and the smoothing then know the land's true height. Plants and frost painted over them stay.": "Como os mapas de Conquest Reforged as colocam sobre o terreno. Transformadas em solo, o seu bloco é o topo do terreno à sua própria altura, e todo o mapa é suavizado com camadas (Suavizar terreno), de modo que o solo com cobertura e o solo sem ela se encontram nivelados: o mapa, a vista 3D, os pincéis e a suavização conhecem então a altura real do terreno. As plantas e a geada pintadas por cima ficam.",
+ "Import “{file}”": "Importar «{file}»",
+ "A WorldPainter world. The mods it is made of are read with it: their blocks' colours, their families of layers and slabs.": "Um mundo do WorldPainter. Os mods de que é feito são lidos com ele: as cores dos seus blocos, as suas famílias de camadas e lajes.",
+ "Make covers of layers the ground's own": "Transformar as coberturas de camadas em solo",
+ "Ground covers of layer blocks (Conquest Reforged's grass layers, a Forest Floor) become the land itself at its own height, and the whole map is smoothed with layers, so that ground with a cover and ground without one meet level.": "As coberturas de blocos de camadas (as camadas de relva de Conquest Reforged, um Forest Floor) tornam-se o próprio terreno à sua própria altura, e todo o mapa é suavizado com camadas, de modo que o solo com cobertura e o solo sem ela se encontram nivelados.",
+ "The top of the land is laid in layers, slabs and stairs on export, following its precise height.": "O topo do terreno é colocado em camadas, lajes e escadas na exportação, seguindo a sua altura precisa.",
+ "The land is exported in whole blocks, as WorldPainter does.": "O terreno é exportado em blocos inteiros, como faz o WorldPainter."
 }

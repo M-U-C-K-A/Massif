@@ -322,6 +322,12 @@ impl Job {
         })
     }
 
+    /// A job whose outcome is ready: what a test makes a task bring.
+    #[cfg(test)]
+    pub fn ready(ctx: &egui::Context, kind: JobKind, outcome: Outcome) -> Job {
+        Job::spawn(kind, String::new(), None, ctx, move || outcome)
+    }
+
     /// Convert a WorldPainter `.world` file.
     pub fn import(ctx: &egui::Context, path: PathBuf) -> Job {
         let progress = Arc::new(ImportProgress::default());

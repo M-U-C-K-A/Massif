@@ -3627,7 +3627,6 @@
  "Covers of layers made the ground's own": "Покровы из слоёв стали самой землёй",
  "Covers of layers: {meanwhile}, nothing was done": "Покровы из слоёв: {meanwhile}, ничего не сделано",
  "Covers of layers made ground": "Покровы из слоёв в землю",
- "Covers of layers made the ground's own: {columns} columns raised and smoothed in {secs:.1} s": "Покровы из слоёв стали землёй: {columns} столбцов поднято и сглажено за {secs:.1} с",
  "Make them the ground's own": "Сделать землёй",
  "Contour lines: interval, strength, colour": "Горизонтали: шаг, яркость, цвет",
  "Crisp": "Чёткие",
@@ -3799,7 +3798,6 @@
   "many": "{n} покровов состоят из блоков-слоёв",
   "other": "{n} покрова состоят из блоков-слоёв"
  },
- "As Conquest Reforged maps lay them over the land. Made the ground's own, the land rises by their layers, its top is their block, and the export lays the same layers (Smooth terrain): the map, the 3D view, the brushes and the smoothing then know the land's true height. Plants and frost painted over them stay.": "Так их кладут на землю карты Conquest Reforged. Ставшие грунтом, они поднимают землю на свои слои, её верхний блок — их блок, а экспорт кладёт те же слои (Сглаженный рельеф): карта, 3D-вид, кисти и сглаживание знают настоящую высоту земли. Растения и иней, нарисованные поверх, остаются.",
  "{name} — {blocks} (its other blocks stay a cover)": "{name} — {blocks} (остальные его блоки остаются покровом)",
  "Map colour": "Цвет на карте",
  "{n} custom biomes, now biomes of the map (exported by their ids):": {
@@ -3907,5 +3905,13 @@
  "Read them from {instance}": "Прочитать из {instance}",
  "The map's terrains: what each part of the ground is made of. Click one to paint it; the blocks of your game and mods are below, each a terrain once you paint with it.": "Местности карты: из чего сделана каждая часть земли. Щёлкните местность, чтобы рисовать ею; блоки вашей игры и модов — ниже, каждый становится местностью, когда вы им рисуете.",
  "Where the blocks you paint with come from: the version of Minecraft installed here, and the mods, modpack instances and resource packs read with it. Those that make ground are offered in the Terrain panel, every block in the Blocks panel.": "Откуда берутся блоки, которыми вы рисуете: установленная здесь версия Minecraft и моды, сборки модпаков и ресурспаки, прочитанные с ней. Блоки, из которых получается земля, — в панели «Местность», все блоки — в панели «Блоки».",
- "Set up the game and mods…": "Настроить игру и моды…"
+ "Set up the game and mods…": "Настроить игру и моды…",
+ "Covers of layers made the ground's own: {columns} columns made ground and the map smoothed in {secs:.1} s": "Покровы из слоёв стали грунтом: {columns} столбцов стали грунтом, карта сглажена за {secs:.1} с",
+ "As Conquest Reforged maps lay them over the land. Made the ground's own, their block is the top of the land at its own height, and the whole map is smoothed with layers (Smooth terrain), so that ground with a cover and ground without one meet level: the map, the 3D view, the brushes and the smoothing then know the land's true height. Plants and frost painted over them stay.": "Так их кладут на землю карты Conquest Reforged. Ставшие грунтом, их блок становится верхом земли на её собственной высоте, а вся карта сглаживается слоями (Сглаживание рельефа), так что земля с покровом и без него сходится вровень: карта, 3D-вид, кисти и сглаживание знают настоящую высоту земли. Растения и иней, нарисованные поверх, остаются.",
+ "Import “{file}”": "Импорт «{file}»",
+ "A WorldPainter world. The mods it is made of are read with it: their blocks' colours, their families of layers and slabs.": "Мир WorldPainter. Моды, из которых он сделан, читаются вместе с ним: цвета их блоков, их семейства слоёв и плит.",
+ "Make covers of layers the ground's own": "Сделать покровы из слоёв грунтом",
+ "Ground covers of layer blocks (Conquest Reforged's grass layers, a Forest Floor) become the land itself at its own height, and the whole map is smoothed with layers, so that ground with a cover and ground without one meet level.": "Покровы из блоков-слоёв (слои травы Conquest Reforged, Forest Floor) становятся самой землёй на её собственной высоте, а вся карта сглаживается слоями, так что земля с покровом и без него сходится вровень.",
+ "The top of the land is laid in layers, slabs and stairs on export, following its precise height.": "Верх земли при экспорте кладётся слоями, плитами и ступенями по её точной высоте.",
+ "The land is exported in whole blocks, as WorldPainter does.": "Земля экспортируется целыми блоками, как в WorldPainter."
 }

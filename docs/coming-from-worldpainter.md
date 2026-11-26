@@ -91,9 +91,15 @@ becomes a layer of the Layers panel, painted where it was:
   layer over the block takes the place of all of that slot's.
 - **Covers of layers** — ground covers whose blocks are the layers of a
   block (`conquest:grass_block_layer[layers=3]`, snow layers, covers mixing
-  several of them) — are listed first in the import report, ticked,
-  whether or not Conquest Reforged is read in the Blocks panel (the map's
-  own blocks are known). **Make them the ground's own** turns those
+  several of them) — are made the ground's own as the world is imported.
+  Before the world is read, the import asks for the mods it uses (the
+  game's version, the mods' jars or a modpack's instance, remembered for
+  next time), with **Make covers of layers the ground's own** (on) and
+  **Smooth terrain** (on, and always with the first): the map opens with
+  its covers of layers already made ground. Left off, they are listed first
+  in the import report, ticked, whether or not Conquest Reforged is read in
+  the Blocks panel (the map's own blocks are known). **Make them the
+  ground's own** turns those
   you keep ticked into the land itself: the cover's layers take the place
   of the top of the land, whatever `layers` its blocks say, the ground
   keeping its precise height, and its top becomes

@@ -3463,7 +3463,6 @@
  "Covers of layers made the ground's own": "Coberturas de capas convertidas en suelo",
  "Covers of layers: {meanwhile}, nothing was done": "Coberturas de capas: {meanwhile}, no se hizo nada",
  "Covers of layers made ground": "Coberturas de capas a suelo",
- "Covers of layers made the ground's own: {columns} columns raised and smoothed in {secs:.1} s": "Coberturas de capas convertidas en suelo: {columns} columnas elevadas y suavizadas en {secs:.1} s",
  "Make them the ground's own": "Convertirlas en suelo",
  "Contour lines: interval, strength, colour": "Curvas de nivel: intervalo, intensidad, color",
  "Crisp": "Nítidos",
@@ -3776,7 +3775,6 @@
   "one": "{n} cobertura está hecha de bloques de capas",
   "other": "{n} coberturas están hechas de bloques de capas"
  },
- "As Conquest Reforged maps lay them over the land. Made the ground's own, the land rises by their layers, its top is their block, and the export lays the same layers (Smooth terrain): the map, the 3D view, the brushes and the smoothing then know the land's true height. Plants and frost painted over them stay.": "Como los mapas de Conquest Reforged las ponen sobre el terreno. Convertidas en suelo, el terreno sube según sus capas, su bloque superior es el suyo y la exportación pone las mismas capas (Terreno suavizado): el mapa, la vista 3D, los pinceles y el suavizado conocen entonces la altura real del terreno. Las plantas y la escarcha pintadas encima se quedan.",
  "{name} — {blocks} (its other blocks stay a cover)": "{name} — {blocks} (sus otros bloques siguen siendo una cobertura)",
  "Map colour": "Color en el mapa",
  "{n} custom biomes, now biomes of the map (exported by their ids):": {
@@ -3950,5 +3948,13 @@
  "Turn it": "Girarlo",
  "Turning it…": "Girándolo…",
  "{kind} selected: drag it to move it, R turns it, Delete takes it away": "{kind} seleccionado: arrástralo para moverlo, R lo gira, Supr lo quita",
- "{n} buildings changed by hand on this map.": "{n} edificios cambiados a mano en este mapa."
+ "{n} buildings changed by hand on this map.": "{n} edificios cambiados a mano en este mapa.",
+ "Covers of layers made the ground's own: {columns} columns made ground and the map smoothed in {secs:.1} s": "Coberturas de capas convertidas en suelo: {columns} columnas hechas suelo y el mapa suavizado en {secs:.1} s",
+ "As Conquest Reforged maps lay them over the land. Made the ground's own, their block is the top of the land at its own height, and the whole map is smoothed with layers (Smooth terrain), so that ground with a cover and ground without one meet level: the map, the 3D view, the brushes and the smoothing then know the land's true height. Plants and frost painted over them stay.": "Como los mapas de Conquest Reforged las colocan sobre el terreno. Convertidas en suelo, su bloque es la parte superior del terreno a su propia altura, y todo el mapa se suaviza con capas (Suavizar terreno), de modo que el suelo con cobertura y el suelo sin ella se encuentran a nivel: el mapa, la vista 3D, los pinceles y el suavizado conocen entonces la altura real del terreno. Las plantas y la escarcha pintadas encima se quedan.",
+ "Import “{file}”": "Importar «{file}»",
+ "A WorldPainter world. The mods it is made of are read with it: their blocks' colours, their families of layers and slabs.": "Un mundo de WorldPainter. Los mods de los que está hecho se leen con él: los colores de sus bloques, sus familias de capas y losas.",
+ "Make covers of layers the ground's own": "Convertir las coberturas de capas en suelo",
+ "Ground covers of layer blocks (Conquest Reforged's grass layers, a Forest Floor) become the land itself at its own height, and the whole map is smoothed with layers, so that ground with a cover and ground without one meet level.": "Las coberturas de bloques de capas (las capas de hierba de Conquest Reforged, un Forest Floor) se convierten en el propio terreno a su propia altura, y todo el mapa se suaviza con capas, de modo que el suelo con cobertura y el suelo sin ella se encuentran a nivel.",
+ "The top of the land is laid in layers, slabs and stairs on export, following its precise height.": "La parte superior del terreno se coloca en capas, losas y escaleras al exportar, siguiendo su altura precisa.",
+ "The land is exported in whole blocks, as WorldPainter does.": "El terreno se exporta en bloques enteros, como hace WorldPainter."
 }

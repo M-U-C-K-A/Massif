@@ -2592,3 +2592,44 @@ fn layer_covers_made_ground_meet_the_bare_ground_level() {
     assert!(seen.len() >= 6, "the slope a ramp of layers: {seen:?}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// For the check in the game itself (`tools/minecraft_check.py`): the map
+/// of [`layer_covers_made_ground_meet_the_bare_ground_level`] in the game's
+/// own blocks, a smooth cover of snow layers on half of a slope of snow
+/// blocks, made ground, written to `MASSIF_SEAM_WORLD`.
+#[test]
+fn seam_world_for_the_game() {
+    let Ok(out) = std::env::var("MASSIF_SEAM_WORLD") else { return };
+    let mut world = generate(&GenParams { tiles_x: 1, tiles_z: 1, landform: Landform::Hills, seed: 3, ..GenParams::default() });
+    world.meta.ores.on = false;
+    let grass = world.registry.terrain_by_name("Grass").unwrap();
+    let mut c = CoverDef::new("Snow Layer", [240, 240, 250], &[("minecraft:snow[layers=8]", 1)], 1.0);
+    (c.soil_only, c.height, c.smooth) = (false, [1, 1], true);
+    let layer = world.registry.add_cover(c);
+    let pos = world.dims[0].ground().positions().next().unwrap();
+    let (ox, _) = pos.origin();
+    let height = |x: i32| 60.2 + 0.23 * (x - ox) as f32;
+    let tile = world.dims[0].ground_mut().tile_mut(pos).unwrap();
+    for i in 0..massif_core::TILE_AREA {
+        tile.top.set(i, height(ox + (i % 128) as i32));
+        tile.fluid.set(i, massif_core::NO_FLUID);
+        tile.terrain.set(i, grass.0);
+        tile.cover.set(i, if i / 128 < 64 { layer } else { 0 });
+        tile.objects.set(i, 0);
+    }
+    let mods = HashMap::new();
+    let target = Target::release("1.20.1").unwrap();
+    let vanilla = |id: &str| id.strip_prefix("minecraft:").is_some_and(|s| target.has_block(s));
+    let known = massif_core::shapes::Known { vanilla: &vanilla, mods: &mods, families: massif_core::block_families::none() };
+    let found: Vec<_> = massif_core::surface_layers::surface_covers(&world.registry, &known).into_iter().filter(|c| c.cover == layer).collect();
+    let g = massif_core::surface_layers::to_ground(&world.dims[0], &world.meta, &world.registry, &found);
+    (world.dims[0], world.meta, world.registry) = (g.dimension, g.meta, g.registry);
+    // The bare half of snow blocks too, so that both lay snow's layers.
+    let snow = (world.registry.terrains.len() - 1) as u16;
+    let tile = world.dims[0].ground_mut().tile_mut(pos).unwrap();
+    for i in 64 * 128..massif_core::TILE_AREA {
+        tile.terrain.set(i, snow);
+    }
+    massif_format::save(&world.snapshot(), Path::new(&out)).unwrap();
+    eprintln!("columns across the border, as x,z: {}", (1..127).step_by(5).map(|x| format!("{},{} {},{}", ox + x, pos.origin().1 + 63, ox + x, pos.origin().1 + 64)).collect::<Vec<_>>().join(" "));
+}
