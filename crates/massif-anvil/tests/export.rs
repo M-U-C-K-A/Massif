@@ -2528,3 +2528,67 @@ fn smooth_covers_follow_the_slope_by_eighths() {
     }
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// Jack's Conquest Reforged map (issue 004): a smooth cover of grass
+/// layers painted on half of a slope, made the ground's own, meets the
+/// ground with no cover level, the whole slope one ramp of eighths with no
+/// seam a block high at the cover's border. The cover's ground keeps its
+/// precise height, and the ground beside it is smoothed with the same
+/// layers.
+#[test]
+fn layer_covers_made_ground_meet_the_bare_ground_level() {
+    let mut world = generate(&GenParams { tiles_x: 1, tiles_z: 1, landform: Landform::Hills, seed: 3, ..GenParams::default() });
+    world.meta.ores.on = false;
+    let grass = world.registry.terrain_by_name("Grass").unwrap();
+    let mut c = CoverDef::new("Grass Layer", [60, 120, 40], &[("conquest:grass_block_layer[layers=8]", 1)], 1.0);
+    (c.soil_only, c.height, c.smooth) = (false, [1, 1], true);
+    let layer = world.registry.add_cover(c);
+    let pos = world.dims[0].ground().positions().next().unwrap();
+    let (ox, oz) = pos.origin();
+    // A gentle slope of 0.23 of a block a column, from 60.2; the cover on
+    // the rows under 64.
+    let height = |x: i32| 60.2 + 0.23 * (x - ox) as f32;
+    let tile = world.dims[0].ground_mut().tile_mut(pos).unwrap();
+    for i in 0..massif_core::TILE_AREA {
+        tile.top.set(i, height(ox + (i % 128) as i32));
+        tile.fluid.set(i, massif_core::NO_FLUID);
+        tile.terrain.set(i, grass.0);
+        tile.cover.set(i, if i / 128 < 64 { layer } else { 0 });
+        tile.objects.set(i, 0);
+    }
+    let mods: HashMap<String, Vec<String>> = [("conquest:grass_block_layer".to_owned(), vec!["layers".to_owned()])].into_iter().collect();
+    let target = Target::release("1.20.1").unwrap();
+    let vanilla = |id: &str| id.strip_prefix("minecraft:").is_some_and(|s| target.has_block(s));
+    let known = massif_core::shapes::Known { vanilla: &vanilla, mods: &mods, families: massif_core::block_families::none() };
+    let found: Vec<_> = massif_core::surface_layers::surface_covers(&world.registry, &known).into_iter().filter(|c| c.cover == layer).collect();
+    assert_eq!(found.len(), 1);
+    let g = massif_core::surface_layers::to_ground(&world.dims[0], &world.meta, &world.registry, &found);
+    (world.dims[0], world.meta, world.registry) = (g.dimension, g.meta, g.registry);
+    let options = ExportOptions { target, mod_blocks: std::sync::Arc::new(mods), ..ExportOptions::default() };
+    let dir = temp_dir("layer-seam");
+    export(&world.snapshot(), &dir, &options, &Progress::default()).unwrap();
+    let mut r = Reader::new(&dir);
+    // The height of the land's surface, in eighths: the top block's top, or
+    // its layers'.
+    let mut surface = |x: i32, z: i32| {
+        let mut y = 120;
+        while r.block(x, y, z) == "minecraft:air" {
+            y -= 1;
+        }
+        let s = r.state(x, y, z);
+        let layers = s.split_once("layers=").map_or(8, |(_, n)| n.chars().take_while(char::is_ascii_digit).collect::<String>().parse::<i32>().unwrap());
+        y * 8 + layers
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    for x in ox + 1..ox + 127 {
+        let want = (height(x) * 8.0).round() as i32;
+        let (covered, bare) = (surface(x, oz + 63), surface(x, oz + 64));
+        assert_eq!(covered, bare, "a seam at {x}: {covered} eighths where the cover was, {bare} beside it");
+        // Within half a block of the land (the foot of a step takes four
+        // layers, as Smooth terrain lays it).
+        assert!((covered - want).abs() <= 4, "at {x}: {covered} eighths, the land {want}");
+        seen.insert(covered % 8);
+    }
+    assert!(seen.len() >= 6, "the slope a ramp of layers: {seen:?}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

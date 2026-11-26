@@ -94,13 +94,16 @@ becomes a layer of the Layers panel, painted where it was:
   several of them) — are listed first in the import report, ticked,
   whether or not Conquest Reforged is read in the Blocks panel (the map's
   own blocks are known). **Make them the ground's own** turns those
-  you keep ticked into the land itself: each column rises as WorldPainter
-  lays the cover — a smooth cover as thick as it is from the land's precise
-  height, by eighths, whatever `layers` its blocks say — and its top becomes
+  you keep ticked into the land itself: the cover's layers take the place
+  of the top of the land, whatever `layers` its blocks say, the ground
+  keeping its precise height, and its top becomes
   the full block they are layers of, as the mods' recipes and names tell it
   (Conquest's slabs by eighths, `*_slab[layers=N]`, count too) (its terrain
-  stays when it already is), and Smooth terrain lays the same layers on
-  export, now from the land's true height, which the map, the 3D view, the
+  stays when it already is). Smooth terrain then lays layers on the whole
+  map, the ground with no cover too, so that ground that had a cover and
+  ground that had none meet level, with no seam a block high where the
+  cover ended (WorldPainter lays the cover over the ground, a block higher
+  than the ground beside it); the map, the 3D view, the
   brushes and the smoothing all follow. It is one step to undo. Layers of
   a block that has no full block of its own (`grass_and_sand_layer`) use
   eight of them as their full block; a mix's other blocks (small stones)

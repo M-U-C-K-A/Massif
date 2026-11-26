@@ -5,10 +5,12 @@
 //! (`conquest:grass_block_layer[layers=3]` over its grass): an eighth of a
 //! block at a time, the land as high as it looks. In Massif that is the
 //! land's own height and Smooth terrain's Layers ([`crate::shapes`]): the
-//! ground raised by the cover's eighths, its top block the full block those
-//! layers are of, and the column smoothed, so that the export lays the same
-//! layers, and the map, the 3D view, the brushes and the smoothing all know
-//! the land's true height. [`surface_covers`] finds the covers that are such
+//! layers in place of the ground's top, its top block the full block those
+//! layers are of, at the ground's precise height, and the whole map
+//! smoothed with layers, so that ground with a cover and ground without
+//! one meet level, as one layered terrain with no seam where a cover was
+//! painted (WorldPainter lays a cover over the ground, a block higher than
+//! the ground beside it). [`surface_covers`] finds the covers that are such
 //! layers; [`to_ground`] turns those chosen into ground.
 
 use crate::coords::TilePos;
@@ -122,12 +124,12 @@ pub struct Grounded {
 }
 
 /// Dimension `dim` of the map with the covers `chosen` turned into ground:
-/// on each column one grows on, the ground raised by its thickness (its
-/// blocks', the last one by its eighths) over its precise height, its
+/// on each column one grows on, the ground at its own precise height, its
 /// terrain one whose top block is the full block (the column's own when it
 /// already is, else one made of that block over the column's terrain, once
-/// for each cover and block), the column smoothed with layers, the cover
-/// gone. The covers are removed from the map's layers. Returned with the
+/// for each cover and block), the cover gone. The whole map is smoothed
+/// with layers, every terrain allowed them, so that the ground with no
+/// cover meets it level. The covers are removed from the map's layers. Returned with the
 /// map's settings and registry as they become, to replace as one step.
 pub fn to_ground(dimension: &Dimension, meta: &WorldMeta, registry: &Registry, chosen: &[SurfaceCover]) -> Grounded {
     let mut reg = registry.clone();
@@ -160,9 +162,8 @@ pub fn to_ground(dimension: &Dimension, meta: &WorldMeta, registry: &Registry, c
             let (x, z) = (ox + (i & 127) as i32, oz + (i >> 7) as i32);
             let Some(def) = reg.cover(cover.cover) else { continue };
             let color = def.color;
-            let thickness = def.height[0].max(1) as f32;
             let Some(growth) = def.growth(x, z, seed) else { continue };
-            let Some(Some((full, eighths))) = cover.plants.get(growth.plant) else { continue };
+            let Some(Some((full, _))) = cover.plants.get(growth.plant) else { continue };
             let base = tile.terrain.get(i);
             let terrain = *terrains.entry((base, full.clone())).or_insert_with(|| {
                 if crate::shapes::top_block(&reg, TerrainId(base)).is_some_and(|b| reg.block(b).name() == full) {
@@ -178,13 +179,10 @@ pub fn to_ground(dimension: &Dimension, meta: &WorldMeta, registry: &Registry, c
                     (reg.terrains.len() - 1) as u16
                 })
             });
-            // The cover lies on the ground, as many blocks thick as it is,
-            // the last one its eighths: WorldPainter's smooth covers from the
-            // ground's precise height (whole layers, the land's eighths), as
-            // the ground now goes by eighths.
-            let h = tile.top.get(i);
-            let thick = thickness - 1.0 + *eighths as f32 / 8.0;
-            tile.top.set(i, ((h + thick) * 8.0).round() / 8.0);
+            // The cover's layers become the top of the land where it is:
+            // the ground keeps its precise height, its top block the full
+            // block, smoothed with layers as the land around it, so that
+            // ground with a cover and ground without one meet level.
             tile.terrain.set(i, terrain);
             if tile.cover.get(i) == cover.cover {
                 let next = tile.stacked.pop_cover(i).unwrap_or(0);
@@ -199,16 +197,23 @@ pub fn to_ground(dimension: &Dimension, meta: &WorldMeta, registry: &Registry, c
     }
     dim.ground_mut().take_dirty();
     dim.ground_mut().freeze();
-    // The terrains used may lay layers: the full blocks' own shapes, with
-    // layers.
-    let used: Vec<u16> = terrains.values().copied().collect();
-    for t in used {
-        let mut shapes = meta.smooth.shapes_of(&reg, TerrainId(t));
-        if !shapes.has(Shape::Layers) {
+    // The whole map is smoothed with layers, the ground with no cover too,
+    // so that the land is one layered terrain with no seam where a cover
+    // ended: every terrain may lay layers (those whose block has none lay
+    // nothing), with the shapes it had when the map was smoothed already.
+    for t in 0..reg.terrains.len() {
+        let name = reg.terrains[t].name.clone();
+        let mut shapes = match meta.smooth.terrains.get(&name) {
+            Some(s) => *s,
+            None if meta.smooth.on => meta.smooth.shapes_of(&reg, TerrainId(t as u16)),
+            None => crate::shapes::ShapeSet::NONE,
+        };
+        if !shapes.has(Shape::Layers) || !meta.smooth.terrains.contains_key(&name) {
             shapes.set(Shape::Layers, true);
-            meta.smooth.terrains.insert(reg.terrain(TerrainId(t)).name.clone(), shapes);
+            meta.smooth.terrains.insert(name, shapes);
         }
     }
+    meta.smooth.on = true;
     // A cover all of layers is gone; one with other plants stays where
     // those grow.
     for c in chosen.iter().filter(|c| c.all_layers()) {
@@ -255,7 +260,7 @@ mod tests {
 
     /// Two covers of grass layers (one over grass, one over dirt) and one of
     /// small stones: the first two are found; turned into ground, their
-    /// columns rise by their eighths and are smoothed with layers, grass
+    /// columns keep their height and the map is smoothed with layers, grass
     /// keeps its terrain, dirt gets a terrain of grass over it, and the
     /// covers are gone; the stones stay a cover.
     #[test]
@@ -288,16 +293,17 @@ mod tests {
         let g = to_ground(&world.dims[0], &world.meta, &world.registry, &found);
         assert_eq!(g.columns, 64 * 128);
         let t = g.dimension.ground().view(pos).unwrap();
-        assert_eq!((t.top.get(0), t.terrain.get(0), t.cover.get(0)), (70.375, grass, 0));
+        assert_eq!((t.top.get(0), t.terrain.get(0), t.cover.get(0)), (70.0, grass, 0), "level with the ground beside it");
         assert_eq!(crate::shapes::decode(t.slabs.get(0)), Some(Some((None, false))), "smoothed");
-        assert_eq!((t.top.get(40 * 128), t.cover.get(40 * 128)), (70.75, 0));
+        assert_eq!((t.top.get(40 * 128), t.cover.get(40 * 128)), (70.0, 0));
         assert_eq!((t.top.get(70 * 128), t.cover.get(70 * 128)), (70.0, stones), "the stones stay");
         assert_eq!(g.registry.terrains.len(), before + 1, "grass over grass needs no terrain, grass over dirt one");
         assert_eq!(t.terrain.get(50 * 128), before as u16);
         let made = &g.registry.terrains[before];
         assert_eq!((made.name.as_str(), g.registry.block(made.strata[0].blocks[0].0).name()), ("Thick grass", "minecraft:grass_block"));
         assert!(g.registry.covers[thin as usize - 1].removed && g.registry.covers[full as usize - 1].removed && !g.registry.covers[stones as usize - 1].removed);
-        assert!(g.meta.smooth.shapes_of(&g.registry, TerrainId(grass)).has(Shape::Layers));
+        assert!(g.meta.smooth.on, "the whole map smoothed");
+        assert!((0..g.registry.terrains.len()).all(|t| g.meta.smooth.shapes_of(&g.registry, TerrainId(t as u16)) == crate::shapes::ShapeSet::of(&[Shape::Layers])), "every terrain with layers, and only layers");
     }
 
     /// A WorldPainter map of Conquest Reforged, the mod not read: its covers
@@ -344,23 +350,24 @@ mod tests {
         let t = g.dimension.ground().view(pos).unwrap();
         let (layered, stones) = (0..64 * 128).partition::<Vec<usize>, _>(|&i| t.cover.get(i) == 0);
         assert!(layered.len() > 2000 && stones.len() > 2000, "{} {}", layered.len(), stones.len());
-        assert!(layered.iter().all(|&i| t.top.get(i) == 70.25) && stones.iter().all(|&i| t.top.get(i) == 70.0 && t.cover.get(i) == mixed));
+        assert!(layered.iter().all(|&i| t.top.get(i) == 70.0) && stones.iter().all(|&i| t.top.get(i) == 70.0 && t.cover.get(i) == mixed));
         let i = 100 * 128;
-        assert_eq!((t.top.get(i), t.cover.get(i), t.stacked.covers_under(i)), (70.5, flowers, vec![]), "the flowers stay on the raised ground");
+        assert_eq!((t.top.get(i), t.cover.get(i), t.stacked.covers_under(i)), (70.0, flowers, vec![]), "the flowers stay on the ground");
         let top = crate::shapes::top_block(&g.registry, TerrainId(t.terrain.get(i))).unwrap();
         assert_eq!(g.registry.block(top).state, "conquest:grass_and_sand_layer[layers=8]");
         assert!(!g.registry.covers[mixed as usize - 1].removed && g.registry.covers[sand as usize - 1].removed);
     }
 
     /// Jack's ArdaCraft covers, as WorldPainter lays them smooth: whole
-    /// layers (the import's `layers=8`), from the ground's precise height,
-    /// as thick as the cover: the ground rises by the cover's thickness from
-    /// its precise height, by eighths, not by a whole block over its top.
+    /// layers (the import's `layers=8`) over the ground's precise height.
+    /// Turned into ground they keep that precise height, by eighths, level
+    /// with the ground with no cover beside them (no seam a block high, as
+    /// there was when the ground rose by the cover's thickness).
     /// A cover of Conquest slabs by eighths (`brown_moss_slab`) is found too,
     /// and a shape the mod's recipes give another name (`limestone_slab` is
     /// stone's) knows its full block by them.
     #[test]
-    fn covers_rise_from_the_precise_height_and_slabs_count() {
+    fn covers_keep_their_precise_height_and_slabs_count() {
         let mut mods = mods();
         mods.insert("conquest:brown_moss".into(), vec![]);
         mods.insert("conquest:brown_moss_slab".into(), vec!["layers".into(), "type".into()]);
@@ -390,7 +397,6 @@ mod tests {
         world.dims[0].ground_mut().insert(pos, tile);
         let g = to_ground(&world.dims[0], &world.meta, &world.registry, &found);
         let t = g.dimension.ground().view(pos).unwrap();
-        // WorldPainter: round((h + 1 − intHeight) × 8) eighths from intHeight + 1.
-        assert_eq!((t.top.get(0), t.top.get(1)), (70.75, 71.25), "a block over the precise height, by eighths");
+        assert_eq!((t.top.get(0), t.top.get(1)), (69.7, 70.3), "the precise height kept");
     }
 }
