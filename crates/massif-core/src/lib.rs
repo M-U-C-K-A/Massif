@@ -72,6 +72,7 @@ pub mod surface_layers;
 pub mod stamps;
 pub mod structures;
 pub mod thumbnail;
+pub mod treegen;
 pub mod treepack;
 pub mod tile;
 pub mod versions;

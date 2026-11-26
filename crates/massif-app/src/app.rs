@@ -476,6 +476,7 @@ enum Dialog {
     Reshape(Box<crate::reshape::ReshapeForm>),
     /// Snowfall over the whole map: its settings and a picture of the snow.
     Snowfall(Box<crate::snowfall_ui::SnowfallForm>),
+    GrowTrees(Box<crate::grow_trees::GrowForm>),
     /// The survival check of the whole map.
     Analysis(Box<crate::analysis::AnalysisView>),
     /// The ores the export lays.
@@ -5790,6 +5791,9 @@ impl MassifApp {
                 }
             }
         }
+        if std::mem::take(&mut self.tools.grow_trees) {
+            self.dialog = Some(Dialog::GrowTrees(Box::new(crate::grow_trees::GrowForm::new())));
+        }
         if let Some(biomes) = self.tools.run_auto.take() {
             let snapshot = self.doc.world.snapshot();
             self.jobs.push(Job::auto(ctx, snapshot, self.doc.dim, self.tools.auto.clone(), biomes, self.doc.revision).on(self.doc.generation));
@@ -6160,6 +6164,29 @@ impl MassifApp {
                 }
                 if keep {
                     self.dialog = Some(Dialog::Snowfall(form));
+                }
+            }
+            Dialog::GrowTrees(mut form) => {
+                use crate::grow_trees::Choice;
+                let mut choice = Choice::Keep;
+                let n = self.tools.object_layer;
+                let layer = n.checked_sub(1).and_then(|k| self.doc.world.registry.object_layers.get(k as usize)).filter(|l| !l.removed).map(|l| l.name.clone());
+                let response = modal(ctx, "grow trees").show(ctx, |ui| {
+                    choice = form.ui(ui, layer.as_deref());
+                });
+                if response.should_close() {
+                    keep = false;
+                }
+                match choice {
+                    Choice::Keep => {}
+                    Choice::Close => keep = false,
+                    Choice::Add(new_layer) => {
+                        keep = false;
+                        crate::grow_trees::add(&form, if new_layer { None } else { Some(n) }, &mut self.doc, &mut self.tools);
+                    }
+                }
+                if keep {
+                    self.dialog = Some(Dialog::GrowTrees(form));
                 }
             }
             Dialog::Analysis(mut view) => {
@@ -8936,6 +8963,9 @@ mod structures_tests;
 #[cfg(test)]
 #[path = "ideas_tests.rs"]
 mod ideas_tests;
+#[cfg(test)]
+#[path = "grow_trees_tests.rs"]
+mod grow_trees_tests;
 #[cfg(test)]
 #[path = "perf_tests.rs"]
 mod perf_tests;

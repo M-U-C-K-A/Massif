@@ -1270,6 +1270,42 @@ deep they go into the ground) and **replace the ground** (otherwise their
 blocks only take the place of air, water and plants). The right button takes
 a layer off; Add objects… reads more files into a layer.
 
+### Growing trees
+
+**Grow trees…**, in the Objects tool's settings and beside Add objects… in
+a layer's, grows trees from a few settings rather than reading them from
+files. Start from a kind (Oak, Spruce, Birch, Cherry, Palm, Willow, Acacia,
+Dead tree, and two giants: Giant sequoia, about a hundred blocks tall, and
+Great oak) and change what makes it:
+
+| Setting | What it does |
+|---|---|
+| Height, Trunk width | The tree's size, up to 128 blocks tall and 9 across; each seed varies it a little |
+| Limbs | How many limbs leave the trunk, in a spiral (in whorls for a cone) |
+| Droop, Reach for the sun | How much branches bend down under their weight, and turn up to the light |
+| Crown | Cone, Round, Umbrella (flat clumps), Weeping (curtains of leaves), Palm (fronds) |
+| Clump size, Fullness | The clumps of leaves at the ends of the twigs; 0 % for a bare tree |
+| Wood, Leaves | The blocks |
+| Survival friendly | Only logs and leaves, the blocks a tree of the game has |
+| More settings | The trunk's flare, how far up it goes, where the limbs start, branch levels (1 to 4), their angle, length and how crooked they grow |
+
+The trunk flares into roots at its foot, smoothed with stairs and slabs;
+thick wood is logs laid along their axis, thinner branches walls (of the
+stone closest to the bark), the thinnest fences (of the planks closest to
+it) that vanish into the leaves, whose clumps leave gaps the wood shows
+through; every leaf is persistent and
+within the game's reach of wood (a palm's fronds reach further). Nothing
+floats: every block holds to the trunk. The picture shows the tree of the
+seed, and those of the next four seeds under it; a click on one takes its
+seed. **Add … trees to a new layer** makes an object layer of as many
+variants as Trees says, each grown from the next seed; **Add to** adds them
+to the layer picked. Bushes and small trees for Tree sizes are grown with
+them, of weight 0, as for the packs' trees. The same settings and seed
+always grow the same tree. A tree too tall to stand under the top of the
+world where it is painted is left out there rather than cut, on the map,
+in the 3D view and in the export alike. Growing a giant of 120 blocks takes
+about 30 ms.
+
 Where each object stands is decided from the world's seed, square by
 square, where the layer is painted on the top of the land: the map draws the
 objects from above with their shadows when zoomed in, the 3D view block by

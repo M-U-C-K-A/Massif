@@ -59,6 +59,7 @@ mod references;
 mod diorama;
 mod reshape;
 mod snowfall_ui;
+mod grow_trees;
 mod reticle;
 mod run_script;
 mod road_draft;

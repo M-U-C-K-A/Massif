@@ -1391,6 +1391,9 @@ fn object_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, block
             import_objects(doc, tools, &files, None, blocks.catalogue.as_deref());
         }
     }
+    if crate::widgets::button(ui, theme::with_icon(Icon::TreeDeciduous, tr!("Grow trees…"))).on_hover_text(tr!("Trees grown from a few settings, in as many variants as you like")).clicked() {
+        tools.grow_trees = true;
+    }
     hint(ui, tr!("Trees, rocks, ruins from .schem, .schematic, .bp, .litematic or .nbt files — or drop them on the window. Every layer of the map: the Layers panel."));
     if let Some(note) = &tools.objects_note {
         ui.label(RichText::new(note).size(11.5).color(if note.contains("Could not") { pal.danger } else { pal.weak }));
@@ -1564,7 +1567,12 @@ pub fn object_layer_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Docum
         crate::object_list::object_list(ui, reg, k);
         let objects = std::mem::take(&mut reg.objects);
         let layer = &mut reg.object_layers[k];
-        add = crate::widgets::button(ui, theme::with_icon(Icon::Plus, tr!("Add objects…"))).on_hover_text(tr!("Read more files into this layer")).clicked();
+        ui.horizontal(|ui| {
+            add = crate::widgets::button(ui, theme::with_icon(Icon::Plus, tr!("Add objects…"))).on_hover_text(tr!("Read more files into this layer")).clicked();
+            if crate::widgets::button(ui, theme::with_icon(Icon::TreeDeciduous, tr!("Grow trees…"))).on_hover_text(tr!("Trees grown from a few settings, added to this layer or a new one")).clicked() {
+                tools.grow_trees = true;
+            }
+        });
         if layer.objects.is_empty() {
             hint(ui, tr!("Nothing stands yet: add objects."));
         }

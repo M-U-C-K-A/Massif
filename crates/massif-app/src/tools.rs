@@ -605,6 +605,9 @@ pub struct ToolState {
     /// when `true`, paint otherwise).
     #[serde(skip)]
     pub run_auto: Option<bool>,
+    /// Asked from a panel: open Grow trees.
+    #[serde(skip)]
+    pub grow_trees: bool,
     /// What the last automatic pass over the whole map changed: whether
     /// it was of biomes, and how many columns.
     #[serde(skip)]
@@ -1276,6 +1279,7 @@ impl Default for ToolState {
             auto: massif_core::auto::AutoRules::default(),
             open_rules: false,
             run_auto: None,
+            grow_trees: false,
             auto_done: None,
             river: RiverSettings::default(),
             river_draft: None,
