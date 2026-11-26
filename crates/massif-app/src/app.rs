@@ -494,6 +494,9 @@ enum Dialog {
     ImportMask(Box<crate::import_mask::MaskForm>),
     /// A part of the map to write as images: where, and what.
     ExportRegion(Box<crate::region_export::RegionForm>),
+    /// The selection to write as a schematic: its settings, its blocks and
+    /// its file as they are built.
+    ExportSchematic(Box<crate::schem_export::SchemForm>),
     /// The relief of a real place: where, at what scale, how high.
     Real(Box<crate::real_terrain::RealForm>),
     /// A save point to make (`None`) or rename (its index): its name.
@@ -605,6 +608,9 @@ pub struct MassifApp {
     /// The export dialog set aside while its Test Export's regions are
     /// picked on the map.
     region_form: Option<ExportForm>,
+    /// The settings of Export Selection as Schematic, from one opening to
+    /// the next.
+    schem: crate::schem_export::Remembered,
     /// Where the filters' eyedropper's choices were last shown.
     pick_shown: Option<((i32, i32), egui::Pos2)>,
     /// Where the Eyedropper tool's choices are shown, by the pointer as it
@@ -1284,6 +1290,7 @@ impl MassifApp {
             pick_shown: None,
             eyedrop_shown: None,
             region_form: None,
+            schem: Default::default(),
             finding: None,
             inspected: None,
             map_center: None,
@@ -3666,6 +3673,38 @@ impl MassifApp {
         self.dialog = Some(Dialog::Share(Box::new(crate::share::ShareForm::new(source, self.wgpu.clone()))));
     }
 
+    /// The version of Minecraft to export for: the one the map's mods are
+    /// made for, else the newest installed here; without one, 1.18.2, which
+    /// every later version opens.
+    fn export_target(&self, versions: &[(massif_anvil::Target, bool)], mods: &[ModUse]) -> massif_anvil::Target {
+        mods.iter()
+            .filter_map(|m| m.minecraft.as_deref())
+            .find_map(|v| versions.iter().find(|(t, _)| t.name == v))
+            .or_else(|| versions.iter().find(|(_, installed)| *installed))
+            .map_or_else(massif_anvil::Target::default, |(t, _)| t.clone())
+    }
+
+    fn open_schematic_dialog(&mut self) {
+        let Some(selection) = self.doc.selection().cloned() else { return };
+        let versions = export_versions();
+        let mods = mod_uses(&self.doc.world.registry, self.blocks.catalogue.as_deref());
+        // Schematics keep block states by name: 1.13 and later.
+        let mut target = self.export_target(&versions, &mods);
+        if target.era() != massif_anvil::Era::Modern {
+            target = massif_anvil::Target::default();
+        }
+        let form = crate::schem_export::SchemForm::new(
+            self.schem,
+            self.doc.world.snapshot(),
+            selection,
+            self.doc.dim,
+            target,
+            crate::blocks::mod_block_ids(self.blocks.catalogue.as_deref()),
+            crate::blocks::block_families(self.blocks.catalogue.as_deref()),
+        );
+        self.dialog = Some(Dialog::ExportSchematic(Box::new(form)));
+    }
+
     fn open_export_dialog(&mut self) {
         let parent = massif_anvil::default_saves_dir()
             .or_else(|| self.doc.path.as_ref().and_then(|p| p.parent().map(PathBuf::from)))
@@ -3675,12 +3714,7 @@ impl MassifApp {
         // one, 1.18.2, which every later version opens.
         let versions = export_versions();
         let mods = mod_uses(&self.doc.world.registry, self.blocks.catalogue.as_deref());
-        let target = mods
-            .iter()
-            .filter_map(|m| m.minecraft.as_deref())
-            .find_map(|v| versions.iter().find(|(t, _)| t.name == v))
-            .or_else(|| versions.iter().find(|(_, installed)| *installed))
-            .map_or_else(massif_anvil::Target::default, |(t, _)| t.clone());
+        let target = self.export_target(&versions, &mods);
         // Into the saves of the modpack the map's mods come from.
         let parent = self
             .blocks
@@ -4571,6 +4605,7 @@ impl MassifApp {
                     self.dialog = Some(Dialog::ExportRegion(Box::new(crate::region_export::RegionForm::new(map, selection))));
                 }
             }
+            Command::ExportSchematic => self.open_schematic_dialog(),
             Command::Export => self.open_export_dialog(),
             // Asked first if the map has changes (see `handle_close`).
             Command::Quit => ctx.send_viewport_cmd(ViewportCommand::Close),
@@ -5718,6 +5753,9 @@ impl MassifApp {
     // ------------------------------------------------------------ dialogs --
 
     fn dialogs(&mut self, ctx: &egui::Context) {
+        if ctx.data_mut(|d| d.remove_temp::<bool>(egui::Id::unique(crate::select::EXPORT_SCHEMATIC))).unwrap_or(false) && self.dialog.is_none() {
+            self.command(ctx, crate::menu::Command::ExportSchematic);
+        }
         // The very first start: "Coming from WorldPainter?", before the tour
         // and before anything else is asked.
         if !self.settings.origin_asked && self.dialog.is_none() && self.pack_dialog.is_none() && self.blocking_job().is_none() && self.sample.is_none() {
@@ -6629,6 +6667,44 @@ impl MassifApp {
                 }
                 if keep {
                     self.dialog = Some(Dialog::ImportMask(form));
+                }
+            }
+            Dialog::ExportSchematic(mut form) => {
+                use crate::schem_export::Choice;
+                let mut choice = Choice::Keep;
+                let blocks = &mut self.blocks;
+                let response = modal(ctx, "export schematic").show(ctx, |ui| {
+                    choice = form.ui(ui, blocks);
+                });
+                if response.should_close() {
+                    keep = false;
+                }
+                self.schem = form.remembered();
+                match choice {
+                    Choice::Keep => {}
+                    Choice::Close => keep = false,
+                    Choice::Save(bytes, ext) => {
+                        let rect = self.doc.selection().and_then(|s| s.column_bounds());
+                        let (x, z) = rect.map_or((0, 0), |r| (r.x0, r.z0));
+                        let name = massif_core::mask::file_safe(&format!("{} {x} {z}", self.doc.world.meta.name));
+                        let filter = if ext == "litematic" { "Litematica" } else { "Sponge schematic" };
+                        if let Some(path) = rfd::FileDialog::new().set_title(tr!("Save the selection as a schematic")).set_file_name(format!("{name}.{ext}")).add_filter(filter, &[ext]).save_file() {
+                            let path = if path.extension().is_some_and(|e| e == ext) { path } else { path.with_extension(ext) };
+                            match massif_core::atomic::write(&path, &bytes, true) {
+                                Ok(()) => {
+                                    keep = false;
+                                    let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                                    self.say(ctx, tr!("Saved {file}", file), false, Some(path.clone()));
+                                }
+                                Err(e) => self.say(ctx, tr!("The schematic could not be saved. {why}.", why = massif_core::atomic::cause(&e, &path)), true, None),
+                            }
+                        }
+                    }
+                }
+                if keep {
+                    self.dialog = Some(Dialog::ExportSchematic(form));
+                } else {
+                    form.stop();
                 }
             }
             Dialog::ExportRegion(mut form) => {
@@ -13360,6 +13436,49 @@ mod tests {
         let share = |h: &egui_kittest::Harness<'static, MassifApp>, x0: i32| (0..64).flat_map(|z| (x0..x0 + 64).map(move |x| (x, z))).filter(|&(x, z)| at(h, x, z).1 == 1).count() as f32 / 4096.0;
         let (west, east) = (share(&h, -500), share(&h, 400));
         assert!(west < 0.08 && east > 0.85, "{west} {east}");
+    }
+
+    /// Export Selection as Schematic builds the selection's blocks in the
+    /// background, counts its materials and makes its file before it is
+    /// saved; the file reads back as the blocks counted (renders with
+    /// MASSIF_SNAPSHOT_DIR, the time of a 256 × 256 selection printed).
+    #[test]
+    fn a_selection_goes_out_as_a_schematic() {
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let ctx = h.ctx.clone();
+        let rect = massif_core::BlockRect::new(-128, -128, 128, 128);
+        {
+            let app = h.state_mut();
+            let sel = massif_core::selection::Selection::shape(&massif_core::selection::Shape::Rect(rect));
+            app.doc.select("Select", Some(sel));
+        }
+        h.state_mut().command(&ctx, Command::ExportSchematic);
+        h.run_steps(2);
+        assert!(matches!(h.state().dialog, Some(Dialog::ExportSchematic(_))));
+        let started = std::time::Instant::now();
+        loop {
+            h.step();
+            if let Some(Dialog::ExportSchematic(form)) = &h.state().dialog
+                && form.ready().is_some()
+            {
+                break;
+            }
+            assert!(started.elapsed().as_secs() < 120, "the schematic was not made in time");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        eprintln!("256 × 256 selection: blocks and file in {:?}", started.elapsed());
+        h.run_steps(3);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("dialog-export-schematic.png")).unwrap();
+        }
+        let Some(Dialog::ExportSchematic(form)) = &h.state().dialog else { unreachable!() };
+        let bytes = form.ready().unwrap();
+        let back = massif_objects::read_bytes("x", &bytes).unwrap();
+        let text = form.as_text().unwrap();
+        assert!(text.lines().count() > 3, "{text}");
+        assert!(back.object.count() > 0);
     }
 
     /// File ▸ Export Region writes a part of the map as a heightmap and

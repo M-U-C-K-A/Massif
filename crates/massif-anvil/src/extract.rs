@@ -268,7 +268,7 @@ pub fn extract(world: &World, selection: &Selection, options: &ExtractOptions, p
         let clip = t.tile.rect().intersect(&rect);
         let cw = clip.width() as usize;
         for (local, &(start, len)) in t.spans.iter().enumerate() {
-            let (x, z) = (clip.x0 as usize + local % cw - rect.x0 as usize, clip.z0 as usize + local / cw - rect.z0 as usize);
+            let (x, z) = ((clip.x0 - rect.x0) as usize + local % cw, (clip.z0 - rect.z0) as usize + local / cw);
             for k in 0..len as usize {
                 let state = t.blocks[start as usize + k];
                 let slot = &mut index[state as usize];

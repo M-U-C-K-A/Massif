@@ -414,6 +414,10 @@ pub(crate) fn thousands(n: u64) -> String {
     out
 }
 
+/// Set in the context's data when Export as Schematic is clicked in Tool
+/// Settings, for the app to open its dialog.
+pub const EXPORT_SCHEMATIC: &str = "export the selection as a schematic";
+
 /// The options of the selection tools, in Tool Settings.
 pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut crate::blocks::BlockLibrary) {
     use crate::panels::{hint, section};
@@ -483,6 +487,9 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: 
         {
             doc.select(tr!("Feather selection"), Some(s.feather(n)));
         }
+    }
+    if any && crate::widgets::button(ui, theme::with_icon(Icon::Box, tr!("Export as Schematic…"))).on_hover_text(tr!("The selected part of the map as a WorldEdit or Litematica schematic, with the materials it holds")).clicked() {
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(EXPORT_SCHEMATIC), true));
     }
 
     section(ui, Icon::ScanLine, tr!("Select by"));

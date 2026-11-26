@@ -212,6 +212,19 @@ pub fn object_list(ui: &mut Ui, reg: &mut Registry, k: usize) -> bool {
     let remove = crate::widgets::button(ui, theme::with_icon(Icon::X, &trn!("Take {n} out of the layer", "Take {n} out of the layer", n = rows.len())))
         .on_hover_text(tr!("Its objects stay in the map's library; they no longer stand with this layer"))
         .clicked();
+    let export = crate::widgets::button(ui, theme::with_icon(Icon::FileBox, &trn!("Export {n} as .schem…", "Export {n} as .schem…", n = rows.len())))
+        .on_hover_text(tr!("Each as a Sponge schematic of its own, its anchor the origin: to paste with WorldEdit or bring into another map"))
+        .clicked();
+    let said = egui::Id::unique(("object schematics said", k));
+    if export {
+        let defs: Vec<&ObjectDef> = rows.iter().filter_map(|&r| reg.object_layers[k].objects.get(r)).filter_map(|o| reg.objects.get(o.0 as usize)).collect();
+        if let Some(text) = export_schematics(&defs) {
+            ui.ctx().data_mut(|d| d.insert_temp(said, text));
+        }
+    }
+    if let Some(text) = ui.ctx().data(|d| d.get_temp::<String>(said)) {
+        ui.add(egui::Label::new(RichText::new(text).size(11.0).color(pal.weak)).wrap());
+    }
     if remove {
         let layer = &mut reg.object_layers[k];
         for &row in rows.iter().rev() {
@@ -223,6 +236,56 @@ pub fn object_list(ui: &mut Ui, reg: &mut Registry, k: usize) -> bool {
         return true;
     }
     changed
+}
+
+/// The data version objects are written with: the newest release of 1.21,
+/// which WorldEdit and Litematica of every later version read.
+const OBJECT_DATA_VERSION: i32 = 4671;
+
+/// The file names of objects, each its own, in a folder: `Oak.schem`,
+/// `Oak 2.schem`…
+fn file_names(defs: &[&ObjectDef]) -> Vec<String> {
+    let mut taken = std::collections::HashSet::new();
+    defs.iter()
+        .map(|d| {
+            let base = massif_core::mask::file_safe(if d.name.trim().is_empty() { "Object" } else { d.name.trim() });
+            let mut name = format!("{base}.schem");
+            let mut n = 2;
+            while !taken.insert(name.to_lowercase()) {
+                name = format!("{base} {n}.schem");
+                n += 1;
+            }
+            name
+        })
+        .collect()
+}
+
+/// Write `defs` as schematics: one to a file asked for, several to a
+/// folder asked for. What was done, to say; `None` when nothing was asked.
+pub fn export_schematics(defs: &[&ObjectDef]) -> Option<String> {
+    let names = file_names(defs);
+    let paths: Vec<std::path::PathBuf> = match defs {
+        [] => return None,
+        [_] => vec![rfd::FileDialog::new().set_title(tr!("Save the object as a schematic")).set_file_name(&names[0]).add_filter("Sponge schematic", &["schem"]).save_file()?],
+        _ => {
+            let dir = rfd::FileDialog::new().set_title(tr!("A folder to write the objects in")).pick_folder()?;
+            names.iter().map(|n| dir.join(n)).collect()
+        }
+    };
+    let mut written = 0;
+    for (def, path) in defs.iter().zip(&paths) {
+        let volume = massif_objects::write::Volume::of_object(def, OBJECT_DATA_VERSION);
+        let bytes = match massif_objects::write::write(&volume, massif_objects::write::Format::Sponge3) {
+            Ok(b) => b,
+            Err(e) => return Some(tr!("{name} could not be written: {e}", name = def.name, e)),
+        };
+        if let Err(e) = massif_core::atomic::write(path, &bytes, true) {
+            return Some(tr!("{name} could not be written. {why}.", name = def.name, why = massif_core::atomic::cause(&e, path)));
+        }
+        written += 1;
+    }
+    let place = paths[0].parent().map(|p| p.display().to_string()).unwrap_or_default();
+    Some(trn!("{n} schematic written in {place}", "{n} schematics written in {place}", n = written, place))
 }
 
 /// The settings of rows `rows` of layer `k`: of one, or of several at

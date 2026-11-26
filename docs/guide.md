@@ -210,7 +210,7 @@ field or in Edit ▸ Ores as before, and ⌘C, ⌘V and ⌘A work in text fields
 The menus hold every command, each item with its shortcut beside it (⌘ on a Mac is Ctrl on Windows and Linux):
 
 - **Massif** (the Mac's app menu; the first menu on Windows and Linux): **About Massif**, **Settings…** (⌘,), **Check for Updates…**, **Full Screen** (F11), **Quit**.
-- **File**: **New World…** (⌘N), **Open…** (⌘O), **Import WorldPainter World…**, **Import Minecraft World…**, **Merge Massif Map…**, **New World from Height Map…**, **New World from a Real Place…**, **Open Recent**; **Save** (⌘S), **Save As…**, **Save Point…**, **World Information…**, **Import Report…** (after importing a WorldPainter world), **Game & mods…**; **Share Image…**, **Export Height Map…**, **Export Region…**, **Export to Minecraft…** (⌘E); **Run Script…**; **Import Pack…**, **Export Pack…**.
+- **File**: **New World…** (⌘N), **Open…** (⌘O), **Import WorldPainter World…**, **Import Minecraft World…**, **Merge Massif Map…**, **New World from Height Map…**, **New World from a Real Place…**, **Open Recent**; **Save** (⌘S), **Save As…**, **Save Point…**, **World Information…**, **Import Report…** (after importing a WorldPainter world), **Game & mods…**; **Share Image…**, **Export Height Map…**, **Export Region…**, **Export Selection as Schematic…**, **Export to Minecraft…** (⌘E); **Run Script…**; **Import Pack…**, **Export Pack…**.
 - **Edit**: **Undo** and **Redo** (naming the step), **Select All**, **Deselect**, **Invert Selection**; **Auto biome: whole map**, **Auto paint: whole map**, **Automatic rules…**, **Smooth terrain…**, **Covers of Layers to Ground…**; **Whole map ▸** (Erosion, Thermal erosion, Rivers, Lakes, Smooth, Sharpen, Terraces, Strata, Scale and raise, then Snowfall… and Caves…), **Replace terrain…**, **Relief of a Real Place…**, **Import Mask…**, **Add Reference Image…**; **Ores…**, **Analyse the map…**.
 - **View**: the theme (**Follow the system**, **Light**, **Dark**), **Fit the whole map**, **Show Annotations**, **Reset workspaces**.
 - **Help**: **Massif Help** (F1), **Keyboard shortcuts**, **Take the tour**, **Where are my WorldPainter tools?**, **Report a Problem…**, **Record Performance…**, **Join the Discord…**, **Home screen**.
@@ -2723,6 +2723,46 @@ see [A zone through another tool](versioning.md#a-zone-through-another-tool).
 a border of whole tiles around it, for someone to work on in Massif; File ▸
 Merge Massif Map… brings their work back: see
 [A region of the map for someone else](versioning.md#a-region-of-the-map-for-someone-else).
+
+### A part of the map as a schematic
+
+**File ▸ Export Selection as Schematic…** (or **Export as Schematic…** under
+the selection in a selection tool's settings) writes the selected columns as
+a schematic, to paste a mountain, a village or a forest with WorldEdit or to
+build it from with Litematica. It holds the blocks the export to Minecraft
+writes there, built the same way: the ground and its strata, the water as
+the export settles it, the caves, the covers' plants, the trees and other
+objects, the structures with their chests and signs.
+
+- **Format**: **WorldEdit .schem** (Sponge schematic version 3: WorldEdit
+  7.3 and later, FAWE, Axiom), **WorldEdit 7.2 .schem** (version 2, biomes
+  by the column) or **Litematica** (`.litematic`, no biomes).
+- **Down to**: a number of blocks **under the lowest ground** of the
+  selection (8 to begin with), or **the world's floor**. The box goes up to
+  the highest block of the selection.
+- **Trees and objects**, **Structures**, **Biomes**: left out when off.
+- **Keep the air**: pasted, the air clears what stands there (WorldEdit's
+  `//paste -a` leaves it out). Off, the empty blocks are structure voids,
+  which Litematica and Massif leave as they are; WorldEdit places them as
+  blocks, so keep the air for it.
+- **Origin**: the middle of the box's foot, or its corner: where the box
+  goes from the block a player stands on when pasting it.
+
+The blocks are built in the background as the dialog opens, again when a
+setting they depend on changes (**Stop** stops it), and the file is made
+from them, so that before anything is saved the dialog shows the box's size
+and heights, how many blocks it holds, the file's size, the **materials**
+(each block by its name, the most first, with its icon) and the **trees and
+objects** of each object layer. **Copy as text** copies the size and the
+materials, a line each. A box may hold 64 million blocks; past 16 million
+it is said to be large, as WorldEdit and Litematica are slow to paste it
+and Massif's own import of objects refuses it. A selection of 256 × 256
+columns of hills with trees is built and written in about 1 s.
+
+In an object layer's list of objects, **Export as .schem…** writes the
+objects picked as Sponge schematics, their anchor the origin: one to a
+file, several to a folder, a file each. **Grow trees…** writes its trees the
+same way.
 
 ## New worlds and export
 

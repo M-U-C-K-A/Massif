@@ -52,6 +52,7 @@ mod player;
 mod quit;
 mod real_terrain;
 mod region_export;
+mod schem_export;
 mod report;
 mod report_view;
 mod render_side;

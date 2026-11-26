@@ -40,6 +40,8 @@ pub enum Command {
     ShareImage,
     /// A part of the map as images, to bring back with Import mask.
     ExportRegion,
+    /// The selection as a WorldEdit or Litematica schematic.
+    ExportSchematic,
     /// File ▸ Import Report…: what the import of a WorldPainter world
     /// brought in, again.
     ImportReport,
@@ -293,6 +295,7 @@ pub fn menus(state: &State) -> Vec<Menu> {
         tipped(Command::ShareImage, Icon::Share2, tr!("Share Image…"), map, tr!("A picture of the map, ready to post: as a diorama, its relief, the map from above")),
         item(Command::ExportHeightMap, Icon::ImageDown, tr!("Export Height Map…"), map),
         tipped(Command::ExportRegion, Icon::ImageDown, tr!("Export Region…"), map, tr!("A part of the map as a heightmap and masks, to work on in another tool and import back in place")),
+        tipped(Command::ExportSchematic, Icon::Box, tr!("Export Selection as Schematic…"), map && state.selected, tr!("The selected part of the map as a WorldEdit or Litematica schematic, with the materials it holds")),
         item(Command::Export, Icon::Package, tr!("Export to Minecraft…"), map),
         Entry::Separator,
         tipped(Command::RunScript, Icon::FileCode, tr!("Run Script…"), map, tr!("A script run on the map: one of Massif's, in Lua, or one of WorldPainter's, as it is")),
