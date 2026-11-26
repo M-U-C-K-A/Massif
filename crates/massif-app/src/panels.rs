@@ -2829,12 +2829,27 @@ pub fn pattern_presets(ui: &mut Ui, ps: &mut crate::tools::PatternSettings) {
             }
         });
         let name_id = egui::Id::unique("noise preset name");
-        ui.menu_button(theme::glyph(Icon::Save).to_string(), |ui| {
+        let save = ui.menu_button(theme::glyph(Icon::Save).to_string(), |ui| {
             ui.set_min_width(220.0);
             ui.label(RichText::new(tr!("Save this pattern as")).size(12.0));
             let mut name: String = ui.ctx().data(|d| d.get_temp(name_id)).unwrap_or_else(|| current.clone().unwrap_or_default());
-            let edit = ui.add(egui::TextEdit::singleline(&mut name).hint_text(tr!("Its name")).desired_width(200.0));
+            let mut output = egui::TextEdit::singleline(&mut name).hint_text(tr!("Its name")).desired_width(200.0).show(ui);
+            let edit = output.response.clone();
+            // Typed into as soon as the menu opens, wherever the pointer is,
+            // the name it offers selected so that typing replaces it.
+            let opened_id = name_id.with("opened");
+            if !ui.ctx().data(|d| d.get_temp::<bool>(opened_id).unwrap_or(false)) {
+                edit.request_focus();
+                let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(name.chars().count()));
+                output.state.cursor.set_char_range(Some(all));
+                output.state.store(ui.ctx(), edit.id);
+                ui.ctx().data_mut(|d| d.insert_temp(opened_id, true));
+            }
             let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                ui.ctx().data_mut(|d| d.remove::<String>(name_id));
+                ui.close();
+            }
             let taken = ps.saved.iter().any(|p| p.name.eq_ignore_ascii_case(name.trim()));
             let label = if taken { tr!("Replace it") } else { tr!("Save") };
             if (ui.add_enabled(!name.trim().is_empty(), egui::Button::new(label)).clicked() || enter) && !name.trim().is_empty() {
@@ -2844,9 +2859,12 @@ pub fn pattern_presets(ui: &mut Ui, ps: &mut crate::tools::PatternSettings) {
             } else {
                 ui.ctx().data_mut(|d| d.insert_temp(name_id, name));
             }
-        })
-        .response
-        .on_hover_text(tr!("Save this pattern, to paint with it again"));
+        });
+        if save.inner.is_none() {
+            // Closed: focused again the next time it opens.
+            ui.ctx().data_mut(|d| d.remove::<bool>(name_id.with("opened")));
+        }
+        save.response.on_hover_text(tr!("Save this pattern, to paint with it again"));
     });
     if let Some(p) = load {
         ps.load(&p);
@@ -5440,6 +5458,63 @@ pub fn empty_area(ui: &mut Ui, shown: &HashSet<EditorKind>, developer: bool, cla
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Saving a Noise preset: the name field takes typing as soon as the
+    /// menu opens, Enter saves it, Escape leaves without saving. Rendered
+    /// with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn a_noise_preset_is_named_as_soon_as_asked() {
+        use egui::Key;
+        use egui_kittest::kittest::Queryable;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(320.0, 260.0)).with_accessibility_check(false).build_ui_state(
+            |ui, ps: &mut crate::tools::PatternSettings| {
+                crate::theme::install(ui.ctx());
+                pattern_presets(ui, ps);
+            },
+            crate::tools::PatternSettings::default(),
+        );
+        h.run_steps(2);
+        let saved = h.state().saved.len();
+        let save = theme::glyph(Icon::Save).to_string();
+        h.get_by_label(&save).click();
+        h.run_steps(2);
+        // Typed at once, the pointer left where it clicked.
+        h.get_by_role(egui::accesskit::Role::TextInput).type_text("Dunes");
+        h.run_steps(1);
+        h.key_press(Key::Enter);
+        h.run_steps(2);
+        assert_eq!(h.state().saved.len(), saved + 1);
+        assert!(h.state().saved.iter().any(|p| p.name == "Dunes"));
+        assert!(h.query_by_role(egui::accesskit::Role::TextInput).is_none(), "the menu closed");
+        // Escape leaves it without saving.
+        h.get_by_label(&save).click();
+        h.run_steps(2);
+        h.get_by_role(egui::accesskit::Role::TextInput).type_text("Ridges");
+        h.run_steps(1);
+        h.key_press(Key::Escape);
+        h.run_steps(2);
+        assert!(!h.state().saved.iter().any(|p| p.name.contains("Ridges")));
+        assert!(h.query_by_role(egui::accesskit::Role::TextInput).is_none(), "the menu closed");
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from) {
+            for dark in [true, false] {
+                let mut h = egui_kittest::Harness::builder().with_size(vec2(320.0, 200.0)).with_pixels_per_point(2.0).with_accessibility_check(false).wgpu().build_ui_state(
+                    move |ui, ps: &mut crate::tools::PatternSettings| {
+                        ui.ctx().set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
+                        crate::theme::install(ui.ctx());
+                        let pal = crate::theme::Palette::of(ui);
+                        egui::Frame::new().fill(pal.panel).inner_margin(12).show(ui, |ui| pattern_presets(ui, ps));
+                    },
+                    crate::tools::PatternSettings::default(),
+                );
+                h.run_steps(2);
+                h.get_by_label(&theme::glyph(Icon::Save).to_string()).click();
+                h.run_steps(2);
+                h.get_by_role(egui::accesskit::Role::TextInput).type_text("Dunes");
+                h.run_steps(2);
+                h.render().unwrap().save(dir.join(format!("noise-preset-name-{}.png", if dark { "dark" } else { "light" }))).unwrap();
+            }
+        }
+    }
 
     /// Info at a narrow panel's width: the Blocks menu, opened, and its
     /// help stay inside the panel, the mod's palette offered beside the

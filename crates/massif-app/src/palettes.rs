@@ -310,7 +310,9 @@ impl PaletteEditor {
             .stroke(Stroke::new(if on && editable { 1.5 } else { 1.0 }, if on && editable { pal.accent } else { pal.border }))
             .corner_radius(theme::GROUP_RADIUS)
             .inner_margin(egui::Margin::symmetric(12, 8));
-        let response = frame.show(ui, |ui| {
+        // The click that picks the layer is sensed behind its controls, so
+        // that its ✕ buttons and fields keep their own clicks.
+        let response = ui.scope_builder(egui::UiBuilder::new().sense(Sense::click()), |ui| frame.show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.add_enabled_ui(editable, |ui| {
                 ui.horizontal(|ui| {
@@ -344,9 +346,16 @@ impl PaletteEditor {
                 for (i, (state, weight)) in layer.blocks.iter_mut().enumerate() {
                     ui.horizontal(|ui| {
                         block_icon(ui, blocks, state, 20.0);
-                        ui.label(RichText::new(block_name(blocks, state)).size(12.5)).on_hover_text(state.as_str());
+                        ui.add(egui::Label::new(RichText::new(block_name(blocks, state)).size(12.5)).sense(Sense::click())).on_hover_text(state.as_str()).context_menu(|ui| {
+                            if ui.button(theme::with_icon(Icon::Trash2, tr!("Remove"))).clicked() {
+                                remove = Some(i);
+                                ui.close();
+                            }
+                        });
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui.small_button(theme::glyph(Icon::X).to_string()).on_hover_text(tr!("Remove the block")).clicked() {
+                            let x = ui.small_button(theme::glyph(Icon::X).to_string()).on_hover_text(tr!("Remove the block"));
+                            x.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tr!("Remove {block}", block = state.as_str())));
+                            if x.clicked() {
                                 remove = Some(i);
                             }
                             ui.label(RichText::new(format!("{}%", *weight as u32 * 100 / total)).size(12.0).color(pal.weak));
@@ -361,8 +370,8 @@ impl PaletteEditor {
                     ui.label(RichText::new(tr!("No block yet: pick one below")).size(12.0).color(pal.weak));
                 }
             });
-        });
-        if editable && response.response.interact(Sense::click()).clicked() {
+        }));
+        if editable && response.response.clicked() {
             self.layer = k;
         }
         ui.add_space(6.0);
@@ -479,4 +488,71 @@ pub fn game_of(palette: &Palette) -> String {
     // The version its mods' profiles name, if any.
     let version = massif_core::mod_profiles::minecraft_of(palette).unwrap_or("1.18+");
     format!("{}  ·  Minecraft Java {version}", palette.name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::kittest::Queryable;
+    use std::collections::BTreeMap;
+
+    fn own() -> Palette {
+        let layer = Layer { blocks: vec![("minecraft:grass_block".into(), 1), ("minecraft:dirt".into(), 1), ("minecraft:moss_block".into(), 1)], depth: (1, 1), patches: None };
+        let mut terrains = BTreeMap::new();
+        terrains.insert("Grass".to_owned(), Recipe { strata: vec![layer], submerged_top: None });
+        Palette { name: "Mine".into(), terrains, stone: None, deepslate: None, colors: BTreeMap::new() }
+    }
+
+    fn blocks_of(h: &egui_kittest::Harness<'_, (PaletteEditor, BlockLibrary)>) -> Vec<String> {
+        h.state().0.own[0].terrains["Grass"].strata[0].blocks.iter().map(|b| b.0.clone()).collect()
+    }
+
+    /// A block added to a palette of one's own goes again: by the ✕ on its
+    /// row, and by Remove in its right-click menu. Rendered with
+    /// MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn a_palette_block_is_removed() {
+        let of_map = Palette { name: "Map".into(), terrains: BTreeMap::new(), stone: None, deepslate: None, colors: BTreeMap::new() };
+        let editor = PaletteEditor::new(Vec::new(), vec![own()], Some("Mine"), of_map);
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(WIDTH + 40.0, 900.0)).with_accessibility_check(false).build_ui_state(
+            |ui, s: &mut (PaletteEditor, BlockLibrary)| {
+                crate::theme::install(ui.ctx());
+                let _ = s.0.ui(ui, &mut s.1);
+            },
+            (editor, BlockLibrary::default()),
+        );
+        h.run_steps(2);
+        assert_eq!(blocks_of(&h).len(), 3);
+        // The ✕ of the dirt's row.
+        h.get_by_label("Remove minecraft:dirt").click();
+        h.run_steps(2);
+        assert_eq!(blocks_of(&h), ["minecraft:grass_block", "minecraft:moss_block"]);
+        // Right-click ▸ Remove on the moss.
+        h.get_by_label("minecraft:moss_block").click_secondary();
+        h.run_steps(2);
+        h.get_by_label(&format!("{}  Remove", theme::glyph(Icon::Trash2))).click();
+        h.run_steps(2);
+        assert_eq!(blocks_of(&h), ["minecraft:grass_block"]);
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from) {
+            for dark in [true, false] {
+                let of_map = Palette { name: "Map".into(), terrains: BTreeMap::new(), stone: None, deepslate: None, colors: BTreeMap::new() };
+                let editor = PaletteEditor::new(Vec::new(), vec![own()], Some("Mine"), of_map);
+                let mut h = egui_kittest::Harness::builder().with_size(vec2(WIDTH + 40.0, 560.0)).with_pixels_per_point(2.0).with_accessibility_check(false).wgpu().build_ui_state(
+                    move |ui, s: &mut (PaletteEditor, BlockLibrary)| {
+                        ui.ctx().set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
+                        crate::theme::install(ui.ctx());
+                        let pal = Colors::of(ui);
+                        egui::Frame::new().fill(pal.panel).inner_margin(12).show(ui, |ui| {
+                            let _ = s.0.ui(ui, &mut s.1);
+                        });
+                    },
+                    (editor, BlockLibrary::default()),
+                );
+                h.run_steps(2);
+                h.get_by_label("minecraft:dirt").click_secondary();
+                h.run_steps(2);
+                h.render().unwrap().save(dir.join(format!("palette-remove-{}.png", if dark { "dark" } else { "light" }))).unwrap();
+            }
+        }
+    }
 }
