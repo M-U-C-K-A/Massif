@@ -150,14 +150,14 @@ impl TreePreset {
         };
         match self {
             TreePreset::Oak => p(22.0, 2.0, 0.6, 0.6, 3, 6, 0.6, 45.0, 0.5, 0.55, 0.3, 0.35, 0.35, Crown::Round, 2.1, 0.65, "oak", "oak"),
-            TreePreset::Spruce => p(26.0, 1.5, 0.35, 1.0, 1, 40, 0.35, 92.0, 0.24, 0.35, 0.05, 0.0, 0.05, Crown::Cone, 1.5, 0.95, "spruce", "spruce"),
+            TreePreset::Spruce => p(28.0, 1.5, 0.35, 1.0, 1, 48, 0.3, 92.0, 0.15, 0.35, 0.05, 0.0, 0.05, Crown::Cone, 1.5, 0.95, "spruce", "spruce"),
             TreePreset::Birch => p(19.0, 1.0, 0.15, 0.85, 2, 6, 0.45, 30.0, 0.22, 0.5, 0.15, 0.45, 0.2, Crown::Round, 2.0, 0.75, "birch", "birch"),
             TreePreset::Cherry => p(14.0, 1.5, 0.4, 0.4, 3, 4, 0.85, 50.0, 0.55, 0.55, 0.3, 0.3, 0.3, Crown::Umbrella, 2.8, 0.8, "cherry", "cherry"),
             TreePreset::Palm => p(15.0, 1.0, 0.25, 1.0, 1, 9, 0.98, 62.0, 0.5, 0.5, 0.9, 0.0, 0.25, Crown::Palm, 1.0, 1.0, "jungle", "jungle"),
             TreePreset::Willow => p(16.0, 2.0, 0.5, 0.5, 2, 7, 0.7, 55.0, 0.5, 0.5, 0.45, 0.25, 0.3, Crown::Weeping, 2.4, 0.75, "oak", "oak"),
             TreePreset::Acacia => p(13.0, 1.0, 0.2, 0.5, 2, 3, 0.75, 42.0, 0.6, 0.45, 0.1, 0.25, 0.4, Crown::Umbrella, 3.0, 0.8, "acacia", "acacia"),
-            TreePreset::GiantSequoia => p(100.0, 7.0, 0.7, 1.0, 3, 26, 0.5, 75.0, 0.14, 0.5, 0.25, 0.4, 0.2, Crown::Round, 2.4, 0.65, "mangrove", "spruce"),
-            TreePreset::GreatOak => p(60.0, 7.0, 0.9, 0.4, 3, 8, 0.75, 55.0, 0.55, 0.5, 0.3, 0.3, 0.3, Crown::Round, 3.0, 0.6, "dark_oak", "dark_oak"),
+            TreePreset::GiantSequoia => p(100.0, 7.0, 0.7, 1.0, 2, 16, 0.58, 80.0, 0.16, 0.5, 0.3, 0.45, 0.25, Crown::Round, 2.8, 0.7, "mangrove", "spruce"),
+            TreePreset::GreatOak => p(60.0, 7.0, 0.9, 0.4, 3, 6, 0.75, 55.0, 0.6, 0.45, 0.3, 0.3, 0.3, Crown::Round, 3.2, 0.6, "dark_oak", "dark_oak"),
             TreePreset::Dead => p(17.0, 1.0, 0.3, 0.7, 2, 6, 0.4, 45.0, 0.5, 0.55, 0.2, 0.3, 0.6, Crown::Round, 0.0, 0.0, "oak", ""),
         }
     }
@@ -281,7 +281,7 @@ impl Grower<'_> {
             let n = ((length / 2.2).round() as usize).clamp(2, 10);
             let mut azimuth = self.rng.f() * PI * 2.0;
             for k in 0..n {
-                let t = 0.3 + 0.7 * (k as f32 + 0.5 + self.rng.s() * 0.3) / n as f32;
+                let t = 0.45 + 0.55 * (k as f32 + 0.5 + self.rng.s() * 0.3) / n as f32;
                 let i = ((t * steps as f32) as usize).min(steps);
                 let (at, r) = path[i];
                 let along = norm(sub(path[(i + 1).min(steps)].0, path[i.saturating_sub(1)].0));
@@ -297,7 +297,9 @@ impl Grower<'_> {
             }
         } else if leafy {
             // The outer part of the last twigs bears the leaves.
-            self.leaves_along(&path, if p.crown == Crown::Cone { 0.0 } else { 0.7 });
+            if matches!(p.crown, Crown::Cone | Crown::Weeping) {
+                self.leaves_along(&path, if p.crown == Crown::Cone { 0.0 } else { 0.7 });
+            }
         }
         if leafy {
             let end = path[steps].0;
@@ -351,7 +353,8 @@ impl Grower<'_> {
             Crown::Palm => 0.02 + p.crook * 0.04,
             // A conifer's leader grows straight.
             Crown::Cone => 0.0,
-            _ => p.crook * 0.015,
+            // A tall trunk bends no more than a short one.
+            _ => p.crook * 0.015 * (20.0 / h).min(1.0),
         };
         let sway = if p.crown == Crown::Cone { 0.0 } else { p.crook * 0.03 };
         let flare_height = 2.0 + r0 * 1.5;
@@ -432,7 +435,7 @@ impl Grower<'_> {
                 // A conifer's leader: a spike of needles over the top whorl.
                 Crown::Cone => {
                     for k in 0..3 {
-                        self.sk.clumps.push((add(top, [0.0, 0.0, k as f32]), 0.75));
+                        self.sk.clumps.push((add(top, [0.0, 0.0, k as f32 - 1.0]), 1.15 - k as f32 * 0.15));
                     }
                 }
                 _ => self.sk.clumps.push((add(top, [0.0, 0.0, 1.0]), p.leaf_size * 0.9)),
@@ -583,6 +586,13 @@ pub fn grow(p: &TreeParams, name: &str) -> ObjectDef {
         for (x, y, z) in tops {
             v.put(x, y, z + 1, B::Leaves);
         }
+        // And the leader within the crown, all round.
+        let leader: Vec<(i32, i32, i32)> = v.m.iter().filter(|(k, b)| b.wood() && k.2 as f32 > height * p.start && ((k.0 as f32 + 0.5).powi(2) + (k.1 as f32 + 0.5).powi(2)).sqrt() <= reach).map(|(k, _)| *k).collect();
+        for (x, y, z) in leader {
+            for (dx, dy, _) in &SIDES[..4] {
+                v.put(x + dx, y + dy, z, B::Leaves);
+            }
+        }
     }
 
     // Leaves: lumpy clumps, flatter under an umbrella; fronds.
@@ -594,7 +604,10 @@ pub fn grow(p: &TreeParams, name: &str) -> ObjectDef {
     let seed = p.seed;
     // Holes as large as the clumps make them: wider in a giant's crown.
     let cell = ((p.leaf_size * 0.6).round() as i32).max(2);
+    // Clumps smaller near the trunk, so that the limbs show under the crown.
+    let spread = sk.clumps.iter().map(|(c, _)| c[0].hypot(c[1])).fold(1.0f32, f32::max);
     for &(c, r) in &sk.clumps {
+        let r = if p.crown == Crown::Palm { r } else { r * (0.45 + 0.55 * (c[0].hypot(c[1]) / (spread * 0.7)).min(1.0)) }.max(0.8);
         let hz = (r * squash).max(0.8);
         let n = r.ceil() as i32 + 1;
         let (cx, cy, cz) = (c[0].floor() as i32, c[1].floor() as i32, c[2].floor() as i32);
@@ -605,7 +618,7 @@ pub fn grow(p: &TreeParams, name: &str) -> ObjectDef {
                     let d = dot(q, q);
                     // Full inside, ragged at the rim, with holes the wood
                     // shows through (not in a conifer's needles).
-                    let hole = p.crown != Crown::Cone && hash3(x.div_euclid(cell), y.div_euclid(cell), z.div_euclid(cell), seed ^ 0x51) < 0.2;
+                    let hole = p.crown != Crown::Cone && hash3(x.div_euclid(cell), y.div_euclid(cell), z.div_euclid(cell), seed ^ 0x51) < 0.24;
                     if d <= 1.0 && !hole && (d < 0.45 || hash3(x, y, z, seed) < p.leaf_density * (1.35 - d)) {
                         v.put(x, y, z, B::Leaves);
                     }
