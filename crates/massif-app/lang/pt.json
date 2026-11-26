@@ -4033,5 +4033,13 @@
  "{value:.0} m": "{value:.0} m",
  "{value:.1} m": "{value:.1} m",
  "{value:.2} km": "{value:.2} km",
- "{value:.2} km²": "{value:.2} km²"
+ "{value:.2} km²": "{value:.2} km²",
+ "{pct}% of the stroke shows no change: the ground cover {name} lies over the terrain there. Rub it out with the Ground cover tool (right button), or hide it in the Layers panel to see the terrain under it.": "{pct} % do traço não muda: a cobertura do solo {name} está sobre o terreno ali. Apague-a com a ferramenta Cobertura do solo (botão direito), ou oculte-a no painel Camadas para ver o terreno por baixo.",
+ "{pct}% of the stroke shows no change: the level {name} stands over the one painted there. Pick it in the Levels panel to paint it.": "{pct} % do traço não muda: o nível {name} está sobre o pintado ali. Escolha-o no painel Níveis para pintá-lo.",
+ "{pct}% of the stroke was left as it was by the brush's filter (Only on, Except on, heights, slopes): see Tool Settings.": "O filtro do pincel deixou {pct} % do traço como estava (Só sobre, Exceto sobre, alturas, declives): veja Ajustes da ferramenta.",
+ "{pct}% of the stroke was left as it was: the layer {name} is locked there. Unlock it in the Layers panel to paint over it.": "{pct} % do traço ficou como estava: a camada {name} está bloqueada ali. Desbloqueie-a no painel Camadas para pintar por cima.",
+ "The layer {name} is hidden on the map: it is painted all the same, and shows once shown again in the Layers panel.": "A camada {name} está oculta no mapa: é pintada mesmo assim, e aparece quando for mostrada de novo no painel Camadas.",
+ "The ground cover {name} lies over the terrain here: a terrain painted here stays under it.": "A cobertura do solo {name} está sobre o terreno aqui: um terreno pintado aqui fica por baixo.",
+ "The level {name} stands over the one painted here.": "O nível {name} está sobre o pintado aqui.",
+ "The layer {name} is locked here: brushes leave it as it is.": "A camada {name} está bloqueada aqui: os pincéis deixam-na como está."
 }

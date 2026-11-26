@@ -1382,7 +1382,7 @@ mod tests {
                     let pal = Palette::of(ui);
                     egui::Frame::new().fill(pal.panel).inner_margin(12).show(ui, |ui| {
                         ui.set_width(248.0);
-                        crate::inspect::panel(ui, Some(&info), &reg, Some((&report, false)));
+                        crate::inspect::panel(ui, Some(&info), &reg, None, Some((&report, false)));
                     });
                 });
                 h.run_steps(3);

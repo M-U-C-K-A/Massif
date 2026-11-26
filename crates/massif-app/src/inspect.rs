@@ -242,7 +242,8 @@ pub fn swatch(ui: &mut Ui, color: [u8; 3]) {
 /// The Info panel: the column under the cursor, all it holds, in four
 /// parts: where it is, its ground, the layers painted on it, and the
 /// measure when there is one (see `measure`).
-pub fn panel(ui: &mut Ui, info: Option<&ColumnInfo>, reg: &massif_core::registry::Registry, measure: Option<(&crate::measure::Report, bool)>) {
+/// `note`: why the column would not show the paint of the tool in hand.
+pub fn panel(ui: &mut Ui, info: Option<&ColumnInfo>, reg: &massif_core::registry::Registry, note: Option<&str>, measure: Option<(&crate::measure::Report, bool)>) {
     use crate::panels::{hint, section};
     use crate::widgets::{row, well};
     let pal = Palette::of(ui);
@@ -323,6 +324,9 @@ pub fn panel(ui: &mut Ui, info: Option<&ColumnInfo>, reg: &massif_core::registry
                         });
                     }
                 });
+            }
+            if let Some(note) = note {
+                hint(ui, note);
             }
         }
     }

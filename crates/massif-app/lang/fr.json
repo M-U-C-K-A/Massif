@@ -4096,5 +4096,13 @@
  "{value:.0} m": "{value:.0} m",
  "{value:.1} m": "{value:.1} m",
  "{value:.2} km": "{value:.2} km",
- "{value:.2} km²": "{value:.2} km²"
+ "{value:.2} km²": "{value:.2} km²",
+ "{pct}% of the stroke shows no change: the ground cover {name} lies over the terrain there. Rub it out with the Ground cover tool (right button), or hide it in the Layers panel to see the terrain under it.": "{pct} % du trait ne change pas : le couvert du sol {name} recouvre le terrain à cet endroit. Effacez-le avec l'outil Couvert du sol (bouton droit), ou masquez-le dans le panneau Calques pour voir le terrain dessous.",
+ "{pct}% of the stroke shows no change: the level {name} stands over the one painted there. Pick it in the Levels panel to paint it.": "{pct} % du trait ne change pas : le niveau {name} se trouve au-dessus de celui peint à cet endroit. Choisissez-le dans le panneau Niveaux pour le peindre.",
+ "{pct}% of the stroke was left as it was by the brush's filter (Only on, Except on, heights, slopes): see Tool Settings.": "{pct} % du trait a été laissé tel quel par le filtre du pinceau (Seulement sur, Sauf sur, hauteurs, pentes) : voir Réglages de l'outil.",
+ "{pct}% of the stroke was left as it was: the layer {name} is locked there. Unlock it in the Layers panel to paint over it.": "{pct} % du trait a été laissé tel quel : le calque {name} y est verrouillé. Déverrouillez-le dans le panneau Calques pour peindre dessus.",
+ "The layer {name} is hidden on the map: it is painted all the same, and shows once shown again in the Layers panel.": "Le calque {name} est masqué sur la carte : il est bien peint, et s'affichera une fois réaffiché dans le panneau Calques.",
+ "The ground cover {name} lies over the terrain here: a terrain painted here stays under it.": "Le couvert du sol {name} recouvre le terrain ici : un terrain peint ici reste dessous.",
+ "The level {name} stands over the one painted here.": "Le niveau {name} se trouve au-dessus de celui peint ici.",
+ "The layer {name} is locked here: brushes leave it as it is.": "Le calque {name} est verrouillé ici : les pinceaux le laissent tel quel."
 }

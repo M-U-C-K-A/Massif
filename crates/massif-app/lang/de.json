@@ -4036,5 +4036,13 @@
  "{value:.0} m": "{value:.0} m",
  "{value:.1} m": "{value:.1} m",
  "{value:.2} km": "{value:.2} km",
- "{value:.2} km²": "{value:.2} km²"
+ "{value:.2} km²": "{value:.2} km²",
+ "{pct}% of the stroke shows no change: the ground cover {name} lies over the terrain there. Rub it out with the Ground cover tool (right button), or hide it in the Layers panel to see the terrain under it.": "{pct} % des Strichs ändern sich nicht: Der Bodenbewuchs {name} liegt dort über dem Terrain. Radiere ihn mit dem Werkzeug Bodenbewuchs (rechte Maustaste) aus, oder blende ihn im Ebenen-Panel aus, um das Terrain darunter zu sehen.",
+ "{pct}% of the stroke shows no change: the level {name} stands over the one painted there. Pick it in the Levels panel to paint it.": "{pct} % des Strichs ändern sich nicht: Die Stufe {name} liegt dort über der bemalten. Wähle sie im Stufen-Panel, um sie zu bemalen.",
+ "{pct}% of the stroke was left as it was by the brush's filter (Only on, Except on, heights, slopes): see Tool Settings.": "{pct} % des Strichs hat der Filter des Pinsels unverändert gelassen (Nur auf, Außer auf, Höhen, Neigungen): siehe Werkzeug-Einstellungen.",
+ "{pct}% of the stroke was left as it was: the layer {name} is locked there. Unlock it in the Layers panel to paint over it.": "{pct} % des Strichs blieben unverändert: Die Ebene {name} ist dort gesperrt. Entsperre sie im Ebenen-Panel, um darüber zu malen.",
+ "The layer {name} is hidden on the map: it is painted all the same, and shows once shown again in the Layers panel.": "Die Ebene {name} ist auf der Karte ausgeblendet: Sie wird trotzdem gemalt und erscheint, sobald sie im Ebenen-Panel wieder eingeblendet wird.",
+ "The ground cover {name} lies over the terrain here: a terrain painted here stays under it.": "Der Bodenbewuchs {name} liegt hier über dem Terrain: Ein hier gemaltes Terrain bleibt darunter.",
+ "The level {name} stands over the one painted here.": "Die Stufe {name} liegt hier über der bemalten.",
+ "The layer {name} is locked here: brushes leave it as it is.": "Die Ebene {name} ist hier gesperrt: Pinsel lassen sie, wie sie ist."
 }

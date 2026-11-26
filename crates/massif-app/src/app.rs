@@ -5670,7 +5670,13 @@ impl MassifApp {
                 let reg = &self.doc.world.registry;
                 let measure = crate::measure::shown(&self.tools).then(|| crate::measure::report(cui.ctx(), &self.doc, &self.tools)).flatten();
                 let drawing = self.tools.measure.drawing();
-                scrolled(&mut cui, &mut |ui| crate::inspect::panel(ui, info, reg, measure.as_deref().map(|r| (r, drawing))));
+                // Why the column would not show the paint of the tool in hand.
+                let note = info.and_then(|c| {
+                    let aim = crate::tools::aim_of(&self.doc, &self.tools, self.tools.tool, false)?;
+                    let level = self.doc.active_level.min(self.doc.dimension().levels.len() - 1);
+                    crate::paint_check::note_at(self.doc.dimension(), reg, level, aim, c.x, c.z)
+                });
+                scrolled(&mut cui, &mut |ui| crate::inspect::panel(ui, info, reg, note.as_deref(), measure.as_deref().map(|r| (r, drawing))));
             }
             EditorKind::RenderView => {
                 let catalogue = self.blocks.catalogue.clone();
@@ -9068,6 +9074,9 @@ mod diorama_tests;
 #[cfg(test)]
 #[path = "jack_tools_tests.rs"]
 mod jack_tools_tests;
+#[cfg(test)]
+#[path = "paint_check_tests.rs"]
+mod paint_check_tests;
 #[cfg(test)]
 #[path = "structures_tests.rs"]
 mod structures_tests;

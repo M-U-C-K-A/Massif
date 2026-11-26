@@ -601,6 +601,30 @@ map. On a map whose terrains came from its height, or with **By height**,
 the right button puts back what the map's zones call for (see
 [Zones](#zones)). In 3D Sculpt, Paint's inverse does the same.
 
+### When the paint does not show
+
+Some parts of the map may keep their look under a stroke. Once the stroke
+ends, a word at the foot of the window says how much of it shows no change,
+and why:
+
+- **A ground cover lies over the terrain.** A cover that lays blocks over
+  the ground (sand, gravel, layers: a WorldPainter map's custom ground
+  covers come in as such) stays on top of whatever terrain is painted under
+  it, on the map and in the game. The terrain is painted all the same.
+  Rub the cover out with **Ground cover**'s right button, or hide it in the
+  Layers panel to see the terrain under it.
+- **A level stands over the one painted.** Pick that level in the Levels
+  panel to paint it.
+- **A layer is locked.** Ground cover and Objects leave a locked layer's
+  blocks as they are: unlock it in the Layers panel.
+- **The brush's filter** (Only on, Except on, the heights, the slopes)
+  leaves the columns it does not let through.
+- **The layer is hidden** on the map: it is painted, and shows once shown
+  again.
+
+The Info panel says the same of the column under the cursor, for the tool
+in hand.
+
 ### Replace terrain
 
 **Edit ▸ Replace terrain…** paints every column of one terrain with

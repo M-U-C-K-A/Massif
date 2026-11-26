@@ -1522,6 +1522,8 @@ pub struct Stroke {
     /// The Pencil drew its first block: the next part of the line starts
     /// past the block it ended on.
     drawn: bool,
+    /// The columns gone over, to tell afterwards why some show no change.
+    probe: Option<crate::paint_check::Probe>,
 }
 
 impl Stroke {
@@ -1683,12 +1685,31 @@ pub fn begin_stroke(doc: &mut Document, tools: &ToolState, at: (f32, f32), inver
         reached: (doc.selection().is_some() && tool != Tool::SelectBrush).then_some(false),
         note: None,
         drawn: false,
+        probe: probe_for(doc, tools, tool, inverse, level),
     };
     if tool == Tool::Gradient {
         // The map keeps the gradients it is painted with.
         tools.gradient.keep_in(doc);
     }
     (Some(stroke), None)
+}
+
+/// What a stroke of `tool` paints, as far as telling why some of its
+/// columns show no change goes: the painting tools'.
+pub fn aim_of(doc: &Document, tools: &ToolState, tool: Tool, inverse: bool) -> Option<crate::paint_check::Aim> {
+    use crate::paint_check::Aim;
+    Some(match tool {
+        Tool::PaintTerrain if !inverse && !tools.pattern.on && !tools.zones_left => Aim::Terrain(Some(TerrainId(tools.terrain))),
+        Tool::PaintTerrain => Aim::Terrain(None),
+        Tool::Cover if !inverse && tools.cover != 0 => Aim::Cover(tools.cover),
+        Tool::Objects if !inverse && tools.object_layer != 0 => Aim::Objects { layer: tools.object_layer, understory: doc.world.registry.object_layer(tools.object_layer).is_some_and(|l| l.understory) },
+        _ => return None,
+    })
+}
+
+/// What a stroke of `tool` notes of the columns it goes over.
+fn probe_for(doc: &Document, tools: &ToolState, tool: Tool, inverse: bool, level: usize) -> Option<crate::paint_check::Probe> {
+    Some(crate::paint_check::Probe::new(aim_of(doc, tools, tool, inverse)?, level, tools.stroke_brush().filter))
 }
 
 /// The Gradient brush's sides for a stroke beginning: those its strokes
@@ -1828,6 +1849,9 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
             None => (stroke.last.0 + dx * t, stroke.last.1 + dz * t),
         };
         stroke.salt = stroke.salt.wrapping_add(0x632b_e59b);
+        if let Some(probe) = &mut stroke.probe {
+            probe.dab(x, z, brush.radius);
+        }
         let share = 1.0 / n as f32;
         match stroke.tool {
             Tool::Raise => {
@@ -1989,7 +2013,11 @@ pub fn end_stroke(doc: &mut Document, mut stroke: Stroke) -> Feedback {
             (n, Tool::AutoPaint) => tr!("Repainted {n} columns", n),
             (n, _) => tr!("Changed the biome of {n} columns", n),
         }),
-        _ => None,
+        // What paints says why part of it shows no change, if it does.
+        _ => stroke.probe.as_ref().and_then(|p| {
+            let (blocked, share) = p.verdict(doc.dimension(), &doc.world.registry)?;
+            Some(crate::paint_check::say(blocked, share, doc.dimension(), &doc.world.registry, p.aim()))
+        }),
     }
 }
 

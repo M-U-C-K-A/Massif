@@ -4001,5 +4001,13 @@
  "{value:.0} m": "{value:.0} м",
  "{value:.1} m": "{value:.1} м",
  "{value:.2} km": "{value:.2} км",
- "{value:.2} km²": "{value:.2} км²"
+ "{value:.2} km²": "{value:.2} км²",
+ "{pct}% of the stroke shows no change: the ground cover {name} lies over the terrain there. Rub it out with the Ground cover tool (right button), or hide it in the Layers panel to see the terrain under it.": "{pct} % мазка не изменилось: покров {name} лежит там поверх ландшафта. Сотрите его инструментом «Покров» (правая кнопка) или скройте на панели «Слои», чтобы увидеть ландшафт под ним.",
+ "{pct}% of the stroke shows no change: the level {name} stands over the one painted there. Pick it in the Levels panel to paint it.": "{pct} % мазка не изменилось: уровень {name} находится там над закрашиваемым. Выберите его на панели «Уровни», чтобы закрасить.",
+ "{pct}% of the stroke was left as it was by the brush's filter (Only on, Except on, heights, slopes): see Tool Settings.": "Фильтр кисти оставил {pct} % мазка без изменений (Только на, Кроме, высоты, уклоны): см. «Настройки инструмента».",
+ "{pct}% of the stroke was left as it was: the layer {name} is locked there. Unlock it in the Layers panel to paint over it.": "{pct} % мазка осталось без изменений: слой {name} там заблокирован. Разблокируйте его на панели «Слои», чтобы рисовать поверх.",
+ "The layer {name} is hidden on the map: it is painted all the same, and shows once shown again in the Layers panel.": "Слой {name} скрыт на карте: он всё равно рисуется и появится, когда его снова покажут на панели «Слои».",
+ "The ground cover {name} lies over the terrain here: a terrain painted here stays under it.": "Покров {name} лежит здесь поверх ландшафта: нарисованный здесь ландшафт остаётся под ним.",
+ "The level {name} stands over the one painted here.": "Уровень {name} находится здесь над закрашиваемым.",
+ "The layer {name} is locked here: brushes leave it as it is.": "Слой {name} здесь заблокирован: кисти оставляют его как есть."
 }
