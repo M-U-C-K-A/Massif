@@ -2160,6 +2160,7 @@ name = "massif-app"
 version = "1.2.2"
 dependencies = [
  "bytemuck",
+ "color_quant",
  "crc32fast",
  "eframe",
  "egui",
@@ -2187,6 +2188,7 @@ dependencies = [
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
+ "png",
  "pollster",
  "profiling",
  "rayon",

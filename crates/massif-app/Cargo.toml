@@ -71,6 +71,10 @@ wgpu = { version = "30", default-features = false, features = ["angle"] }
 fastnbt = "2.6"
 # The regions of an export read back (see `real_place_with_another_palette`).
 fastanvil = { version = "0.32", default-features = false }
+# The pictures of the manual, made lighter in 256 colours (see
+# `doc_captures_tests`).
+color_quant = "1.1"
+png = "0.18"
 
 [build-dependencies]
 # The icon of massif.exe in Windows' Explorer.

@@ -27,7 +27,7 @@ The four panels are laid out as one, and like every panel of Massif each can be 
 
 They work together wherever they are: selecting a node in the graph shows its settings and its terrain, and undo over any of them undoes the graph's last change. The graph is saved with the world.
 
-> 📷 **Screenshot:** the Terrain side's **Generator** workspace with the Alpine range sample open (home screen ▸ Samples ▸ Alpine range, then the Terrain side): the Node Library, the Viewer in 3D, the graph and Node Properties with the Alpine Range composite selected.
+![The Terrain side's Generator workspace: Node Library, Viewer, Graph and Node Properties, the Alpine Range composite selected](images/generator-workspace.png)
 
 ### What a graph makes
 
@@ -218,7 +218,7 @@ Each node shows its result as a thumbnail, lit as the viewer lights it,
 with the range of its values (in blocks for a height, from 0 to 1 for a
 mask) when the graph is zoomed in.
 
-> 📷 **Screenshot:** the Generator Graph with the add-node search open (Tab) after typing `therm`, the matching nodes listed.
+![The add-node search of the Generator Graph after typing therm](images/generator-add-node.png)
 
 ### Composites
 
@@ -250,7 +250,7 @@ cutting valleys up every flank, snow above a line), **Cave System** and
 Composites are listed in the library under **Composites** and found by the
 search like any node. They are saved with the world.
 
-> 📷 **Screenshot:** the Alpine Range composite opened (double-click it): the breadcrumb `Graph › Alpine Range` at the top, its inputs and outputs as columns at the graph's edges.
+![The Alpine Range composite opened: the breadcrumb Graph › Alpine Range, its outputs as a column](images/generator-composite.png)
 
 ### Frames
 
@@ -353,7 +353,7 @@ With no node selected, the panel shows the whole graph's settings: the
 terrain's size, its seed, the sea level and the resolution simulations run
 at in the previews.
 
-> 📷 **Screenshot:** Node Properties of a Mountain range node, its groups (main, Shape, Detail) and a ◇ setting driven by a mask wired into its diamond socket.
+![Node Properties of a Mountain range node, its ◇ beside Height](images/generator-node-settings.png)
 
 ## The Generator Viewer
 
@@ -387,7 +387,7 @@ A picture comes coarse first, then sharp.
 
 In **3D**, the viewer draws with the same renderer as the classic Graph Viewport: the generator's output under a sky with soft light, clouds, the sea at the world's sea level and the sides of the terrain, with a camera you turn, move and zoom freely. Its bar at the foot opens the render settings (sun, clouds, haze, exposure), turns the clouds and the sea on and off, frames the relief and saves the view as an image. The **Dark** background shows a plain dark backdrop in place of the sky.
 
-> 📷 **Screenshot:** the Generator Viewer in 3D over an alpine graph, with its bar at the foot (Render, Clouds, Sea, frame, save an image) and the settings menu open at the top right.
+![The Generator Viewer in 3D, its bar at the foot](images/generator-viewer.png)
 
 ## Live and Apply
 
@@ -426,7 +426,7 @@ as its cut a little under the sea's level, laid over the relief.
 
 A graph can be written as text, and text made into a graph: the **script** button at the top right of the Generator Graph (a page with `<>`) shows the **Script** pane. **Apply** builds the graph from the script (one step to undo), **From graph** writes the graph open as a script, and **Copy for AI** copies a guide to paste into any AI chat (ChatGPT, Claude, Mistral…): the language, every node, examples and the graph open now. Paste the script it answers into the pane, and Apply. See [MassifScript](massifscript.md) and [its reference](massifscript-reference.md). An MCP server, so that an AI assistant could work on the graph in Massif directly, is planned, not shipped.
 
-> 📷 **Screenshot:** the Script pane beside the Generator Graph, a short script in it and the graph it built, with the **Copy for AI** button (the sparkles) highlighted.
+![The Script pane beside the Generator Graph, the Copy for AI button among its commands](images/generator-script.png)
 
 ## Generator keys
 

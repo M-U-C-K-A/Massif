@@ -18,7 +18,7 @@ This guide follows the app area by area, one page each, in the order you meet th
 
 Inside the app, **Help ▸ Massif Help** (F1) holds the same guide in short, with a search.
 
-A note on the pictures: lines marked **📷 Screenshot** say which picture belongs there and where to take it in the app. They are placeholders until the pictures are added.
+A note on the pictures: they are rendered by the app itself (see `doc_captures_tests.rs`), in the dark theme. Lines still marked **📷 Screenshot** name a picture not taken yet, and where to take it in the app.
 
 ## Getting started
 
@@ -48,7 +48,7 @@ Massif tells you when a new version is out, once a day at most (see [New version
 
 A short tour shows the window the first time a map is open; **Help ▸ Take the tour** shows it again.
 
-> 📷 **Screenshot:** a fresh 1,024 × 1,024 Hills map just created, in the World side's **Layout** workspace, with Raise / Lower in hand and the brush outline on the map.
+![A new Hills map in the World side's Layout workspace, Raise / Lower in hand](images/first-map.png)
 
 ### Samples
 
@@ -125,7 +125,7 @@ Behind it is the background chosen in **Settings ▸ Appearance ▸ Home backgro
 
 The words over it always stay legible: the colours are held toward the page's own under the text, and over Waves, Pixel and Prism the new map's settings sit on a solid surface. In the light theme the colours soften into pastels; in high contrast they turn to calm greys. The background moves at 12 frames a second at most, only while the home screen is in front; with **Animate the background** off, or Reduce motion on, it stands still.
 
-> 📷 **Screenshot:** Settings ▸ Appearance, the **Home background** section with **Waves** chosen and its live picture above the settings.
+![Settings ▸ Appearance: the Home background section with Waves chosen and its live picture](images/settings-appearance.png)
 
 ## The window
 
@@ -220,7 +220,7 @@ The menus hold every command, each item with its shortcut beside it (⌘ on a Ma
 
 The **Map** panel shows the map from above, to paint and shape. Move it with the middle button, Space + drag or the **Pan** tool; zoom with Ctrl + wheel (⌘ + wheel too on a Mac) or a trackpad pinch; **View ▸ Fit the whole map** shows all of it. The wheel alone sizes the brush, as in WorldPainter (see [Controls](#controls) to change that). The footer gives the coordinates and height under the pointer, its region file, and the zoom.
 
-> 📷 **Screenshot:** the Map panel's header with the display mode menu open (Terrain, Height, Slope, Biome, Relief, True Colour) and the overlay buttons (contours, block steps, grid, annotations, reference images) beside it.
+![The Map panel's header: its display modes and overlay buttons](images/map-header.png)
 
 ### Display modes and overlays
 
@@ -281,7 +281,7 @@ annotation, each in its colour, with its intensity where it has one (the
 share of the columns a cover grows on, of the squares a tree stands in, of
 the rock the pockets take).
 
-> 📷 **Screenshot:** the Info panel with the pointer over a forested hillside, showing height, terrain, biome and the layers painted there.
+![The Info panel reading the column under the pointer](images/info-panel.png)
 
 The world's own details — its name, seed, sea level, spawn and block
 palette, the map's size, the memory it takes and the map's cache, its
@@ -354,7 +354,7 @@ The **Tools** panel holds every tool of the World side, a row for each theme. Ho
 
 The tools new in this version are marked in the panel until you first try them. In the **3D Sculpt** panel the same tools work in 3D, with three of its own: **Sculpt**, **Dig** and **Smooth** (see [3D Sculpt](#3d-sculpt)).
 
-> 📷 **Screenshot:** the Tools panel at full width (Layout workspace), every group visible, with the pointer over **Gradient brush** so its card shows.
+![The Tools panel and its groups](images/tools-panel.png)
 
 ### Cards
 
@@ -373,7 +373,7 @@ Brushes work as in WorldPainter. A brush has a shape (one of the twelve
 built-in brushes, a terrain stamp, or an image), a radius, an intensity and
 a rotation:
 
-> 📷 **Screenshot:** the Brushes panel (built-in brushes and terrain stamps) beside Brush Settings with **Height limits** on, its side cut of the map showing the band the brush acts on (Layout workspace, Raise / Lower in hand).
+![The Brushes panel beside Brush Settings](images/brushes.png)
 
 - **Built-in brushes**: circle or square with a Constant, Linear, Sine,
   Plateau, Spike or Dome profile.
@@ -454,7 +454,7 @@ notch, 1° with Shift; Ctrl and the wheel zoom the map.
 As in WorldPainter and image editors, a selection marks the part of the map
 the tools change. The **Select** row of the Tools panel holds four tools:
 
-> 📷 **Screenshot:** a lasso selection on the map (marching dashes) with **Feather** set, and the Select tools' Tool Settings (New · Add · Subtract · Intersect, Select by).
+![The Lasso selection tool in hand, its Tool Settings beside the map](images/select-tools.png)
 
 - **Rectangle selection** and **Ellipse selection**: drag across the map.
 - **Lasso selection**: draw around an area; letting go closes it.
@@ -546,7 +546,7 @@ A **terrain** is what the top of the ground is made of: grass, sand, stone, a mi
 
 The right button takes the ground back to the map's own terrain. **Paint biome** paints a biome from the **Biomes** panel the same way, its right button back to automatic.
 
-> 📷 **Screenshot:** the World side's **Painting** workspace with Paint terrain in hand, the Terrain panel showing its categories, and the Tool Settings of Paint terrain (One terrain · Noise · Zones · Gradient) beside the map.
+![The Painting workspace with Paint terrain in hand](images/painting-workspace.png)
 
 ### Picking the terrain
 
@@ -655,7 +655,7 @@ rather than grass, podzol or mycelium wherever water stands on them.)
 
 ![The Gradient brush's editor on the gradient of the terraformers' sketch: moss, coarse dirt, podzol and grass on a bar with their textures, the stops and midpoints under it, the edge's marker over it, a blobby transition chosen, a patch and a strip showing the result](assets/renders/gradient-editor.jpg)
 
-> 📷 **Screenshot:** the Gradient brush's editor in Tool Settings (its bands from one terrain to another), and a stroke across the edge between grass and stone on the map.
+![The Gradient brush's Tool Settings beside the map](images/gradient-brush.png)
 
 The **Gradient brush** (in the Paint tools, beside Paint terrain: a swatch
 fading out, marked with a dot until it is first tried; or **Gradient** at the
@@ -744,7 +744,7 @@ gravel, rooted dirt in andesite, a patchwork of fields. The noise has a
 **stretch** and a **direction** to draw it out into streaks or bands, soft or
 sharp edges and a seed.
 
-> 📷 **Screenshot:** Paint terrain in **Noise** mode, its Tool Settings listing three terrains with their shares and the noise's preview, and a patch painted on the map in True Colour.
+![Paint terrain in Noise mode: three terrains and their shares](images/noise-painting.png)
 
 The blocks are a list, in order — neighbours in the list meet on the ground,
 as in a gradient —, each with its **share of the ground**: the shares always
@@ -787,7 +787,7 @@ it.
 Two tools of the Paint group work from what the map already is, with a
 brush (and its options) or over the whole map at once:
 
-> 📷 **Screenshot:** Auto biome hovered over the map: the brush's preview of the columns that would change, in their new colours, and the bar under the map naming what they become.
+![Auto biome in hand over the map](images/auto-biome.png)
 
 - **Auto biome** reads the land and gives it biomes. Every column is one
   of twenty kinds of land, told from its water (deep, shallow, or with a
@@ -879,7 +879,7 @@ annotations (it sits under the Terrain panel; any area can show it, from
 Paint in the area's chooser). How they fit together is in
 [Layers](layers.md).
 
-> 📷 **Screenshot:** the Layers panel with a ground cover, a tree layer, a combined layer and annotation layers, one of them selected and its settings open.
+![The Layers panel listing the map's layers](images/layers-panel.png)
 
 - a **click** picks one to paint with, with its tool — Ground cover,
   Objects, or Paint terrain with its noise — and Tool Settings shows its
@@ -1126,7 +1126,7 @@ the file with the name of one of the map's comes in as a layer of its own.
 - **Curves**: **Curve** at the top of the tool's settings, in place of **Brush**, draws annotations as curves, as Axiom's Path tool: click to place points, drag a point to move it, drag the curve to add a point, right-click a point (or Delete) to take it off. **Smooth** (a spline through every point), **Bézier** (two handles on the point picked) or **Straight**. It is drawn as the ribbon it will paint, from its **Start width** to its **End width**, until **Paint curve** (Enter) paints it in one step to undo. Escape drops it.
 - **Import Mask** paints annotations from a colour image, each pixel taking the nearest colour (see [Import mask](#import-mask)), and scripts read and write them (see [Scripting](#scripting)).
 
-> 📷 **Screenshot:** the Annotations tool's settings with the fifteen WorldPainter colours and two colours of the map's own below them, and the map behind with a few annotations painted (a curve being drawn, its points visible).
+![The Annotations tool: WorldPainter's colours, an annotation painted on the map](images/annotations-tool.png)
 
 ## Packs
 
@@ -1137,7 +1137,7 @@ editor of its own in the area chooser. A click on an item adds it to the
 map and picks it to paint, with its tool; a click on one the map has
 already (marked with a dot) picks it again. A search field filters them.
 
-> 📷 **Screenshot:** the Packs panel with its categories (trees, plants & ground cover, water plants…) and a pack's tree layers ready to add.
+![The Packs panel and its categories](images/packs-panel.png)
 
 | Section | Holds | Becomes |
 |---|---|---|
@@ -1289,7 +1289,7 @@ The **Water** group holds three tools, which work at any height: the sea's level
 
 The **lava** setting of a new map, and the **Lava** ground cover, give lava in place of water. Water written to the world holds as the game holds it (see [Water in the game](#water-in-the-game)).
 
-> 📷 **Screenshot:** Flood in hand over a valley, with its Tool Settings showing **Water height** and the line that says what a click will do, and the hollow's preview on the map.
+![Flood in hand: its Tool Settings beside the map](images/flood-tool.png)
 
 ### Flood and drain
 
@@ -1392,7 +1392,7 @@ step to undo.
 
 The **River** tool (Water group) lays a river out from its source:
 
-> 📷 **Screenshot:** the River tool after a click on a mountain source: the river's course drawn down to the sea on the map, with its Tool Settings (width, depth, banks).
+![The River tool in hand: its Tool Settings beside the map](images/river-tool.png)
 
 - **Click** on land: the river springs there, and its water finds its own
   way down — down the slope, a block at a time; a hollow it meets fills up
@@ -1524,7 +1524,7 @@ of lava is written as before.
 The **Road** tool (Sculpt terrain group) lays a road through points
 clicked on the 2D map and builds it into the land:
 
-> 📷 **Screenshot:** the Road tool with points placed across a valley and the road's ribbon before Enter, its Tool Settings beside it.
+![The Road tool in hand: its Tool Settings beside the map](images/road-tool.png)
 
 - **Click** on the map: where the road starts; each click after adds a
   point at its end. A smooth curve runs through all of them.
@@ -1570,14 +1570,14 @@ The map's ground is a height for each column. **Levels** add rock over it or car
 
 The **Levels** tools paint on the active level, which must be a Solid or a Carve one: **Stamp slab** adds to it (the right button erases), **Erase slab** erases it (the right button adds). Tool Settings sets the slab's **Thickness** and where its **Centre** stands (**Above ground**, by an **Offset**, negative underground; or **At height**), and what a stroke edits: the level's **Surface**, its **Top** or its **Bottom**. Levels are best seen in the 3D view. Paint terrain and the other paint tools paint the active level's top when it is not the Ground. The Terrain Generator writes floating islands and overhangs as Solid levels of their own, and WorldPainter's tunnel and floating layers import as Carve and Solid levels.
 
-> 📷 **Screenshot:** the Levels panel with the Ground, a Solid level and a Carve level, the active one highlighted, and the 3D View beside it showing a floating island made with Stamp slab.
+![The Levels panel: Solid, Carve and the Ground](images/levels-panel.png)
 
 ## Caves
 
 Caves are a layer painted on the map, carved as Minecraft carves them since
 1.18 wherever it is painted. A **cave layer** says what its caves are:
 
-> 📷 **Screenshot:** Edit ▸ Whole map ▸ Caves… with its settings (chambers, tunnels, noodles, ravines) and the cut of the map showing the caves it carves.
+![Edit ▸ Whole map ▸ Caves…: chambers, tunnels, noodles and ravines](images/caves-dialog.png)
 
 - **Chambers**: large rooms with thin pillars of rock left standing in
   them, the game's "cheese" caves.
@@ -1635,7 +1635,7 @@ The **Layer** tool, first in the Underground group, edits the map block by
 block, one layer at a time — the way to fix a cave by hand, open an
 entrance, wall off a lake or dig a mine.
 
-> 📷 **Screenshot:** the Layer tool on the 2D map cut at a height (Page Up / Page Down), digging a tunnel, the height shown in the map's header.
+![The Layer tool: the map cut at a height, shown in the map's header](images/layer-tool.png)
 
 - **Seeing a layer.** With the tool in hand the 2D map is cut at a height:
   the **Underground** button in the map's header turns the cut on and off,
@@ -1725,7 +1725,7 @@ The **Building** tool changes one building of a village placed from a pack: a cl
 
 The whole story, with every setting, is in [Structures and villages](structures.md); [Village packs](village-packs.md) says how to make a pack of your own builds.
 
-> 📷 **Screenshot:** a village placed with the Structures tool, selected (its outline and corner handles on the map), with the Structures Tool Settings showing its theme, roads and walls.
+![The Structures tool in hand: its Tool Settings beside the map](images/structures-tool.png)
 
 > 📷 **Screenshot:** the Building tool with one house selected in a pack village, and the Tool Settings menu of pictures of the pack's other buildings open.
 
@@ -1734,7 +1734,7 @@ The whole story, with every setting, is in [Structures and villages](structures.
 **Edit ▸ Whole map** runs one of the terrain graph's filters over the whole
 map, without opening the graph:
 
-> 📷 **Screenshot:** Edit ▸ Whole map ▸ Erosion… with its settings and the map small before and after.
+![Edit ▸ Whole map ▸ Erosion…: its settings and the map before and after](images/erosion-dialog.png)
 
 - **Erosion**: rain runs down the slopes and carries soil from the heights
   to the valleys — gullies, worn flanks, fans of silt (the Erosion node:
@@ -1795,7 +1795,7 @@ two or three, terraces and smoothing under half a second.
 **Edit ▸ Whole map ▸ Snowfall…** lays snow over the map by a small
 simulation, as the wind and the slopes would leave it:
 
-> 📷 **Screenshot:** Edit ▸ Whole map ▸ Snowfall… with its settings and the picture of the snow it would lay, drifts in the lee of the ridges.
+![Edit ▸ Whole map ▸ Snowfall…: its settings and the snow it would lay](images/snowfall-dialog.png)
 
 - **Intensity**: how much snow falls, in blocks, before it moves.
 - **Lowest**, **Highest** and **Fade**: the band of heights it falls on,
@@ -1835,7 +1835,7 @@ of the ground; the water and the ice of Frost stay as they are.
 
 The **3D Sculpt** panel is a 3D view with the tools (below), and its **Player** mode walks the land as in the game. The **Diorama** shows the map from straight above as the game would. The **Render** side path-traces it.
 
-> 📷 **Screenshot:** the World side's **3D** workspace with the 3D View in its Terrain look over a mountain map, the header's mode menu open.
+![The World side's 3D workspace: the 3D View over the map](images/view3d.png)
 
 > 📷 **Screenshot:** the 3D View with **X-ray** on over a map with caves (Edit ▸ Whole map ▸ Caves… first), the cave floors glowing through the ground.
 
@@ -2072,7 +2072,7 @@ Massif paints with every block of your game, and of the mods and resource packs 
 
 Once read, a mod's blocks are in the **Blocks** panel and among the terrains, its biomes in the **Biomes** panel (see [Biomes of mods and data packs](#biomes-of-mods-and-data-packs)), its textures in the 3D views and in [True Colour](#true-colour), and its structures among the Structures tool's. A resource pack read changes the textures and colours Massif shows, over the mods' own. The export writes mods' blocks by their ids: open the world with those mods installed. The export dialog warns when the version chosen does not suit the map's mods.
 
-> 📷 **Screenshot:** File ▸ Game & mods… with a Minecraft version found, two mods and a resource pack added as chips, the right-click menu of the resource pack open (Read earlier / Read later (wins)).
+![File ▸ Game & mods…: the version of Minecraft found, mods and instances](images/game-and-mods.png)
 
 ### Block palettes
 
@@ -2085,7 +2085,7 @@ paint the same terrains, so their beaches and beds follow the palette too.
 A terrain a palette leaves out is the game's own; terrains of your own are
 never touched.
 
-> 📷 **Screenshot:** the **Blocks** choice of the New map settings (Vanilla, a mod's palette, your own) and a palette's editor.
+![The block palettes window](images/palettes.png)
 
 **Vanilla**, the game's blocks, comes with Massif. A mod may have a palette
 of its blocks too, offered only once that mod's blocks are read (see
@@ -2320,7 +2320,7 @@ Linux), or chosen by hand. Nothing of the game is
 copied into Massif or the repository; the jar is read in place, in a
 fraction of a second, every time Massif starts.
 
-> 📷 **Screenshot:** the Blocks panel listing the game's blocks by category with their textures, one being painted as a terrain.
+![The Blocks panel](images/blocks-panel.png)
 
 - Every block state file gives a block; its model, followed through its
   parents, gives the textures of its top, sides and bottom; grass, leaves
@@ -2351,7 +2351,7 @@ Massif brings in what you already have:
 - **A copy or a region of this map**, edited elsewhere: **File ▸ Merge Massif Map…**. See [Working together](#working-together).
 - **Packs**: **File ▸ Import Pack…** adds a `.massifpack` someone shared. See [Packs](#packs).
 
-> 📷 **Screenshot:** the Import Report of a WorldPainter world (File ▸ Import Report… after File ▸ Import WorldPainter World…), with its list of what came in and the covers of layers to make the ground's own.
+![The Import Report of a WorldPainter world](images/import-report.png)
 
 ## Height maps
 
@@ -2371,7 +2371,7 @@ Massif brings in what you already have:
   beside Convert to voxels builds the terrain at full size and saves its
   relief as a 16-bit PNG instead of writing it to the map.
 
-> 📷 **Screenshot:** the home screen's **From a height map** page with a 16-bit PNG chosen, its scale and Black is Y / White is Y set, and the preview.
+![The home screen's From a height map page](images/from-height-map.png)
 
 ## Real places
 
@@ -2730,7 +2730,7 @@ from a height map takes a height too.
 
 **Test Export…** writes a part of the map to a world of its own beside the export ("*name* test"), to try it in the game quickly: **The selection**, **Around the view** (384 × 384 blocks around the middle of the map view), **These blocks** (a corner, width and depth typed in), or **Regions**: **Pick on the map…** shows the region files' grid and names over the map; a click takes a region of 512 × 512 blocks, a drag takes or leaves several, and **Done** comes back. **Snap to regions** rounds the other parts out to whole region files. The dialog lists the region files it will write (`r.0.-1.mca`…), and **Export the test** writes them.
 
-> 📷 **Screenshot:** the Test Export page of the export dialog with **Regions** chosen and the list of region files, then the map in **Pick on the map…** mode with the region grid and a few regions picked.
+![The export dialog's Test Export with Regions chosen and the region files listed](images/export-test-regions.png)
 
 ### Versions of the game
 
@@ -2784,7 +2784,7 @@ The export dialog's **Rules** tab sets what goes on by itself in the world,
 written into it so that it opens as set: no `/gamerule` to type after each
 export.
 
-> 📷 **Screenshot:** the export dialog's Rules tab with the **Creative / Frozen** preset chosen and its rules greyed where the version lacks them.
+![The export dialog's Rules, Creative / Frozen chosen, rules greyed where the version lacks them](images/export-rules.png)
 
 - **Game**: the game mode, the difficulty, hardcore.
 - **Preset**: **Creative / Frozen** (nothing spawns, spreads, grows or
@@ -2826,7 +2826,7 @@ veins start: few at the ends of a band, the most over its peak (a
 trapezoid: a triangle when the peak is one height, an even spread when it is
 the whole band), so many veins a chunk, so many blocks a vein.
 
-> 📷 **Screenshot:** Edit ▸ Ores… with the cut through the map showing the ores and the candles of each band, the chart below.
+![Edit ▸ Ores…: the cut through the map with the candles of each band, and the chart](images/ores-dialog.png)
 
 - **Across the top**, each ore with what the map is expected to hold of it
   (a click picks it; a funnel marks one kept to some biomes), and the map
@@ -2905,7 +2905,7 @@ On a WorldPainter map of 5,888 blocks a side (4.3 billion blocks) it takes
 a few seconds, in the background. The ores are counted where the export
 lays them, block for block.
 
-> 📷 **Screenshot:** Edit ▸ Analyse the map… on a finished map: the red, amber and green findings, the way through a game, and the card beside them.
+![Edit ▸ Analyse the map…: the survival check's findings](images/survival-check.png)
 
 What it finds comes in three tones, as a survival player would read it:
 
@@ -3014,7 +3014,7 @@ A map larger than the graphics card's buffers is drawn in part, and says
 so. With less motion (Settings ▸ Accessibility), the view stops at 64
 samples a pixel.
 
-> 📷 **Screenshot:** the Render side's **Still** workspace with the Render Viewport converged over a mountain map at sunset, Sun and Sky open beside it.
+![The Render side's Still workspace: the Render Viewport with Sun and Sky, Camera and Render Output](images/render-still.png)
 
 ## Save points
 
@@ -3023,7 +3023,7 @@ A save point keeps the map as it is now under a name — "before the rivers",
 **File ▸ Save Point…**, or **Save point…** at the top of the **Versions**
 panel (under World in an area's list of editors), asks for its name.
 
-> 📷 **Screenshot:** the Versions panel with three save points, their pictures and dates, one being compared on the map (higher and lower land in the accent).
+![The Versions panel](images/versions-panel.png)
 
 The Versions panel lists the map's points, the newest first, each with a
 small picture of it from above, its name and when it was made:
@@ -3075,7 +3075,7 @@ rest of Massif: on a map of 44,544 × 33,536 blocks (91,176 tiles, a 1 GB
 file), the editor stops for 3 to 8 milliseconds to take it, and the frames
 keep their pace while it is written (5 to 12 seconds).
 
-> 📷 **Screenshot:** the **Restore unsaved changes?** window at start after a forced quit, listing a map, when its copy was taken, its file and size.
+![The Restore unsaved changes? window after a forced quit](images/restore-unsaved.png)
 
 Should Massif close without saving — a crash, a forced quit, a power cut —
 it shows, the next time it starts, **Restore unsaved changes?**: each map
@@ -3133,7 +3133,7 @@ The dialog of Run Script… shows the script's parameters (from its descriptor),
 - [MassifScript](massifscript.md): the language, the editor, Copy for AI, and [the reference of every node](massifscript-reference.md).
 - An **MCP server** for MassifScript, so that an AI assistant could build and change graphs in Massif directly, is planned but not shipped: today, Copy for AI and pasting the answer back is the way.
 
-> 📷 **Screenshot:** File ▸ Run Script… with a Lua script chosen, its parameters filled in and its output after a run.
+![File ▸ Run Script…: a Lua script's parameter and its output after a run](images/run-script.png)
 
 ## Command line
 
@@ -3291,14 +3291,14 @@ their own:
   drawing when nothing changes, so the charts show how many frames the
   computer makes. Both apply at once, and only in developer mode.
 
-> 📷 **Screenshot:** the Settings window on its **Graphics** section, the Low · Medium · High presets above the 3D views' settings.
+![Settings ▸ Graphics: the Low · Medium · High presets above the 3D views' settings](images/settings-graphics.png)
 
 ## Controls
 
 Massif follows WorldPainter's defaults. These are the keys out of the box;
 **Settings ▸ Keyboard** changes any of them.
 
-> 📷 **Screenshot:** Settings ▸ Keyboard with its columns (General, Tools, Brushes, Map, 3D view, Player) and the search.
+![Settings ▸ Keyboard: the shortcuts in columns, and the search](images/settings-keyboard.png)
 
 ### Your own shortcuts
 
@@ -3452,7 +3452,7 @@ an [issue on GitHub](https://github.com/M-U-C-K-A/Massif/issues). Nothing is
 sent from Massif: you save the file where you like and send it yourself. The
 dialog links to both. It holds:
 
-> 📷 **Screenshot:** Help ▸ Report a Problem… filled in, with what it attaches listed.
+![Help ▸ Report a Problem…: what it attaches](images/report-problem.png)
 
 - `report.txt`: what happened, in your words if you write them; Massif's
   version and the commit it was built from; the system, the processor and

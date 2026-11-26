@@ -8853,6 +8853,9 @@ mod perf_tests;
 #[cfg(test)]
 #[path = "views_loading_tests.rs"]
 mod views_loading_tests;
+#[cfg(test)]
+#[path = "doc_captures_tests.rs"]
+mod doc_captures_tests;
 
 #[cfg(test)]
 mod tests {
