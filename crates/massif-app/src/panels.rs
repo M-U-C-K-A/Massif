@@ -1713,12 +1713,14 @@ pub fn annotation_name(n: u16) -> &'static str {
 
 /// The colours of annotations as swatches `size` points wide, the fifteen
 /// then the map's own, the one of `picked` ringed; returns the one clicked.
-pub fn annotation_swatches(ui: &mut Ui, size: f32, picked: Option<u16>, palette: &massif_core::annotations::AnnotationPalette) -> Option<u16> {
+/// `sorted`: the annotation layers sorted into a palette are offered too
+/// (the Layers panel lists them in their palettes instead).
+pub fn annotation_swatches(ui: &mut Ui, size: f32, picked: Option<u16>, palette: &massif_core::annotations::AnnotationPalette, sorted: bool) -> Option<u16> {
     let pal = Palette::of(ui);
     let mut clicked = None;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(size / 6.0, size / 6.0);
-        for n in palette.numbers() {
+        for n in palette.numbers().filter(|&n| sorted || !palette.in_palette(n)) {
             let Some(color) = palette.color(n) else { continue };
             let color = &color;
             let name = annotation_label(n, palette);
@@ -1789,7 +1791,7 @@ fn annotation_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
     if palette.color(tools.annotation).is_none() {
         tools.annotation = 14;
     }
-    if let Some(n) = annotation_swatches(ui, 24.0, Some(tools.annotation), palette) {
+    if let Some(n) = annotation_swatches(ui, 24.0, Some(tools.annotation), palette, true) {
         tools.annotation = n;
     }
     ui.add_space(6.0);

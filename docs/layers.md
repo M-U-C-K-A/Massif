@@ -145,9 +145,12 @@ The panel lists the combined layers first, then the layers by slot, in
 the order the export lays them: terrain mixes (the ground), ground
 covers, trees and objects, under the trees, underground pockets; then
 the tree sizes and the annotations. Biomes are painted from
-the Biome panel. Within a section, the order is yours: **Move up** and
-**Move down** in a layer's menu. As a block holds one layer of a slot, the
-order changes the list, not the world.
+the Biome panel. Within a section, the order is yours: drag a layer onto
+another of its list, and let it go on that row's upper half to put it
+above, on its lower half to put it below (a line in the accent shows
+where it will go); or **Move up** and **Move down** in its menu. Each move
+is one step to undo, saved with the map. As a block holds one layer of a
+slot, the order changes the list, not the world: the export is the same.
 
 The **eye** hides a layer on the map and in the 3D view, to see what lies
 under it; the export writes it all the same. The **lock** (pointed at, a
@@ -166,8 +169,11 @@ rather than in its section, with what it is and does unchanged: its slot,
 its order in the export, its lock and eye. Dragged onto a section's title,
 or by ▸ Palette ▸ **Back to its section**, it goes back. A palette's menu
 renames it, moves it up or down, or deletes it: its layers go back to
-their sections, none is removed. Palettes are a way of listing layers, not
-of painting them: they never change the map's blocks.
+their sections, none is removed. Inside a palette, a layer dragged onto
+another of its kind goes above or below it, as in a section; dragged onto
+a layer of another palette, it joins that palette at that place. Palettes
+are a way of listing layers, not of painting them: they never change the
+map's blocks.
 
 A palette's **eye**, on the left of its title, hides or shows every layer
 of it at once on the map and in the 3D views, ground covers and object

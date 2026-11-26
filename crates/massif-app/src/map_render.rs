@@ -825,7 +825,8 @@ impl<'a> Colorizer<'a> {
             auto: AutoBiome::new(reg),
             notes: (0..=massif_core::annotations::MAX)
                 .map(|n| {
-                    let alpha = reg.annotations.drawn_opacity(n) as f32 / 100.0;
+                    // A layer in a palette follows its palette's eye.
+                    let alpha = reg.annotations.shown_opacity(n, style.annotations) as f32 / 100.0;
                     reg.annotations.color(n).filter(|_| alpha > 0.0).map(|c| (rgb(c), alpha))
                 })
                 .collect(),
@@ -1086,12 +1087,11 @@ impl<'a> Colorizer<'a> {
         {
             out = mix(out, color.map(|v| v as f32), 0.6);
         }
-        // Annotations: marks of colour over everything else.
-        if self.style.annotations {
-            for n in std::iter::once(c.annotation).chain(c.notes) {
-                if let Some(Some((color, alpha))) = self.notes.get(n as usize) {
-                    out = mix(out, *color, *alpha);
-                }
+        // Annotations: marks of colour over everything else (those hidden
+        // with all the annotations have none here).
+        for n in std::iter::once(c.annotation).chain(c.notes) {
+            if let Some(Some((color, alpha))) = self.notes.get(n as usize) {
+                out = mix(out, *color, *alpha);
             }
         }
 

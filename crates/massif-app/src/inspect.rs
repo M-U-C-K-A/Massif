@@ -148,7 +148,7 @@ impl ColumnInfo {
                 layers.push(LayerHere { matches: None, kind: tr!("Combined"), name: c.name.clone(), color: c.color, intensity: None, paint: Some(Paint::Combined(i as u16 + 1)) });
             }
         }
-        let notes: Vec<u16> = stack.ground().notes(cell).collect();
+        let notes: Vec<u16> = stack.ground().notes(cell).filter(|&n| !reg.annotations.is_removed(n)).collect();
         for n in notes {
             let color = reg.annotations.color(n).unwrap_or([128; 3]);
             let kind = if reg.annotations.is_layer(n) { tr!("Annotation layer") } else { tr!("Annotation") };

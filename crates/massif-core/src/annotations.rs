@@ -37,11 +37,16 @@ pub struct CustomColor {
     /// layer ("": none, it stays with the annotations).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub palette: String,
+    /// Deleted as an annotation layer: no longer listed, offered or drawn
+    /// (its number is kept, so that the others keep theirs, and its marks
+    /// come back with an undo).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub removed: bool,
 }
 
 impl CustomColor {
     pub fn new(rgb: [u8; 3]) -> Self {
-        Self { rgb, opacity: DEFAULT_OPACITY, name: String::new(), hidden: false, palette: String::new() }
+        Self { rgb, opacity: DEFAULT_OPACITY, name: String::new(), hidden: false, palette: String::new(), removed: false }
     }
 }
 
@@ -95,18 +100,37 @@ impl AnnotationPalette {
     }
 
     /// How opaque annotation `n` is drawn: its opacity, 0 when its layer
-    /// is hidden.
+    /// is hidden or deleted.
     pub fn drawn_opacity(&self, n: u16) -> u8 {
         match n {
             0..=PRESETS => self.opacity(n),
-            _ => self.custom.get((n - PRESETS - 1) as usize).map_or(0, |c| if c.hidden { 0 } else { c.opacity }),
+            _ => self.custom.get((n - PRESETS - 1) as usize).map_or(0, |c| if c.hidden || c.removed { 0 } else { c.opacity }),
         }
+    }
+
+    /// Whether annotation `n` is an annotation layer sorted into a palette
+    /// of the Layers panel: shown or hidden by its own eye (its palette's),
+    /// whatever the eye of all the annotations says.
+    pub fn in_palette(&self, n: u16) -> bool {
+        n > PRESETS && self.custom.get((n - PRESETS - 1) as usize).is_some_and(|c| !c.name.is_empty() && !c.palette.is_empty())
+    }
+
+    /// How opaque annotation `n` is drawn with the annotations shown
+    /// (`all`) or hidden: a layer in a palette as its own eye says, the
+    /// others only with all the annotations.
+    pub fn shown_opacity(&self, n: u16, all: bool) -> u8 {
+        if all || self.in_palette(n) { self.drawn_opacity(n) } else { 0 }
+    }
+
+    /// Whether annotation `n` is a deleted annotation layer.
+    pub fn is_removed(&self, n: u16) -> bool {
+        n > PRESETS && self.custom.get((n - PRESETS - 1) as usize).is_some_and(|c| c.removed)
     }
 
     /// The annotation layers: the map's own colours that have a name, by
     /// number.
     pub fn layers(&self) -> impl Iterator<Item = (u16, &CustomColor)> + '_ {
-        self.custom.iter().enumerate().filter(|(_, c)| !c.name.is_empty()).map(|(k, c)| (k as u16 + PRESETS + 1, c))
+        self.custom.iter().enumerate().filter(|(_, c)| !c.name.is_empty() && !c.removed).map(|(k, c)| (k as u16 + PRESETS + 1, c))
     }
 
     /// Whether `n` is an annotation layer (a colour of the map's own with
@@ -182,9 +206,10 @@ impl AnnotationPalette {
         Some(n)
     }
 
-    /// Every number with a colour: the fifteen, then the map's own.
+    /// Every number with a colour: the fifteen, then the map's own (but
+    /// the annotation layers deleted).
     pub fn numbers(&self) -> impl Iterator<Item = u16> + '_ {
-        1..=PRESETS + self.custom.len() as u16
+        (1..=PRESETS + self.custom.len() as u16).filter(|&n| !self.is_removed(n))
     }
 
     /// The nearest colour to `c` (1 to 15, or one of the map's own).

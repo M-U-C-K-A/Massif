@@ -205,6 +205,7 @@ pub fn commit(doc: &mut Document, tools: &mut ToolState) -> Feedback {
         return Some(tr!("A curve needs two points at least").into());
     }
     let ribbon = draft.curve.ribbon(tools.curve.width.max(0.0), tools.curve.end_width.max(0.0));
+    crate::tools::show_painted(doc, tools);
     doc.history.begin(tr!("Annotation curve"), doc.dim);
     let layer = doc.world.registry.annotations.is_layer(tools.annotation);
     massif_core::ops::paint_annotation_ribbon(&mut doc.history.edit(&mut doc.world, 0), &ribbon, tools.annotation.max(1), layer);

@@ -569,8 +569,9 @@ pub struct Style {
     /// The world's fluid is lava.
     pub lava: bool,
     /// The annotations shown on the land: the fingerprint of the map's
-    /// colours of annotations; `None`: hidden.
-    pub notes: Option<u64>,
+    /// colours of annotations, and whether all are shown (else only the
+    /// layers in a palette, by their own eyes); `None`: none.
+    pub notes: Option<(u64, bool)>,
     /// The caves of the cave layers drawn: those open to the sky seen from
     /// above, all of them from inside (walking, as a ghost).
     pub caves: massif_core::compose::Caves,
@@ -654,14 +655,12 @@ pub fn object_density(dim: &Dimension, reg: &Registry, seed: i64, lava: bool, x0
 
 /// The colour of each annotation by number and how opaque it is drawn (0
 /// to 1), for `notes` (see [`Style::notes`]); empty when hidden.
-fn note_colors(reg: &Registry, notes: Option<u64>) -> Vec<Option<([u8; 3], f32)>> {
-    if notes.is_none() {
-        return Vec::new();
-    }
+fn note_colors(reg: &Registry, notes: Option<(u64, bool)>) -> Vec<Option<([u8; 3], f32)>> {
+    let Some((_, all)) = notes else { return Vec::new() };
     let p = &reg.annotations;
     (0..=massif_core::annotations::MAX)
         .map(|n| {
-            let alpha = p.drawn_opacity(n) as f32 / 100.0;
+            let alpha = p.shown_opacity(n, all) as f32 / 100.0;
             p.color(n).filter(|_| alpha > 0.0).map(|c| (c, alpha))
         })
         .collect()
@@ -5033,8 +5032,8 @@ impl Default for View3d {
 
 impl View3d {
     /// The annotations as the style shows them (see [`Style::notes`]).
-    fn notes(&self, doc: &Document) -> Option<u64> {
-        self.annotations.then(|| doc.world.registry.annotations.fingerprint())
+    fn notes(&self, doc: &Document) -> Option<(u64, bool)> {
+        Some((doc.world.registry.annotations.fingerprint(), self.annotations))
     }
 
     /// A view of its own beside this one: looking where it looks, with
@@ -7604,7 +7603,7 @@ mod tests {
         h.commit();
         let dim = &w.dims[0];
         let tile = TilePos::new(0, 0);
-        let shown = build_tile(dim, &w.registry, 63.0, w.meta.seed, tile, Style { notes: Some(w.registry.annotations.fingerprint()), ..STYLE });
+        let shown = build_tile(dim, &w.registry, 63.0, w.meta.seed, tile, Style { notes: Some((w.registry.annotations.fingerprint(), true)), ..STYLE });
         let hidden = build_tile(dim, &w.registry, 63.0, w.meta.seed, tile, STYLE);
         let at = |b: &TileBuild| b.pairs[b.colors[64 * 128 + 64] as usize].top;
         let (blue, ground) = (at(&shown), at(&hidden));

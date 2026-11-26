@@ -1583,6 +1583,28 @@ pub fn touches_selection(sel: &massif_core::selection::Selection, rect: massif_c
 
 /// Begin a stroke at block position `at`. Returns `None` when the tool
 /// cannot act here (the reason is in the feedback).
+/// The layer about to be painted with made visible, as WorldPainter does,
+/// whatever hid it: its own eye or its palette's (a cover, an object layer,
+/// an annotation layer), or the eye of all the annotations for a colour or
+/// an annotation layer in no palette. Returns whether it was hidden.
+pub fn show_painted(doc: &mut Document, tools: &mut ToolState) -> bool {
+    let reg = &mut doc.world.registry;
+    let mut shown = match tools.tool {
+        Tool::Cover => tools.cover.checked_sub(1).and_then(|k| reg.covers.get_mut(k as usize)).is_some_and(|c| std::mem::take(&mut c.hidden)),
+        Tool::Objects => tools.object_layer.checked_sub(1).and_then(|k| reg.object_layers.get_mut(k as usize)).is_some_and(|l| std::mem::take(&mut l.hidden)),
+        Tool::Annotate => reg.annotations.is_layer(tools.annotation) && reg.annotations.layer_mut(tools.annotation).is_some_and(|c| std::mem::take(&mut c.hidden)),
+        _ => false,
+    };
+    if shown {
+        doc.mark_changed();
+    }
+    if tools.tool == Tool::Annotate && !tools.show_annotations && !doc.world.registry.annotations.in_palette(tools.annotation) {
+        tools.show_annotations = true;
+        shown = true;
+    }
+    shown
+}
+
 pub fn begin_stroke(doc: &mut Document, tools: &ToolState, at: (f32, f32), inverse: bool, secondary: bool) -> (Option<Stroke>, Feedback) {
     let tool = tools.tool;
     if tool == Tool::Pan || tool.is_click() {

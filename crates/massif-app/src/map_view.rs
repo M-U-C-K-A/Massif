@@ -1623,6 +1623,7 @@ impl MapView {
             } else if tools.tool.is_click() {
                 *feedback = tools::click(doc, tools, bx, bz, inverse);
             } else if tools.tool.uses_brush() {
+                tools::show_painted(doc, tools);
                 let (stroke, msg) = tools::begin_stroke(doc, tools, (x as f32, z as f32), inverse, secondary);
                 *feedback = msg.or(feedback.take());
                 if let Some(stroke) = stroke {

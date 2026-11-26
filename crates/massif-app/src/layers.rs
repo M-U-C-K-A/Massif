@@ -195,6 +195,9 @@ enum Action {
     ToggleLock(Kind, usize),
     /// Up (`true`) or down the list of its section.
     Move(Kind, usize, bool),
+    /// A layer dragged onto another of its list: put just before it, or
+    /// just after (`true`), and into its palette.
+    Place(Kind, usize, usize, bool),
     Rename(Kind, usize, String),
     Renamed(Kind, usize, String),
     Duplicate(Kind, usize),
@@ -242,6 +245,8 @@ struct Entry {
     palette: String,
     /// Shown alone (solo).
     solo: bool,
+    /// A sub-canopy object layer: listed apart from the others.
+    under: bool,
 }
 
 
@@ -299,6 +304,7 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                     selected: tools.tool == Tool::Combined && tools.combined as usize == k + 1,
                     palette: c.palette.clone(),
                     solo: false,
+                    under: false,
                 },
             )
         })
@@ -328,6 +334,7 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                 selected: current.as_deref() == Some(p.name.as_str()),
                 palette: p.palette.clone(),
                 solo: false,
+                under: false,
             }
         })
         .collect();
@@ -353,6 +360,7 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                     selected: tools.tool == Tool::Cover && tools.cover as usize == k + 1,
                     palette: c.palette.clone(),
                     solo: false,
+                    under: false,
                 },
             )
         })
@@ -385,6 +393,7 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                     selected: tools.tool == Tool::Objects && tools.object_layer as usize == k + 1,
                     palette: l.palette.clone(),
                     solo: false,
+                    under: l.understory,
                 },
             )
         })
@@ -414,6 +423,7 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                     selected: tools.tool == Tool::Pockets && tools.pocket_layer as usize == k + 1,
                     palette: p.palette.clone(),
                     solo: false,
+                    under: false,
                 },
             )
         })
@@ -439,6 +449,7 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
             selected: tools.tool == Tool::Annotate && tools.annotation == n,
             palette: c.palette.clone(),
             solo: false,
+            under: false,
         })
         .collect();
 
@@ -618,7 +629,7 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
             doc.mark_changed();
         }
     }
-    if let Some(n) = crate::panels::annotation_swatches(ui, 20.0, (tools.tool == Tool::Annotate).then_some(tools.annotation), &doc.world.registry.annotations) {
+    if let Some(n) = crate::panels::annotation_swatches(ui, 20.0, (tools.tool == Tool::Annotate).then_some(tools.annotation), &doc.world.registry.annotations, false) {
         tools.annotation = n;
         tools.select(Tool::Annotate);
     }
@@ -627,10 +638,10 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     hint(ui, tr!("+ makes an annotation layer of its own, named and shown or hidden on its own."));
 
     ui.add_space(8.0);
-    hint(ui, tr!("Click a layer to paint it, double-click to rename it; its menu has its settings, its place in the list, its lock. A block holds one layer of each section. Ready-made trees, plants and mixes: Packs, above."));
+    hint(ui, tr!("Click a layer to paint it, double-click to rename it, drag it onto another to move it; its menu has its settings, its place in the list, its lock. A block holds one layer of each section. Ready-made trees, plants and mixes: Packs, above."));
 
     for action in actions {
-        apply(action, tools, doc, state, &lists);
+        apply_step(action, tools, doc, state, &lists);
     }
     if (doc.world.registry.covers.clone(), doc.world.registry.object_layers.clone(), doc.world.registry.pockets.clone(), doc.world.registry.combined.clone(), doc.world.registry.palettes.clone(), doc.world.registry.annotations.clone()) != before {
         doc.mark_changed();
@@ -686,7 +697,7 @@ fn section_header(ui: &mut Ui, icon: Icon, title: &str, add: &str, tip: &str) ->
 
 /// A layer being dragged to a palette: its kind and number.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Dragged(Kind, usize);
+struct Dragged(Kind, usize, bool);
 
 /// The palettes the panel shows, in their order: the map's, then any a
 /// layer or a terrain mix names that the map does not list (a mix saved
@@ -875,7 +886,12 @@ fn palette_group(ui: &mut Ui, name: &str, place: usize, count: usize, members: &
         });
     }
     let whole = Rect::from_min_max(egui::pos2(rect.left(), top), egui::pos2(rect.right(), ui.min_rect().bottom().max(rect.bottom())));
-    if let Some(d) = dropped_on(ui, whole) {
+    // A layer of its own held over it is being sorted, not sorted in: no
+    // ring (its row shows where it goes).
+    let own = egui::DragAndDrop::payload::<Dragged>(ui.ctx()).is_some_and(|d| members.iter().any(|e| (e.kind, e.id) == (d.0, d.1)));
+    if !own
+        && let Some(d) = dropped_on(ui, whole)
+    {
         actions.push(Action::SetPalette(d.0, d.1, name.to_owned()));
     }
 }
@@ -898,10 +914,14 @@ fn row(ui: &mut Ui, e: &Entry, state: &mut LayersUi, names: &[String], actions: 
         ui.allocate_space(size);
         return;
     }
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
+    // An id of its own, not counted from the widgets before it: the lock
+    // shown on the row pointed at would change it, and a drag from the
+    // rows under that one would be lost.
+    let (_, rect) = ui.allocate_space(size);
+    let response = ui.interact(rect, egui::Id::new(("layer row", e.kind as u8, e.id)), Sense::click_and_drag());
     // Dragged, to a palette or out of one.
     if response.drag_started() {
-        egui::DragAndDrop::set_payload(ui.ctx(), Dragged(e.kind, e.id));
+        egui::DragAndDrop::set_payload(ui.ctx(), Dragged(e.kind, e.id, e.under));
     }
     let response = response.on_hover_text(&e.tip);
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, e.selected, &e.name));
@@ -946,6 +966,7 @@ fn row(ui: &mut Ui, e: &Entry, state: &mut LayersUi, names: &[String], actions: 
     }
     let detail = painter.layout_no_wrap(e.detail.clone(), egui::FontId::proportional(11.0), pal.weak);
     let detail_w = detail.size().x + lock_w;
+    insert_here(ui, rect, e, actions);
     painter.galley(rect.right_center() - vec2(8.0 + detail_w, detail.size().y / 2.0), detail, pal.weak);
     let name_rect = Rect::from_min_max(rect.left_top() + vec2(46.0, 3.0), rect.right_bottom() - vec2(16.0 + detail_w, 3.0));
 
@@ -1065,10 +1086,6 @@ fn row(ui: &mut Ui, e: &Entry, state: &mut LayersUi, names: &[String], actions: 
                 ui.close();
             }
         });
-        // An annotation layer stays: its marks are numbered by it.
-        if e.kind == Kind::Note {
-            return;
-        }
         ui.separator();
         let pal = Palette::of(ui);
         let what = match e.kind {
@@ -1076,13 +1093,98 @@ fn row(ui: &mut Ui, e: &Entry, state: &mut LayersUi, names: &[String], actions: 
             Kind::Objects => tr!("Nothing stands where it was painted any more"),
             Kind::Mix => tr!("Forget this mix (the ground painted with it stays)"),
             Kind::Pockets => tr!("No pocket where it was painted any more"),
-            Kind::Combined | Kind::Note => tr!("What it painted stays"),
+            Kind::Combined => tr!("What it painted stays"),
+            Kind::Note => tr!("Its marks go from the map with it; Undo brings them back"),
         };
         if crate::widgets::button(ui, RichText::new(theme::with_icon(Icon::Trash2, tr!("Remove"))).color(pal.danger)).on_hover_text(what).clicked() {
             actions.push(Action::Remove(e.kind, e.id));
             ui.close();
         }
     });
+}
+
+/// Another layer of the same list held over row `rect` of `e`: a line in
+/// the accent where it would go, above or below the row by the pointer's
+/// half; let go, it is put there (into the row's palette, if another).
+/// Annotation layers keep their place: their marks are numbered by it.
+fn insert_here(ui: &Ui, rect: Rect, e: &Entry, actions: &mut Vec<Action>) {
+    let Some(held) = egui::DragAndDrop::payload::<Dragged>(ui.ctx()) else { return };
+    if (held.0, held.2) != (e.kind, e.under) || held.1 == e.id || e.kind == Kind::Note {
+        return;
+    }
+    let Some(at) = ui.ctx().pointer_hover_pos().or_else(|| ui.ctx().pointer_latest_pos()).filter(|p| rect.contains(*p)) else { return };
+    let after = at.y > rect.center().y;
+    if ui.input(|i| i.pointer.any_released()) {
+        egui::DragAndDrop::clear_payload(ui.ctx());
+        actions.push(Action::Place(e.kind, held.1, e.id, after));
+        return;
+    }
+    // In the gap between two rows (half the spacing out), as wide as them.
+    let gap = ui.spacing().item_spacing.y / 2.0;
+    let y = if after { rect.bottom() + gap } else { rect.top() - gap };
+    let line = Rect::from_center_size(egui::pos2(rect.center().x, y), vec2(rect.width() - 4.0, 2.0));
+    ui.painter().rect_filled(line, theme::PILL, Palette::of(ui).accent);
+}
+
+/// Where layer `id` of `kind` is sorted: its palette ("": none).
+fn palette_of(reg: &massif_core::registry::Registry, mixes: &[crate::tools::PatternPreset], kind: Kind, id: usize) -> Option<String> {
+    match kind {
+        Kind::Mix => mixes.get(id).map(|m| m.palette.clone()),
+        Kind::Cover => reg.covers.get(id.wrapping_sub(1)).map(|c| c.palette.clone()),
+        Kind::Objects => reg.object_layers.get(id.wrapping_sub(1)).map(|l| l.palette.clone()),
+        Kind::Pockets => reg.pockets.get(id.wrapping_sub(1)).map(|p| p.palette.clone()),
+        Kind::Combined => reg.combined.get(id.wrapping_sub(1)).map(|c| c.palette.clone()),
+        Kind::Note => reg.annotations.layers().find(|(n, _)| *n as usize == id).map(|(_, c)| c.palette.clone()),
+    }
+}
+
+/// Layer `id` of `kind` put just before layer `target` (just after if
+/// `after`) among the layers of its kind: every one numbered again in the
+/// new order (`order`, the place the Layers panel shows it at; the export
+/// never reads it). False if nothing moved.
+fn reorder(reg: &mut massif_core::registry::Registry, kind: Kind, id: usize, target: usize, after: bool) -> bool {
+    fn order_mut(reg: &mut massif_core::registry::Registry, kind: Kind, n: usize) -> Option<&mut u32> {
+        match kind {
+            Kind::Cover => reg.covers.get_mut(n.wrapping_sub(1)).map(|c| &mut c.order),
+            Kind::Objects => reg.object_layers.get_mut(n.wrapping_sub(1)).map(|l| &mut l.order),
+            Kind::Pockets => reg.pockets.get_mut(n.wrapping_sub(1)).map(|p| &mut p.order),
+            Kind::Combined => reg.combined.get_mut(n.wrapping_sub(1)).map(|c| &mut c.order),
+            Kind::Mix | Kind::Note => None,
+        }
+    }
+    let count = match kind {
+        Kind::Cover => reg.covers.len(),
+        Kind::Objects => reg.object_layers.len(),
+        Kind::Pockets => reg.pockets.len(),
+        Kind::Combined => reg.combined.len(),
+        Kind::Mix | Kind::Note => return false,
+    };
+    // Every layer of the kind as the panel sorts them, removed ones too.
+    let mut ids: Vec<usize> = (1..=count).collect();
+    ids.sort_by_key(|&n| (order_mut(reg, kind, n).map_or(0, |o| *o), n));
+    let Some(from) = ids.iter().position(|&n| n == id) else { return false };
+    ids.remove(from);
+    let Some(to) = ids.iter().position(|&n| n == target) else { return false };
+    ids.insert(to + usize::from(after), id);
+    let mut moved = false;
+    for (place, &n) in ids.iter().enumerate() {
+        if let Some(o) = order_mut(reg, kind, n) {
+            moved |= *o != place as u32 + 1;
+            *o = place as u32 + 1;
+        }
+    }
+    moved
+}
+
+/// Palette `name` listed with the map's from now on, where it was shown
+/// (`names`), if it was only named by its layers.
+fn list_palette(reg: &mut massif_core::registry::Registry, names: &[String], name: &str) {
+    if !name.is_empty() && !reg.palettes.iter().any(|p| p == name) {
+        reg.palettes = names.to_vec();
+        if !reg.palettes.iter().any(|p| p == name) {
+            reg.palettes.push(name.to_owned());
+        }
+    }
 }
 
 /// Sort layer `id` of `kind` into palette `name` ("": none).
@@ -1147,20 +1249,57 @@ pub fn unique_name<'a>(name: &str, taken: impl Iterator<Item = &'a str> + Clone)
     (2..).map(|k| format!("{name} {k}")).find(|n| free(n)).expect("a free name")
 }
 
+/// [`apply`], a removal as one step to undo (the map's layers as they
+/// were, an annotation layer's marks with them).
+fn apply_step(action: Action, tools: &mut ToolState, doc: &mut Document, state: &mut LayersUi, lists: &[(Kind, bool, Vec<Entry>)]) {
+    let undoable = matches!(action, Action::Remove(kind, _) if kind != Kind::Mix);
+    let before = undoable.then(|| doc.world.registry.clone());
+    apply(action, tools, doc, state, lists);
+    if let Some(before) = before
+        && before != doc.world.registry
+    {
+        let after = std::mem::replace(&mut doc.world.registry, before);
+        let meta = doc.world.meta.clone();
+        doc.history.replace_settings(&mut doc.world, meta, after, tr!("Remove a layer"));
+        doc.mark_changed();
+    }
+}
+
 fn apply(action: Action, tools: &mut ToolState, doc: &mut Document, state: &mut LayersUi, lists: &[(Kind, bool, Vec<Entry>)]) {
     let names = palette_names(&doc.world.registry, &tools.pattern.saved);
     let reg = &mut doc.world.registry;
     match action {
         Action::SetPalette(kind, id, name) => {
-            if !name.is_empty() && !reg.palettes.contains(&name) {
-                // A palette named only by its layers is listed from now on,
-                // where it was shown.
-                reg.palettes = names.clone();
-                if !reg.palettes.contains(&name) {
-                    reg.palettes.push(name.clone());
-                }
-            }
+            list_palette(reg, &names, &name);
             set_palette(reg, &mut tools.pattern.saved, kind, id, name);
+        }
+        Action::Place(Kind::Note, ..) => {}
+        Action::Place(Kind::Mix, k, target, after) => {
+            // A saved mix: the settings', not the map's.
+            let saved = &mut tools.pattern.saved;
+            if k == target || k >= saved.len() || target >= saved.len() {
+                return;
+            }
+            let mut mix = saved.remove(k);
+            mix.palette = saved[if target > k { target - 1 } else { target }].palette.clone();
+            let to = if target > k { target - 1 } else { target } + usize::from(after);
+            saved.insert(to, mix);
+            list_palette(reg, &names, &saved[to].palette);
+        }
+        Action::Place(kind, id, target, after) => {
+            // One step to undo, the map's layers as they were.
+            let Some(palette) = palette_of(reg, &tools.pattern.saved, kind, target) else { return };
+            let mut new = reg.clone();
+            if palette_of(&new, &tools.pattern.saved, kind, id).is_some_and(|p| p != palette) {
+                list_palette(&mut new, &names, &palette);
+                set_palette(&mut new, &mut tools.pattern.saved, kind, id, palette);
+            }
+            reorder(&mut new, kind, id, target, after);
+            if new != doc.world.registry {
+                let meta = doc.world.meta.clone();
+                doc.history.replace_settings(&mut doc.world, meta, new, tr!("Move a layer"));
+                doc.mark_changed();
+            }
         }
         Action::NewPalette(layer) => {
             let name = unique_name(tr!("Palette"), names.iter().map(String::as_str));
@@ -1266,46 +1405,13 @@ fn apply(action: Action, tools: &mut ToolState, doc: &mut Document, state: &mut 
         }
         Action::ToggleLock(Kind::Mix | Kind::Combined | Kind::Note, _) => {}
         Action::Move(kind, id, up) => {
-            // Its section's list, in the order shown; it changes place with
-            // its neighbour.
+            // Its list, in the order shown: it goes before the one above it
+            // or after the one below.
             let Some(ids) = lists.iter().find(|l| l.0 == kind && l.2.iter().any(|e| e.id == id)).map(|l| l.2.iter().map(|e| e.id).collect::<Vec<usize>>()) else { return };
             let Some(k) = ids.iter().position(|&i| i == id) else { return };
             let other = if up { k.checked_sub(1) } else { Some(k + 1).filter(|&o| o < ids.len()) };
             let Some(other) = other else { return };
-            let mut ids = ids;
-            ids.swap(k, other);
-            match kind {
-                Kind::Note => {}
-                Kind::Mix => tools.pattern.saved.swap(k, other),
-                Kind::Pockets => {
-                    for (place, &n) in ids.iter().enumerate() {
-                        if let Some(p) = reg.pockets.get_mut(n - 1) {
-                            p.order = place as u32 + 1;
-                        }
-                    }
-                }
-                Kind::Combined => {
-                    for (place, &n) in ids.iter().enumerate() {
-                        if let Some(c) = reg.combined.get_mut(n - 1) {
-                            c.order = place as u32 + 1;
-                        }
-                    }
-                }
-                Kind::Cover => {
-                    for (place, &n) in ids.iter().enumerate() {
-                        if let Some(c) = reg.covers.get_mut(n - 1) {
-                            c.order = place as u32 + 1;
-                        }
-                    }
-                }
-                Kind::Objects => {
-                    for (place, &n) in ids.iter().enumerate() {
-                        if let Some(l) = reg.object_layers.get_mut(n - 1) {
-                            l.order = place as u32 + 1;
-                        }
-                    }
-                }
-            }
+            apply(Action::Place(kind, id, ids[other], !up), tools, doc, state, lists);
         }
         Action::Paint(Kind::Cover, n) => {
             tools.cover = n as u16;
@@ -1342,7 +1448,20 @@ fn apply(action: Action, tools: &mut ToolState, doc: &mut Document, state: &mut 
             tools.annotation_curve = false;
             tools.select(Tool::Annotate);
         }
-        Action::Duplicate(Kind::Note, _) | Action::Remove(Kind::Note, _) => {}
+        Action::Duplicate(Kind::Note, _) => {}
+        Action::Remove(Kind::Note, n) => {
+            // Its number stays taken, so that the others and their marks
+            // keep theirs.
+            if let Some(c) = reg.annotations.layer_mut(n as u16) {
+                c.removed = true;
+            }
+            if let Some(s) = reg.solo.as_mut() {
+                s.hidden_notes.retain(|&h| h != n as u16);
+            }
+            if tools.annotation as usize == n {
+                tools.annotation = 1;
+            }
+        }
         Action::ToggleShown(Kind::Mix | Kind::Pockets | Kind::Combined, _) => {}
         Action::Paint(Kind::Combined, n) => {
             tools.combined = n as u16;
@@ -1683,7 +1802,7 @@ mod tests {
     }
 
     fn entry(kind: Kind, id: usize, name: &str) -> Entry {
-        Entry { kind, id, name: name.to_owned(), color: [0; 3], detail: String::new(), tip: String::new(), shown: None, locked: None, find: None, selected: false, palette: String::new(), solo: false }
+        Entry { kind, id, name: name.to_owned(), color: [0; 3], detail: String::new(), tip: String::new(), shown: None, locked: None, find: None, selected: false, palette: String::new(), solo: false, under: false }
     }
 
     /// Palettes: made, filled from a layer's menu and by dragging a row
@@ -1753,6 +1872,155 @@ mod tests {
         assert_eq!(s.doc.world.registry.palettes, ["Flowers and grass"], "an empty palette stays");
         h.run_steps(2);
         assert_eq!(h.query_all_by_label("Oaks").count(), 1);
+    }
+
+    /// Jack's palette after a WorldPainter import, its covers out of
+    /// order: a row dragged onto another of its list goes above it or
+    /// below it by the half it is let go on, a cover from no palette joins
+    /// the palette where it is let go; each move one step to undo, the map
+    /// edited and keeping the order when saved. Rendered with
+    /// MASSIF_SNAPSHOT_DIR, a row held between two others.
+    #[test]
+    fn rows_are_dragged_into_their_place() {
+        let mut s = state();
+        let reg = &mut s.doc.world.registry;
+        reg.palettes = vec!["Misties".into()];
+        let template = reg.covers[reg.cover_by_name("Flowers").unwrap() as usize - 1].clone();
+        for (name, color) in [("Misties Biome 3", [90, 30, 160]), ("Misties Biome 1", [30, 30, 220]), ("Misties Biome 2", [60, 30, 200])] {
+            let mut c = template.clone();
+            (c.name, c.color, c.palette) = (name.into(), color, "Misties".into());
+            reg.add_cover(c);
+        }
+        let snapshots = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from);
+        let ppp = std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
+        let builder = egui_kittest::Harness::builder().with_size(vec2(320.0, 1400.0)).with_pixels_per_point(ppp);
+        let mut h = if snapshots.is_some() { builder.with_accessibility_check(false).wgpu().build_ui_state(draw, s) } else { builder.build_ui_state(draw, s) };
+        h.run_steps(2);
+        let shown = |h: &egui_kittest::Harness<'_, State>| -> Vec<String> {
+            // The rows above the first section's title: the palette's.
+            let end = h.get_by_label_contains("COMBINED LAYERS").rect().top();
+            let mut rows: Vec<(f32, String)> = ["Misties Biome 1", "Misties Biome 2", "Misties Biome 3", "Flowers"].iter().flat_map(|name| h.query_all_by_label(name).map(|n| (n.rect().top(), name.to_string())).collect::<Vec<_>>()).filter(|r| r.0 < end).collect();
+            rows.sort_by(|a, b| a.0.total_cmp(&b.0));
+            rows.into_iter().map(|r| r.1).collect()
+        };
+        let drag = |h: &mut egui_kittest::Harness<'_, State>, from: &str, onto: &str, below: bool, shot: Option<&str>| {
+            let from = h.get_by_label(from).rect().center();
+            let to = h.get_by_label(onto).rect();
+            let to = to.center() + vec2(0.0, if below { to.height() / 2.0 - 3.0 } else { 3.0 - to.height() / 2.0 });
+            h.drag_at(from);
+            h.run_steps(1);
+            h.hover_at(from + vec2(0.0, 6.0));
+            h.run_steps(1);
+            h.hover_at(to);
+            h.run_steps(2);
+            if let (Some(dir), Some(shot)) = (&snapshots, shot) {
+                h.render().unwrap().save(dir.join(format!("{shot}-{ppp}x.png"))).unwrap();
+            }
+            h.drop_at(to);
+            h.run_steps(3);
+        };
+        assert_eq!(shown(&h), ["Misties Biome 3", "Misties Biome 1", "Misties Biome 2"]);
+        drag(&mut h, "Misties Biome 1", "Misties Biome 3", false, Some("palette-reorder"));
+        assert_eq!(shown(&h), ["Misties Biome 1", "Misties Biome 3", "Misties Biome 2"]);
+        assert!(h.state().doc.is_modified(), "the map is edited");
+        drag(&mut h, "Misties Biome 3", "Misties Biome 2", true, None);
+        assert_eq!(shown(&h), ["Misties Biome 1", "Misties Biome 2", "Misties Biome 3"]);
+        // From no palette into this one, below the first.
+        let flowers = h.state().doc.world.registry.cover_by_name("Flowers").unwrap() as usize;
+        drag(&mut h, "Flowers", "Misties Biome 1", true, None);
+        assert_eq!(h.state().doc.world.registry.covers[flowers - 1].palette, "Misties");
+        assert_eq!(shown(&h), ["Misties Biome 1", "Flowers", "Misties Biome 2", "Misties Biome 3"]);
+        // Saved and read again, the order is kept.
+        let json = serde_json::to_string(&h.state().doc.world.registry).unwrap();
+        let back: massif_core::registry::Registry = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, h.state().doc.world.registry);
+        // Each move undone in turn.
+        assert_eq!(h.state_mut().doc.undo().as_deref(), Some("Move a layer"));
+        h.run_steps(2);
+        assert_eq!(h.state().doc.world.registry.covers[flowers - 1].palette, "");
+        assert_eq!(shown(&h), ["Misties Biome 1", "Misties Biome 2", "Misties Biome 3"]);
+        h.state_mut().doc.undo();
+        h.state_mut().doc.undo();
+        h.run_steps(2);
+        assert_eq!(shown(&h), ["Misties Biome 3", "Misties Biome 1", "Misties Biome 2"]);
+    }
+
+    /// Jack's annotation layers: one sorted into a palette is listed only
+    /// there, not among the Annotations' swatches too, and follows its
+    /// palette's eye with the annotations' eye off; one in no palette
+    /// follows the annotations' eye.
+    #[test]
+    fn annotation_layers_in_palettes_follow_their_palette() {
+        let mut s = state();
+        let reg = &mut s.doc.world.registry;
+        let placeholder = reg.annotations.add_layer("Village site", [220, 60, 160]).unwrap();
+        let free = reg.annotations.add_layer("Flow lines", [240, 170, 40]).unwrap();
+        reg.palettes = vec!["Placeholders".into()];
+        reg.annotations.layer_mut(placeholder).unwrap().palette = "Placeholders".into();
+        s.tools.show_annotations = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(320.0, 1600.0)).build_ui_state(draw, s);
+        h.run_steps(2);
+        assert_eq!(h.query_all_by_label("Village site").count(), 1, "its row in the palette, no swatch");
+        assert_eq!(h.query_all_by_label("Flow lines").count(), 2, "its row and its swatch");
+        let notes = &h.state().doc.world.registry.annotations;
+        assert!(notes.shown_opacity(placeholder, false) > 0 && notes.shown_opacity(free, false) == 0 && notes.shown_opacity(3, false) == 0);
+        assert!(notes.shown_opacity(free, true) > 0);
+        // The palette's eye hides it, whatever the annotations' eye.
+        h.get_by_label("Hide the palette on the map").click();
+        h.run_steps(2);
+        assert_eq!(h.state().doc.world.registry.annotations.shown_opacity(placeholder, true), 0);
+    }
+
+    /// As in WorldPainter, the layer a stroke starts painting with is made
+    /// visible: a hidden cover or object layer, an annotation layer hidden
+    /// by its palette's eye (the annotations' eye left as it is), a colour
+    /// or a layer in no palette with all the annotations hidden.
+    #[test]
+    fn the_layer_painted_with_is_shown() {
+        let mut s = state();
+        let flowers = s.doc.world.registry.cover_by_name("Flowers").unwrap();
+        s.doc.world.registry.covers[flowers as usize - 1].hidden = true;
+        s.doc.world.registry.object_layers[0].hidden = true;
+        let sorted = s.doc.world.registry.annotations.add_layer("Village site", [220, 60, 160]).unwrap();
+        let c = s.doc.world.registry.annotations.layer_mut(sorted).unwrap();
+        (c.palette, c.hidden) = ("Placeholders".into(), true);
+        s.tools.show_annotations = false;
+        (s.tools.cover, s.tools.object_layer, s.tools.annotation) = (flowers, 1, sorted);
+        s.tools.select(Tool::Cover);
+        assert!(crate::tools::show_painted(&mut s.doc, &mut s.tools));
+        assert!(!s.doc.world.registry.covers[flowers as usize - 1].hidden && s.doc.is_modified());
+        s.tools.select(Tool::Objects);
+        assert!(crate::tools::show_painted(&mut s.doc, &mut s.tools) && !s.doc.world.registry.object_layers[0].hidden);
+        s.tools.select(Tool::Annotate);
+        assert!(crate::tools::show_painted(&mut s.doc, &mut s.tools));
+        assert!(!s.doc.world.registry.annotations.layer_mut(sorted).unwrap().hidden && !s.tools.show_annotations, "its palette's layer shown alone");
+        assert!(!crate::tools::show_painted(&mut s.doc, &mut s.tools), "nothing more to show");
+        s.tools.annotation = 4;
+        assert!(crate::tools::show_painted(&mut s.doc, &mut s.tools) && s.tools.show_annotations, "a colour: all the annotations shown");
+    }
+
+    /// An annotation layer is removed from its menu (Jack: it could not
+    /// be): no longer listed, offered, painted with or drawn, as one step
+    /// to undo that brings it back with its marks.
+    #[test]
+    fn an_annotation_layer_is_removed() {
+        let mut s = state();
+        let n = s.doc.world.registry.annotations.add_layer("Misties Biome 8", [120, 90, 200]).unwrap();
+        let after = s.doc.world.registry.annotations.add_layer("Flow lines", [240, 170, 40]).unwrap();
+        s.tools.annotation = n;
+        s.tools.select(Tool::Annotate);
+        apply_step(Action::Remove(Kind::Note, n as usize), &mut s.tools, &mut s.doc, &mut s.ui, &[]);
+        let notes = &s.doc.world.registry.annotations;
+        assert!(notes.layers().all(|(k, _)| k != n) && notes.numbers().all(|k| k != n) && notes.drawn_opacity(n) == 0);
+        assert_eq!(notes.layers().map(|(k, c)| (k, c.name.as_str())).collect::<Vec<_>>(), [(after, "Flow lines")], "the others keep their numbers");
+        assert!(s.tools.annotation != n && s.doc.is_modified());
+        let back: massif_core::registry::Registry = serde_json::from_str(&serde_json::to_string(&s.doc.world.registry).unwrap()).unwrap();
+        assert_eq!(back.annotations, s.doc.world.registry.annotations, "saved removed");
+        assert_eq!(s.doc.undo().as_deref(), Some("Remove a layer"));
+        assert!(s.doc.world.registry.annotations.layers().any(|(k, _)| k == n));
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(320.0, 1600.0)).build_ui_state(draw, s);
+        h.run_steps(2);
+        h.get_all_by_label("Misties Biome 8").next().expect("listed again");
     }
 
     /// A palette's eye hides or shows all its layers at once, ground covers
