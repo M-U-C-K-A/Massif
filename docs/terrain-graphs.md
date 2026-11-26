@@ -368,7 +368,7 @@ With no node selected, the panel shows the whole graph's settings: the
 terrain's size, its seed, the sea level and the resolution simulations run
 at in the previews.
 
-![Node Properties of a Mountain range node, its ◇ beside Height](images/generator-node-settings.png)
+![Node Properties of a Mountain range node, its Height driven by a mask wired into its diamond socket](images/generator-node-settings.png)
 
 ## The Generator Viewer
 

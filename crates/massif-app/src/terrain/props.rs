@@ -713,7 +713,7 @@ fn inputs_ui(p: &mut TerrainPanel, ui: &mut Ui, id: &str, shape: &NodeShape) {
     let pal = Palette::of(ui);
     let mut names: Vec<(String, String, PortKind, String, String)> = shape.inputs.iter().map(|i| (i.name.clone(), i.label.clone(), i.kind, i.default.clone(), i.help.clone())).collect();
     if let Some(spec) = shape.spec() {
-        names.extend(spec.params.iter().filter(|q| q.drivable && p.graph.nodes[id].inputs.contains_key(&format!("@{}", q.name))).map(|q| (format!("@{}", q.name), format!("◇ {}", super::text::name(q.label)), PortKind::Mask, String::new(), q.help.to_owned())));
+        names.extend(spec.params.iter().filter(|q| q.drivable && p.graph.nodes[id].inputs.contains_key(&format!("@{}", q.name))).map(|q| (format!("@{}", q.name), super::text::name(q.label).to_string(), PortKind::Mask, String::new(), q.help.to_owned())));
     }
     if names.is_empty() {
         return;

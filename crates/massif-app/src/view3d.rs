@@ -5485,6 +5485,14 @@ impl View3d {
 
     /// Come down into the map where the middle of the view looks, as a
     /// player: on the ground there, before a wall, under a roof.
+    /// Walking as a ghost, through the ground, for tests.
+    #[cfg(test)]
+    pub fn ghost_for_tests(&mut self) {
+        if let Some(walk) = &mut self.walk {
+            walk.player.set_motion(crate::player::Motion::Ghost);
+        }
+    }
+
     fn start_walking(&mut self, doc: &Document, rect: Rect) {
         let (o, d) = self.ray(rect, rect.center());
         let dim = doc.dimension();

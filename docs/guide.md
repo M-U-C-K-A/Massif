@@ -157,7 +157,7 @@ A workspace is made of **areas**, as in Blender. Each area shows one panel, and 
 | **Render** | **Render Viewport**, **Sun and Sky**, **Camera**, **Render Output**, **Timeline** |
 | **Developer** | **Developer** (frames, memory and processor, live): with Settings ▸ Developer ▸ developer mode on |
 
-> 📷 **Screenshot:** the panel chooser open over an area of the Layout workspace (click the icon before an area's title), showing every section in columns, with the pointer over **Layers** so its line of description shows.
+![The panel chooser open over an area, every section in columns, the pointer over Layers](images/panel-chooser.png)
 
 ### Arranging areas
 
@@ -167,7 +167,7 @@ A workspace is made of **areas**, as in Blender. Each area shows one panel, and 
 - **Float** in the ⋮ menu takes the area out of the layout into a window of its own: move it anywhere, onto another screen, size it by its edges. **Dock back** in its own ⋮ menu, or closing its window, puts it back beside the largest area. Any panel floats, the map, the 3D View and the Render Viewport included; floating panels are saved with their workspace. Where the system gives no windows of their own (some Linux desktops), a floating panel stands over the layout instead: drag its title to move it, its bottom right corner to size it, and drag its title with Shift held onto an area to dock it there.
 - Each 3D View area is a view of its own, with its own mode, water and camera: split one to watch the map in two modes side by side.
 
-> 📷 **Screenshot:** an area being dragged by its title onto another area, the drop zone highlighted (Layout workspace, drag the Brushes panel's title over the 3D View).
+![The Brushes area dragged by its title over the 3D View, the drop zone highlighted](images/area-drag.png)
 
 ### Controls of the panels
 
@@ -297,7 +297,7 @@ never changes the land and is never exported. **Edit ▸ Add Reference
 Image…**, or drop a picture (PNG, JPEG, WebP, BMP, TIFF or GIF) on the map, adds one where it falls; a picture
 larger than the map is fitted to it, others take a block a pixel.
 
-> 📷 **Screenshot:** a reference image (a sketch or a real map) laid over the 2D map at half opacity, its corner handles visible after **Edit placement**, with its settings open from the picture button in the map's header.
+![A plan laid over the map at half opacity, its handles out while placing it](images/reference-image.png)
 
 The picture button in the map's header lists them, each with an eye to show
 or hide it and a lock to keep it in place; click one for its settings:
@@ -353,7 +353,7 @@ The **Tools** panel holds every tool of the World side, a row for each theme. Ho
 
 The tools new in this version are marked in the panel until you first try them. In the **3D Sculpt** panel the same tools work in 3D, with three of its own: **Sculpt**, **Dig** and **Smooth** (see [3D Sculpt](#3d-sculpt)).
 
-![The Tools panel and its groups](images/tools-panel.png)
+![The Tools panel, the pointer over Gradient brush and its card](images/tools-panel.png)
 
 ### Cards
 
@@ -372,7 +372,7 @@ Brushes work as in WorldPainter. A brush has a shape (one of the twelve
 built-in brushes, a terrain stamp, or an image), a radius, an intensity and
 a rotation:
 
-![The Brushes panel beside Brush Settings](images/brushes.png)
+![Brush Settings with Height limits on: the side cut of the map showing the band the brush acts on](images/brushes.png)
 
 - **Built-in brushes**: circle or square with a Constant, Linear, Sine,
   Plateau, Spike or Dome profile.
@@ -453,7 +453,7 @@ notch, 1° with Shift; Ctrl and the wheel zoom the map.
 As in WorldPainter and image editors, a selection marks the part of the map
 the tools change. The **Select** row of the Tools panel holds four tools:
 
-![The Lasso selection tool in hand, its Tool Settings beside the map](images/select-tools.png)
+![A lasso selection drawn round a hill, the Select tools' settings beside the map](images/select-tools.png)
 
 - **Rectangle selection** and **Ellipse selection**: drag across the map.
 - **Lasso selection**: draw around an area; letting go closes it.
@@ -1227,7 +1227,7 @@ coral). The right button takes a cover off. The brush, its intensity and its
 options (height band, slope, only on a terrain…) apply as with any paint;
 the eyedropper picks the cover under the cursor.
 
-> 📷 **Screenshot:** a ground cover's settings (its plants and their shares, block states) with flowers painted on the map and seen in the 3D View.
+![A ground cover's settings: its plants and their shares](images/ground-cover.png)
 
 Covers grow on the topmost surface of a column — the ground, a floating
 island's top, the floor a carve opens — never under an overhang. Where each
@@ -1248,7 +1248,7 @@ The **Objects** tool (in Decorate, beside Ground cover) paints where objects
 stand. **Import objects…** in its settings — or files dropped on the window
 — reads them from:
 
-> 📷 **Screenshot:** an object layer made of WorldEdit or Litematica schematics, its object list and a preview, with trees painted on a hill in the 3D View.
+![An object layer's settings: its objects, their sizes and how they stand](images/object-layer.png)
 
 | File | From |
 |---|---|
@@ -1296,7 +1296,7 @@ The Water group has three tools: the **Water brush**, **Flood** and the
 **River** tool. They work at any height, wherever you use them; the sea's
 level is not a limit.
 
-> 📷 **Screenshot:** Flood's Tool Settings with the water height choices, and a lake filled in a hollow seen in the 3D View.
+![A lake flooded in a hollow, seen in the 3D View](images/flood-lake.png)
 
 **Water height.** The Water brush and Flood each take the water's height
 from one choice in Tool Settings, with a line under it saying in plain
@@ -1726,7 +1726,7 @@ The whole story, with every setting, is in [Structures and villages](structures.
 
 ![The Structures tool in hand: its Tool Settings beside the map](images/structures-tool.png)
 
-> 📷 **Screenshot:** the Building tool with one house selected in a pack village, and the Tool Settings menu of pictures of the pack's other buildings open.
+![The Building tool: one house of a pack village selected, its Tool Settings beside the map](images/building-tool.png)
 
 ## The whole map at once
 
@@ -1836,7 +1836,7 @@ The **3D Sculpt** panel is a 3D view with the tools (below), and its **Player** 
 
 ![The World side's 3D workspace: the 3D View over the map](images/view3d.png)
 
-> 📷 **Screenshot:** the 3D View with **X-ray** on over a map with caves (Edit ▸ Whole map ▸ Caves… first), the cave floors glowing through the ground.
+![The 3D View with X-ray on: the caves glowing through the ground](images/xray.png)
 
 ## 3D Sculpt
 
@@ -1844,7 +1844,7 @@ The **3D Sculpt** panel is a 3D view with the tools (below), and its **Player** 
 
 Use the brush settings to adjust the stroke and the slope and height maps to read the surrounding ground. [View full size](assets/workspaces/3d-sculpt.webp).
 
-> 📷 **Screenshot:** the Player mode of 3D Sculpt in Ghost, under an overhang, with the bar along the bottom listing the keys.
+![3D Sculpt's Player mode, the keys listed along the bottom](images/player-ghost.png)
 
 Sculpting in 3D has its own editor, **3D Sculpt** (its workspace sits next
 to 3D; the 3D View's **Sculpt** button opens it): a 3D view that works with
@@ -1999,7 +1999,9 @@ paint on one and see the result on the other, float it, or give it the
 whole window. It follows the map's edits: the tiles changed are built
 again, the old ones shown until then.
 
-> 📷 **Screenshot:** the Diorama panel over a village at close zoom, every block textured and shadows cast, then with **Caves** on showing the cave floors under a height.
+![The Diorama over a village, every block textured](images/diorama.png)
+
+![The Diorama with Caves on: the cave floors under a height](images/diorama-caves.png)
 
 - Drag to pan, the wheel (or a pinch) to zoom, down to the blocks,
   **Space** to come back to the middle of the map.
@@ -2371,7 +2373,7 @@ Massif brings in what you already have:
   map (**Height map: Save…**), a block a sample, without writing it into
   the map.
 
-![The home screen's From a height map page](images/from-height-map.png)
+![The home screen's From a height map page with a 16-bit PNG chosen](images/from-height-map.png)
 
 ## Real places
 
@@ -2508,7 +2510,7 @@ PNG (8 or 16 bits, grey, colour or palette, with or without alpha), TIFF
 bits) and JPEG. The image is read once in the background, for the range of
 its values and a picture of it, then the dialog opens.
 
-> 📷 **Screenshot:** Edit ▸ Import Mask… with several images, each assigned to a terrain or a layer, and its mask window (histogram and threshold) open.
+![Edit ▸ Import Mask… with two pictures: what the first paints, its levels and threshold](images/import-mask.png)
 
 **What it paints**:
 
@@ -3022,7 +3024,7 @@ A save point keeps the map as it is now under a name — "before the rivers",
 **File ▸ Save Point…**, or **Save point…** at the top of the **Versions**
 panel (under World in an area's list of editors), asks for its name.
 
-![The Versions panel](images/versions-panel.png)
+![The Versions panel with three save points](images/versions-panel.png)
 
 The Versions panel lists the map's points, the newest first, each with a
 small picture of it from above, its name and when it was made:
@@ -3116,7 +3118,7 @@ Several people can work on one map, and a part of a map can go through another t
 
 All of it is in [Working on one map together](versioning.md) (beta).
 
-> 📷 **Screenshot:** the Versions panel's timeline with a branch merged back, and the review of a contribution on the map (accepted areas in the accent, a conflict marked).
+![The review of a contribution: its changed area and the conflict on the map, the Versions panel beside it](images/review.png)
 
 ## Scripting
 
