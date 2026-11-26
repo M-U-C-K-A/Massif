@@ -7,7 +7,7 @@ use crate::kernel::Ctx;
 use crate::nodes::height_out;
 use crate::noise::{Fbm, noise1};
 use crate::params::Point;
-use crate::registry::{Family, Field, Kernel, NodeSpec, ParamSpec, PortKind, PortSpec, Section, Unit};
+use crate::registry::{Choice, Family, Field, Kernel, NodeSpec, ParamSpec, PortKind, PortSpec, Section, Unit};
 
 const MASK_OUT: PortSpec = PortSpec::new("mask", "Mask", PortKind::Mask, "1 on the mountains, fading to 0 at their feet.");
 const AREA_IN: PortSpec = PortSpec::new("area", "Area", PortKind::Mask, "Where the mountains stand, from 0 to 1 (where Coverage says, when unconnected).").optional();
@@ -42,6 +42,115 @@ const STEEP: &[[f64; 2]] = &[[0.0, 0.0], [0.3, 0.08], [0.65, 0.5], [1.0, 1.0]];
 const FULL: &[[f64; 2]] = &[[0.0, 0.0], [0.25, 0.14], [0.6, 0.62], [1.0, 1.0]];
 /// Convex, worn shoulders.
 const WORN: &[[f64; 2]] = &[[0.0, 0.0], [0.3, 0.3], [0.7, 0.82], [1.0, 1.0]];
+
+// -------------------------------------------------------------- mountain --
+
+const STYLES: &[Choice] = &[
+    Choice { value: "basic", label: "Basic", help: "A summit with ridges running down from it." },
+    Choice { value: "eroded", label: "Eroded", help: "Gullies between the ridges, as water would wear them." },
+    Choice { value: "old", label: "Old", help: "Worn down: a rounded top and broad shoulders." },
+    Choice { value: "alpine", label: "Alpine", help: "Sharp crests and steep faces around a pointed summit." },
+    Choice { value: "strata", label: "Strata", help: "Laid in beds of rock: ledges along its flanks." },
+];
+
+const BULK: &[Choice] = &[
+    Choice { value: "low", label: "Low", help: "A slender peak: the flanks fall away from the summit." },
+    Choice { value: "medium", label: "Medium", help: "Between the two." },
+    Choice { value: "high", label: "High", help: "A massive mountain: high all the way to its edges." },
+];
+
+pub static MOUNTAIN: NodeSpec = NodeSpec {
+    id: "mountain.single",
+    label: "Mountain",
+    family: Family::Shape,
+    summary: "One mountain in the middle of the terrain, a summit with ridges running down its flanks: light, fast, and a base for erosion.",
+    help: "Scale is how wide the mountain is at its foot, Height how high its summit rises; Style gives it its character and Bulk how massive it is. It stands in the middle of the terrain and rises from 0: move, turn and copy it with Transform, set several side by side with Combine (Max), and give it its valleys with erosion. Reduce details leaves out the finest relief, for a faster preview or for erosion to make it.",
+    keywords: &["mountain", "peak", "summit", "hill", "massif", "gaea", "simple"],
+    outputs: &[height_out("The mountain, from 0 at its foot."), PortSpec::new("mask", "Mask", PortKind::Mask, "1 on the mountain, fading to 0 at its foot.")],
+    params: &[
+        ParamSpec::float("scale", "Scale", Unit::Blocks, 1500.0, 32.0, 65536.0, "How wide the mountain is at its foot, in blocks.").soft(128.0, 8000.0),
+        ParamSpec::float("height", "Height", Unit::Blocks, 240.0, 0.0, 4096.0, "How high its summit rises, in blocks.").soft(0.0, 600.0).drivable(),
+        ParamSpec::choice("style", "Style", STYLES, "basic", "The mountain's character."),
+        ParamSpec::choice("bulk", "Bulk", BULK, "medium", "How massive it is, from a slender peak to a broad massif."),
+        ParamSpec::flag("reduce_details", "Reduce details", false, "Leaves out the finest relief: faster, and smoother for erosion to work on."),
+        ParamSpec::seed(),
+    ],
+    kernel: Kernel::Point { cpu: mountain_cpu, gpu: None },
+    ..NodeSpec::BASE
+};
+
+fn mountain_cpu(ctx: &Ctx, _: &[Option<&[f32]>], out: &mut [Vec<f32>]) {
+    let p = ctx.params;
+    let seed = ctx.seed;
+    let radius = p.num("scale").max(32.0) * 0.5;
+    let style = p.choice("style");
+    let reduce = p.flag("reduce_details");
+    let exponent = match p.choice("bulk") {
+        "low" => 2.2f32,
+        "high" => 0.75,
+        _ => 1.35,
+    };
+    let middle = ctx.space.size as f64 * 0.5;
+    // How far the foot wanders from a circle: a mountain, not a cone.
+    let wander = radius * 0.3;
+    let (x0, z0, x1, z1) = bounds(ctx);
+    let reach = radius + wander;
+    let (out_h, rest) = out.split_at_mut(1);
+    let (out_h, out_m) = (&mut out_h[0], &mut rest[0]);
+    if x1 < middle - reach || x0 > middle + reach || z1 < middle - reach || z0 > middle + reach {
+        out_h.fill(0.0);
+        out_m.fill(0.0);
+        return;
+    }
+    let warp = Warp::new(radius * 1.2, wander, seed);
+    let finest = if reduce { finest(ctx).max(radius / 24.0) } else { finest(ctx) };
+    let ridges = Fbm::down_to(radius * 0.8, finest, 0.5, seed ^ 0xcc9e_2d51);
+    let (sharp, floor, eroded) = match style {
+        "alpine" => (0.95f32, 0.25f32, 0.0f32),
+        "eroded" => (0.55, 0.35, 0.6),
+        "old" => (0.15, 0.6, 0.4),
+        "strata" => (0.45, 0.45, 0.2),
+        _ => (0.6, 0.4, 0.0),
+    };
+    let height = |k: usize| ctx.num_at("height", k);
+    for (k, x, z) in samples(ctx) {
+        let (dx, dz) = (x - middle, z - middle);
+        if dx.abs() > reach || dz.abs() > reach {
+            out_h[k] = 0.0;
+            out_m[k] = 0.0;
+            continue;
+        }
+        let (wx, wz) = warp.at(x, z);
+        let r = (((wx - middle).powi(2) + (wz - middle).powi(2)).sqrt() / radius) as f32;
+        if r >= 1.0 {
+            out_h[k] = 0.0;
+            out_m[k] = 0.0;
+            continue;
+        }
+        // The mass: 1 at the summit, 0 at the foot, its feet concave.
+        let t = 1.0 - r;
+        let mass = t.powf(exponent) * smoothstep(0.0, 0.35, t);
+        out_m[k] = smoothstep(0.0, 0.25, t);
+        let mut ridge = ridges.mountains(wx, wz, sharp);
+        if eroded > 0.0 {
+            ridge += (ridges.eroded(wx, wz, 2.0) - ridge) * eroded;
+        }
+        // The relief weighs more on the flanks than at the summit, which
+        // stays the highest place.
+        let relief = floor + (1.0 - floor) * ridge;
+        let mut h = mass * (relief + (1.0 - relief) * mass * mass);
+        if style == "old" {
+            h = h.powf(0.8);
+        } else if style == "strata" {
+            // Ledges: each bed's top flat, its front steep.
+            let beds = 14.0;
+            let b = h * beds;
+            let f = b - b.floor();
+            h = (b.floor() + smoothstep(0.55, 1.0, f)) / beds * 0.7 + h * 0.3;
+        }
+        out_h[k] = height(k) * h.max(0.0);
+    }
+}
 
 // --------------------------------------------------------------- massifs --
 

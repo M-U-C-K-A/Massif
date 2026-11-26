@@ -1021,3 +1021,47 @@ fn a_map_output_is_added_when_missing() {
     assert!(p.graph.nodes[&id].inputs.contains_key("height"), "its Height fed");
     assert!(p.pos(&id)[0] > p.pos("alps")[0], "right of the graph");
 }
+
+/// Gaea's way: light Mountains, moved and turned by Transform, gathered by
+/// a Combine whose inputs grow as they are connected.
+fn light_primitives() -> Graph {
+    Graph::from_json(
+        r##"{ "nodes": {
+            "a": { "type": "mountain.single", "params": { "scale": 1100, "height": 220, "style": "alpine" } },
+            "b": { "type": "mountain.single", "params": { "scale": 800, "height": 160, "style": "eroded", "bulk": "high", "seed": 4 } },
+            "ta": { "type": "adjust.transform@2", "params": { "offset_x": -0.15, "offset_z": -0.1, "rotate": 20 }, "inputs": { "in": "a.height" } },
+            "tb": { "type": "adjust.transform@2", "params": { "offset_x": 0.2, "offset_z": 0.15, "scale": 0.8, "deform": 60 }, "inputs": { "in": "b.height" } },
+            "fade": { "type": "pattern.gradient" },
+            "mix": { "type": "combine.layers", "inputs": { "in.1": "ta", "in.2": "tb", "mask.2": "fade" } },
+            "out": { "type": "output.map", "inputs": { "height": "mix" } }
+        },
+        "ui": { "a": { "pos": [0, 0] }, "b": { "pos": [0, 260] }, "ta": { "pos": [228, 0] }, "tb": { "pos": [228, 260] }, "fade": { "pos": [228, 520] }, "mix": { "pos": [470, 120] }, "out": { "pos": [720, 120] } },
+        "terrain": { "size": 2048 } }"##,
+    )
+    .unwrap()
+}
+
+#[test]
+fn combine_inputs_grow_as_they_are_connected() {
+    let mut p = super::TerrainPanel::with_graph(Arc::new(Engine::new(Default::default())), light_primitives());
+    let names = |p: &super::TerrainPanel| -> Vec<String> { super::canvas::rows(p, "mix").into_iter().filter_map(|r| if let super::canvas::Row::Input { name, .. } = r { Some(name) } else { None }).collect() };
+    assert_eq!(names(&p), ["in.1", "in.2", "mask.2", "in.3"]);
+    p.connect("a", 0, "mix", "in.3");
+    assert_eq!(p.graph.nodes["mix"].inputs["in.3"], "a");
+    assert_eq!(names(&p), ["in.1", "in.2", "mask.2", "in.3", "mask.3", "in.4"]);
+}
+
+#[test]
+fn the_light_primitives_render() {
+    let Some(dir) = snapshot_dir() else { return };
+    let Some(gpu) = Gpu::headless() else { return };
+    let engine = Arc::new(Engine::with_gpu(gpu, Default::default()));
+    for (theme, tag) in [(egui::Theme::Dark, "dark"), (egui::Theme::Light, "light")] {
+        render_editor(&dir, &format!("primitives-{tag}"), theme, 1.0, engine.clone(), light_primitives(), |p| {
+            p.selected = vec!["mix".into()];
+        });
+    }
+    render_editor(&dir, "primitives-transform-dark-2x", egui::Theme::Dark, 2.0, engine, light_primitives(), |p| {
+        p.selected = vec!["tb".into()];
+    });
+}

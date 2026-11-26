@@ -4,11 +4,11 @@ use crate::kernel::{Ctx, Footprint, GpuKernel, Grid, Stats, Uniforms};
 use crate::noise::Fbm;
 use crate::params::Params;
 use crate::registry::{Choice, Family, Kernel, NodeSpec, ParamSpec, PortKind, PortSpec, Section, Unit};
-use crate::space::Space;
+use crate::space::{MAX_LOD, Space};
 use rayon::prelude::*;
 
 /// The node types of this family, in the library's order.
-pub static NODES: &[&NodeSpec] = &[&LEVELS, &CURVE, &TERRACE, &STRATIFY, &CLAMP, &FOLD, &INVERT, &NORMALIZE, &BLUR, &SHARPEN, &WARP, &TRANSFORM, &SWIRL];
+pub static NODES: &[&NodeSpec] = &[&LEVELS, &CURVE, &TERRACE, &STRATIFY, &CLAMP, &FOLD, &INVERT, &NORMALIZE, &BLUR, &SHARPEN, &WARP, &TRANSFORM_2, &TRANSFORM, &SWIRL];
 
 /// Where a reshaping applies: between heights given, or over the input's
 /// own range.
@@ -142,7 +142,7 @@ fn blur_footprint(p: &Params, lod: u8, _: usize) -> Footprint {
     let s = sigma(p) / Space::spacing(work);
     // The kernel's reach, and two samples for the cubic going back.
     let reach = (3.0 * s).ceil() as u32;
-    Footprint { lod: work, halo: reach + if work > lod { 2 } else { 0 } }
+    Footprint { lod: work, halo: reach + if work > lod { 2 } else { 0 }, map: None }
 }
 
 fn blur_cpu(ctx: &Ctx, inputs: &[Option<&Grid>], out: &mut [Vec<f32>]) {
@@ -392,7 +392,7 @@ pub static SHARPEN: NodeSpec = NodeSpec {
 
 fn sharpen_footprint(p: &Params, lod: u8, _: usize) -> Footprint {
     let s = sigma(p) / Space::spacing(lod);
-    Footprint { lod, halo: (3.0 * s).ceil() as u32 + 1 }
+    Footprint { lod, halo: (3.0 * s).ceil() as u32 + 1, map: None }
 }
 
 fn sharpen_cpu(ctx: &Ctx, inputs: &[Option<&Grid>], out: &mut [Vec<f32>]) {
@@ -428,7 +428,7 @@ pub static WARP: NodeSpec = NodeSpec {
 };
 
 fn warp_footprint(p: &Params, lod: u8, _: usize) -> Footprint {
-    Footprint { lod, halo: (p.num("amount") / Space::spacing(lod)).ceil() as u32 + 2 }
+    Footprint { lod, halo: (p.num("amount") / Space::spacing(lod)).ceil() as u32 + 2, map: None }
 }
 
 fn warp_cpu(ctx: &Ctx, inputs: &[Option<&Grid>], out: &mut [Vec<f32>]) {
@@ -493,6 +493,83 @@ fn transform_cpu(ctx: &Ctx, inputs: &[Option<&Grid>], _: &(dyn Fn() -> bool + Sy
         let (u, v) = (u - ox, v - oz);
         ((u * c - v * s) * k, (u * s + v * c) * k)
     })])
+}
+
+/// Version 2: worked tile by tile at full resolution (version 1 resampled
+/// the whole terrain at the simulations' resolution), and with a
+/// deformation of its own.
+pub static TRANSFORM_2: NodeSpec = NodeSpec {
+    id: "adjust.transform",
+    version: 2,
+    label: "Transform",
+    family: Family::Adjust,
+    summary: "Moves, turns, scales and deforms a relief over the terrain, at full detail.",
+    help: "Scale above 1 enlarges the relief around the terrain's middle, Stretch makes it wider east to west than north to south; Rotate turns it, in degrees clockwise; Offset moves it, as fractions of the terrain. Deform pushes it around by a smooth noise of Deform size, so that a shape made once looks less made. Place one Mountain, Volcano or Crater, then Transform copies of it and Combine them.",
+    keywords: &["transform", "scale", "rotate", "move", "offset", "zoom", "stretch", "deform", "place"],
+    inputs: &[IN],
+    outputs: &[OUT],
+    params: &[
+        ParamSpec::float("offset_x", "Offset east", Unit::Fraction, 0.0, -1.0, 1.0, "How far it is moved east, as a fraction of the terrain."),
+        ParamSpec::float("offset_z", "Offset south", Unit::Fraction, 0.0, -1.0, 1.0, "How far it is moved south, as a fraction of the terrain."),
+        ParamSpec::float("rotate", "Rotate", Unit::Degrees, 0.0, -360.0, 360.0, "How far it is turned, clockwise."),
+        ParamSpec::float("scale", "Scale", Unit::Ratio, 1.0, 0.05, 20.0, "How much larger the relief is drawn.").soft(0.25, 4.0),
+        ParamSpec::float("stretch", "Stretch", Unit::Ratio, 1.0, 0.1, 10.0, "How much wider east to west than north to south, before it is turned.").soft(0.25, 4.0).section(Section::Shape),
+        ParamSpec::float("deform", "Deform", Unit::Blocks, 0.0, 0.0, 2048.0, "How far the relief is pushed around, in blocks.").soft(0.0, 400.0).section(Section::Shape),
+        ParamSpec::float("deform_size", "Deform size", Unit::Blocks, 600.0, 16.0, 65536.0, "The size of the pushes, in blocks.").soft(64.0, 4000.0).section(Section::Shape),
+        ParamSpec::seed(),
+    ],
+    kernel: Kernel::Local { cpu: transform2_cpu, gpu: None, footprint: transform2_footprint },
+    ..NodeSpec::BASE
+};
+
+/// From a place of the output to the place of the input it shows, in
+/// fractions of the terrain from its middle: `[a, b, c, d, e, f]`.
+fn transform2_map(p: &Params) -> [f64; 6] {
+    let (s, c) = (-p.num("rotate").to_radians()).sin_cos();
+    let k = 1.0 / p.num("scale").max(0.01);
+    let st = p.num("stretch").max(0.01).sqrt();
+    let (kx, kz) = (k / st, k * st);
+    let (ox, oz) = (p.num("offset_x"), p.num("offset_z"));
+    // Moved back, turned back, then shrunk back: u' = kx (c (u − ox) − s (v − oz)).
+    [kx * c, -kx * s, kx * (-c * ox + s * oz), kz * s, kz * c, kz * (-s * ox - c * oz)]
+}
+
+/// Input blocks per block of the output, along its most shrunk axis.
+fn transform2_reach(p: &Params) -> f64 {
+    let st = p.num("stretch").max(0.01).sqrt();
+    st.max(1.0 / st) / p.num("scale").max(0.01)
+}
+
+fn transform2_footprint(p: &Params, lod: u8, _: usize) -> Footprint {
+    // Read as coarse as the samples made show it: a relief drawn small is
+    // not read at a detail it cannot show.
+    let reach = transform2_reach(p);
+    let work = (lod + if reach > 1.0 { reach.log2().floor() as u8 } else { 0 }).min(MAX_LOD);
+    let halo = (p.num("deform") * reach / Space::spacing(work)).ceil() as u32 + 2;
+    Footprint { lod: work, halo, map: Some(transform2_map(p)) }
+}
+
+fn transform2_cpu(ctx: &Ctx, inputs: &[Option<&Grid>], out: &mut [Vec<f32>]) {
+    let src = inputs[0].expect("transform has its input");
+    let p = ctx.params;
+    let m = transform2_map(p);
+    let size = ctx.space.size as f64;
+    let read = ctx.reads.first().copied().flatten().map_or(ctx.lod, |r| r.0);
+    let spacing = Space::spacing(read);
+    let amount = p.num("deform");
+    let (nx, nz) = (Fbm::new(p.num("deform_size"), 3, 0.5, ctx.seed ^ 0x68e3_1da4), Fbm::new(p.num("deform_size"), 3, 0.5, ctx.seed ^ 0xb529_7a4d));
+    let w = ctx.rect.w as usize;
+    out[0].par_iter_mut().enumerate().for_each(|(k, o)| {
+        let (mut x, mut z) = ctx.world(ctx.rect.x + (k % w) as i32, ctx.rect.z + (k / w) as i32);
+        if amount > 0.0 {
+            let (dx, dz) = (nx.at(x, z) as f64, nz.at(x, z) as f64);
+            x += (dx * 1.6).clamp(-1.0, 1.0) * amount;
+            z += (dz * 1.6).clamp(-1.0, 1.0) * amount;
+        }
+        let (u, v) = (x / size - 0.5, z / size - 0.5);
+        let (iu, iv) = (m[0] * u + m[1] * v + m[2], m[3] * u + m[4] * v + m[5]);
+        *o = src.bicubic((iu + 0.5) * size / spacing, (iv + 0.5) * size / spacing);
+    });
 }
 
 pub static SWIRL: NodeSpec = NodeSpec {

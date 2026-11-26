@@ -55,6 +55,41 @@ curvature, facing, sunlight, openness, snow, wetness, distance), colours
 fractions of the terrain, distances and heights blocks. Every node and
 setting is listed in [terrain-nodes.md](terrain-nodes.md).
 
+### Light primitives, Transform and Combine
+
+As in Gaea, a landscape can be built from a few light pieces rather than
+one heavy node. **Mountain** makes one mountain in the middle of the
+terrain from six settings: **Scale** (its width at the foot), **Height**,
+**Style** (Basic, Eroded, Old, Alpine, Strata), **Bulk** (Low, a slender
+peak, to High, a massif), **Reduce details** (leaves the finest relief to
+erosion, and previews faster) and **Seed**. It costs about half what
+Alpine mountains cost (10.5 against 23.4 ms for a tile of 256² at full
+detail on one core). **Transform** then moves, turns, scales, stretches and
+deforms a relief, at full detail, tile by tile (its first version worked at
+the simulations' resolution and stays for graphs made with it). **Combine**
+gathers any number of reliefs: connect **In 1**, and an empty **In 2**
+appears, and so on; each input after the first has a **Mask** of its own,
+and they combine in the order of their numbers by one mode (Blend, Add,
+Subtract, Max, Min, Multiply, Average, Difference, Screen, Overlay, Power)
+and **Strength**. In MassifScript the inputs are given in order,
+`Mixer(a, b, c, mode: "max")`, a mask by its name in backquotes
+(`` `mask.2`: m ``); in a graph's JSON they are `in.1`, `in.2`… and
+`mask.2`, `mask.3`….
+
+### The relief bench
+
+`tools/relief_bench.sh fetch` downloads five real landforms once
+(Copernicus GLO-30 elevation tiles, 168 MB, outside the repository: the
+Bernese Alps, Monte Perdido, the Grand Canyon, the Appalachian plateau and
+Pico in the Azores); `tools/relief_bench.sh run` measures each against
+Massif's nodes on a terrain as wide (16.4 km), their heights brought to the
+same range: the slope distribution, the hypsometric curve, the drainage and
+ridge densities and the curvature of valley floors, with a gap from 0 (the
+same) to 1 (far) for each, and a board of hillshades side by side
+(`relief-bench.md`, `relief-bench.png`). The measures live in
+`massif_terrain::bench`, so that work on erosion and shapes is judged by
+numbers.
+
 ### Underground
 
 A **Cave layer** node is one of the map's cave layers

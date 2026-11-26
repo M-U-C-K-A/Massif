@@ -23,6 +23,8 @@ pub struct Target {
 /// twice: the rest are the label in CamelCase.
 const CANONICAL: &[(&str, &str)] = &[
     ("noise.fbm", "FractalNoise"),
+    ("mountain.single", "SingleMountain"),
+    ("combine.layers", "Mixer"),
     ("noise.eroded", "ErodedNoise"),
     ("noise.cells", "CellNoise"),
     ("pattern.gradient", "Gradient"),

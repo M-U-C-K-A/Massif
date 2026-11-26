@@ -58,6 +58,7 @@ Each line: `Name(inputs) -> outputs — what it makes. Settings: name: kind rang
 
 ### Shapes
 
+- SingleMountain() -> height: height, mask: mask — One mountain in the middle of the terrain, a summit with ridges running down its flanks: light, fast, and a base for erosion. Settings: scale: float 32..65536 blocks = 1500; height*: float 0..4096 blocks = 240; style: "basic"|"eroded"|"old"|"alpine"|"strata" = "basic"; bulk: "low"|"medium"|"high" = "medium"; reduce_details: bool = false; seed: seed (from the node's id when left out).
 - AlpineMountains(area?: mask) -> height: height, mask: mask — Young, sharp mountains: pyramidal summits, knife-edge ridges and deep valleys, like the Alps or the Himalaya. Settings: height*: float 0..4096 blocks = 220; base: float -2048..4096 blocks = 70; peak_spacing: float 64..16000 blocks = 500; coverage: float 0..1 = 0.55; profile: profile [[x, y], …] = [[0.0,0.0],[0.3,0.08],[0.65,0.5],[1.0,1.0]]; sharpness: float 0..1 = 0.8; roughness: float 0..1 = 0.55; detail: float 16..8000 blocks = 160; warp: float 0..1 = 0.35; seed: seed (from the node's id when left out).
 - RoundedMountains(area?: mask) -> height: height, mask: mask — Old, worn mountains: rounded summits, broad shoulders and gentle valleys, like the Appalachians or the Vosges. Settings: height*: float 0..4096 blocks = 120; base: float -2048..4096 blocks = 70; peak_spacing: float 64..16000 blocks = 800; coverage: float 0..1 = 0.6; profile: profile [[x, y], …] = [[0.0,0.0],[0.3,0.3],[0.7,0.82],[1.0,1.0]]; sharpness: float 0..1 = 0.12; roughness: float 0..1 = 0.4; detail: float 16..8000 blocks = 260; warp: float 0..1 = 0.35; seed: seed (from the node's id when left out).
 - MountainRange() -> height: height, mask: mask — A range of mountains along a line drawn on the terrain: a crest of summits and saddles, with side ridges running down to its feet. Settings: spine: curve [{ x, z, height, width }, …] (x, z from 0 to 1); height*: float 0..4096 blocks = 230; base: float -2048..4096 blocks = 70; width: float 64..32000 blocks = 1800; profile: profile [[x, y], …] = [[0.0,0.0],[0.25,0.14],[0.6,0.62],[1.0,1.0]]; peak_spacing: float 32..16000 blocks = 450; saddles: float 0..1 = 0.45; spurs: float 0..1 = 0.6; spur_spacing: float 32..8000 blocks = 260; asymmetry: float -1..1 = 0; sharpness: float 0..1 = 0.75; roughness: float 0..1 = 0.5; detail: float 16..8000 blocks = 150; warp: float 0..1 = 0.35; seed: seed (from the node's id when left out).
@@ -87,7 +88,7 @@ Each line: `Name(inputs) -> outputs — what it makes. Settings: name: kind rang
 - Blur(in: height) -> out: height — Smooths a relief: the detail smaller than Radius goes, the larger shapes stay. Settings: radius: float 0..8192 blocks = 32.
 - Sharpen(in: height) -> out: height — Brings out a relief's detail: what stands above its surroundings rises, what lies below sinks. Settings: radius: float 1..1024 blocks = 24; amount: float 0..8 = 0.8.
 - Warp(in: height) -> out: height — Pushes a relief around by a noise: straight lines wander, round shapes twist, everything looks less made. Settings: amount: float 0..4096 blocks = 60; scale: float 4..65536 blocks = 400; octaves: int 1..8 = 3; seed: seed (from the node's id when left out).
-- Transform(in: height) -> out: height — Scales, turns and moves a relief over the terrain. (simulation) Settings: scale: float 0.01..100 = 1; rotate: float -360..360° = 0; offset_x: float -1..1 of the side = 0; offset_z: float -1..1 of the side = 0.
+- Transform(in: height) -> out: height — Moves, turns, scales and deforms a relief over the terrain, at full detail. Settings: offset_x: float -1..1 of the side = 0; offset_z: float -1..1 of the side = 0; rotate: float -360..360° = 0; scale: float 0.05..20 = 1; stretch: float 0.1..10 = 1; deform: float 0..2048 blocks = 0; deform_size: float 16..65536 blocks = 600; seed: seed (from the node's id when left out).
 - Swirl(in: height) -> out: height — Twists a relief around a point, most at the middle, not at all at Radius. (simulation) Settings: angle: float -1080..1080° = 120; radius: float 0.01..2 of the side = 0.5; x: float -1..2 of the side = 0.5; z: float -1..2 of the side = 0.5.
 
 ### Simulate
@@ -138,6 +139,7 @@ Each line: `Name(inputs) -> outputs — what it makes. Settings: name: kind rang
 
 ### Combine
 
+- Mixer(in.<name>?: height, mask.<name>?: mask) -> height: height — Combines any number of reliefs or masks into one by a mode, each input through its own mask. Settings: mode: "blend"|"add"|"subtract"|"max"|"min"|"multiply"|"average"|"difference"|"screen"|"overlay"|"power" = "max"; strength: float 0..1 = 1.
 - Blend(a: height, b: height, mask?: mask) -> height: height — Combines two reliefs, A and B, by a mode, through a mask where one is given. Settings: mode: "add"|"subtract"|"multiply"|"max"|"min"|"average"|"difference"|"screen"|"overlay"|"replace" = "add"; strength: float 0..1 = 1.
 
 ### Geometry

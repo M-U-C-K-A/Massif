@@ -97,7 +97,7 @@ pub static SLOPE: NodeSpec = NodeSpec {
         ParamSpec::float("to", "To", Unit::Degrees, 45.0, 0.0, 90.0, "Slopes steeper than this are 1."),
         ParamSpec::float("upper", "Upper", Unit::Degrees, 90.0, 0.0, 90.0, "Slopes steeper than this are 0 again (90: none).").section(Section::Advanced),
     ],
-    kernel: Kernel::Local { cpu: slope_cpu, gpu: None, footprint: |_: &Params, lod, _| Footprint { lod, halo: 1 } },
+    kernel: Kernel::Local { cpu: slope_cpu, gpu: None, footprint: |_: &Params, lod, _| Footprint { lod, halo: 1, map: None } },
     ..NodeSpec::BASE
 };
 
@@ -148,7 +148,7 @@ fn curvature_footprint(p: &Params, lod: u8, _: usize) -> Footprint {
     let s = sigma_of(p.num("scale"));
     let work = work_lod(lod, s, 6.0);
     let reach = (3.0 * s / Space::spacing(work)).ceil() as u32;
-    Footprint { lod: work, halo: reach + 2 }
+    Footprint { lod: work, halo: reach + 2, map: None }
 }
 
 /// How far below its smoothing each sample lies (hollows positive), at
@@ -198,7 +198,7 @@ pub static FACING: NodeSpec = NodeSpec {
         ParamSpec::float("spread", "Spread", Unit::Degrees, 90.0, 1.0, 180.0, "How far from Direction a slope still counts, in degrees."),
         ParamSpec::float("min_slope", "Min slope", Unit::Degrees, 5.0, 0.0, 45.0, "Ground flatter than this faces nowhere.").section(Section::Advanced),
     ],
-    kernel: Kernel::Local { cpu: facing_cpu, gpu: None, footprint: |_: &Params, lod, _| Footprint { lod, halo: 1 } },
+    kernel: Kernel::Local { cpu: facing_cpu, gpu: None, footprint: |_: &Params, lod, _| Footprint { lod, halo: 1, map: None } },
     ..NodeSpec::BASE
 };
 
@@ -237,7 +237,7 @@ pub static EXPOSURE: NodeSpec = NodeSpec {
         ParamSpec::float("azimuth", "Azimuth", Unit::Degrees, 90.0, -360.0, 360.0, "Where the sun stands, in degrees (0 east, 90 south)."),
         ParamSpec::float("elevation", "Elevation", Unit::Degrees, 35.0, 0.0, 90.0, "How high the sun stands above the horizon, in degrees."),
     ],
-    kernel: Kernel::Local { cpu: exposure_cpu, gpu: None, footprint: |_: &Params, lod, _| Footprint { lod, halo: 1 } },
+    kernel: Kernel::Local { cpu: exposure_cpu, gpu: None, footprint: |_: &Params, lod, _| Footprint { lod, halo: 1, map: None } },
     ..NodeSpec::BASE
 };
 
@@ -275,7 +275,7 @@ pub static OCCLUSION: NodeSpec = NodeSpec {
 fn occlusion_footprint(p: &Params, lod: u8, _: usize) -> Footprint {
     let r = p.num("radius");
     let work = work_lod(lod, r, 24.0);
-    Footprint { lod: work, halo: (r / Space::spacing(work)).ceil() as u32 + 3 }
+    Footprint { lod: work, halo: (r / Space::spacing(work)).ceil() as u32 + 3, map: None }
 }
 
 fn occlusion_cpu(ctx: &Ctx, inputs: &[Option<&Grid>], out: &mut [Vec<f32>]) {
@@ -330,7 +330,7 @@ pub static SNOW: NodeSpec = NodeSpec {
         ParamSpec::float("depth", "Depth", Unit::Blocks, 0.0, 0.0, 64.0, "How deep the snow is on the Height output, in blocks.").section(Section::Detail),
         ParamSpec::seed(),
     ],
-    kernel: Kernel::Local { cpu: snow_cpu, gpu: None, footprint: |_: &Params, lod, _| Footprint { lod, halo: (24.0 / Space::spacing(lod)).ceil() as u32 + 1 } },
+    kernel: Kernel::Local { cpu: snow_cpu, gpu: None, footprint: |_: &Params, lod, _| Footprint { lod, halo: (24.0 / Space::spacing(lod)).ceil() as u32 + 1, map: None } },
     ..NodeSpec::BASE
 };
 
@@ -378,9 +378,9 @@ pub static WETNESS: NodeSpec = NodeSpec {
 
 fn wetness_footprint(p: &Params, lod: u8, input: usize) -> Footprint {
     if input == 1 {
-        return Footprint { lod, halo: 0 };
+        return Footprint { lod, halo: 0, map: None };
     }
-    Footprint { lod, halo: (3.0 * sigma_of(p.num("scale")) / Space::spacing(lod)).ceil() as u32 + 1 }
+    Footprint { lod, halo: (3.0 * sigma_of(p.num("scale")) / Space::spacing(lod)).ceil() as u32 + 1, map: None }
 }
 
 fn wetness_cpu(ctx: &Ctx, inputs: &[Option<&Grid>], out: &mut [Vec<f32>]) {
@@ -500,7 +500,7 @@ pub static EXPAND: NodeSpec = NodeSpec {
 fn expand_footprint(p: &Params, lod: u8, _: usize) -> Footprint {
     let r = p.num("radius").abs();
     let work = work_lod(lod, r, 16.0);
-    Footprint { lod: work, halo: (r / Space::spacing(work)).ceil() as u32 + 2 }
+    Footprint { lod: work, halo: (r / Space::spacing(work)).ceil() as u32 + 2, map: None }
 }
 
 fn expand_cpu(ctx: &Ctx, inputs: &[Option<&Grid>], out: &mut [Vec<f32>]) {

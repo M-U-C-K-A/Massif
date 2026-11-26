@@ -90,7 +90,7 @@ pub static WIND: NodeSpec = NodeSpec {
         ParamSpec::float("strength", "Strength", Unit::Ratio, 1.0, 0.0, 10.0, "How strong it is."),
         ParamSpec::float("deflection", "Deflection", Unit::Ratio, 0.5, 0.0, 1.0, "How much the relief turns it aside."),
     ],
-    kernel: Kernel::Local { cpu: wind_cpu, gpu: None, footprint: |_: &Params, lod, _| Footprint { lod, halo: 1 } },
+    kernel: Kernel::Local { cpu: wind_cpu, gpu: None, footprint: |_: &Params, lod, _| Footprint { lod, halo: 1, map: None } },
     ..NodeSpec::BASE
 };
 

@@ -414,7 +414,24 @@ pub fn compile_in(graph: &Graph, mut space: Space, sim_res: u32, env: Arc<dyn En
             Some(b.convert((n, w.port), w.conversion))
         };
         let inputs: Vec<Option<(usize, u8)>> = p.inputs.iter().enumerate().map(|(k, w)| w.as_ref().and_then(|w| resolve(spec.inputs[k].name, w, &mut broken))).collect();
-        let open: Vec<(String, (usize, u8))> = p.open.iter().filter_map(|(name, w)| resolve(name, w, &mut broken).map(|s| (name.clone(), s))).collect();
+        let mut open: Vec<(String, (usize, u8))> = p.open.iter().filter_map(|(name, w)| resolve(name, w, &mut broken).map(|s| (name.clone(), s))).collect();
+        let mut inputs = inputs;
+        if spec.grows() {
+            // Its open inputs feed the kernel after the declared ones, each
+            // followed by its mask (`in.2`, `mask.2`); a mask without its
+            // input is left out.
+            let (pre, masks) = (spec.open_inputs.map_or("", |o| o.name), spec.open_masks.map_or("", |o| o.name));
+            let mut layers: Vec<&(String, (usize, u8))> = open.iter().filter(|(n, _)| n.starts_with(pre)).collect();
+            layers.sort_by(|a, b| registry::open_order(&a.0).cmp(&registry::open_order(&b.0)));
+            for (name, src) in layers {
+                inputs.push(Some(*src));
+                if spec.open_masks.is_some() {
+                    let mask = format!("{masks}{}", &name[pre.len()..]);
+                    inputs.push(open.iter().find(|(n, _)| *n == mask).map(|o| o.1));
+                }
+            }
+            open.clear();
+        }
         let driven: Vec<Option<(usize, u8)>> = p.driven.iter().enumerate().map(|(i, w)| w.as_ref().and_then(|w| resolve(&format!("@{}", spec.params[i].name), w, &mut broken))).collect();
         let params = p.params.expect("known types have settings");
         b.push(id.to_owned(), spec, params, Links { inputs, open, driven }, broken);

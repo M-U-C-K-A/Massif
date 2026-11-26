@@ -541,21 +541,24 @@ impl<'l> Compiler<'l> {
             };
             match name {
                 None => {
-                    let Some((input, _, _)) = inputs.get(positional) else {
+                    // A node whose inputs grow takes as many as it is given.
+                    let grown = spec_of(&kind).filter(|s| s.grows()).and_then(|s| s.open_inputs).filter(|_| positional >= inputs.len()).map(|o| (format!("{}{}", o.name, positional - inputs.len() + 1), o.kind, true));
+                    let Some((input, _, _)) = inputs.get(positional).or(grown.as_ref()) else {
                         return err(*span, format!("{label} takes {} input{} in order; name the rest (scale: 900)", inputs.len(), if inputs.len() == 1 { "" } else { "s" }));
                     };
+                    let input = input.clone();
                     positional += 1;
                     match child {
                         Val::Node(src) => links.push((input.clone(), src, *span)),
                         v => return err(*span, format!("{label}'s input “{input}” takes a node, not {}", v.what())),
                     }
-                    given.insert(input.clone());
+                    given.insert(input);
                 }
                 Some(n) => {
                     if !given.insert(n.clone()) {
                         return err(*span, format!("“{n}” is given twice"));
                     }
-                    let is_input = inputs.iter().any(|(i, _, _)| i == n) || open.as_ref().is_some_and(|o| n.strip_prefix(o.as_str()).is_some_and(valid_id)) || n.starts_with('@');
+                    let is_input = inputs.iter().any(|(i, _, _)| i == n) || open.iter().any(|o| n.strip_prefix(o.as_str()).is_some_and(valid_id)) || n.starts_with('@');
                     if is_input {
                         match child {
                             Val::Node(src) => links.push((n.clone(), src, *span)),
@@ -644,20 +647,20 @@ impl<'l> Compiler<'l> {
         err(call.name_span, format!("unknown node “{name}”{h}"))
     }
 
-    /// A type's label, inputs (name, type, optional), open inputs' prefix
+    /// A type's label, inputs (name, type, optional), open inputs' prefixes
     /// and settings (name, kind).
     #[allow(clippy::type_complexity)]
-    fn signature(&self, kind: &str, call: &Call) -> R<(String, Vec<(String, PortKind, bool)>, Option<String>, Vec<(String, Option<ParamKind>)>)> {
+    fn signature(&self, kind: &str, call: &Call) -> R<(String, Vec<(String, PortKind, bool)>, Vec<String>, Vec<(String, Option<ParamKind>)>)> {
         if is_component_type(kind) {
             let c = self.component_def(kind).ok_or_else(|| Error::new(call.name_span, format!("there is no composite “{kind}”")))?;
             let inputs = c.inputs.iter().map(|p| (p.name.clone(), PortKind::from_id(&p.kind).unwrap_or(PortKind::Height), p.optional)).collect();
             let settings = c.exposed.iter().map(|e| (e.name.clone(), None)).collect();
-            return Ok((names::name_of(kind).unwrap_or_else(|| kind.to_owned()), inputs, None, settings));
+            return Ok((names::name_of(kind).unwrap_or_else(|| kind.to_owned()), inputs, Vec::new(), settings));
         }
         let spec = spec_of(kind).ok_or_else(|| Error::new(call.name_span, format!("there is no type of node “{kind}”")))?;
         let inputs = spec.inputs.iter().map(|p| (p.name.to_owned(), p.kind, p.optional)).collect();
         let settings = spec.params.iter().map(|p| (p.name.to_owned(), Some(p.kind))).collect();
-        Ok((names::name_of(kind).unwrap_or_else(|| kind.to_owned()), inputs, spec.open_inputs.map(|o| o.name.to_owned()), settings))
+        Ok((names::name_of(kind).unwrap_or_else(|| kind.to_owned()), inputs, spec.open_families().map(|o| o.name.to_owned()).collect(), settings))
     }
 
     fn component_def(&self, kind: &str) -> Option<Component> {

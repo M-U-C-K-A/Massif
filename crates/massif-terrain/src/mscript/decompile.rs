@@ -386,9 +386,21 @@ fn node(s: &Scope, id: &str, g: &Graph, mine: &BTreeSet<String>, ind: &str) -> S
             None => positional = false,
         }
     }
+    // A node whose inputs grow: its open inputs in order, after the
+    // declared ones, while they are numbered one after the other.
+    if positional
+        && let Some(open) = registry::spec(&n.kind).filter(|s| s.grows()).and_then(|s| s.open_inputs)
+    {
+        for k in 1.. {
+            let Some((name, src)) = n.inputs.get_key_value(&format!("{}{k}", open.name)) else { break };
+            args.push(source(src));
+            used.insert(name);
+        }
+    }
     for (i, src) in &n.inputs {
         if !used.contains(i.as_str()) {
-            args.push(format!("{i}: {}", source(src)));
+            let name = if i.starts_with('@') || i.split('.').all(|w| ident(w) == *w) { i.clone() } else { format!("`{i}`") };
+            args.push(format!("{name}: {}", source(src)));
         }
     }
     // Its own settings in the type's order, then those standing for the

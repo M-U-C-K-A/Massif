@@ -196,10 +196,15 @@ impl Stats {
 
 /// Where a local kernel reads an input: at which level of detail, and how
 /// many samples around the samples it makes (at that level).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Footprint {
     pub lod: u8,
     pub halo: u32,
+    /// Read elsewhere than under the samples made: around where this
+    /// affine map sends them (a Transform). Positions are fractions of the
+    /// terrain from its middle, `[a, b, c, d, e, f]` sending `(u, v)` to
+    /// `(a u + b v + c, d u + e v + f)`.
+    pub map: Option<[f64; 6]>,
 }
 
 /// Fills the outputs (each `ctx.rect.area()` samples) from the inputs'

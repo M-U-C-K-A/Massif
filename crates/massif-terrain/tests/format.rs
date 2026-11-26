@@ -28,7 +28,7 @@ fn every_example_builds() {
         let h = e.whole(&c, c.output("height").expect("the example feeds the Map Output's height"), 5, &never).unwrap();
         assert!(h.data.iter().all(|v| v.is_finite()), "{}", spec.id);
         // The example uses the node.
-        assert!(g.nodes.values().any(|n| n.kind == spec.id), "{}", spec.id);
+        assert!(g.nodes.values().any(|n| n.kind == spec.type_name()), "{}", spec.type_name());
     }
 }
 
@@ -37,8 +37,8 @@ fn the_schema_names_every_node() {
     let schema = format::schema();
     let defs = schema["$defs"].as_object().unwrap();
     for spec in format::public() {
-        let d = &defs[spec.id];
-        assert_eq!(d["properties"]["type"]["const"], spec.id);
+        let d = &defs[&spec.type_name()];
+        assert_eq!(d["properties"]["type"]["const"], spec.type_name());
         for p in spec.params {
             assert!(d["properties"]["params"]["properties"].get(p.name).is_some(), "{}.{}", spec.id, p.name);
         }
@@ -55,7 +55,7 @@ fn the_schema_names_every_node() {
     // Every node of the catalogue, by family, with an example.
     let cat = format::catalog_json();
     let listed: usize = cat["families"].as_array().unwrap().iter().map(|f| f["nodes"].as_array().unwrap().len()).sum();
-    assert_eq!(listed, format::public().count());
+    assert_eq!(listed, format::current().count());
     assert!(cat["families"][0]["nodes"][0]["example"]["nodes"].is_object());
 }
 

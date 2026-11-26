@@ -112,7 +112,7 @@ fn port(p: &PortSpec) -> String {
 /// One line for a type of node.
 pub fn node_line(name: &str, s: &NodeSpec) -> String {
     let mut ins: Vec<String> = s.inputs.iter().map(port).collect();
-    if let Some(o) = &s.open_inputs {
+    for o in s.open_families() {
         ins.push(format!("{}<name>?: {}", o.name, o.kind.id()));
     }
     let outs: Vec<String> = s.outputs.iter().map(port).collect();

@@ -362,6 +362,34 @@ Outputs:
 
 ## Shapes
 
+### Mountain — `mountain.single`
+
+One mountain in the middle of the terrain, a summit with ridges running down its flanks: light, fast, and a base for erosion. Scale is how wide the mountain is at its foot, Height how high its summit rises; Style gives it its character and Bulk how massive it is. It stands in the middle of the terrain and rises from 0: move, turn and copy it with Transform, set several side by side with Combine (Max), and give it its valleys with erosion. Reduce details leaves out the finest relief, for a faster preview or for erosion to make it.
+
+Outputs:
+
+- `height` (height) — The mountain, from 0 at its foot.
+- `mask` (mask) — 1 on the mountain, fading to 0 at its foot.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `scale` | number | 1500 | 32 to 65536 blocks | How wide the mountain is at its foot, in blocks. Usually 128 to 8000. |
+| `height` | number | 240 | 0 to 4096 blocks | How high its summit rises, in blocks. Usually 0 to 600. A field connected to the input `@height` drives it place by place. |
+| `style` | choice | `basic` | `basic`, `eroded`, `old`, `alpine`, `strata` | The mountain's character. `basic`: A summit with ridges running down from it. `eroded`: Gullies between the ridges, as water would wear them. `old`: Worn down: a rounded top and broad shoulders. `alpine`: Sharp crests and steep faces around a pointed summit. `strata`: Laid in beds of rock: ledges along its flanks. |
+| `bulk` | choice | `medium` | `low`, `medium`, `high` | How massive it is, from a slender peak to a broad massif. `low`: A slender peak: the flanks fall away from the summit. `medium`: Between the two. `high`: A massive mountain: high all the way to its edges. |
+| `reduce_details` | boolean | false |  | Leaves out the finest relief: faster, and smoother for erosion to work on. |
+| `seed` | seed | — | 0 to 4294967295 | Another seed gives another variation of the same settings. Left out, it comes from the node's name. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "out": { "type": "output.map", "inputs": { "height": "single" } },
+    "single": { "type": "mountain.single" }
+  }
+}
+```
+
 ### Alpine mountains — `mountain.alpine`
 
 Young, sharp mountains: pyramidal summits, knife-edge ridges and deep valleys, like the Alps or the Himalaya. Mountains over an area: summits about Peak spacing apart joined by ridges, valleys between them, and the relief of Detail size on their slopes. Connect a mask to Area to say where they stand (a painted area, a coastline's land), or let Coverage spread them. Height is the summits' height over Base; the Profile shapes the massif from its edges to its heart. Run erosion after them for valleys carved by water.
@@ -1265,11 +1293,9 @@ Outputs:
 }
 ```
 
-### Transform — `adjust.transform`
+### Transform — `adjust.transform@2`
 
-Scales, turns and moves a relief over the terrain. Scale above 1 enlarges the relief around the terrain's middle; Rotate turns it, in degrees clockwise; Offset moves it, as fractions of the terrain. Worked over the whole terrain at the simulations' resolution.
-
-A simulation: it works over the whole terrain at the simulations' resolution.
+Moves, turns, scales and deforms a relief over the terrain, at full detail. Scale above 1 enlarges the relief around the terrain's middle, Stretch makes it wider east to west than north to south; Rotate turns it, in degrees clockwise; Offset moves it, as fractions of the terrain. Deform pushes it around by a smooth noise of Deform size, so that a shape made once looks less made. Place one Mountain, Volcano or Crater, then Transform copies of it and Combine them.
 
 Inputs:
 
@@ -1281,10 +1307,14 @@ Outputs:
 
 | Setting | Kind | Default | Range | What it does |
 |---|---|---|---|---|
-| `scale` | number | 1 | 0.01 to 100 | How much larger the relief is drawn. Usually 0.25 to 4. |
-| `rotate` | number | 0 | -360 to 360 degrees | How far it is turned, clockwise. In degrees. |
 | `offset_x` | number | 0 | -1 to 1 fraction of the terrain's side | How far it is moved east, as a fraction of the terrain. |
 | `offset_z` | number | 0 | -1 to 1 fraction of the terrain's side | How far it is moved south, as a fraction of the terrain. |
+| `rotate` | number | 0 | -360 to 360 degrees | How far it is turned, clockwise. In degrees. |
+| `scale` | number | 1 | 0.05 to 20 | How much larger the relief is drawn. Usually 0.25 to 4. |
+| `stretch` | number | 1 | 0.1 to 10 | How much wider east to west than north to south, before it is turned. Usually 0.25 to 4. |
+| `deform` | number | 0 | 0 to 2048 blocks | How far the relief is pushed around, in blocks. Usually 0 to 400. |
+| `deform_size` | number | 600 | 16 to 65536 blocks | The size of the pushes, in blocks. Usually 64 to 4000. |
+| `seed` | seed | — | 0 to 4294967295 | Another seed gives another variation of the same settings. Left out, it comes from the node's name. |
 
 ```json
 {
@@ -1292,7 +1322,7 @@ Outputs:
   "nodes": {
     "out": { "type": "output.map", "inputs": { "height": "transform" } },
     "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } },
-    "transform": { "type": "adjust.transform", "inputs": { "in": "relief" } }
+    "transform": { "type": "adjust.transform@2", "inputs": { "in": "relief" } }
   }
 }
 ```
@@ -2680,6 +2710,33 @@ Outputs:
 ```
 
 ## Combine
+
+### Combine — `combine.layers`
+
+Combines any number of reliefs or masks into one by a mode, each input through its own mask. Connect the reliefs to In 1, In 2 and on: a new empty input appears as soon as the last one is connected. In 1 is the base; each input after it combines with what is above it by the mode, as much as its mask says (everywhere when its mask is unconnected) and Strength. A Constant mask gives an input a weight of its own. Max sets landforms side by side, Add raises them on a plain, Blend with masks lays one landscape into another.
+- `in.<name>` (height, optional) — A relief or a mask combined in, in the order of the numbers.
+- `mask.<name>` (mask, optional) — Where the input of the same number is combined, and how much (everywhere when unconnected).
+
+Outputs:
+
+- `height` (height) — The inputs combined.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `mode` | choice | `max` | `blend`, `add`, `subtract`, `max`, `min`, `multiply`, `average`, `difference`, `screen`, `overlay`, `power` | How each input combines with the ones before it. `blend`: Each input laid over the ones before, through its mask: where the mask is 1, the input. `add`: Each input raised on top of the ones before. `subtract`: Each input dug out of the ones before. `max`: The highest of the inputs: landforms side by side. `min`: The lowest of the inputs: one relief cut down by the others. `multiply`: The inputs multiplied: masks cutting each other. `average`: The mean of the inputs, each weighted by its mask. `difference`: How far each input lies from the ones before. `screen`: 1 − (1 − A)(1 − B), for masks: any of them. `overlay`: For masks: each input deepens the contrast of the ones before. `power`: For masks: the ones before raised to the power of each input, which darkens them where it is high. |
+| `strength` | number | 1 | 0 to 1 | How much of each input after the first is taken: 0 leaves In 1. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "layers": { "type": "combine.layers", "inputs": { "in.1": "relief", "in.2": "relief", "mask.2": "slopes" } },
+    "out": { "type": "output.map", "inputs": { "height": "layers" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } },
+    "slopes": { "type": "mask.slope", "inputs": { "height": "relief" } }
+  }
+}
+```
 
 ### Blend — `combine.blend`
 

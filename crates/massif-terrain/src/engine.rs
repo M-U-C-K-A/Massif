@@ -848,7 +848,11 @@ fn feeds(c: &Compiled, n: usize, l: u8, x: i32, z: i32) -> Vec<Option<Feed>> {
             .map(|(k, i)| {
                 i.filter(|&s| c.kind(s).is_raster()).map(|src| {
                     let f = footprint(&node.params, l, k);
-                    Feed { src, lod: f.lod, rect: tile.at_lod(l, f.lod).expand(f.halo) }
+                    let rect = match f.map {
+                        Some(m) => mapped(tile, l, f.lod, &m, c.space.size as f64),
+                        None => tile.at_lod(l, f.lod),
+                    };
+                    Feed { src, lod: f.lod, rect: rect.expand(f.halo) }
                 })
             })
             .chain(driven.map(at_tile))
@@ -862,6 +866,27 @@ fn feeds(c: &Compiled, n: usize, l: u8, x: i32, z: i32) -> Vec<Option<Feed>> {
             .collect(),
         Kernel::Output | Kernel::Geometry { .. } | Kernel::Volume { .. } => Vec::new(),
     }
+}
+
+/// The samples at level `to` around where affine map `m` (in fractions of
+/// a terrain `size` blocks wide, from its middle) sends the samples `rect`
+/// of level `from`: the box of its corners, with one more sample on each
+/// side for interpolating.
+fn mapped(rect: Rect, from: u8, to: u8, m: &[f64; 6], size: f64) -> Rect {
+    let (s, t) = (Space::spacing(from), Space::spacing(to));
+    let (x0, z0, x1, z1) = (rect.x as f64 * s, rect.z as f64 * s, rect.x1() as f64 * s, rect.z1() as f64 * s);
+    let (mut lo, mut hi) = ((f64::MAX, f64::MAX), (f64::MIN, f64::MIN));
+    for (x, z) in [(x0, z0), (x1, z0), (x0, z1), (x1, z1)] {
+        let (x, z) = (x / size - 0.5, z / size - 0.5);
+        let (u, v) = ((m[0] * x + m[1] * z + m[2] + 0.5) * size, (m[3] * x + m[4] * z + m[5] + 0.5) * size);
+        lo = (lo.0.min(u), lo.1.min(v));
+        hi = (hi.0.max(u), hi.1.max(v));
+    }
+    // Kept to a sane size whatever the map: a few terrains across.
+    let clamp = |v: f64| (v / t).clamp(-(1 << 26) as f64, (1 << 26) as f64);
+    let (ax, az) = (clamp(lo.0).floor() as i32 - 1, clamp(lo.1).floor() as i32 - 1);
+    let (bx, bz) = (clamp(hi.0).ceil() as i32 + 2, clamp(hi.1).ceil() as i32 + 2);
+    Rect::new(ax, az, (bx - ax).max(1) as u32, (bz - az).max(1) as u32)
 }
 
 /// The context of node `n`'s kernel, with the geometry feeding it.

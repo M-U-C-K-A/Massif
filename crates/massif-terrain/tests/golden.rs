@@ -49,8 +49,14 @@ fn fingerprints() -> BTreeMap<String, Vec<f64>> {
             };
             inputs.push(format!(r#""{}": "{src}""#, port.name));
         }
+        // A node whose inputs grow: two reliefs, the second through a mask.
+        if spec.grows() {
+            inputs.extend([r#""in.1": "feed""#.to_owned(), r#""in.2": "feed2""#.to_owned(), r#""mask.2": "mask2""#.to_owned()]);
+        }
         let json = format!(
             r#"{{ "nodes": {{ "feed": {{ "type": "noise.fbm", "params": {{ "scale": 400, "height": 120, "base": 40, "seed": 1 }} }},
+            "feed2": {{ "type": "noise.fbm", "params": {{ "scale": 900, "height": 200, "base": 20, "seed": 9 }} }},
+            "mask2": {{ "type": "pattern.gradient" }},
             "paint": {{ "type": "color.gradient", "inputs": {{ "in": "feed" }} }}, "lay": {{ "type": "terrain.layers" }}, "pts": {{ "type": "points.scatter", "inputs": {{ "height": "feed" }}, "params": {{ "spacing": 128, "seed": 2 }} }},
             "sq": {{ "type": "village.site", "inputs": {{ "height": "feed" }}, "params": {{ "houses": 30, "seed": 4 }} }},
             "rd": {{ "type": "village.roads", "inputs": {{ "height": "feed", "squares": "sq" }}, "params": {{ "pack": {pack}, "seed": 5 }} }},

@@ -461,6 +461,9 @@ pub struct NodeSpec {
     /// A family of inputs named by the graph: `name` is their prefix
     /// (`mask.` takes `mask.snow`, `mask.moss`…).
     pub open_inputs: Option<PortSpec>,
+    /// On a node whose inputs grow ([`NodeSpec::grows`]): the mask each of
+    /// its open inputs can take, named alike (`in.2` takes `mask.2`).
+    pub open_masks: Option<PortSpec>,
     pub outputs: &'static [PortSpec],
     pub params: &'static [ParamSpec],
     pub kernel: Kernel,
@@ -479,6 +482,7 @@ impl NodeSpec {
         keywords: &[],
         inputs: &[],
         open_inputs: None,
+        open_masks: None,
         outputs: &[],
         params: &[],
         kernel: Kernel::Output,
@@ -506,9 +510,21 @@ impl NodeSpec {
         self.inputs.iter().position(|p| p.name == name)
     }
 
-    /// Whether `name` is one of the open family of inputs.
+    /// Whether `name` is one of the open families of inputs.
     pub fn open_input(&self, name: &str) -> Option<&PortSpec> {
-        self.open_inputs.as_ref().filter(|o| name.strip_prefix(o.name).is_some_and(crate::model::valid_id))
+        self.open_families().find(|o| name.strip_prefix(o.name).is_some_and(crate::model::valid_id))
+    }
+
+    /// The open families of inputs: `in.<name>`, then their masks.
+    pub fn open_families(&self) -> impl Iterator<Item = &PortSpec> {
+        self.open_inputs.iter().chain(self.open_masks.iter())
+    }
+
+    /// A node whose inputs grow as they are connected (a Combine): its open
+    /// inputs feed its kernel after the declared ones, in their order
+    /// ([`open_order`]), each followed by its mask.
+    pub fn grows(&self) -> bool {
+        self.open_inputs.is_some() && !self.is_output()
     }
 
     pub fn output(&self, name: &str) -> Option<usize> {
@@ -522,6 +538,13 @@ impl NodeSpec {
     pub fn has_seed(&self) -> bool {
         self.params.iter().any(|p| matches!(p.kind, ParamKind::Seed))
     }
+}
+
+/// How the open inputs of a node that grows are ordered: by the number
+/// after their prefix (`in.2` before `in.10`), then by name.
+pub fn open_order(name: &str) -> (u64, &str) {
+    let tail = name.rsplit('.').next().unwrap_or(name);
+    (tail.parse().unwrap_or(u64::MAX), name)
 }
 
 /// Every type of node, in the library's order (with the internal ones,

@@ -149,6 +149,7 @@ pub fn rows(p: &TerrainPanel, id: &str) -> Vec<Row> {
     out.push(Row::Thumb);
     out.extend(shape.inputs.iter().map(input_row));
     if let Some(spec) = shape.spec() {
+        out.extend(growing_rows(spec, node));
         for prm in spec.params.iter().filter(|q| q.drivable) {
             let input = format!("@{}", prm.name);
             if node.inputs.contains_key(&input) || p.layout.exposed.contains(&p.lkey(&format!("{id}.{}", prm.name))) {
@@ -156,6 +157,27 @@ pub fn rows(p: &TerrainPanel, id: &str) -> Vec<Row> {
             }
         }
     }
+    out
+}
+
+/// The inputs of a node whose inputs grow (a Combine): those connected in
+/// their order, each after the first with its mask, then an empty one, the
+/// next number, for the next wire.
+fn growing_rows(spec: &'static NodeSpec, node: &massif_terrain::model::Node) -> Vec<Row> {
+    let (Some(open), true) = (spec.open_inputs, spec.grows()) else { return Vec::new() };
+    let mut names: Vec<&String> = node.inputs.keys().filter(|k| k.starts_with(open.name) && spec.open_input(k).is_some()).collect();
+    names.sort_by(|a, b| registry::open_order(a).cmp(&registry::open_order(b)));
+    let mut out = Vec::new();
+    let mut next = 1;
+    for (k, name) in names.iter().enumerate() {
+        let tail = &name[open.name.len()..];
+        out.push(Row::Input { name: (*name).clone(), label: format!("{} {tail}", super::text::name(open.label)), kind: open.kind, form: sockets::shape(open.kind), default: String::new() });
+        if let (Some(mask), true) = (spec.open_masks, k > 0) {
+            out.push(Row::Input { name: format!("{}{tail}", mask.name), label: format!("{} {tail}", super::text::name(mask.label)), kind: mask.kind, form: sockets::shape(mask.kind), default: "none".to_owned() });
+        }
+        next = next.max(tail.parse::<u64>().map_or(next, |n| n + 1));
+    }
+    out.push(Row::Input { name: format!("{}{next}", open.name), label: format!("{} {next}", super::text::name(open.label)), kind: open.kind, form: sockets::shape(open.kind), default: String::new() });
     out
 }
 
@@ -2108,7 +2130,7 @@ fn search_ui(p: &mut TerrainPanel, ui: &mut Ui, canvas: Rect, pal: &Palette) {
         {
             let kind = p.out_kind(&from, port).unwrap_or(PortKind::Height);
             let shape = p.shape(&id);
-            let input = shape.as_ref().and_then(|sh| sh.inputs.iter().find(|i| i.kind == kind).or_else(|| sh.inputs.iter().find(|i| kind.conversion(i.kind).is_some())).map(|i| i.name.clone())).or_else(|| e.spec.and_then(|sp| sp.open_inputs).map(|_| "mask.custom".to_owned()));
+            let input = shape.as_ref().and_then(|sh| sh.inputs.iter().find(|i| i.kind == kind).or_else(|| sh.inputs.iter().find(|i| kind.conversion(i.kind).is_some())).map(|i| i.name.clone())).or_else(|| e.spec.and_then(|sp| sp.open_inputs.map(|o| if sp.grows() { format!("{}1", o.name) } else { "mask.custom".to_owned() })));
             if let Some(input) = input {
                 p.connect(&from, port, &id, &input);
             }

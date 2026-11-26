@@ -273,9 +273,9 @@ fn node_schema(s: &NodeSpec) -> Value {
     if !required.is_empty() {
         ins["required"] = json!(required);
     }
-    if let Some(open) = &s.open_inputs {
-        let pattern = format!("^{}[A-Za-z0-9_-]{{1,64}}$", open.name.replace('.', "\\."));
-        ins["patternProperties"] = json!({ pattern: port_schema(open) });
+    let patterns: Map<String, Value> = s.open_families().map(|open| (format!("^{}[A-Za-z0-9_-]{{1,64}}$", open.name.replace('.', "\\.")), port_schema(open))).collect();
+    if !patterns.is_empty() {
+        ins["patternProperties"] = Value::Object(patterns);
     }
     let params: Map<String, Value> = s.params.iter().map(|p| (p.name.to_owned(), param_schema(p))).collect();
     let mut node = json!({
@@ -447,6 +447,9 @@ fn node_json(s: &'static NodeSpec) -> Value {
     if let Some(open) = &s.open_inputs {
         v["open_inputs"] = port_json(open);
     }
+    if let Some(open) = &s.open_masks {
+        v["open_masks"] = port_json(open);
+    }
     if matches!(s.kernel, Kernel::Global { .. }) {
         v["simulates"] = json!(true);
     }
@@ -567,7 +570,7 @@ fn node_markdown(md: &mut String, s: &'static NodeSpec) {
         Reads::Nothing => {}
     }
     ports_markdown(md, "Inputs", s.inputs);
-    if let Some(open) = &s.open_inputs {
+    for open in s.open_families() {
         let _ = writeln!(md, "- `{}<name>` ({}, optional) — {}", open.name, open.kind.id(), open.help);
     }
     ports_markdown(md, "Outputs", s.outputs);
@@ -684,6 +687,17 @@ pub fn example(spec: &'static NodeSpec) -> Graph {
     }
     for port in spec.inputs.iter().filter(|p| !p.optional) {
         node.inputs.insert(port.name.into(), feeder(&mut g, port.kind));
+    }
+    // A node whose inputs grow: two of them, the second through a mask.
+    if spec.grows()
+        && let Some(open) = spec.open_inputs
+    {
+        for k in 1..=2 {
+            node.inputs.insert(format!("{}{k}", open.name), feeder(&mut g, open.kind));
+        }
+        if let Some(mask) = spec.open_masks {
+            node.inputs.insert(format!("{}2", mask.name), feeder(&mut g, mask.kind));
+        }
     }
     let stem = spec.id.rsplit('.').next().unwrap_or("node");
     let name = if g.nodes.contains_key(stem) || stem == "out" { format!("{stem}_1") } else { stem.to_owned() };

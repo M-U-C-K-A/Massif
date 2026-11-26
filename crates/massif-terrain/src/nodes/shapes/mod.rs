@@ -18,6 +18,7 @@ use crate::registry::NodeSpec;
 
 /// The node types of this family, in the library's order.
 pub static NODES: &[&NodeSpec] = &[
+    &mountains::MOUNTAIN,
     &mountains::ALPINE,
     &mountains::ROUNDED,
     &mountains::RANGE,
