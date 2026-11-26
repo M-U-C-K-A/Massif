@@ -996,14 +996,14 @@ impl MapView {
         self.canvas.contains(p).then(|| self.to_world(self.canvas, p))
     }
 
-    /// Where block coordinates `(x, z)` were on the screen, last frame.
-    #[cfg(test)]
     /// The middle of the canvas as last drawn, where the crosshair is.
     #[cfg(test)]
     pub fn canvas_centre(&self) -> Pos2 {
         self.canvas.center()
     }
 
+    /// Where block coordinates `(x, z)` were on the screen, last frame.
+    #[cfg(test)]
     pub fn screen_of(&self, x: f64, z: f64) -> Pos2 {
         self.to_screen(self.canvas, x, z)
     }
