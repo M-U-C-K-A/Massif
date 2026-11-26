@@ -61,15 +61,15 @@ name = NodeType(input, other_input, setting: value, …);
   soft = Blur(hills) { name: "Soft hills"; note: "for the coast"; bypass: true; };
   ```
 
-Every node of the registry has a CamelCase name, made from the live catalogue: `FractalNoise` (noise.fbm), `StreamErosion`, `SlopeMask`, `Levels`, `MountainRange`, `AlpineRange` (Massif's composite)…
+Every node of the registry has a CamelCase name, made from the live catalogue: `FractalNoise` (noise.fbm), `Erosion`, `SlopeMask`, `Levels`, `MountainRange`, `AlpineRange` (Massif's composite)…
 
 Aliases read like the words people use. Some give settings of their own:
 
 - `Multiply`, `Add`, `Max`… are Blend in that mode.
 - `RidgedNoise` is FractalNoise in its ridged style.
-- `Remap` is Levels; `DomainWarp` is Warp; `HydraulicErosion` is StreamErosion.
+- `Remap` is Levels; `DomainWarp` is Warp; `HydraulicErosion` and `StreamErosion` are Erosion.
 
-A type can always be called by its id (`noise.fbm(…)`, `"massif:mountain"(…)`), and an older version of a node by `@`: `FractalNoise@1(…)`.
+A type can always be called by its id (`noise.fbm(…)`, `"massif:mountain"(…)`), and a call makes the latest version of a type: an older version is called with `@`, as `Erosion@1(…)` (the Stream erosion of 1.2) or `Transform@1(…)`, and the script pane writes it so.
 
 ### Values
 

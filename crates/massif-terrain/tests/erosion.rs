@@ -486,3 +486,79 @@ fn strata_stand_as_cliffs_between_benches() {
         assert!(off(&a, &b, 0.5) < 0.02, "{}", off(&a, &b, 0.5));
     }
 }
+
+/// Erosion (version 2): it cuts valleys, lays down what it cut, gives
+/// masks from 0 to 1, the same each time and window by window.
+#[test]
+fn erosion_cuts_and_lays_down_the_same_each_time_and_window_by_window() {
+    use massif_terrain::space::Rect;
+    let g = peaks(
+        r#", "er": { "type": "erosion.stream@2", "inputs": { "height": "land" }, "params": { "duration": 2 } },
+            "kept": { "type": "erosion.stream@2", "inputs": { "height": "land" }, "params": { "duration": 2, "removal": 0 } },
+            "gone": { "type": "erosion.stream@2", "inputs": { "height": "land" }, "params": { "duration": 2, "removal": 1 } }"#,
+    );
+    let c = compiled(&g, 2048, 256);
+    let e = engine(false);
+    let land = whole(&e, &c, "land", None);
+    let er = whole(&e, &c, "er", None);
+    assert!(mean(&er) < mean(&land) - 1.0, "{} {}", mean(&er), mean(&land));
+    // Kept sediment fills the valleys: more land stands than when all of it leaves.
+    assert!(mean(&whole(&e, &c, "kept", None)) > mean(&whole(&e, &c, "gone", None)) + 0.5);
+    for port in ["flow", "wear", "deposition", "sediment"] {
+        let (lo, hi) = whole(&e, &c, "er", Some(port)).range();
+        assert!(lo >= 0.0 && hi <= 1.0 && hi > 0.3, "{port}: {lo} {hi}");
+    }
+    assert_eq!(whole(&engine(false), &c, "er", None).data, er.data, "the same each time");
+    // At full detail, two windows side by side are the window over both.
+    let out = c.source("er", None).unwrap();
+    let both = engine(false).region(&c, out, 0, Rect::new(900, 700, 256, 128), &never).unwrap();
+    for x in [900, 1028] {
+        let w = engine(false).region(&c, out, 0, Rect::new(x, 700, 128, 128), &never).unwrap();
+        for z in 700..828 {
+            for dx in 0..128 {
+                assert_eq!(w.at(x + dx, z), both.at(x + dx, z), "({}, {z})", x + dx);
+            }
+        }
+    }
+}
+
+/// Erosion makes dendritic valleys out of noise in a fraction of a second.
+#[test]
+fn erosion_is_quick() {
+    let g = peaks(r#", "er": { "type": "erosion.stream@2", "inputs": { "height": "land" } }"#);
+    let c = compiled(&g, 4096, 512);
+    let e = engine(false);
+    whole(&e, &c, "land", None);
+    let t = Instant::now();
+    whole(&e, &c, "er", None);
+    let ms = t.elapsed().as_secs_f64() * 1000.0;
+    eprintln!("erosion at 512²: {ms:.0} ms");
+    assert!(ms < 5000.0, "{ms} ms");
+}
+
+/// Timings of Erosion against Stream erosion (ignored):
+/// `MASSIF_EROSION_SIDE=1024 MASSIF_EROSION_NODE=erosion.stream@2 cargo
+/// test --release -p massif-terrain --test erosion -- --ignored
+/// --nocapture erosion_timing`, under `/usr/bin/time` for the CPU time.
+#[test]
+#[ignore]
+fn erosion_timing() {
+    let side: u32 = std::env::var("MASSIF_EROSION_SIDE").ok().and_then(|s| s.parse().ok()).unwrap_or(1024);
+    let node = std::env::var("MASSIF_EROSION_NODE").unwrap_or_else(|_| "erosion.stream@2".into());
+    let g = graph(&format!(
+        r#"{{ "terrain": {{ "size": {size}, "seed": 5 }}, "nodes": {{
+            "land": {{ "type": "mountain.rounded", "params": {{ "height": 200, "peak_spacing": 1500, "coverage": 1 }} }},
+            "er": {{ "type": "{node}", "inputs": {{ "height": "land.height" }} }} }} }}"#,
+        size = side * 8
+    ));
+    let c = compiled(&g, side * 8, side);
+    let mut best = f64::MAX;
+    for _ in 0..3 {
+        let e = engine(false);
+        whole(&e, &c, "land", None);
+        let t = Instant::now();
+        whole(&e, &c, "er", None);
+        best = best.min(t.elapsed().as_secs_f64() * 1000.0);
+    }
+    println!("{node} at {side}²: best of 3 {best:.0} ms");
+}

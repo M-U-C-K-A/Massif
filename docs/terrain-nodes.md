@@ -1395,9 +1395,9 @@ Outputs:
 
 ## Simulate
 
-### Stream erosion — `erosion.stream`
+### Erosion — `erosion.stream@2`
 
-Rivers cut valleys that branch up into every slope, leaving sharp ridges between them, and lay what they carry down where they slow. The erosion that makes mountains look like mountains: water gathers into streams, the more of it the deeper they cut (stream power), their walls fall back to the talus angle, and the sediment settles at the feet of slopes, on valley floors and at the sea. Use it after shapes and noise to turn lumps into ranges drained by real valleys; follow it with Particle erosion for small gullies and Thermal erosion for scree. Strength is how far the rivers cut back into the land; Hardness keeps some rock standing; Rain gives more water where it falls.
+Rivers cut valleys that branch up into every slope, leaving sharp ridges between them; the slopes creep and slide, and what the water carries settles on valley floors and in fans at their feet. The erosion that makes mountains look like mountains, worked out coarse to fine over the whole terrain: water gathers into rivers that cut their beds by stream power (the more water and the steeper, the deeper), carry what they cut and lay it down where they slow, while the slopes between them creep and slide back to the talus angle. Use it after shapes and noise: Duration is how long the land has eroded, Downcutting how much the rivers cut down rather than wear the land broad, Erosion scale the size of the smallest valleys, Sediment removal how much of what is cut leaves the terrain rather than filling the valleys, Rock softness how easily the rock gives. Hardness keeps some rock standing; Rainfall gives more water where it falls. The Flow, Wear and Deposition masks colour rivers, gullies and alluvium.
 
 A simulation: it works over the whole terrain at the simulations' resolution.
 
@@ -1406,7 +1406,6 @@ Inputs:
 - `height` (height) — The relief to erode.
 - `hardness` (mask, optional) — Rock that resists: 1 wears twenty times slower than 0. Left empty: soft rock everywhere.
 - `rainfall` (mask, optional) — How much rain falls where: a rainfall map, a rain shadow. Left empty: the same rain everywhere.
-- `uplift` (mask, optional) — Where the land rises while the rivers cut, as much as Rebuild says. Left empty: the relief itself: the higher, the more.
 
 Outputs:
 
@@ -1418,15 +1417,14 @@ Outputs:
 
 | Setting | Kind | Default | Range | What it does |
 |---|---|---|---|---|
-| `strength` | number | 1 | 0 to 20 | How hard the rivers cut: higher, deeper valleys reaching further up into the land. Usually 0 to 4. |
-| `rebuild` | number | 1 | 0 to 1 | How much of the relief rises while the rivers cut, then is brought back to its height: 1 turns any shape into mountains carved by their rivers; 0 only cuts valleys into it, down to the sea and the low ground. |
-| `iterations` | integer | 200 | 10 to 2000 | Steps at each level of the simulation: more, finer valleys reaching further, slower. |
-| `talus` | number | 55 | 10 to 80 degrees | The steepest the valleys' walls stand: lower, wider valleys and rounder ridges. In degrees. |
-| `deposition` | number | 0.5 | 0 to 1 | How readily the water drops what it carries where it slows: fans, filled valleys, deltas. |
-| `channel` | number | 24 | 0 to 512 blocks | The side of the smallest area that drains into a stream: under it the ground only creeps and slides. In blocks. |
-| `diffusion` | number | 0 | 0 to 1 | How much soil creeps downhill and rounds the land between the streams. |
-| `m` | number | 0.5 | 0.2 to 0.8 | How much more large rivers cut than small ones (m of K·A^m·S^n). |
-| `n` | number | 1 | 0.5 to 2 | How much more steep streams cut than gentle ones (n of K·A^m·S^n). |
+| `duration` | number | 1 | 0 to 20 | How long the land has eroded: longer, valleys cut deeper and reaching further up into the land. Usually 0 to 4. |
+| `downcutting` | number | 0.35 | 0 to 1 | How much the large rivers cut down rather than the slopes wear back: high, deep narrow valleys and sharp ridges; low, broad valleys and rounded hills. |
+| `scale` | number | 64 | 4 to 4096 blocks | How wide the smallest valleys and rivers are: under it the ground only creeps and slides. Wider also works coarser, and quicker. In blocks. Usually 8 to 512. |
+| `removal` | number | 0.2 | 0 to 1 | How much of what the rivers cut leaves the terrain: 0 fills the valley floors and spreads fans; 1 carries it all out. |
+| `softness` | number | 0.5 | 0 to 1 | How easily the rock gives to the water and creeps. |
+| `base` | number | -64 | -64 to 512 blocks | The height under which the water has left: nothing is cut below it (the sea, when higher). In blocks. |
+| `talus` | number | 42 | 10 to 80 degrees | The steepest the slopes stand: lower, wider valleys and rounder ridges. In degrees. |
+| `steps` | integer | 24 | 4 to 400 | Steps at each level of the simulation: more, a finer result, slower. |
 | `seed` | seed | — | 0 to 4294967295 | Another seed gives another variation of the same settings. Left out, it comes from the node's name. |
 
 ```json
@@ -1435,7 +1433,7 @@ Outputs:
   "nodes": {
     "out": { "type": "output.map", "inputs": { "height": "stream" } },
     "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } },
-    "stream": { "type": "erosion.stream", "inputs": { "height": "relief" } }
+    "stream": { "type": "erosion.stream@2", "inputs": { "height": "relief" } }
   }
 }
 ```

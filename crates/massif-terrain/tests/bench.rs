@@ -42,13 +42,28 @@ fn candidates() -> Vec<(&'static str, String)> {
         ("Rounded mountains", one(r#""h": { "type": "mountain.rounded", "params": { "height": 1000, "peak_spacing": 4000, "coverage": 1, "detail": 800 } }"#)),
         ("Eroded noise", one(r#""h": { "type": "noise.eroded", "params": { "height": 1000, "scale": 6000 } }"#)),
         ("Alpine + erosion", one(r#""m": { "type": "mountain.alpine", "params": { "height": 1000, "peak_spacing": 3000, "coverage": 1, "detail": 600 } }, "h": { "type": "erosion.stream", "inputs": { "height": "m.height" } }"#)),
+        ("Mountain + Erosion", one(r#""m": { "type": "mountain.single", "params": { "scale": 15000, "height": 1000, "style": "alpine", "bulk": "high" } }, "h": { "type": "erosion.stream@2", "inputs": { "height": "m.height" } }"#)),
+        ("Alpine + Erosion 2", one(r#""m": { "type": "mountain.alpine", "params": { "height": 1000, "peak_spacing": 3000, "coverage": 1, "detail": 600 } }, "h": { "type": "erosion.stream@2", "inputs": { "height": "m.height" } }"#)),
+        ("Noise + Erosion 2", one(r#""m": { "type": "noise.fbm", "params": { "scale": 6000, "height": 1000 } }, "h": { "type": "erosion.stream@2", "inputs": { "height": "m.height" } }"#)),
+        ("Rounded + Erosion 2", one(r#""m": { "type": "mountain.rounded", "params": { "height": 1000, "peak_spacing": 4000, "coverage": 1, "detail": 800 } }, "h": { "type": "erosion.stream@2", "inputs": { "height": "m.height" } }"#)),
+        ("Plateau + Erosion 2", one(r#""m": { "type": "noise.fbm", "params": { "scale": 5000, "height": 250, "base": 800 } }, "h": { "type": "erosion.stream@2", "inputs": { "height": "m.height" }, "params": { "duration": 3 } }"#)),
+        ("Volcano + Erosion 2", one(r#""v": { "type": "mountain.volcano", "params": { "volcanoes": [{ "x": 0.5, "z": 0.5, "height": 1000, "radius": 7000 }] } }, "r": { "type": "noise.fbm", "params": { "style": "ridged", "scale": 1500, "height": 80 } }, "m": { "type": "combine.blend", "inputs": { "a": "v.height", "b": "r" }, "params": { "mode": "add" } }, "h": { "type": "erosion.stream@2", "inputs": { "height": "m" }, "params": { "downcutting": 0.3, "scale": 16, "removal": 0 } }"#)),
+        ("Hills + Erosion 2", one(r#""m": { "type": "noise.fbm", "params": { "scale": 2000, "height": 40, "base": 400 } }, "h": { "type": "erosion.stream@2", "inputs": { "height": "m.height" }, "params": { "downcutting": 0.9, "scale": 32, "duration": 6, "removal": 0.8 } }"#)),
+        ("Alpine broad + Erosion 2", one(r#""m": { "type": "mountain.alpine", "params": { "height": 1000, "peak_spacing": 3000, "coverage": 1, "detail": 600 } }, "h": { "type": "erosion.stream@2", "inputs": { "height": "m.height" }, "params": { "downcutting": 0.2, "removal": 0, "scale": 128 } }"#)),
+        ("Eroded noise + Erosion 2", one(r#""m": { "type": "noise.eroded", "params": { "height": 1000, "scale": 6000 } }, "h": { "type": "erosion.stream@2", "inputs": { "height": "m" }, "params": { "downcutting": 0.2, "removal": 0, "scale": 128, "duration": 0.5 } }"#)),
+        ("Broad + Erosion 2", one(r#""m": { "type": "mountain.rounded", "params": { "height": 1000, "peak_spacing": 4000, "coverage": 1, "detail": 800 } }, "h": { "type": "erosion.stream@2", "inputs": { "height": "m.height" }, "params": { "downcutting": 0.15, "removal": 0 } }"#)),
         ("Canyon", one(r#""p": { "type": "pattern.constant", "params": { "value": 1000 } }, "h": { "type": "valley.canyon", "params": { "depth": 700, "width": 1800, "scale": 6000 }, "inputs": { "height": "p" } }"#)),
         ("Volcano", one(r#""h": { "type": "mountain.volcano", "params": { "volcanoes": [{ "x": 0.5, "z": 0.5, "height": 1000, "radius": 7000 }] } }"#)),
     ]
 }
 
 fn ours(json: &str) -> (Relief, f64) {
-    let g = Graph::from_json(json).unwrap();
+    // MASSIF_BENCH_EROSION=<"name": value, …>: settings given to every Erosion, to tune it.
+    let json = match std::env::var("MASSIF_BENCH_EROSION") {
+        Ok(p) if !p.is_empty() => json.replace(r#""type": "erosion.stream@2""#, &format!(r#""type": "erosion.stream@2", "params": {{ {p} }}"#)),
+        _ => json.to_owned(),
+    };
+    let g = Graph::from_json(&json).unwrap();
     let (c, _) = compile(&g, Space::new(SIZE), 512);
     let e = Engine::new(Settings::default());
     let t = Instant::now();
@@ -83,7 +98,9 @@ fn relief_bench() {
         return;
     };
     let out = std::env::var_os("MASSIF_BENCH_OUT").map_or(dir.clone(), PathBuf::from);
-    let cands = candidates();
+    // MASSIF_BENCH_ONLY=<a,b>: only the candidates whose names hold one of these.
+    let only = std::env::var("MASSIF_BENCH_ONLY").ok();
+    let cands: Vec<_> = candidates().into_iter().filter(|(name, _)| only.as_ref().is_none_or(|o| o.split(',').any(|w| name.contains(w)))).collect();
     // Each candidate made once (they do not depend on the case), fitted
     // to each case's range.
     let made: Vec<(&str, Relief, f64)> = cands.iter().map(|(name, json)| {

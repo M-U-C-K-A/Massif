@@ -495,9 +495,10 @@ impl<'l> Compiler<'l> {
     fn call(&mut self, call: &Call, id: Option<&str>) -> R<String> {
         self.tick(call.span)?;
         let target = self.resolve(call)?;
-        let kind = match call.version {
-            Some(v) if v != 1 => format!("{}@{v}", target.kind),
-            _ => target.kind.clone(),
+        // Without `@`, the latest version.
+        let kind = match call.version.unwrap_or_else(|| names::latest_version(&target.kind)) {
+            1 => target.kind.clone(),
+            v => format!("{}@{v}", target.kind),
         };
         // What it takes: inputs (name, type, optional) and settings.
         let (label, inputs, open, settings) = self.signature(&kind, call)?;

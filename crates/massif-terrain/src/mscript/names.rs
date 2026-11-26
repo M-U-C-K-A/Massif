@@ -212,6 +212,18 @@ pub fn lookup(name: &str) -> Option<Target> {
     }
 }
 
+/// The latest version of type `base` (a node type or a composite Massif
+/// ships), the one a call without `@` makes; 1 for any other.
+pub fn latest_version(base: &str) -> u16 {
+    if base.starts_with("massif:") {
+        return crate::components::latest(base).map_or(1, |(v, _)| v);
+    }
+    if is_component_type(base) {
+        return 1;
+    }
+    crate::registry::latest(base).map_or(1, |s| s.version)
+}
+
 /// Every name a script can call, for suggestions.
 pub fn all_names() -> impl Iterator<Item = &'static str> {
     table().by_name.keys().map(String::as_str)
@@ -240,7 +252,7 @@ mod tests {
             }
             assert_eq!(lookup(&n).unwrap().kind, s.id);
         }
-        for (kind, _, _) in crate::components::all() {
+        for (kind, _, _) in crate::components::all().iter().filter(|(_, v, _)| *v == 1) {
             let n = name_of(kind).unwrap();
             assert!(seen.insert(n.clone(), kind).is_none(), "{n} names two types");
             assert_eq!(lookup(&n).unwrap().kind, *kind);

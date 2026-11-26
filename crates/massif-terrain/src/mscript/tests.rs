@@ -277,3 +277,14 @@ fn the_reference_is_current() {
     }
     assert!(std::fs::read_to_string(&path).is_ok_and(|t| t == text), "docs/massifscript-reference.md is out of date: MASSIF_WRITE_DOCS=1 cargo test -p massif-terrain --lib mscript");
 }
+
+/// A call makes the latest version of its type; an older one says its own.
+#[test]
+fn calls_make_the_latest_version() {
+    let g = ok("h = Erosion(FractalNoise(), duration: 2);\nold = Erosion@1(h);\nr = AlpineRange();\noutput height = old;\n");
+    let kinds: Vec<&str> = g.nodes.values().map(|n| n.kind.as_str()).collect();
+    assert!(kinds.contains(&"erosion.stream@2") && kinds.contains(&"erosion.stream") && kinds.contains(&"massif:alpine-range@2"), "{kinds:?}");
+    let text = decompile(&g, None);
+    assert!(text.contains("Erosion(") && text.contains("@1(") && !text.contains("@2"), "{text}");
+    assert_eq!(shape(&ok(&text)).nodes, shape(&g).nodes);
+}

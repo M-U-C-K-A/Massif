@@ -168,7 +168,7 @@ const LANGUAGE: &str = r##"MassifScript is the text form of Massif's terrain nod
 - Outputs of the map: `output height = eroded;` and likewise `water`, `albedo`, `terrain` (block materials), `biome`, `temperature`, `humidity`, `cover`, `objects`, `understory`, `pockets`, `caves`, `cave_biomes`, `annotations`, `structures`, `roads`, `volume.carve`, `volume.add`, and any mask as `mask.<name>`. They are the Map Output node's inputs.
 - A component is a node made of nodes: `component Name(input: height, mask_in: mask?, size: float = 800) { … output result; }`. Parameters typed as a socket (height, mask, color, vector, terrain, biome, layer, points, splines, footprints, instances, density; `?` optional) are its inputs; those typed float, int, bool, seed, choice, string or value are settings it exposes, which its nodes take as values (`height: size`). `expose size { label: "Size"; min: 0; max: 2000; unit: "blocks"; }` says how to show one. `label = "…"; category = "…"; summary = "…";` describe it. Use it like any node: `m = Name(relief, size: 900);`, `m.result` for one of its outputs.
 - `import "lib.mscript";` reads another script (its components, constants and nodes).
-- A type can also be called by its id: `noise.fbm(…)`, `"massif:mountain"(…)`, and an older version with `@`: `FractalNoise@1(…)`.
+- A type can also be called by its id: `noise.fbm(…)`, `"massif:mountain"(…)`, and a call makes the latest version of a type, an older one with `@`: `Erosion@1(…)`, `Transform@1(…)`.
 
 ## Sockets
 

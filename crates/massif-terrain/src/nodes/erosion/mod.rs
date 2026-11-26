@@ -6,6 +6,7 @@
 mod common;
 mod flow;
 mod glacier;
+mod hydraulic;
 mod particle;
 mod stream;
 mod water;
@@ -18,7 +19,7 @@ use crate::registry::{Family, Kernel, NodeSpec, ParamSpec, PortKind, PortSpec, S
 use rayon::prelude::*;
 
 /// The node types of this family, in the library's order.
-pub static NODES: &[&NodeSpec] = &[&STREAM, &PARTICLE, &THERMAL, &DEPOSIT, &GLACIER, &WIND, &FLOW, &RIVERS, &LAKES, &SEA];
+pub static NODES: &[&NodeSpec] = &[&STREAM_2, &STREAM, &PARTICLE, &THERMAL, &DEPOSIT, &GLACIER, &WIND, &FLOW, &RIVERS, &LAKES, &SEA];
 
 /// The masks every erosion node gives beside its height, named as the Map
 /// Output's inputs are.
@@ -29,6 +30,31 @@ const SEDIMENT_OUT: PortSpec = PortSpec::new("sediment", "Sediment", PortKind::M
 
 const HARDNESS_IN: PortSpec = PortSpec::new("hardness", "Hardness", PortKind::Mask, "Rock that resists: 1 wears twenty times slower than 0.").or("soft rock everywhere");
 const RAIN_IN: PortSpec = PortSpec::new("rainfall", "Rainfall", PortKind::Mask, "How much rain falls where: a rainfall map, a rain shadow.").or("the same rain everywhere");
+
+pub static STREAM_2: NodeSpec = NodeSpec {
+    id: "erosion.stream",
+    version: 2,
+    label: "Erosion",
+    family: Family::Simulate,
+    summary: "Rivers cut valleys that branch up into every slope, leaving sharp ridges between them; the slopes creep and slide, and what the water carries settles on valley floors and in fans at their feet.",
+    help: "The erosion that makes mountains look like mountains, worked out coarse to fine over the whole terrain: water gathers into rivers that cut their beds by stream power (the more water and the steeper, the deeper), carry what they cut and lay it down where they slow, while the slopes between them creep and slide back to the talus angle. Use it after shapes and noise: Duration is how long the land has eroded, Downcutting how much the rivers cut down rather than wear the land broad, Erosion scale the size of the smallest valleys, Sediment removal how much of what is cut leaves the terrain rather than filling the valleys, Rock softness how easily the rock gives. Hardness keeps some rock standing; Rainfall gives more water where it falls. The Flow, Wear and Deposition masks colour rivers, gullies and alluvium.",
+    keywords: &["hydraulic", "fluvial", "rivers", "valleys", "drainage", "dendritic", "stream power", "incision", "sediment", "erosion"],
+    inputs: &[PortSpec::new("height", "Height", PortKind::Height, "The relief to erode."), HARDNESS_IN, RAIN_IN],
+    outputs: &[height_out("The relief eroded."), FLOW_OUT, WEAR_OUT, DEPOSITION_OUT, SEDIMENT_OUT],
+    params: &[
+        ParamSpec::float("duration", "Duration", Unit::Ratio, 1.0, 0.0, 20.0, "How long the land has eroded: longer, valleys cut deeper and reaching further up into the land.").soft(0.0, 4.0),
+        ParamSpec::float("downcutting", "Downcutting", Unit::Ratio, 0.35, 0.0, 1.0, "How much the large rivers cut down rather than the slopes wear back: high, deep narrow valleys and sharp ridges; low, broad valleys and rounded hills."),
+        ParamSpec::float("scale", "Erosion scale", Unit::Blocks, 64.0, 4.0, 4096.0, "How wide the smallest valleys and rivers are: under it the ground only creeps and slides. Wider also works coarser, and quicker.").soft(8.0, 512.0),
+        ParamSpec::float("removal", "Sediment removal", Unit::Ratio, 0.2, 0.0, 1.0, "How much of what the rivers cut leaves the terrain: 0 fills the valley floors and spreads fans; 1 carries it all out."),
+        ParamSpec::float("softness", "Rock softness", Unit::Ratio, 0.5, 0.0, 1.0, "How easily the rock gives to the water and creeps."),
+        ParamSpec::float("base", "Base level", Unit::Blocks, -64.0, -64.0, 512.0, "The height under which the water has left: nothing is cut below it (the sea, when higher)."),
+        ParamSpec::float("talus", "Talus angle", Unit::Degrees, 42.0, 10.0, 80.0, "The steepest the slopes stand: lower, wider valleys and rounder ridges.").section(Section::Detail),
+        ParamSpec::int("steps", "Steps", 24, 4, 400, "Steps at each level of the simulation: more, a finer result, slower.").section(Section::Advanced),
+        ParamSpec::seed(),
+    ],
+    kernel: Kernel::Global { cpu: hydraulic::erosion_cpu, gpu: None, carry: &[Some(0), None, None, None, None] },
+    ..NodeSpec::BASE
+};
 
 pub static STREAM: NodeSpec = NodeSpec {
     id: "erosion.stream",

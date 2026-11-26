@@ -1065,3 +1065,23 @@ fn the_light_primitives_render() {
         p.selected = vec!["tb".into()];
     });
 }
+
+/// Erosion (version 2) on two light Mountains, its settings shown.
+#[test]
+fn the_erosion_renders() {
+    let Some(dir) = snapshot_dir() else { return };
+    let Some(gpu) = Gpu::headless() else { return };
+    let engine = Arc::new(Engine::with_gpu(gpu, Default::default()));
+    let mut g = light_primitives();
+    let er = Graph::from_json(r#"{ "nodes": { "er": { "type": "erosion.stream@2", "inputs": { "height": "mix" }, "params": { "duration": 2 } } } }"#).unwrap();
+    g.nodes.extend(er.nodes);
+    g.nodes.get_mut("out").unwrap().inputs.insert("height".into(), "er.height".into());
+    g.ui.get_mut("out").unwrap().pos = [960.0, 120.0];
+    g.ui.insert("er".into(), g.ui["mix"].clone());
+    g.ui.get_mut("er").unwrap().pos = [720.0, 120.0];
+    for (theme, tag, ppp) in [(egui::Theme::Dark, "dark", 1.0), (egui::Theme::Light, "light", 1.0), (egui::Theme::Dark, "dark-2x", 2.0)] {
+        render_editor(&dir, &format!("erosion-{tag}"), theme, ppp, engine.clone(), g.clone(), |p| {
+            p.selected = vec!["er".into()];
+        });
+    }
+}

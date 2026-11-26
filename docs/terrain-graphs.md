@@ -76,6 +76,31 @@ and **Strength**. In MassifScript the inputs are given in order,
 (`` `mask.2`: m ``); in a graph's JSON they are `in.1`, `in.2`… and
 `mask.2`, `mask.3`….
 
+### Erosion
+
+**Erosion** (in the Simulate family, a new version of Stream erosion) turns
+lumps into ranges drained by real valleys. Water gathers into rivers that
+cut their beds by stream power (the more water and the steeper, the
+deeper), carry what they cut and lay it down where they slow, while the
+slopes between them creep and slide back to the talus angle. It works
+coarse to fine over the whole terrain, so that a river runs on from one
+valley to the next, and Apply window by window gives the same as one
+Apply: there are no seams. Its settings are Gaea's: **Duration** (how long
+the land has eroded), **Downcutting** (deep narrow valleys and sharp
+ridges, or broad valleys and rounded hills), **Erosion scale** (how wide
+the smallest valleys are; wider works coarser and quicker), **Sediment
+removal** (0 fills the valley floors and spreads fans, 1 carries it all
+out), **Rock softness**, **Base level** (nothing is cut below it, nor
+below the sea), with the **Talus angle**, **Steps** and **Seed** further
+down. **Hardness** and **Rainfall** masks vary the rock and the rain; its
+**Flow**, **Wear**, **Deposition** and **Sediment** masks colour rivers,
+gullies and alluvium. It is about a hundred times quicker than Stream
+erosion: 46, 148 and 660 ms for a simulation of 512², 1024² and 2048²
+samples, against 3.0, 15.4 and 83 s. The same graph gives the same result
+on any machine. Graphs made with Stream erosion keep it (`Erosion@1` in
+MassifScript), and the **Alpine Range** composite now uses Erosion (its
+version 2: Erosion and Downcutting exposed, a Deposition output).
+
 ### The relief bench
 
 `tools/relief_bench.sh fetch` downloads five real landforms once

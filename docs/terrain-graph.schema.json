@@ -5084,6 +5084,178 @@
       "title": "Stream erosion",
       "type": "object"
     },
+    "erosion.stream@2": {
+      "additionalProperties": false,
+      "description": "Rivers cut valleys that branch up into every slope, leaving sharp ridges between them; the slopes creep and slide, and what the water carries settles on valley floors and in fans at their feet. The erosion that makes mountains look like mountains, worked out coarse to fine over the whole terrain: water gathers into rivers that cut their beds by stream power (the more water and the steeper, the deeper), carry what they cut and lay it down where they slow, while the slopes between them creep and slide back to the talus angle. Use it after shapes and noise: Duration is how long the land has eroded, Downcutting how much the rivers cut down rather than wear the land broad, Erosion scale the size of the smallest valleys, Sediment removal how much of what is cut leaves the terrain rather than filling the valleys, Rock softness how easily the rock gives. Hardness keeps some rock standing; Rainfall gives more water where it falls. The Flow, Wear and Deposition masks colour rivers, gullies and alluvium.",
+      "properties": {
+        "bypass": {
+          "description": "Left out of the graph: what it feeds takes its first input instead.",
+          "type": "boolean"
+        },
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "hardness": {
+              "$ref": "#/$defs/source",
+              "description": "Rock that resists: 1 wears twenty times slower than 0. (mask) Left empty: soft rock everywhere.",
+              "title": "Hardness"
+            },
+            "height": {
+              "$ref": "#/$defs/source",
+              "description": "The relief to erode. (height)",
+              "title": "Height"
+            },
+            "rainfall": {
+              "$ref": "#/$defs/source",
+              "description": "How much rain falls where: a rainfall map, a rain shadow. (mask) Left empty: the same rain everywhere.",
+              "title": "Rainfall"
+            }
+          },
+          "required": [
+            "height"
+          ],
+          "type": "object"
+        },
+        "name": {
+          "description": "What the editor calls the node (its type's label when left out); its id never changes.",
+          "type": "string"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "base": {
+              "default": -64.0,
+              "description": "The height under which the water has left: nothing is cut below it (the sea, when higher). In blocks.",
+              "maximum": 512.0,
+              "minimum": -64.0,
+              "title": "Base level",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -64.0,
+                512.0
+              ],
+              "x-unit": "blocks"
+            },
+            "downcutting": {
+              "default": 0.35,
+              "description": "How much the large rivers cut down rather than the slopes wear back: high, deep narrow valleys and sharp ridges; low, broad valleys and rounded hills.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Downcutting",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "duration": {
+              "default": 1.0,
+              "description": "How long the land has eroded: longer, valleys cut deeper and reaching further up into the land. Usually 0 to 4.",
+              "maximum": 20.0,
+              "minimum": 0.0,
+              "title": "Duration",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                4.0
+              ],
+              "x-unit": "ratio"
+            },
+            "removal": {
+              "default": 0.2,
+              "description": "How much of what the rivers cut leaves the terrain: 0 fills the valley floors and spreads fans; 1 carries it all out.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Sediment removal",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "scale": {
+              "default": 64.0,
+              "description": "How wide the smallest valleys and rivers are: under it the ground only creeps and slides. Wider also works coarser, and quicker. In blocks. Usually 8 to 512.",
+              "maximum": 4096.0,
+              "minimum": 4.0,
+              "title": "Erosion scale",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                8.0,
+                512.0
+              ],
+              "x-unit": "blocks"
+            },
+            "seed": {
+              "description": "Another seed gives another variation of the same settings. Left out, it comes from the node's name.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer",
+              "x-section": "detail"
+            },
+            "softness": {
+              "default": 0.5,
+              "description": "How easily the rock gives to the water and creeps.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Rock softness",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "steps": {
+              "default": 24,
+              "description": "Steps at each level of the simulation: more, a finer result, slower.",
+              "maximum": 400,
+              "minimum": 4,
+              "title": "Steps",
+              "type": "integer",
+              "x-section": "advanced"
+            },
+            "talus": {
+              "default": 42.0,
+              "description": "The steepest the slopes stand: lower, wider valleys and rounder ridges. In degrees.",
+              "maximum": 80.0,
+              "minimum": 10.0,
+              "title": "Talus angle",
+              "type": "number",
+              "x-section": "detail",
+              "x-soft": [
+                10.0,
+                80.0
+              ],
+              "x-unit": "degrees"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "erosion.stream@2"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Erosion",
+      "type": "object"
+    },
     "erosion.thermal": {
       "additionalProperties": false,
       "description": "Loose rock slides down slopes steeper than its angle of repose, and gathers at their feet as scree. Wears cliffs back and fills the feet of slopes with talus, the way frost and gravity do: what is steeper than Talus angle sheds material to the lower neighbours until it is stable. More iterations go further towards that angle; Strength is how much moves at each; Hardness keeps cliffs of hard rock standing while soft beds crumble. The Talus output is where material came to rest: scree, gravel, rubble.",
@@ -10545,6 +10717,21 @@
           "if": {
             "properties": {
               "type": {
+                "const": "erosion.stream@2"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/erosion.stream@2"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
                 "const": "erosion.stream"
               }
             },
@@ -11622,6 +11809,7 @@
                 "adjust.transform@2",
                 "adjust.transform",
                 "adjust.swirl",
+                "erosion.stream@2",
                 "erosion.stream",
                 "erosion.particle",
                 "erosion.thermal",

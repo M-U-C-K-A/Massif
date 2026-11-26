@@ -6,7 +6,7 @@
 //!     group "Base" {
 //!         color = #347a52;
 //!         base = FractalNoise(scale: 2400, height: 600, style: "ridged");
-//!         worn = StreamErosion(base, strength: 0.6);
+//!         worn = Erosion(base, duration: 2);
 //!     }
 //!     output height = worn;
 //! }

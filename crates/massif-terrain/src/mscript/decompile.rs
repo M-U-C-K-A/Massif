@@ -60,11 +60,14 @@ fn callee(kind: &str, mine: &BTreeSet<String>) -> String {
     if let Some(n) = base.strip_prefix("project:") {
         return format!("{}{at}", ident(n));
     }
+    // A call without `@` makes the latest version: older ones say theirs.
+    let v = version.and_then(|v| v.parse::<u16>().ok()).unwrap_or(1);
+    let at = if v == names::latest_version(base) { String::new() } else { format!("@{v}") };
     match names::name_of(base) {
         // A component of the document by the same name would be called instead.
         Some(n) if !mine.contains(&n) => format!("{n}{at}"),
         _ if !is_component_type(base) && base.split('.').all(|p| ident(p) == p) => format!("{base}{at}"),
-        _ => format!("{}{at}", string(kind)),
+        _ => format!("{}{at}", string(base)),
     }
 }
 
