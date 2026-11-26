@@ -110,6 +110,7 @@ fn brushes_write_what_they_wrote() {
         Filter { above: Some(72), ..Default::default() },
         Filter { above: Some(60), below: Some(90), fade: true, ..Default::default() },
         Filter { above: Some(65), below: Some(85), beyond: true, ..Default::default() },
+        // Terrain 2 under water: both, as WorldPainter's Only on (none here).
         Filter { only_on: Some(vec![Match::Terrain(2), Match::Water]), ..Default::default() },
         Filter { except_on: Some(vec![Match::Biome(5), Match::Terrain(3)]), ..Default::default() },
         Filter { slope_above: true, slope: 25.0, ..Default::default() },
@@ -132,9 +133,9 @@ fn brushes_write_what_they_wrote() {
         0x679ec8a6280429bf, 0x9905114175f4b7c4, 0x9734540aa0f93437,
         0xc8bc705c11ee2dbd, 0x59ff57767ae848bd, 0xb073c4dc9bc69612,
         0xa9e738daece510e7, 0xa370b5397ead4b31, 0x401f5237e7884af3,
-        0x539acb32f146ebc0, 0xd4ec0f1398205287, 0xfea1b67766677d2a,
-        0x984ddbe071c6d5a6, 0x058cce81bd4d74b0, 0x507e5ec1e737b67c,
-        0x866e9784634bae73, 0x444ca4e0cfc7cdca, 0x27e21b16706b426e,
+        0x539acb32f146ebc0, 0x539acb32f146ebc0, 0xaf9c721032c7d377,
+        0xe22c4366e2513b2e, 0x188c4ccb5766a5a2, 0x5b48df122c112358,
+        0x01250d600260a7dd, 0x8b5192e9e537d0ee, 0xb3853d67e9f6f252,
     ];
     let got: Vec<String> = sums.iter().map(|s| format!("0x{s:016x}")).collect();
     assert_eq!(sums, expected, "got [{}]", got.join(", "));
