@@ -210,7 +210,7 @@ field or in Edit ▸ Ores as before, and ⌘C, ⌘V and ⌘A work in text fields
 The menus hold every command, each item with its shortcut beside it (⌘ on a Mac is Ctrl on Windows and Linux):
 
 - **Massif** (the Mac's app menu; the first menu on Windows and Linux): **About Massif**, **Settings…** (⌘,), **Check for Updates…**, **Full Screen** (F11), **Quit**.
-- **File**: **New World…** (⌘N), **Open…** (⌘O), **Import WorldPainter World…**, **Import Minecraft World…**, **Merge Massif Map…**, **New World from Height Map…**, **New World from a Real Place…**, **Open Recent**; **Save** (⌘S), **Save As…**, **Save Point…**, **World Information…**, **Import Report…** (after importing a WorldPainter world), **Game & mods…**; **Export Height Map…**, **Export Region…**, **Export to Minecraft…** (⌘E); **Run Script…**; **Import Pack…**, **Export Pack…**.
+- **File**: **New World…** (⌘N), **Open…** (⌘O), **Import WorldPainter World…**, **Import Minecraft World…**, **Merge Massif Map…**, **New World from Height Map…**, **New World from a Real Place…**, **Open Recent**; **Save** (⌘S), **Save As…**, **Save Point…**, **World Information…**, **Import Report…** (after importing a WorldPainter world), **Game & mods…**; **Share Image…**, **Export Height Map…**, **Export Region…**, **Export to Minecraft…** (⌘E); **Run Script…**; **Import Pack…**, **Export Pack…**.
 - **Edit**: **Undo** and **Redo** (naming the step), **Select All**, **Deselect**, **Invert Selection**; **Auto biome: whole map**, **Auto paint: whole map**, **Automatic rules…**, **Smooth terrain…**, **Covers of Layers to Ground…**; **Whole map ▸** (Erosion, Thermal erosion, Rivers, Lakes, Smooth, Sharpen, Terraces, Strata, Scale and raise, then Snowfall… and Caves…), **Replace terrain…**, **Relief of a Real Place…**, **Import Mask…**, **Add Reference Image…**; **Ores…**, **Analyse the map…**.
 - **View**: the theme (**Follow the system**, **Light**, **Dark**), **Fit the whole map**, **Show Annotations**, **Reset workspaces**.
 - **Help**: **Massif Help** (F1), **Keyboard shortcuts**, **Take the tour**, **Where are my WorldPainter tools?**, **Report a Problem…**, **Record Performance…**, **Join the Discord…**, **Home screen**.
@@ -2397,6 +2397,19 @@ Massif brings in what you already have:
   square `.r16` / `.r32` are read too): what height black and white stand
   for, how many blocks a pixel covers, the sea's level; terrains are painted
   from height and slope. The home screen offers it too.
+- **File ▸ Share Image…** draws pictures of the map ready to post on
+  Discord or Reddit, and shows them as a carousel to pick from (the arrows,
+  the thumbnails or ← →): **Diorama**, the whole map as a block with its
+  sides, on a soft background; **Relief**, a low view of the map's most
+  dramatic relief, the sun low and to the side; **Map**, the map from above
+  in the colours the game gives its blocks (in its terrains' colours when
+  the game's blocks are not read),
+  with a scale and a north arrow; **Map and relief**, both side by side. A
+  band along the bottom gives the map's name, its size and the version of
+  Minecraft, with Massif's mark; it can be left out, light or dark. The
+  pictures are 16:9 (1920 × 1080), square (1080 × 1080) or 4K, drawn in a
+  few seconds from a copy of the map; **Copy** puts the one picked on the
+  clipboard, **Save PNG…** saves it.
 - **File ▸ Export Height Map…** saves the map's surface (with its levels and
   what was sculpted) as a 16-bit PNG, black the bottom of the world, white
   its top.

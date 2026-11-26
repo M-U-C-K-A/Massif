@@ -43,6 +43,10 @@ glam = "0.34"
 rfd = "0.18"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "tiff", "webp", "gif"] }
 pollster = "1"
+# The band over a picture to share (`share`): its text and marks drawn on
+# the processor, as egui draws its glyphs, with the same crates.
+vello_cpu = { version = "0.2", default-features = false, features = ["std", "u8_pipeline", "text"] }
+skrifa = { version = "0.44", default-features = false, features = ["std", "autohint_shaping"] }
 rodio = { version = "0.23", default-features = false, features = ["playback"] }
 # Asks GitHub for the latest release (`update`), over rustls: no system
 # TLS library to need on Linux.

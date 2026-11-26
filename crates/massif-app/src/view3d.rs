@@ -3934,7 +3934,6 @@ impl Renderer3d {
     }
 
     /// Copy the rendered image back to the CPU (RGBA, row-major). Blocks.
-    #[cfg(test)]
     pub fn read_image(&self) -> Option<(u32, u32, Vec<u8>)> {
         let target = self.target.as_ref()?;
         let [w, h] = target.size;
@@ -7100,6 +7099,100 @@ impl View3d {
                 egui::CursorIcon::Grab
             });
         }
+    }
+}
+
+/// A whole map put on the graphics card once, to draw pictures of it from
+/// any camera off screen (File ▸ Share Image…): every tile built at the
+/// stride the 3D view would take, its objects standing, in the game's
+/// textures when the game's blocks are read.
+pub struct Still3d {
+    renderer: Renderer3d,
+    tiles: Vec<TilePos>,
+    min_y: i32,
+    substrate: Substrate,
+    /// The game's textures are on, and the stone, deepslate and fluids'
+    /// materials for the tracer.
+    textured: Option<(f32, [f32; 4])>,
+}
+
+impl Still3d {
+    /// Build every tile of dimension `dim` of `world`; `None` for an empty
+    /// map or when `cancel` is set. `done` counts the tiles built of all.
+    pub fn build(device: &wgpu::Device, queue: &wgpu::Queue, world: &massif_core::World, dim: usize, catalogue: Option<&massif_assets::Catalogue>, cancel: &std::sync::atomic::AtomicBool, done: &std::sync::atomic::AtomicUsize) -> Option<(Self, usize)> {
+        use std::sync::atomic::Ordering;
+        let d = world.dims.get(dim)?;
+        let reg = &world.registry;
+        // As many pages as the 3D view may take (Settings ▸ Graphics).
+        let shape = GridShape::of(d, crate::graphics::get().gpu_pages as usize)?;
+        let mut renderer = Renderer3d::with_samples(device, queue, SAMPLES);
+        renderer.set_grid(shape.stride, shape.page0, shape.pages, &shape.present).ok()?;
+        let style = Style { mode: MapMode::Terrain, water: true, lava: world.meta.lava, notes: None, caves: massif_core::compose::Caves::Openings, xray: false, objects: true, density: false };
+        let mut cells: Vec<TilePos> = d.ground().positions().map(|t| grid_tile(t, shape.stride)).collect();
+        cells.sort_unstable_by_key(|t| (t.z, t.x));
+        cells.dedup();
+        let (sea, seed) = (world.meta.sea_level as f32, world.meta.seed);
+        let mut pairs = Pairs::default();
+        let mut tiles = Vec::new();
+        // A few at a time: the builds of a large map would not all fit.
+        for part in cells.chunks(64) {
+            if cancel.load(Ordering::Relaxed) {
+                return None;
+            }
+            let built: Vec<(TilePos, TileBuild)> = part.par_iter().map(|&c| (c, build_cell(d, reg, sea, seed, c, shape.stride, style))).collect();
+            for (c, b) in built {
+                renderer.upload_columns(c, &pairs.pack(&b));
+                if !b.faces.solid.is_empty() || !b.faces.water.is_empty() {
+                    renderer.upload(c, &b.faces);
+                    tiles.push(c);
+                }
+            }
+            done.fetch_add(part.len(), Ordering::Relaxed);
+        }
+        renderer.flush();
+        renderer.set_palette(pairs.list());
+        let most = device.limits().max_texture_array_layers as usize;
+        let atlas = match catalogue {
+            Some(c) => crate::textures::atlas(reg, c, most),
+            None => crate::textures::Atlas::plain(),
+        };
+        renderer.set_look(&atlas, &crate::textures::clouds(catalogue));
+        let (materials, fluids) = renderer.look_info();
+        let wk = reg.well_known;
+        let textured = (catalogue.is_some() && materials > 0).then(|| (materials as f32, [wk.stone.0 as f32, wk.deepslate.0 as f32, fluids[0] as f32, fluids[1] as f32]));
+        renderer.fine = true;
+        let substrate = Substrate { stone: reg.block(wk.stone).color, deepslate: reg.block(wk.deepslate).color, whole: false };
+        Some((Self { renderer, tiles, min_y: d.min_y, substrate, textured }, cells.len()))
+    }
+
+    /// The picture from `camera` under `sky`, the sun from `sun` (towards
+    /// it) when given, the map `extent` blocks across, `size` pixels.
+    pub fn draw(&mut self, camera: &Camera, sky: Sky, sun: Option<[f32; 3]>, extent: f32, size: [u32; 2]) -> Option<image::RgbaImage> {
+        self.renderer.ensure_target(size);
+        let origin = (camera.target[0].floor() as i32, camera.target[2].floor() as i32);
+        let mut globals = camera.globals(origin, size[0] as f32 / size[1].max(1) as f32, extent, sky, size[1]);
+        if let Some(s) = sun {
+            let s = Vec3::from(s).normalize();
+            globals.sun = [s.x, s.y, s.z, 1.0];
+        }
+        if let Some((materials, rock)) = self.textured {
+            globals.look = [1.0, 0.0, 0.0, materials];
+            globals.rock = rock;
+        }
+        self.renderer.render(&globals, origin, &self.tiles, self.min_y, self.substrate, size);
+        self.renderer.wait();
+        let (w, h, rgba) = self.renderer.read_image()?;
+        image::RgbaImage::from_raw(w, h, rgba)
+    }
+
+    /// Where `p` (block coordinates) lands in a picture from `camera` of
+    /// `aspect`: -1..1 across and down, `None` behind the eyes.
+    pub fn project(camera: &Camera, aspect: f32, extent: f32, p: [f64; 3]) -> Option<[f32; 2]> {
+        let origin = (camera.target[0].floor() as i32, camera.target[2].floor() as i32);
+        let g = camera.globals(origin, aspect, extent, Sky::flat([0; 3]), 1);
+        let m = Mat4::from_cols_array_2d(&g.view_proj);
+        let v = m * Vec4::new((p[0] - origin.0 as f64) as f32, p[1] as f32, (p[2] - origin.1 as f64) as f32, 1.0);
+        (v.w > 1e-3).then(|| [v.x / v.w, -v.y / v.w])
     }
 }
 

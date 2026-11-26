@@ -66,6 +66,7 @@ mod road_draft;
 mod curve_draft;
 mod select;
 mod settings_backup;
+mod share;
 #[cfg(test)]
 mod memory_tests;
 mod sounds;

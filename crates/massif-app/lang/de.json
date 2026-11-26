@@ -3927,5 +3927,29 @@
  "Grew {n} trees": {
   "one": "{n} Baum gewachsen",
   "other": "{n} Bäume gewachsen"
- }
+ },
+ "Map and relief": "Karte und Relief",
+ "16:9": "16:9",
+ "Untitled map": "Unbenannte Karte",
+ "{w} × {d} blocks": "{w} × {d} Blöcke",
+ "The 3D pictures could not be drawn": "Die 3D-Bilder konnten nicht gezeichnet werden",
+ "Made with Massif": "Mit Massif gemacht",
+ "Pictures need a graphics card Massif can draw with": "Die Bilder brauchen eine Grafikkarte, mit der Massif zeichnen kann",
+ "The pictures took too long": "Die Bilder haben zu lange gedauert",
+ "Share Image": "Bild teilen",
+ "A picture of the map, ready to post. Pick one, then copy it or save it.": "Ein Bild der Karte, bereit zum Posten. Wähle eines, dann kopiere oder speichere es.",
+ "Drawing the pictures…": "Die Bilder werden gezeichnet…",
+ "Previous picture": "Vorheriges Bild",
+ "Next picture": "Nächstes Bild",
+ "Band with the map's name": "Band mit dem Namen der Karte",
+ "Band": "Band",
+ "Drawing… {p} %": "Zeichnen… {p} %",
+ "{w} × {h} pixels, drawn in {s:.1} s": "{w} × {h} Pixel, gezeichnet in {s:.1} s",
+ "Copy": "Kopieren",
+ "Copied: paste it into Discord, Reddit or anywhere": "Kopiert: füge es in Discord, Reddit oder anderswo ein",
+ "Save PNG…": "Als PNG speichern…",
+ "Save the picture": "Bild speichern",
+ "The picture is not drawn yet": "Das Bild ist noch nicht gezeichnet",
+ "Share Image…": "Bild teilen…",
+ "A picture of the map, ready to post: as a diorama, its relief, the map from above": "Ein Bild der Karte, bereit zum Posten: als Diorama, ihr Relief, die Karte von oben"
 }

@@ -530,6 +530,8 @@ enum Dialog {
     FloodAsk(crate::tools::FloodAsk),
     /// A script to run on the map: its parameters, its output.
     Script(Box<crate::run_script::ScriptForm>),
+    /// File ▸ Share Image…: the pictures of the map to post.
+    Share(Box<crate::share::ShareForm>),
 }
 
 struct Status {
@@ -673,6 +675,9 @@ pub struct MassifApp {
     report_saving: Option<std::sync::mpsc::Receiver<Result<PathBuf, String>>>,
     /// The graphics card, as wgpu says it, for the problem report.
     gpu: Option<crate::report::Gpu>,
+    /// The window's graphics card and its queue, for pictures drawn off
+    /// screen (File ▸ Share Image…).
+    wgpu: Option<(wgpu::Device, wgpu::Queue)>,
     after_save: Option<Pending>,
     status: Option<Status>,
     feedback: Option<String>,
@@ -1308,6 +1313,7 @@ impl MassifApp {
             report_saving: None,
             perf_saving: None,
             gpu: None,
+            wgpu: None,
             after_save: None,
             status: None,
             feedback: None,
@@ -3648,6 +3654,18 @@ impl MassifApp {
         }
     }
 
+    /// File ▸ Share Image…: its pictures drawn from a copy of the map.
+    fn open_share(&mut self) {
+        let mods = mod_uses(&self.doc.world.registry, self.blocks.catalogue.as_deref());
+        // The version the map's mods are made for, else the game's blocks
+        // are read from.
+        let version = mods.iter().find_map(|m| m.minecraft.clone()).or_else(|| self.blocks.catalogue.as_ref().map(|c| c.version.clone())).filter(|v| !v.is_empty());
+        let world = self.doc.world.snapshot();
+        let info = crate::share::Info::of(&world, self.doc.dim, version);
+        let source = crate::share::Source { world, dim: self.doc.dim, catalogue: self.blocks.catalogue.clone(), info };
+        self.dialog = Some(Dialog::Share(Box::new(crate::share::ShareForm::new(source, self.wgpu.clone()))));
+    }
+
     fn open_export_dialog(&mut self) {
         let parent = massif_anvil::default_saves_dir()
             .or_else(|| self.doc.path.as_ref().and_then(|p| p.parent().map(PathBuf::from)))
@@ -4544,6 +4562,7 @@ impl MassifApp {
                 self.save(ctx, true);
             }
             Command::ExportHeightMap => self.export_heightmap(ctx),
+            Command::ShareImage => self.open_share(),
             Command::ExportRegion => {
                 let dim = self.doc.dimension();
                 if let Some((lo, hi)) = dim.bounds() {
@@ -6535,6 +6554,18 @@ impl MassifApp {
                     self.dialog = Some(Dialog::Caves(form));
                 }
             }
+            Dialog::Share(mut form) => {
+                let mut choice = crate::share::Choice::Keep;
+                let response = modal(ctx, "share image").show(ctx, |ui| {
+                    choice = form.ui(ui);
+                });
+                if response.should_close() || matches!(choice, crate::share::Choice::Close) {
+                    keep = false;
+                }
+                if keep {
+                    self.dialog = Some(Dialog::Share(form));
+                }
+            }
             Dialog::Script(mut form) => {
                 use crate::run_script::Choice;
                 let mut choice = Choice::Keep;
@@ -7949,6 +7980,9 @@ impl eframe::App for MassifApp {
         self.limit_frames(ui.ctx(), frame);
         if self.gpu.is_none() {
             self.gpu = frame.wgpu_render_state().map(|rs| crate::report::Gpu::of(&rs.adapter.get_info()));
+        }
+        if self.wgpu.is_none() {
+            self.wgpu = frame.wgpu_render_state().map(|rs| (rs.device.clone(), rs.queue.clone()));
         }
         self.report_frame(ui.ctx());
         crate::startup::frame_laid_out(ui);
@@ -10485,6 +10519,43 @@ mod tests {
         assert!(above == Some(65) && below.is_some_and(|b| (85..=89).contains(&b)), "34 blocks down, finely: {below:?}");
         let (after, _, _): (Rect, f32, f32) = h.ctx.data(|d| d.get_temp(Id::unique("height profile"))).unwrap();
         assert_eq!(after, plot, "the panel did not scroll under the drags");
+    }
+
+    /// File ▸ Share Image…: its pictures are drawn off screen from the map,
+    /// the carousel shows them, and the one picked is saved as a PNG of the
+    /// format chosen, the same picture each time. Renders the dialog with
+    /// MASSIF_SNAPSHOT_DIR. Needs a GPU; skipped without one.
+    #[test]
+    fn the_share_dialog_draws_its_pictures() {
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(3);
+        if h.state().wgpu.is_none() {
+            eprintln!("no GPU: skipping");
+            return;
+        }
+        h.state_mut().open_share();
+        let started = std::time::Instant::now();
+        let ready = |h: &egui_kittest::Harness<MassifApp>| matches!(&h.state().dialog, Some(Dialog::Share(f)) if f.ready());
+        while !ready(&h) {
+            assert!(started.elapsed().as_secs() < 120, "the pictures never came");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.run_steps(4);
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            h.render().unwrap().save(dir.join("share-dialog.png")).unwrap();
+        }
+        let Some(Dialog::Share(form)) = &mut h.state_mut().dialog else { panic!("the dialog") };
+        assert_eq!(form.pictures().len(), crate::share::Kind::ALL.len());
+        form.picked = 2;
+        let out = std::env::temp_dir().join(format!("massif-share-{}.png", std::process::id()));
+        form.save(&out).unwrap();
+        let first = std::fs::read(&out).unwrap();
+        let img = image::load_from_memory(&first).unwrap();
+        assert_eq!((img.width(), img.height()), (1920, 1080));
+        form.save(&out).unwrap();
+        assert_eq!(std::fs::read(&out).unwrap(), first, "the same picture each time");
+        let _ = std::fs::remove_file(out);
     }
 
     /// File ▸ Run Script…: a WorldPainter script asks for the parameters its

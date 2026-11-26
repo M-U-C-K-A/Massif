@@ -2185,8 +2185,7 @@ impl MapCache {
 
 /// Render a rectangle of the map to an image without any caching: one texel
 /// per `2^lod` blocks, `width × height` texels from block `(x0, z0)`. Used by
-/// tests and snapshots.
-#[cfg(test)]
+/// tests, snapshots and the pictures to share (see `share`).
 #[allow(clippy::too_many_arguments)]
 pub fn render_region(
     dim: &Dimension,
@@ -2240,8 +2239,8 @@ pub fn render_region(
     };
     let (w, h) = (chunks_x as usize * CHUNK_PX, chunks_z as usize * CHUNK_PX);
     let mut out = ColorImage::filled([w, h], Color32::TRANSPARENT);
-    for (n, key) in keys.iter().enumerate() {
-        let image = build_chunk(*key, &sources, &colorizer);
+    let images: Vec<ColorImage> = keys.par_iter().map(|key| build_chunk(*key, &sources, &colorizer)).collect();
+    for (n, image) in images.iter().enumerate() {
         let (ci, cj) = (n % chunks_x as usize, n / chunks_x as usize);
         for y in 0..CHUNK_PX {
             let dst = (cj * CHUNK_PX + y) * w + ci * CHUNK_PX;
