@@ -196,6 +196,8 @@ impl UserData for Map {
         fields.add_field_method_set("seed", |_, m, seed: i64| call("set", serde_json::json!({ "world": m.w, "seed": seed })).map(|_| ()));
         fields.add_field_method_get("sea_level", |_, m| Ok(m.info()?["seaLevel"].as_i64().unwrap_or(62)));
         fields.add_field_method_set("sea_level", |_, m, v: i64| call("set", serde_json::json!({ "world": m.w, "seaLevel": v })).map(|_| ()));
+        fields.add_field_method_get("spawn", |lua, m| lua.to_value(&m.info()?["spawn"]));
+        fields.add_field_method_set("spawn", |_, m, v: Vec<f64>| call("set", serde_json::json!({ "world": m.w, "spawn": v })).map(|_| ()));
         fields.add_field_method_get("dimension", |_, m| Ok(["surface", "nether", "end"][m.dim.clamp(0, 2) as usize]));
     }
 

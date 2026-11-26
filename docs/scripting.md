@@ -159,6 +159,7 @@ end
 | `massif.open(file)` | a `.massif`, or a WorldPainter `.world` imported |
 | `massif.create{ width, depth, landform, seed, seaLevel, minY, maxY, … }` | a new map, as File ▸ New World makes one (`landform`: `"flat"`, `"plains"`, `"hills"`, `"mountains"`, `"islands"`) |
 | `map.name`, `map.seed`, `map.sea_level` | read and set |
+| `map.spawn` | `{x, y, z}`: where players arrive, read and set |
 | `map:bounds()` | `x0, z0, x1, z1`: the blocks the map covers, `x1` and `z1` past the last |
 | `map:tiles()` | for `x0, z0, x1, z1 in map:tiles()`: each tile of 128 × 128 blocks |
 | `map:dimension("nether")` | the same map's Nether (or `"end"`, `"surface"`) |
@@ -213,6 +214,11 @@ map:set("trees", x0, z0, x1, z1, spruces.id)
 | `add_terrain` | `name`, `strata` from the surface down: each `blocks` (`"podzol"`, `"minecraft:moss_block"`, or `{block, weight}`), `depth` (`{least, most}` or a number, 1 by default) and `mix`: `"grain"` (each block by its weight), `"patches"` (blobs `size` blocks across) or `"beds"` (horizontal strata); `group`, `color` |
 | `add_cover` | `name`, `plants` (`{block, weight}`), `density` (0.5), `height` (`{least, most}`), `soil_only` (true), `underwater`, `color` |
 | `add_objects` | `name`, `files` (schematics: `.schem`, `.schematic`, `.nbt`, `.litematic`, `.bo2`, `.bo3`, Axiom `.bp`, files the script may touch), `density` (0.6), `spacing` (`"canopy"`, the default, or blocks of a grid), `gap`, `rotate`, `mirror`, `soil_only`, `sink`, `replace`, `understory`, `color` |
+
+`add_objects` without `files` changes the settings of an object layer the
+map has, the tree pack's included, and keeps its objects:
+`map:add_objects{ name = "Big oaks", density = 1 }`, or
+`map:add_objects{ name = "Palm trees", soil_only = false }` for palms on sand.
 
 ### Masks from images
 

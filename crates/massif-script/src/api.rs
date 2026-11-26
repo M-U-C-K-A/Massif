@@ -13,6 +13,38 @@ fn world_of(args: &Value) -> R<usize> {
     int(args, "world").map(|w| w as usize).ok_or_else(|| "a world is needed: massif.open(…), massif.create(…) or the map open in Massif".into())
 }
 
+/// The settings of an object layer a script gives: color, density, spacing,
+/// gap, rotate, mirror, soil_only, replace, understory, sink.
+fn object_settings(layer: &mut massif_core::objects::ObjectLayerDef, args: &Value) -> R<()> {
+    if let Some(c) = color_of(args) {
+        layer.color = c;
+    }
+    if let Some(d) = args.get("density").and_then(Value::as_f64) {
+        layer.density = d.clamp(0.0, 1.0) as f32;
+    }
+    match args.get("spacing") {
+        Some(Value::String(m)) if m == "canopy" => {}
+        Some(v) if v.as_u64().is_some() => {
+            layer.spacing_mode = massif_core::objects::Spacing::Grid;
+            layer.spacing = v.as_u64().unwrap_or(8).clamp(1, 256) as u16;
+        }
+        None => {}
+        Some(_) => return Err("spacing is \"canopy\" (by their crowns) or a number of blocks (a grid)".into()),
+    }
+    if let Some(g) = args.get("gap").and_then(Value::as_u64) {
+        layer.min_gap = g.clamp(0, 64) as u8;
+    }
+    for (key, slot) in [("rotate", &mut layer.rotate), ("mirror", &mut layer.mirror), ("soil_only", &mut layer.soil_only), ("replace", &mut layer.replace), ("understory", &mut layer.understory)] {
+        if let Some(b) = args.get(key).and_then(Value::as_bool) {
+            *slot = b;
+        }
+    }
+    if let Some(k) = args.get("sink").and_then(Value::as_i64) {
+        layer.sink = k.clamp(-64, 64) as i16;
+    }
+    Ok(())
+}
+
 /// `"minecraft:podzol"`, `"podzol"` or `{"minecraft:podzol", 3}`: the block
 /// state and its weight.
 fn block_and_weight(v: &Value) -> R<(String, u16)> {
@@ -303,7 +335,18 @@ pub fn call(s: &mut Session, name: &str, args: &Value) -> R<Value> {
         "addObjects" => {
             let w = world_of(args)?;
             let name = text(args, "name")?.trim().to_owned();
-            let files = args.get("files").and_then(Value::as_array).filter(|a| !a.is_empty()).ok_or("files is needed: the schematics (.schem, .schematic, .nbt, .litematic, .bo2, .bo3, Axiom .bp) of the layer")?;
+            let Some(files) = args.get("files").and_then(Value::as_array).filter(|a| !a.is_empty()) else {
+                // No files: the settings of a layer the map has (one of the
+                // tree pack's, say) change, its objects stay.
+                let reg = &mut s.slot(w)?.world.registry;
+                let k = reg.object_layers.iter().position(|l| !l.removed && l.name.eq_ignore_ascii_case(&name)).ok_or_else(|| {
+                    format!("The map has no object layer \"{name}\": give files, the schematics (.schem, .schematic, .nbt, .litematic, .bo2, .bo3, Axiom .bp) of a new one")
+                })?;
+                object_settings(&mut reg.object_layers[k], args)?;
+                let understory = reg.object_layers[k].understory;
+                s.slot(w)?.changed = true;
+                return Ok(json!({ "kind": if understory { "understory" } else { "trees" }, "id": k as u16 + 1, "objects": 0 }));
+            };
             let mut read = Vec::new();
             for f in files {
                 let f = f.as_str().ok_or("files: names of files")?;
@@ -322,32 +365,7 @@ pub fn call(s: &mut Session, name: &str, args: &Value) -> R<Value> {
             }
             let mut layer = massif_core::objects::ObjectLayerDef::new(&name, &added, reg);
             layer.spacing_mode = massif_core::objects::Spacing::Canopy;
-            if let Some(c) = color_of(args) {
-                layer.color = c;
-            }
-            if let Some(d) = args.get("density").and_then(Value::as_f64) {
-                layer.density = d.clamp(0.0, 1.0) as f32;
-            }
-            match args.get("spacing") {
-                Some(Value::String(m)) if m == "canopy" => {}
-                Some(v) if v.as_u64().is_some() => {
-                    layer.spacing_mode = massif_core::objects::Spacing::Grid;
-                    layer.spacing = v.as_u64().unwrap_or(8).clamp(1, 256) as u16;
-                }
-                None => {}
-                Some(_) => return Err("spacing is \"canopy\" (by their crowns) or a number of blocks (a grid)".into()),
-            }
-            if let Some(g) = args.get("gap").and_then(Value::as_u64) {
-                layer.min_gap = g.clamp(0, 64) as u8;
-            }
-            for (key, slot) in [("rotate", &mut layer.rotate), ("mirror", &mut layer.mirror), ("soil_only", &mut layer.soil_only), ("replace", &mut layer.replace), ("understory", &mut layer.understory)] {
-                if let Some(b) = args.get(key).and_then(Value::as_bool) {
-                    *slot = b;
-                }
-            }
-            if let Some(k) = args.get("sink").and_then(Value::as_i64) {
-                layer.sink = k.clamp(-64, 64) as i16;
-            }
+            object_settings(&mut layer, args)?;
             let understory = layer.understory;
             let found = reg.object_layers.iter().position(|l| !l.removed && l.name.eq_ignore_ascii_case(&name));
             let id = match found {
