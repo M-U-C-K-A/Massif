@@ -300,7 +300,7 @@ pub fn guess_color(state: &str) -> [u8; 3] {
         let w = wood(n);
         return [w[0].saturating_add(50), w[1].saturating_add(40), w[2].saturating_add(30)];
     }
-    let table: [(&str, [u8; 3]); 24] = [
+    let table: [(&str, [u8; 3]); 25] = [
         ("snow", [244, 250, 252]),
         ("ice", [146, 182, 250]),
         ("water", [62, 118, 228]),
@@ -310,6 +310,7 @@ pub fn guess_color(state: &str) -> [u8; 3] {
         ("grass_block", [96, 148, 62]),
         ("moss", [90, 110, 46]),
         ("dirt", [134, 96, 67]),
+        ("mud_brick", [137, 104, 79]),
         ("mud", [60, 57, 61]),
         ("clay", [160, 166, 179]),
         ("terracotta", [152, 94, 67]),
@@ -1289,6 +1290,12 @@ pub fn tile_placements(reg: &Registry, mat: &Materializer, seed: u64, lava: bool
                 if layer.soil_only && !is_soil(&reg.block(mat.block(&top, c.x, top.y1 - 1, c.z, wet)).state) {
                     continue;
                 }
+                // Too tall to stand under the top of the world here: left
+                // out rather than cut (a giant tree on a high summit).
+                let def = &reg.objects[object as usize];
+                if top.y1 - layer.sink as i32 - def.anchor[1] as i32 + def.size[1] as i32 > stack.max_y {
+                    continue;
+                }
                 out.push(Placement {
                     layer: n,
                     object,
@@ -1612,6 +1619,36 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn an_object_too_tall_for_the_world_is_left_out_rather_than_cut() {
+        let mut w = generate(&GenParams { tiles_x: 2, tiles_z: 2, seed: 5, ..GenParams::default() });
+        w.registry.objects.push(tree());
+        let wide = crate::Brush { radius: 60.0, profile: crate::Profile::Constant, strength: 1.0, ..crate::Brush::default() };
+        let mut layer = ObjectLayerDef::new("Oaks", &[0], &w.registry);
+        layer.soil_only = false;
+        layer.density = 1.0;
+        let n = w.registry.add_object_layer(layer);
+        let count = |w: &crate::world::World| {
+            let dim = &w.dims[0];
+            let mat = Materializer::new(&w.registry, w.meta.seed, dim.min_y);
+            [TilePos::new(-1, -1), TilePos::new(0, -1), TilePos::new(-1, 0), TilePos::new(0, 0)].iter().map(|&pos| tile_placements(&w.registry, &mat, 1, false, &TileStack::from_above(dim, pos, true).unwrap(), pos).len()).sum::<usize>()
+        };
+        let mut h = History::default();
+        h.begin("objects", 0);
+        crate::ops::paint_objects(&mut h.edit(&mut w, 0), &crate::Brush { radius: 40.0, profile: crate::Profile::Constant, strength: 1.0, ..crate::Brush::default() }, 0.0, 0.0, n, 1);
+        h.commit();
+        // The ground a block under the top of the world: no room for a tree.
+        let top = w.dims[0].max_y as f32 - 2.0;
+        h.begin("raise", 0);
+        crate::ops::set_height(&mut h.edit(&mut w, 0), &wide, 0.0, 0.0, top, crate::ops::Surface::Top);
+        h.commit();
+        assert_eq!(count(&w), 0, "none cut by the top of the world");
+        h.begin("lower", 0);
+        crate::ops::set_height(&mut h.edit(&mut w, 0), &wide, 0.0, 0.0, 80.0, crate::ops::Surface::Top);
+        h.commit();
+        assert!(count(&w) > 100, "where there is room, they stand");
     }
 
     #[test]
