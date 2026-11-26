@@ -9151,11 +9151,11 @@ mod tests {
         footer.save(dir.join("brush-footer.png")).unwrap();
     }
 
-    /// The pointer over the 2D map with a brush: the crosshair of Settings
-    /// ▸ Appearance in place of the system's thin black one (lost on dark
-    /// land), white in a dark edge, over land and over water, in high
-    /// contrast too; with None, the system's crosshair. Crops of each saved
-    /// to MASSIF_SNAPSHOT_DIR.
+    /// The 2D map with a brush: the crosshair of Settings ▸ Appearance at
+    /// the middle of the view, white in a dark edge, over land and over
+    /// water, in high contrast too, none with None; the pointer, away from
+    /// it, the system's crosshair with a white dot. Crops of each saved to
+    /// MASSIF_SNAPSHOT_DIR.
     #[test]
     fn the_pointer_shows_on_the_map_in_every_crosshair() {
         use crate::reticle::{Reticle, Shape};
@@ -9188,25 +9188,27 @@ mod tests {
                 h.run_steps(5);
                 for shape in Shape::ALL {
                     crate::reticle::set(&h.ctx, Reticle { shape, ..Default::default() });
+                    // The pointer over the land or water, the crosshair at the
+                    // middle of the view: on that ground too, the view
+                    // centred on it.
                     let p = h.state().maps[&id].screen_of(x as f64 + 0.5, z as f64 + 0.5);
                     h.event(egui::Event::PointerMoved(p));
                     h.run_steps(3);
-                    let icon = h.output().platform_output.cursor_icon;
+                    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Crosshair, "{shape:?}: the pointer is the system's crosshair");
                     if shape == Shape::None {
-                        assert_eq!(icon, egui::CursorIcon::Crosshair, "{shape:?}");
-                    } else {
-                        assert_eq!(icon, egui::CursorIcon::None, "{shape:?}: the crosshair drawn stands for the system's");
+                        continue;
                     }
                     let image = h.render().expect("rendered");
                     let half = (24.0 * ppp) as u32;
-                    let (cx, cy) = ((p.x * ppp) as u32, (p.y * ppp) as u32);
+                    let mid = h.state().maps[&id].canvas_centre();
+                    let (cx, cy) = ((mid.x * ppp) as u32, (mid.y * ppp) as u32);
                     let crop = image::imageops::crop_imm(&image, cx - half, cy - half, 2 * half, 2 * half).to_image();
                     // White ink and a dark edge under the pointer, whatever
                     // the ground.
                     let near = image::imageops::crop_imm(&image, cx - (8.0 * ppp) as u32, cy - (8.0 * ppp) as u32, (16.0 * ppp) as u32, (16.0 * ppp) as u32).to_image();
                     let luma = |p: &image::Rgba<u8>| 0.3 * p[0] as f32 + 0.59 * p[1] as f32 + 0.11 * p[2] as f32;
-                    assert!(near.pixels().any(|p| luma(p) > 225.0), "{shape:?} over {ground}: no white ink under the pointer");
-                    assert!(near.pixels().any(|p| luma(p) < 50.0), "{shape:?} over {ground}: no dark edge under the pointer");
+                    assert!(near.pixels().any(|p| luma(p) > 225.0), "{shape:?} over {ground}: no white ink at the middle of the view");
+                    assert!(near.pixels().any(|p| luma(p) < 50.0), "{shape:?} over {ground}: no dark edge at the middle of the view");
                     if let Some(dir) = &dir {
                         let contrast = if high { "-high" } else { "" };
                         crop.save(dir.join(format!("map-pointer-{}-{ground}{contrast}.png", format!("{shape:?}").to_lowercase()))).unwrap();

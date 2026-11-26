@@ -998,6 +998,12 @@ impl MapView {
 
     /// Where block coordinates `(x, z)` were on the screen, last frame.
     #[cfg(test)]
+    /// The middle of the canvas as last drawn, where the crosshair is.
+    #[cfg(test)]
+    pub fn canvas_centre(&self) -> Pos2 {
+        self.canvas.center()
+    }
+
     pub fn screen_of(&self, x: f64, z: f64) -> Pos2 {
         self.to_screen(self.canvas, x, z)
     }
@@ -2263,6 +2269,7 @@ impl MapView {
                 pointer_mark(ui.ctx(), &painter, p);
             }
         }
+        centre_mark(ui.ctx(), &painter, canvas);
 
         // The water tools say what they would do under the cursor: the
         // level they fill to, or why it stays dry.
@@ -2570,19 +2577,21 @@ impl MapView {
 /// Whether the wheel turns the brush: with ⌘ on a Mac (the Windows key of a
 /// PC keyboard), with Ctrl + Shift elsewhere, where the Windows key does not
 /// reach applications.
-/// The pointer over the map: the crosshair of Settings ▸ Appearance in
-/// place of the system's (a thin black cross, lost on dark land), white in
-/// a dark outline so that it reads on snow as on deep water. With None
-/// chosen, the system's crosshair and a white dot in a dark ring.
+/// The pointer over the map: the system's crosshair and a white dot in a
+/// dark ring, so that it reads on snow as on deep water.
 fn pointer_mark(ctx: &egui::Context, painter: &egui::Painter, p: Pos2) {
+    painter.circle_filled(p, 2.6, Color32::from_black_alpha(140));
+    painter.circle_filled(p, 1.5, Color32::WHITE);
+    ctx.set_cursor_icon(CursorIcon::Crosshair);
+}
+
+/// The crosshair of Settings ▸ Appearance at the middle of the map view, as
+/// at the middle of the player's view: where the view is centred, white in
+/// a dark outline. None when it is turned off.
+fn centre_mark(ctx: &egui::Context, painter: &egui::Painter, canvas: Rect) {
     let reticle = crate::reticle::get(ctx);
-    if reticle.shape == crate::reticle::Shape::None || reticle.opacity <= 0.0 {
-        painter.circle_filled(p, 2.6, Color32::from_black_alpha(140));
-        painter.circle_filled(p, 1.5, Color32::WHITE);
-        ctx.set_cursor_icon(CursorIcon::Crosshair);
-    } else {
-        crate::reticle::paint(painter, p, &reticle);
-        ctx.set_cursor_icon(CursorIcon::None);
+    if reticle.shape != crate::reticle::Shape::None && reticle.opacity > 0.0 {
+        crate::reticle::paint(painter, canvas.center(), &reticle);
     }
 }
 

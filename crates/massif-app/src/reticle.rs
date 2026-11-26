@@ -97,7 +97,7 @@ pub fn paint(painter: &Painter, c: Pos2, reticle: &Reticle) {
         Shape::Dot => {
             let rd = (r * 0.3).max(1.6);
             painter.circle_filled(c, rd + 1.6, shade(0.22));
-            painter.circle_filled(c, rd + 0.8, shade(0.35));
+            painter.circle_filled(c, rd + 0.8, shade(0.6));
             painter.circle_filled(c, rd, ink);
         }
         Shape::Cross => {

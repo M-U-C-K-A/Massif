@@ -3178,9 +3178,10 @@ their own:
   **Circle**, a plain **Minecraft** plus, or **None**, with its **Size** (6
   to 32 points) and **Opacity**, beside a preview on light ground and dark.
   It is drawn white in a soft dark outline, so that it shows on snow as on
-  deep water, more strongly in high contrast. The 2D map draws it under the
-  pointer too, in place of the system's thin black crosshair; with **None**,
-  the map keeps the system's crosshair. Last, the **Home background** (**Ridges**, **Waves**, **Pixel**
+  deep water, more strongly in high contrast. The 2D map draws it at the
+  middle of its view too, as at the middle of the player's view, to show
+  where the view is centred; the pointer keeps the system's crosshair, with
+  a white dot. Last, the **Home background** (**Ridges**, **Waves**, **Pixel**
   or **Prism**, alive in a picture above its few settings, and **Animate the
   background**; see [the home screen](#the-home-screen)).
 - **Accessibility**: **High contrast** — text black or white, muted text
