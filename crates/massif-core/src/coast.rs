@@ -269,15 +269,14 @@ pub fn find_lakes(grid: &[f32], nx: usize, nz: usize, metres_per_sample: f64, wa
             continue;
         }
         // A sample read between two flats: across it, a flat on each side
-        // (up to half SEAM_REACH samples away: the tiles' edges are
-        // resampled over a few), and its height about theirs.
+        // (one or two samples away), and its height about theirs.
         let m = grid[k];
         if !m.is_finite() {
             continue;
         }
         for (di, dj) in [(1, 0), (0, 1)] {
-            let a = across(&flat_of, nx, nz, i, j, di, dj, SEAM_REACH / 2);
-            let b = across(&flat_of, nx, nz, i, j, -di, -dj, SEAM_REACH / 2);
+            let a = across(&flat_of, nx, nz, i, j, di, dj, 2);
+            let b = across(&flat_of, nx, nz, i, j, -di, -dj, 2);
             if a == 0 || b == 0 || a == b {
                 continue;
             }
@@ -387,7 +386,8 @@ pub fn find_lakes(grid: &[f32], nx: usize, nz: usize, metres_per_sample: f64, wa
         lakes.of = lake_of.iter().map(|&g| number[g as usize]).collect();
         // What is left between two lakes, a seam of their sources too short
         // or too steep to make them one, read about their levels: water, not
-        // a line of land a hair over it. The higher lake's, whose shore it is.
+        // a line of land a hair over it. The lower lake's, so that it never
+        // stands over the other's water.
         let of = &lakes.of;
         let seams: Vec<(usize, u16)> = (0..grid.len())
             .into_par_iter()
@@ -403,12 +403,35 @@ pub fn find_lakes(grid: &[f32], nx: usize, nz: usize, metres_per_sample: f64, wa
                         return None;
                     }
                     let (la, lb) = (lakes.levels[a as usize - 1], lakes.levels[b as usize - 1]);
-                    (m <= la.max(lb) + SEAM_RING).then_some((k, if la >= lb { a } else { b }))
+                    (m <= la.max(lb) + SEAM_RING).then_some((k, if la <= lb { a } else { b }))
                 })
             })
             .collect();
-        for (k, n) in seams {
+        for &(k, n) in &seams {
             lakes.of[k] = n;
+        }
+        // Never water beside open land lower than it, which the game would
+        // spill over: a sample of the seam beside one is left as it was,
+        // and again beside those, until none is.
+        for _ in 0..2 * SEAM_REACH {
+            let spill: Vec<usize> = seams
+                .par_iter()
+                .filter(|&&(k, n)| {
+                    let level = lakes.levels[n as usize - 1];
+                    let (i, j) = (k % nx, k / nx);
+                    lakes.of[k] != 0
+                        && [(i > 0, k.wrapping_sub(1)), (i + 1 < nx, k + 1), (j > 0, k.wrapping_sub(nx)), (j + 1 < nz, k + nx)]
+                            .iter()
+                            .any(|&(ok, o)| !ok || (lakes.of[o] == 0 && grid[o] < level))
+                })
+                .map(|&(k, _)| k)
+                .collect();
+            if spill.is_empty() {
+                break;
+            }
+            for k in spill {
+                lakes.of[k] = 0;
+            }
         }
     }
     lakes
