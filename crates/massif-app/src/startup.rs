@@ -701,6 +701,19 @@ pub fn graphics_ready(render: &egui_wgpu::RenderState, window: &dyn wgpu::rwh::H
         write(&format!("also found: {}", others.join(", ")));
     }
     render.device.set_device_lost_callback(|reason, message| write(&format!("the graphics card was lost ({reason:?}): {message}")));
+    // A card busy with another program does not give the window its image
+    // in time: that frame is skipped and the window's surface set up again
+    // on the next one. Any other error stays fatal, as wgpu makes it.
+    render.device.on_uncaptured_error(Arc::new(|error| {
+        if !of_the_surface(&error) {
+            panic!("wgpu error: {error}\n");
+        }
+        let n = SURFACE_ERRORS.fetch_add(1, Ordering::Relaxed) + 1;
+        if n <= 5 || n.is_multiple_of(100) {
+            write(&format!("the window's surface failed, the frame skipped and the surface set up again ({n} times): {}", error.to_string().replace('\n', " ")));
+        }
+        RECONFIGURE.store(true, Ordering::SeqCst);
+    }));
     let _ = GRAPHICS.set(Graphics { api: info.backend, card });
     MARKED.store(Stage::Graphics as u8, Ordering::SeqCst);
     mark(Stage::Graphics);
@@ -717,8 +730,22 @@ pub fn graphics_ready(render: &egui_wgpu::RenderState, window: &dyn wgpu::rwh::H
     let _ = window;
 }
 
+/// Set when setting up the window's surface or taking its image failed
+/// (the card busy): the next frame sets the surface up again.
+static RECONFIGURE: AtomicBool = AtomicBool::new(false);
+/// How many times the window's surface failed so, for the log.
+static SURFACE_ERRORS: AtomicU32 = AtomicU32::new(0);
+
+/// Whether a wgpu error is one of the window's surface (`Surface::configure`,
+/// `Surface::get_current_texture`), which a busy card gives and the next
+/// frame recovers from.
+fn of_the_surface(error: &wgpu::Error) -> bool {
+    let of = |text: &str| ["In Surface::configure", "In Surface::get_current_texture"].iter().any(|f| text.contains(f));
+    std::error::Error::source(error).is_some_and(|source| of(&source.to_string())) || of(&error.to_string())
+}
+
 /// egui's answer when the window gives no image to draw on, written down
-/// while the start lasts.
+/// while the start lasts; after the surface failed, set up again.
 pub fn surface_status(answer: Arc<dyn Fn(&wgpu::CurrentSurfaceTexture) -> egui_wgpu::SurfaceErrorAction + Send + Sync>) -> Arc<dyn Fn(&wgpu::CurrentSurfaceTexture) -> egui_wgpu::SurfaceErrorAction + Send + Sync> {
     let times = AtomicU32::new(0);
     Arc::new(move |status| {
@@ -727,6 +754,11 @@ pub fn surface_status(answer: Arc<dyn Fn(&wgpu::CurrentSurfaceTexture) -> egui_w
         set_busy(0, Busy::Idle);
         if !SHOWN.load(Ordering::Relaxed) && (n <= 5 || n.is_multiple_of(50)) {
             write(&format!("the window gave no image to draw on: {status:?} ({n} times)"));
+        }
+        // The surface failed to be set up or to give its image: set up
+        // again, the frame skipped (egui asks for the next one).
+        if RECONFIGURE.swap(false, Ordering::SeqCst) || matches!(status, wgpu::CurrentSurfaceTexture::Validation) {
+            return egui_wgpu::SurfaceErrorAction::Reconfigure;
         }
         answer(status)
     })
@@ -1005,6 +1037,25 @@ fn stuck(last: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A failed set-up of the window's surface (the card busy) is told
+    /// from the errors that stay fatal.
+    #[test]
+    fn surface_errors_are_told_apart() {
+        #[derive(Debug)]
+        struct In(&'static str);
+        impl std::fmt::Display for In {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(self.0)
+            }
+        }
+        impl std::error::Error for In {}
+        let error = |what: &'static str| wgpu::Error::Validation { source: Box::new(In(what)), description: format!("Validation Error\n\nCaused by:\n  {what}\n") };
+        assert!(of_the_surface(&error("In Surface::configure")));
+        assert!(of_the_surface(&error("In Surface::get_current_texture_view")));
+        assert!(!of_the_surface(&error("In Device::create_buffer, label = 'tiles'")));
+        assert!(!of_the_surface(&wgpu::Error::OutOfMemory { source: Box::new(In("In Queue::submit")) }));
+    }
 
     /// A disk that takes its time (here the log held by a write that does
     /// not end) never holds up the thread that writes lines down: they wait
