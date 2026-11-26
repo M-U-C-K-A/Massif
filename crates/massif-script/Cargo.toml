@@ -10,6 +10,7 @@ massif-core.workspace = true
 massif-format.workspace = true
 massif-anvil.workspace = true
 massif-legacy.workspace = true
+massif-objects.workspace = true
 rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -26,3 +27,4 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 png = "0.18"
 
 [dev-dependencies]
+fastnbt = "2.6"

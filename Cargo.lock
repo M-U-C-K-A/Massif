@@ -2316,12 +2316,14 @@ dependencies = [
 name = "massif-script"
 version = "1.2.2"
 dependencies = [
+ "fastnbt",
  "image",
  "log",
  "massif-anvil",
  "massif-core",
  "massif-format",
  "massif-legacy",
+ "massif-objects",
  "mlua",
  "png",
  "rayon",

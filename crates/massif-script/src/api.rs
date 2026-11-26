@@ -266,8 +266,272 @@ pub fn call(s: &mut Session, name: &str, args: &Value) -> R<Value> {
             })?;
             Ok(Value::Null)
         }
+        "addTerrain" => {
+            let w = world_of(args)?;
+            let reg = &mut s.slot(w)?.world.registry;
+            let id = add_terrain(reg, args.get("def").unwrap_or(&Value::Null))?;
+            s.slot(w)?.changed = true;
+            Ok(json!(id))
+        }
+        "addCover" => {
+            let w = world_of(args)?;
+            let reg = &mut s.slot(w)?.world.registry;
+            let id = add_cover(reg, args.get("def").unwrap_or(&Value::Null))?;
+            s.slot(w)?.changed = true;
+            Ok(json!({ "kind": "cover", "id": id }))
+        }
+        "addObjects" => {
+            let w = world_of(args)?;
+            let def = args.get("def").unwrap_or(&Value::Null);
+            // The files read first, each one checked against what the
+            // script may touch.
+            let mut read = Vec::new();
+            if let Some(files) = def.get("files") {
+                let files = files.as_array().ok_or("files is a list of schematics")?;
+                for f in files {
+                    let name = f.as_str().ok_or("files is a list of schematics, by their paths")?;
+                    let path = s.access.check(name, false)?;
+                    let imported = massif_objects::read(&path).map_err(|e| format!("{name}: {e}"))?;
+                    read.push(imported.object);
+                }
+                if read.is_empty() {
+                    return Err("files lists no schematic: give one or more, or leave files out to retune the layer".into());
+                }
+            }
+            let reg = &mut s.slot(w)?.world.registry;
+            let id = add_objects(reg, def, read)?;
+            s.slot(w)?.changed = true;
+            Ok(json!({ "kind": "trees", "id": id }))
+        }
         _ => Err(format!("massif.{name}() is not supported yet")),
     }
+}
+
+// ------------------------------------------------------ layers of a map --
+
+fn number(def: &Value, key: &str) -> R<Option<f64>> {
+    match def.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v.as_f64().map(Some).ok_or_else(|| format!("{key} is a number")),
+    }
+}
+
+fn flag(def: &Value, key: &str) -> R<Option<bool>> {
+    match def.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v.as_bool().map(Some).ok_or_else(|| format!("{key} is true or false")),
+    }
+}
+
+/// A block by its id, `minecraft:` taken for one without a namespace:
+/// `"podzol"`, `"minecraft:snow[layers=2]"`, `"conquest:silt"`.
+fn block_state(name: &str) -> R<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("a block is named by its id: \"podzol\", \"minecraft:snow[layers=2]\"".into());
+    }
+    let bare = name.split('[').next().unwrap_or(name);
+    Ok(if bare.contains(':') { name.to_owned() } else { format!("minecraft:{name}") })
+}
+
+/// Blocks with their weights: `{ "podzol", { "grass_block", 3 } }`, a
+/// block alone weighing 1.
+fn weighted(list: &Value, what: &str) -> R<Vec<(String, u16)>> {
+    let items = list.as_array().ok_or_else(|| format!("{what} is a list of blocks: {{ \"podzol\", {{ \"grass_block\", 3 }} }}"))?;
+    items
+        .iter()
+        .map(|item| match item {
+            Value::String(b) => Ok((block_state(b)?, 1)),
+            Value::Array(pair) => {
+                let b = pair.first().and_then(Value::as_str).ok_or_else(|| format!("each of {what} is a block, or {{ block, weight }}"))?;
+                let w = pair.get(1).map_or(Some(1.0), Value::as_f64).ok_or_else(|| format!("the weight of {b} is a number"))?;
+                Ok((block_state(b)?, w.round().clamp(1.0, u16::MAX as f64) as u16))
+            }
+            _ => Err(format!("each of {what} is a block, or {{ block, weight }}")),
+        })
+        .collect()
+}
+
+/// A colour as `{ r, g, b }`, 0 to 255.
+fn colour(def: &Value) -> R<Option<[u8; 3]>> {
+    match def.get("color") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(c)) if c.len() == 3 && c.iter().all(Value::is_number) => Ok(Some([0, 1, 2].map(|k| c[k].as_f64().unwrap_or(0.0).round().clamp(0.0, 255.0) as u8))),
+        Some(_) => Err("color is { r, g, b }, each 0 to 255".into()),
+    }
+}
+
+/// A range of whole numbers: `n`, or `{ least, most }`.
+fn range(def: &Value, key: &str, max: f64) -> R<Option<(f64, f64)>> {
+    match def.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(r)) if (1..=2).contains(&r.len()) && r.iter().all(Value::is_number) => {
+            let lo = r[0].as_f64().unwrap_or(0.0).round().clamp(0.0, max);
+            let hi = r.last().and_then(Value::as_f64).unwrap_or(lo).round().clamp(0.0, max);
+            Ok(Some((lo.min(hi), lo.max(hi))))
+        }
+        Some(v) => v.as_f64().map(|n| Some((n.round().clamp(0.0, max), n.round().clamp(0.0, max)))).ok_or_else(|| format!("{key} is a number, or {{ least, most }}")),
+    }
+}
+
+fn name_of(def: &Value) -> R<String> {
+    let name = def.get("name").and_then(Value::as_str).map(str::trim).unwrap_or_default();
+    if name.is_empty() { Err("a name is needed".into()) } else { Ok(name.to_owned()) }
+}
+
+/// `map:add_terrain{…}`: a terrain made of strata, or the one of that name
+/// redefined; its number.
+fn add_terrain(reg: &mut massif_core::registry::Registry, def: &Value) -> R<u16> {
+    use massif_core::registry::{Mix, Stratum, TerrainDef};
+    let name = name_of(def)?;
+    let given = def.get("strata").and_then(Value::as_array).filter(|s| !s.is_empty()).ok_or("strata is a list of layers from the surface down: { { blocks = { \"podzol\" }, depth = 1 }, … }")?;
+    let mut strata = Vec::with_capacity(given.len());
+    for (k, s) in given.iter().enumerate() {
+        let blocks = weighted(s.get("blocks").ok_or_else(|| format!("stratum {} has no blocks", k + 1))?, "blocks")?;
+        if blocks.is_empty() {
+            return Err(format!("stratum {} has no blocks", k + 1));
+        }
+        let (lo, hi) = range(s, "depth", 4096.0)?.unwrap_or((1.0, 1.0));
+        let mix = match s.get("mix").and_then(Value::as_str) {
+            None | Some("grain") => Mix::Grain,
+            Some("patches") => Mix::Patches { size: number(s, "size")?.unwrap_or(4.0).clamp(1.0, 256.0) as f32 },
+            Some("beds") => Mix::Beds,
+            Some(other) => return Err(format!("Unknown mix \"{other}\": grain, patches or beds")),
+        };
+        let blocks = blocks.into_iter().map(|(b, w)| (reg.intern_block(&b, massif_core::objects::guess_color(&b)), w)).collect();
+        strata.push(Stratum { blocks, depth: (lo as u16, hi as u16), mix });
+    }
+    let top = reg.block(strata[0].blocks[0].0).color;
+    let existing = reg.terrain_by_name(&name);
+    let old = existing.map(|t| reg.terrain(t).clone());
+    let terrain = TerrainDef {
+        group: def.get("group").and_then(Value::as_str).map(str::to_owned).or_else(|| old.as_ref().map(|o| o.group.clone())).unwrap_or_else(|| "Custom".into()),
+        color: colour(def)?.or_else(|| old.as_ref().map(|o| o.color)).unwrap_or(top),
+        strata,
+        submerged_top: old.as_ref().and_then(|o| o.submerged_top),
+        biome_hint: old.as_ref().and_then(|o| o.biome_hint),
+        name,
+    };
+    match existing {
+        Some(t) => {
+            reg.terrains[t.index()] = terrain;
+            Ok(t.0)
+        }
+        None => {
+            if reg.terrains.len() >= u16::MAX as usize {
+                return Err("the map holds as many terrains as it can".into());
+            }
+            reg.terrains.push(terrain);
+            Ok((reg.terrains.len() - 1) as u16)
+        }
+    }
+}
+
+/// `map:add_cover{…}`: a ground cover, or the one of that name redefined;
+/// its number.
+fn add_cover(reg: &mut massif_core::registry::Registry, def: &Value) -> R<u16> {
+    use massif_core::registry::{CoverDef, plant_color};
+    let name = name_of(def)?;
+    let existing = reg.cover_by_name(&name);
+    let mut cover = match existing {
+        Some(n) => reg.covers[n as usize - 1].clone(),
+        None => CoverDef::new(&name, [120, 170, 90], &[], 0.5),
+    };
+    match def.get("plants") {
+        Some(p) => cover.plants = weighted(p, "plants")?,
+        None if existing.is_none() => return Err("plants is a list of blocks: { { \"short_grass\", 8 }, { \"poppy\", 1 } }".into()),
+        None => {}
+    }
+    if let Some(d) = number(def, "density")? {
+        cover.density = d.clamp(0.0, 1.0) as f32;
+    }
+    if let Some((lo, hi)) = range(def, "height", 255.0)? {
+        cover.height = [lo.max(1.0) as u8, hi.max(1.0) as u8];
+    }
+    if let Some(v) = flag(def, "soil_only")? {
+        cover.soil_only = v;
+    }
+    if let Some(v) = flag(def, "underwater")? {
+        cover.underwater = v;
+    }
+    match colour(def)? {
+        Some(c) => cover.color = c,
+        None if existing.is_none() => cover.color = cover.plants.first().map(|p| plant_color(&p.0).unwrap_or_else(|| massif_core::objects::guess_color(&p.0))).unwrap_or(cover.color),
+        None => {}
+    }
+    Ok(match existing {
+        Some(n) => {
+            reg.covers[n as usize - 1] = cover;
+            n
+        }
+        None => reg.add_cover(cover),
+    })
+}
+
+/// `map:add_objects{…}`: a layer of the objects read, or the one of that
+/// name retuned (its objects kept unless others were read); its number.
+fn add_objects(reg: &mut massif_core::registry::Registry, def: &Value, read: Vec<massif_core::objects::ObjectDef>) -> R<u16> {
+    use massif_core::objects::{ObjectLayerDef, Spacing};
+    let name = name_of(def)?;
+    let existing = reg.object_layers.iter().position(|l| !l.removed && l.name.eq_ignore_ascii_case(&name));
+    if existing.is_none() && read.is_empty() {
+        return Err(format!("This map has no object layer named \"{name}\": give its files to make one"));
+    }
+    let mut added = Vec::with_capacity(read.len());
+    for mut o in read {
+        o.colors = o.palette.iter().map(|state| massif_core::objects::guess_color(state)).collect();
+        reg.objects.push(o);
+        added.push((reg.objects.len() - 1) as u32);
+    }
+    let mut layer = match existing {
+        Some(k) => {
+            let mut l = reg.object_layers[k].clone();
+            if !added.is_empty() {
+                l.objects = added.iter().map(|&o| (o, 1)).collect();
+            }
+            l
+        }
+        None => {
+            let mut l = ObjectLayerDef::new(&name, &added, reg);
+            // As the app makes a layer of objects imported: spaced by
+            // their canopies.
+            l.spacing_mode = Spacing::Canopy;
+            l
+        }
+    };
+    match def.get("spacing") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(s)) if s == "canopy" => layer.spacing_mode = Spacing::Canopy,
+        Some(v) => {
+            let n = v.as_f64().ok_or("spacing is \"canopy\", or a number of blocks")?;
+            layer.spacing_mode = Spacing::Grid;
+            layer.spacing = n.round().clamp(1.0, 256.0) as u16;
+        }
+    }
+    if let Some(d) = number(def, "density")? {
+        layer.density = d.clamp(0.0, 1.0) as f32;
+    }
+    if let Some(g) = number(def, "gap")? {
+        layer.min_gap = g.round().clamp(0.0, 255.0) as u8;
+    }
+    if let Some(s) = number(def, "sink")? {
+        layer.sink = s.round().clamp(-256.0, 256.0) as i16;
+    }
+    for (key, slot) in [("rotate", &mut layer.rotate), ("mirror", &mut layer.mirror), ("soil_only", &mut layer.soil_only), ("replace", &mut layer.replace), ("understory", &mut layer.understory), ("underwater", &mut layer.underwater)] {
+        if let Some(v) = flag(def, key)? {
+            *slot = v;
+        }
+    }
+    if let Some(c) = colour(def)? {
+        layer.color = c;
+    }
+    Ok(match existing {
+        Some(k) => {
+            reg.object_layers[k] = layer;
+            k as u16 + 1
+        }
+        None => reg.add_object_layer(layer),
+    })
 }
 
 /// What `map:import_mask()` paints, and the mapping of the image's levels

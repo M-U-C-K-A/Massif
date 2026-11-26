@@ -223,3 +223,82 @@ print(high > 0, high == frosted)
     assert!(outcome.changed);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// A tree as a structure block saves it: a trunk three high under a
+/// crown of leaves.
+fn write_tree(path: &Path) {
+    use fastnbt::Value;
+    let c = |entries: Vec<(&str, Value)>| Value::Compound(entries.into_iter().map(|(k, v)| (k.to_owned(), v)).collect());
+    let pos = |x: i32, y: i32, z: i32| Value::List(vec![Value::Int(x), Value::Int(y), Value::Int(z)]);
+    let mut blocks = vec![c(vec![("pos", pos(1, 0, 1)), ("state", Value::Int(0))]), c(vec![("pos", pos(1, 1, 1)), ("state", Value::Int(0))]), c(vec![("pos", pos(1, 2, 1)), ("state", Value::Int(0))])];
+    for x in 0..3 {
+        for z in 0..3 {
+            blocks.push(c(vec![("pos", pos(x, 3, z)), ("state", Value::Int(1))]));
+        }
+    }
+    let root = c(vec![
+        ("size", pos(3, 4, 3)),
+        ("palette", Value::List(vec![c(vec![("Name", Value::String("minecraft:oak_log".into()))]), c(vec![("Name", Value::String("minecraft:oak_leaves".into()))])])),
+        ("blocks", Value::List(blocks)),
+    ]);
+    std::fs::write(path, fastnbt::to_bytes(&root).unwrap()).unwrap();
+}
+
+/// A script makes the map's own terrains, ground covers and object
+/// layers, redefines them by name, and moves the spawn.
+#[test]
+fn terrains_covers_objects_and_spawn() {
+    let dir = temp("layers");
+    write_tree(&dir.join("oak.nbt"));
+    let src = r#"
+local map = massif.create{ width = 256, depth = 256, landform = "flat" }
+local forest = map:add_terrain{ name = "Forest floor", group = "Mine", strata = {
+    { blocks = { "podzol", { "grass_block", 3 } }, depth = 1, mix = "patches", size = 6 },
+    { blocks = { "dirt", "coarse_dirt" }, depth = { 2, 4 } },
+    { blocks = { "stone", "andesite" }, depth = 8, mix = "beds" },
+} }
+print(forest == map:terrain_id("Forest floor"))
+local again = map:add_terrain{ name = "forest floor", strata = { { blocks = { "moss_block" } } } }
+print(again == forest)
+local x0, z0 = map:bounds()
+map:set("terrain", x0, z0, x0 + 16, z0 + 16, forest)
+print(map:get("terrain", x0, z0, x0 + 16, z0 + 16):count(forest))
+local meadow = map:add_cover{ name = "Meadow", plants = { { "short_grass", 8 }, { "poppy", 1 } }, density = 0.7, height = { 1, 2 } }
+print(meadow.kind, meadow.id == map:layer("Meadow").id)
+map:set("cover", x0, z0, x0 + 16, z0 + 16, meadow.id)
+local oaks = map:add_objects{ name = "Oaks", files = { "oak.nbt" }, density = 0.4, spacing = "canopy", gap = 5, rotate = false }
+print(oaks.kind, oaks.id == map:layer("Oaks").id)
+local same = map:add_objects{ name = "Oaks", spacing = 12, density = 0.2 }
+print(same.id == oaks.id)
+print(pcall(function() map:add_objects{ name = "Nothing here" } end))
+print(pcall(function() map:add_objects{ name = "Far", files = { "/etc/hosts" } } end))
+print(pcall(function() map:add_terrain{ name = "Odd", strata = { { blocks = { "stone" }, mix = "swirls" } } } end))
+map.spawn = { x = 10, y = 80, z = -4 }
+local s = map.spawn
+print(s.x, s.y, s.z)
+map:save("layers.massif")
+"#;
+    let (ending, lines, _) = run(&dir, "layers.lua", src, &[], None, Default::default());
+    assert_eq!(ending, Ending::Done, "{lines:?}");
+    let o = out(&lines);
+    assert_eq!(o[..6], ["true", "true", "256", "cover\ttrue", "trees\ttrue", "true"]);
+    assert!(o[6].starts_with("false") && o[6].contains("no object layer named"), "{}", o[6]);
+    assert!(o[7].starts_with("false") && o[7].contains("may only use files"), "{}", o[7]);
+    assert!(o[8].starts_with("false") && o[8].contains("Unknown mix"), "{}", o[8]);
+    assert_eq!(o[9], "10\t80\t-4");
+    let world = massif_format::load(&dir.join("layers.massif")).unwrap();
+    let reg = &world.registry;
+    let t = reg.terrain(reg.terrain_by_name("Forest floor").unwrap());
+    assert_eq!(t.strata.len(), 1, "redefined by its name");
+    assert_eq!(reg.block(t.strata[0].blocks[0].0).state, "minecraft:moss_block");
+    assert_eq!(t.group, "Mine", "the group kept");
+    let meadow = &reg.covers[reg.cover_by_name("Meadow").unwrap() as usize - 1];
+    assert_eq!(meadow.plants, [("minecraft:short_grass".to_owned(), 8), ("minecraft:poppy".to_owned(), 1)]);
+    assert_eq!((meadow.density, meadow.height), (0.7, [1, 2]));
+    let oaks = reg.object_layers.iter().find(|l| l.name == "Oaks").unwrap();
+    assert_eq!(oaks.objects.len(), 1, "its objects kept when retuned");
+    assert!(reg.objects[oaks.objects[0].0 as usize].palette.iter().any(|s| s == "minecraft:oak_log"), "the tree read");
+    assert_eq!((oaks.spacing_mode, oaks.spacing, oaks.density, oaks.min_gap, oaks.rotate), (massif_core::objects::Spacing::Grid, 12, 0.2, 5, false));
+    assert_eq!(world.meta.spawn, [10, 80, -4]);
+    std::fs::remove_dir_all(&dir).ok();
+}

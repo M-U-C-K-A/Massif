@@ -196,6 +196,26 @@ impl UserData for Map {
         fields.add_field_method_set("seed", |_, m, seed: i64| call("set", serde_json::json!({ "world": m.w, "seed": seed })).map(|_| ()));
         fields.add_field_method_get("sea_level", |_, m| Ok(m.info()?["seaLevel"].as_i64().unwrap_or(62)));
         fields.add_field_method_set("sea_level", |_, m, v: i64| call("set", serde_json::json!({ "world": m.w, "seaLevel": v })).map(|_| ()));
+        fields.add_field_method_get("spawn", |lua, m| {
+            let info = m.info()?;
+            let c = |k: usize| info["spawn"].get(k).and_then(serde_json::Value::as_i64).unwrap_or(0);
+            let t = lua.create_table()?;
+            t.set("x", c(0))?;
+            t.set("y", c(1))?;
+            t.set("z", c(2))?;
+            Ok(t)
+        });
+        // map.spawn = { x = 0, y = 70, z = 0 }, or { 0, 70, 0 }.
+        fields.add_field_method_set("spawn", |_, m, t: Table| {
+            let c = |key: &str, k: usize| -> mlua::Result<i64> {
+                match t.get::<Option<f64>>(key)?.or(t.get::<Option<f64>>(k)?) {
+                    Some(v) => Ok(v.floor() as i64),
+                    None => Err(mlua::Error::RuntimeError("map.spawn is { x = …, y = …, z = … }".into())),
+                }
+            };
+            let spawn = [c("x", 1)?, c("y", 2)?, c("z", 3)?];
+            call("set", serde_json::json!({ "world": m.w, "spawn": spawn })).map(|_| ())
+        });
         fields.add_field_method_get("dimension", |_, m| Ok(["surface", "nether", "end"][m.dim.clamp(0, 2) as usize]));
     }
 
@@ -280,6 +300,20 @@ impl UserData for Map {
         methods.add_method("terrains", |lua, m, ()| lua.to_value(&call("terrains", serde_json::json!({ "world": m.w }))?));
         methods.add_method("biomes", |lua, m, ()| lua.to_value(&call("biomes", serde_json::json!({ "world": m.w }))?));
         methods.add_method("layers", |lua, m, ()| lua.to_value(&call("layers", serde_json::json!({ "world": m.w }))?));
+        // The map's own terrains, ground covers and object layers, made or
+        // redefined by name.
+        methods.add_method("add_terrain", |lua, m, def: Table| {
+            let def: serde_json::Value = lua.from_value(Value::Table(def))?;
+            Ok(call("addTerrain", serde_json::json!({ "world": m.w, "def": def }))?.as_i64())
+        });
+        methods.add_method("add_cover", |lua, m, def: Table| {
+            let def: serde_json::Value = lua.from_value(Value::Table(def))?;
+            lua.to_value(&call("addCover", serde_json::json!({ "world": m.w, "def": def }))?)
+        });
+        methods.add_method("add_objects", |lua, m, def: Table| {
+            let def: serde_json::Value = lua.from_value(Value::Table(def))?;
+            lua.to_value(&call("addObjects", serde_json::json!({ "world": m.w, "def": def }))?)
+        });
         methods.add_method("select", |_, m, args: MultiValue| {
             let rect = if args.front().is_none_or(|v| v.is_nil()) {
                 serde_json::Value::Null

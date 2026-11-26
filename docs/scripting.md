@@ -158,6 +158,7 @@ end
 | `massif.open(file)` | a `.massif`, or a WorldPainter `.world` imported |
 | `massif.create{ width, depth, landform, seed, seaLevel, minY, maxY, … }` | a new map, as File ▸ New World makes one (`landform`: `"flat"`, `"plains"`, `"hills"`, `"mountains"`, `"islands"`) |
 | `map.name`, `map.seed`, `map.sea_level` | read and set |
+| `map.spawn` | where players appear, `{ x, y, z }`: read and set (`map.spawn = { x = 0, y = 80, z = 0 }`) |
 | `map:bounds()` | `x0, z0, x1, z1`: the blocks the map covers, `x1` and `z1` past the last |
 | `map:tiles()` | for `x0, z0, x1, z1 in map:tiles()`: each tile of 128 × 128 blocks |
 | `map:dimension("nether")` | the same map's Nether (or `"end"`, `"surface"`) |
@@ -188,6 +189,71 @@ without a loop in the script, `g:sum()`, `g:min()`, `g:max()`,
 | `"selection"` | 0 to 255, read only |
 
 `map:height(x, z)` and `map:set_height(x, z, h)` read and write one column.
+
+### Terrains, ground covers and object layers
+
+A script makes the map's own terrains and layers, as the Terrain and Layers
+panels do. Each is known by its name: one of a name the map has already is
+redefined, its number kept, what the script leaves out kept as it was.
+
+```lua
+local map = massif.map
+local floor = map:add_terrain{ name = "Forest floor", group = "Forest", strata = {
+    { blocks = { "podzol", { "grass_block", 3 }, "coarse_dirt" }, depth = 1, mix = "patches", size = 6 },
+    { blocks = { "dirt" }, depth = { 3, 5 } },
+} }
+local meadow = map:add_cover{ name = "Meadow", plants = { { "short_grass", 8 }, { "poppy", 1 } }, density = 0.6 }
+local oaks = map:add_objects{ name = "Oaks", files = { "trees/oak1.schem", "trees/oak2.schem" }, density = 0.5 }
+map:add_objects{ name = "Pine", spacing = 9, density = 0.8 }   -- retunes the map's Pine
+local x0, z0, x1, z1 = map:bounds()
+map:set("terrain", x0, z0, x1, z1, floor)
+map:set("cover", x0, z0, x1, z1, meadow.id)
+map:set("trees", x0, z0, x1, z1, oaks.id)
+```
+
+Blocks are named by their ids, `minecraft:` taken when none is given
+(`"podzol"`, `"minecraft:snow[layers=2]"`, `"conquest:silt"`), alone (a
+weight of 1) or as `{ block, weight }`. A colour is `{ r, g, b }`.
+
+`map:add_terrain{ … }` gives the terrain's number, for `map:set("terrain",
+…)`:
+
+| | |
+|---|---|
+| `name` | its name (needed) |
+| `strata` | its layers from the surface down, each `{ blocks = …, depth = n or { least, most }, mix = …, size = … }`; under the last comes the natural stone |
+| `mix` | `"grain"` (each block on its own, by default), `"patches"` (of about `size` blocks, 4 by default) or `"beds"` (horizontal beds, each block as thick as its weight) |
+| `group` | its category in the Terrain panel (`"Custom"` by default) |
+| `color` | its colour on the map (its top block's by default) |
+
+`map:add_cover{ … }` gives `{ kind = "cover", id = … }`, for
+`map:set("cover", …)`:
+
+| | |
+|---|---|
+| `name`, `plants` | its name and its blocks with their weights (both needed for a new one) |
+| `density` | the share of the columns where something grows, 0 to 1 (0.5) |
+| `height` | how high it grows, `{ least, most }` blocks (cane, cactus) |
+| `soil_only` | only on soil, as plants need (true) |
+| `underwater` | under water rather than in the air (false) |
+| `color` | its colour on the map |
+
+`map:add_objects{ … }` gives `{ kind = "trees", id = … }`, for
+`map:set("trees", …)` or `"understory"`:
+
+| | |
+|---|---|
+| `name` | its name (needed) |
+| `files` | its objects, read from `.schem`, `.schematic`, `.bp`, `.litematic` or `.nbt` files the script may use; left out, the layer of that name is retuned and keeps its objects (a tree pack's too) |
+| `density` | the share of the spots where one stands, 0 to 1 |
+| `spacing` | `"canopy"` (by their crowns, as objects imported are) or the side of a grid's squares in blocks |
+| `gap` | spaced by their canopies, the least distance between two trunks |
+| `rotate`, `mirror` | turned a random quarter turn, mirrored |
+| `soil_only`, `underwater` | only on soil; under water |
+| `sink` | how many blocks into the ground they stand |
+| `replace` | their blocks replace the ground they reach |
+| `understory` | a sub-canopy layer, growing under the trees |
+| `color` | its colour on the map |
 
 ### Masks from images
 
