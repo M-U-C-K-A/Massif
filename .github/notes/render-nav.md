@@ -1,0 +1,3 @@
+**The Render view moves as Blender's**
+
+Dragging turns about the point under the pointer, Shift-drag slides it with the pointer, and the wheel comes closer to the point under the pointer, every speed by the distance to what is there, so that two blocks over the grass and two kilometres over the map are both easy to reach; double-click comes in close on a point, the numeric pad gives the front, side and top views, and W A S D go by their places on the keyboard. The Camera panel gives the eye's location in numbers, and Lock Camera to View with Align Camera to View keep the camera of stills, keyframes and the video apart from the view, as in Blender.

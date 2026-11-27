@@ -186,6 +186,59 @@ impl Orbit {
         Camera::orbit(self.target, self.yaw, self.pitch, self.distance, fov.to_radians())
     }
 
+    /// Where the eye stands.
+    fn eye(&self) -> [f64; 3] {
+        self.camera(50.0).eye
+    }
+
+    /// The camera at `eye` looking along `yaw` and `pitch`, turning about
+    /// the point `distance` ahead.
+    fn from_eye(eye: [f64; 3], yaw: f32, pitch: f32, distance: f64) -> Orbit {
+        let f = Camera { eye, yaw, pitch, fov_y: 1.0 }.forward();
+        let target = [eye[0] + f.x as f64 * distance, eye[1] + f.y as f64 * distance, eye[2] + f.z as f64 * distance];
+        Orbit { target, yaw, pitch, distance }
+    }
+
+    /// Turned by `dyaw` and `dpitch` about `pivot`, the view's direction
+    /// turning as much: Blender's orbit about the point under the pointer
+    /// (its "Orbit Around Selection" with "Auto Depth"), the pivot staying
+    /// where it is on the screen.
+    fn orbit_about(&mut self, pivot: [f64; 3], dyaw: f32, dpitch: f32) {
+        let eye = self.eye();
+        let pitch = (self.pitch + dpitch).clamp(-1.55, 1.55);
+        let dpitch = pitch - self.pitch;
+        let yaw = self.yaw + dyaw;
+        let v = glam::DVec3::new(eye[0] - pivot[0], eye[1] - pivot[1], eye[2] - pivot[2]);
+        // The yaw turns about the vertical (a turn by -dyaw about +y adds
+        // dyaw to the yaw), the pitch about the turned view's right.
+        let v = glam::DQuat::from_rotation_y(-dyaw as f64) * v;
+        let b = Camera { eye, yaw, pitch: self.pitch, fov_y: 1.0 }.basis();
+        let right = glam::DVec3::new(b.right.x as f64, b.right.y as f64, b.right.z as f64);
+        let v = glam::DQuat::from_axis_angle(right, dpitch as f64) * v;
+        *self = Orbit::from_eye([pivot[0] + v.x, pivot[1] + v.y, pivot[2] + v.z], yaw, pitch, self.distance);
+    }
+
+    /// Closer to `point` (or farther) by `factor` of the way, the view's
+    /// direction kept: Blender's "Zoom to Mouse Position", `point` the
+    /// surface under the pointer, so that it stays under it.
+    fn zoom_toward(&mut self, point: [f64; 3], factor: f64) {
+        let eye = self.eye();
+        let eye = [point[0] + (eye[0] - point[0]) * factor, point[1] + (eye[1] - point[1]) * factor, point[2] + (eye[2] - point[2]) * factor];
+        *self = Orbit::from_eye(eye, self.yaw, self.pitch, (self.distance * factor).max(0.5));
+    }
+
+    /// Slid across the view by `dx`, `dy` pixels (y down), `per_pixel`
+    /// blocks a pixel at the depth of the point held: that point follows
+    /// the pointer.
+    fn pan(&mut self, dx: f64, dy: f64, per_pixel: f64) {
+        let b = self.camera(50.0).basis();
+        let (r, u) = (b.right, b.up);
+        let d = [(-r.x as f64 * dx + u.x as f64 * dy) * per_pixel, (-r.y as f64 * dx + u.y as f64 * dy) * per_pixel, (-r.z as f64 * dx + u.z as f64 * dy) * per_pixel];
+        for (t, d) in self.target.iter_mut().zip(d) {
+            *t += d;
+        }
+    }
+
     /// Turning about `target` from `eye`.
     fn between(eye: [f64; 3], target: [f64; 3]) -> Orbit {
         let d = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]];
@@ -289,8 +342,18 @@ pub struct RenderSide {
     /// draws it a pass, the others say where it is.
     drawn: Option<(u64, u64)>,
     playback: Playback,
-    /// How fast W A S D walk, blocks a second (the wheel, while walking).
-    walk_speed: f64,
+    /// How fast W A S D walk, times the distance ahead (the wheel, while
+    /// walking); the keys held, by their places; the point a drag turns
+    /// about (or slides) and how far it is; `.` pressed: in close there.
+    walk_factor: f64,
+    /// The render camera, as Blender's camera object, apart from the view
+    /// while it is not locked to it: what stills, keyframes and the video
+    /// are taken from.
+    lock_camera: bool,
+    camera: Option<Orbit>,
+    held: HashSet<egui::Key>,
+    grab: Option<([f64; 3], f64)>,
+    focus_here: bool,
 }
 
 impl Default for RenderSide {
@@ -331,7 +394,12 @@ impl Default for RenderSide {
             view_px: [0; 2],
             drawn: None,
             playback: Playback::default(),
-            walk_speed: 24.0,
+            walk_factor: 1.0,
+            lock_camera: true,
+            camera: None,
+            held: HashSet::new(),
+            grab: None,
+            focus_here: false,
         }
     }
 }
@@ -400,7 +468,7 @@ impl RenderSide {
     #[cfg(test)]
     pub fn save_still(&mut self, path: PathBuf, size: [u32; 2], samples: u32) {
         let fov = self.fov;
-        if let Some(orbit) = self.orbit {
+        if let Some(orbit) = self.shot() {
             self.still = Some(Still { path, size, samples, camera: orbit.camera(fov), light: self.light, denoise: self.still_denoise, row: 0, started: Instant::now() });
         }
     }
@@ -462,9 +530,15 @@ impl RenderSide {
         }
     }
 
+    /// Where stills, keyframes and the video are taken from: the view, or
+    /// the camera apart from it while it is not locked to the view.
+    fn shot(&self) -> Option<Orbit> {
+        if self.lock_camera { self.orbit } else { self.camera.or(self.orbit) }
+    }
+
     /// The camera and the sun now, as a keyframe holds them.
     fn pose(&self) -> Option<Pose> {
-        let orbit = self.orbit?;
+        let orbit = self.shot()?;
         Some(Pose { eye: orbit.camera(self.fov).eye, target: orbit.target, fov: self.fov, hour: self.time.hour })
     }
 
@@ -637,62 +711,117 @@ impl RenderSide {
         }
         scene.renderer.sync_materials(&scene.materials);
 
-        // The camera: drag to turn about the point looked at, right-drag
-        // (or middle) to slide over the land, the wheel to come closer.
+        // The camera, as Blender's: drag (or the middle button, or Alt with
+        // the left) turns about the point under the pointer where the drag
+        // began; Shift with them slides, the point held following the
+        // pointer; the wheel and a pinch come closer to the point under
+        // the pointer; the right button held looks around from where the
+        // camera stands, and W A S D, Q E walk (by their places on the
+        // keyboard: Z Q S D, A E on an AZERTY one), Shift faster, Alt
+        // slower, the wheel while walking setting the speed. Every speed
+        // goes by the distance to what is under the pointer or ahead, so
+        // that two blocks over the grass and two kilometres over the map
+        // are both in hand. Double-click: in close on the point there (on
+        // the sky: the whole map).
         let sense = if self.still.is_some() { Sense::hover() } else { Sense::click_and_drag() };
         let response = ui.interact(view, egui::Id::unique(("massif render view", area)), sense);
         let now = ui.input(|i| i.time);
         let map = scene.map;
         let span = map.width.max(map.depth) as f64 * 16.0;
-        if response.dragged_by(PointerButton::Primary) {
-            let d = response.drag_delta();
-            orbit.yaw += d.x * 0.006;
-            orbit.pitch = (orbit.pitch - d.y * 0.006).clamp(-1.55, 1.2);
+        let renderer = &scene.renderer;
+        let fov = self.fov;
+        // The surface under a point of the view: the ray there, the point
+        // and how far.
+        let under = |orbit: &Orbit, at: egui::Pos2| -> ([f64; 3], [f64; 3], Option<f64>) {
+            let camera = orbit.camera(fov);
+            let b = camera.basis();
+            let tan = (camera.fov_y * 0.5).tan();
+            let ndc = [((at.x - view.left()) / view.width()) * 2.0 - 1.0, ((at.y - view.top()) / view.height()) * 2.0 - 1.0];
+            let d = (b.forward + b.right * (ndc[0] * tan * view.width() / view.height()) - b.up * (ndc[1] * tan)).normalize();
+            let dir = [d.x as f64, d.y as f64, d.z as f64];
+            (camera.eye, dir, renderer.pick(camera.eye, dir, 60000.0))
+        };
+        let point_at = |eye: [f64; 3], dir: [f64; 3], t: f64| [eye[0] + dir[0] * t, eye[1] + dir[1] * t, eye[2] + dir[2] * t];
+        // Track the keys by their places (the walk keys are where W A S D
+        // are on any keyboard), and forget them when the window loses the
+        // keyboard.
+        ui.input(|i| {
+            for e in &i.events {
+                if let egui::Event::Key { key, physical_key, pressed, repeat: false, .. } = e {
+                    let k = physical_key.unwrap_or(*key);
+                    if *pressed {
+                        self.held.insert(k);
+                    } else {
+                        self.held.remove(&k);
+                    }
+                }
+            }
+            if !i.focused {
+                self.held.clear();
+            }
+        });
+        let (mods, pointer, scroll, pinch, dt) = ui.input(|i| (i.modifiers, i.pointer.hover_pos(), i.smooth_scroll_delta.y + i.smooth_scroll_delta.x, i.zoom_delta(), i.stable_dt.min(0.1) as f64));
+        let orbiting = response.dragged_by(PointerButton::Primary) || response.dragged_by(PointerButton::Middle);
+        if response.drag_started_by(PointerButton::Primary) || response.drag_started_by(PointerButton::Middle) {
+            // The pivot (or the point held, to slide): what is under the
+            // pointer as the drag starts, else the point looked at.
+            self.grab = response.interact_pointer_pos().map(|at| {
+                let (eye, dir, t) = under(orbit, at);
+                match t {
+                    Some(t) => (point_at(eye, dir, t), t),
+                    None => (orbit.target, orbit.distance),
+                }
+            });
         }
-        if response.dragged_by(PointerButton::Middle) {
+        if orbiting {
             let d = response.drag_delta();
-            let k = orbit.distance * 0.0016;
-            let (s, c) = (orbit.yaw.sin() as f64, orbit.yaw.cos() as f64);
-            orbit.target[0] -= (c * d.x as f64 - s * d.y as f64) * k;
-            orbit.target[2] -= (s * d.x as f64 + c * d.y as f64) * k;
+            let (pivot, depth) = self.grab.unwrap_or((orbit.target, orbit.distance));
+            if mods.shift {
+                // The point held follows the pointer.
+                orbit.pan(d.x as f64, d.y as f64, depth * (2.0 * (fov.to_radians() * 0.5).tan() as f64) / view.height().max(1.0) as f64);
+            } else {
+                orbit.orbit_about(pivot, d.x * 0.006, -d.y * 0.006);
+            }
         }
-        // Walking, as Blender's walk navigation: the right button held, the
-        // mouse looks around from where the camera stands; W A S D move,
-        // Q and E go down and up, Shift faster; the wheel, while walking,
-        // sets the speed. Only with the pointer over the view and no field
-        // typed in.
+        if response.drag_stopped() {
+            self.grab = None;
+        }
         let looking = response.dragged_by(PointerButton::Secondary);
         if looking {
             let d = response.drag_delta();
-            let eye = orbit.camera(self.fov).eye;
-            orbit.yaw += d.x * 0.004;
-            orbit.pitch = (orbit.pitch - d.y * 0.004).clamp(-1.55, 1.2);
-            let moved = orbit.camera(self.fov).eye;
-            for k in 0..3 {
-                orbit.target[k] += eye[k] - moved[k];
-            }
+            let eye = orbit.eye();
+            orbit.orbit_about(eye, d.x * 0.004, -d.y * 0.004);
         }
         if (response.hovered() || looking) && self.still.is_none() && !ui.ctx().egui_wants_keyboard_input() {
             use egui::Key;
-            let (dt, keys, faster, scroll) = ui.input(|i| {
-                let k = |key: Key| i.key_down(key) as i32 as f64;
-                let mods = i.modifiers.command || i.modifiers.ctrl || i.modifiers.alt;
-                let keys = if mods { [0.0; 3] } else { [k(Key::W) - k(Key::S), k(Key::D) - k(Key::A), k(Key::E) - k(Key::Q)] };
-                (i.stable_dt.min(0.1) as f64, keys, i.modifiers.shift, i.smooth_scroll_delta.y + i.smooth_scroll_delta.x)
-            });
+            let k = |key: Key| self.held.contains(&key) as i32 as f64;
+            let keys = if mods.command || mods.ctrl { [0.0; 3] } else { [k(Key::W) - k(Key::S), k(Key::D) - k(Key::A), k(Key::E) - k(Key::Q)] };
             let walking = keys != [0.0; 3];
             if walking || looking {
                 if scroll != 0.0 {
-                    self.walk_speed = (self.walk_speed * (scroll as f64 * 0.004).exp()).clamp(1.0, 2000.0);
+                    self.walk_factor = (self.walk_factor * (scroll as f64 * 0.004).exp()).clamp(0.02, 50.0);
                 }
-            } else if scroll != 0.0 {
-                orbit.distance = (orbit.distance * (-scroll as f64 * 0.003).exp()).clamp(3.0, span * 3.0 + 2000.0);
+            } else if (scroll != 0.0 || pinch != 1.0)
+                && let Some(at) = pointer
+            {
+                // Toward the point under the pointer, a share of the way a
+                // step whatever the distance; on the sky, the point looked
+                // at.
+                let factor = ((-scroll as f64 * 0.003).exp() / pinch as f64).clamp(0.2, 5.0);
+                let (eye, dir, t) = under(orbit, at);
+                let point = t.map_or(orbit.target, |t| point_at(eye, dir, t));
+                if t.is_some() || orbit.distance * factor < span * 3.0 + 2000.0 {
+                    orbit.zoom_toward(point, factor);
+                }
             }
             if walking {
-                // Along the way the camera looks, flat or not: as Blender
-                // walks, forward goes where the eyes look.
-                let b = orbit.camera(self.fov).basis();
-                let speed = self.walk_speed * if faster { 4.0 } else { 1.0 } * dt;
+                // Where the eyes look, at a speed by the distance ahead (or
+                // to the ground under the eyes when ahead is sky).
+                let b = orbit.camera(fov).basis();
+                let eye = orbit.eye();
+                let ahead = renderer.pick(eye, [b.forward.x as f64, b.forward.y as f64, b.forward.z as f64], 6000.0);
+                let depth = ahead.unwrap_or_else(|| renderer.surface(eye[0], eye[2]).map_or(200.0, |g| (eye[1] - g).abs().max(2.0)));
+                let speed = walk_speed(depth, self.walk_factor, mods.shift, mods.alt) * dt;
                 let (f, r) = (b.forward, b.right);
                 let step = [
                     (f.x as f64 * keys[0] + r.x as f64 * keys[1]) * speed,
@@ -704,26 +833,71 @@ impl RenderSide {
                 }
                 ui.ctx().request_repaint();
             }
+            // The numeric pad's views, as Blender's: 1 from the front, 3
+            // from the right, 7 from above (Ctrl: the other side), about
+            // the point looked at; . in close on the point under the
+            // pointer.
+            ui.input_mut(|i| {
+                use egui::Modifiers;
+                let view_at = |i: &mut egui::InputState, key: Key| {
+                    if i.consume_key(Modifiers::CTRL, key) {
+                        Some(true)
+                    } else if i.consume_key(Modifiers::NONE, key) {
+                        Some(false)
+                    } else {
+                        None
+                    }
+                };
+                if let Some(back) = view_at(i, Key::Num1) {
+                    *orbit = Orbit { yaw: if back { std::f32::consts::PI } else { 0.0 }, pitch: 0.0, ..*orbit };
+                }
+                if let Some(left) = view_at(i, Key::Num3) {
+                    *orbit = Orbit { yaw: if left { std::f32::consts::FRAC_PI_2 } else { -std::f32::consts::FRAC_PI_2 }, pitch: 0.0, ..*orbit };
+                }
+                if let Some(below) = view_at(i, Key::Num7) {
+                    *orbit = Orbit { pitch: if below { 1.55 } else { -1.55 }, ..*orbit };
+                }
+                if i.consume_key(Modifiers::NONE, Key::Period) {
+                    self.focus_here = true;
+                }
+                if !self.lock_camera {
+                    if i.consume_key(Modifiers::CTRL | Modifiers::ALT, Key::Num0) {
+                        self.camera = Some(*orbit);
+                    } else if i.consume_key(Modifiers::NONE, Key::Num0)
+                        && let Some(c) = self.camera
+                    {
+                        *orbit = c;
+                    }
+                }
+            });
         }
-        if response.double_clicked() || std::mem::take(&mut self.playback.frame_all) {
+        let focus = std::mem::take(&mut self.focus_here);
+        if (response.double_clicked() || focus)
+            && let Some(at) = pointer
+        {
+            // In close on the point there, half the way.
+            match under(orbit, at) {
+                (eye, dir, Some(t)) => {
+                    let point = point_at(eye, dir, t);
+                    *orbit = Orbit::between(eye, point);
+                    orbit.zoom_toward(point, 0.5);
+                }
+                _ => *orbit = framing(&map, reach, doc.world.meta.sea_level as f64),
+            }
+        }
+        if std::mem::take(&mut self.playback.frame_all) {
             *orbit = framing(&map, reach, doc.world.meta.sea_level as f64);
         }
         // Shift-click: in focus there.
         if response.clicked()
-            && ui.input(|i| i.modifiers.shift)
+            && mods.shift
             && let Some(at) = response.interact_pointer_pos()
+            && let (_, dir, Some(t)) = under(orbit, at)
         {
-            let camera = orbit.camera(self.fov);
-            let b = camera.basis();
-            let tan = (camera.fov_y * 0.5).tan();
-            let ndc = [((at.x - view.left()) / view.width()) * 2.0 - 1.0, ((at.y - view.top()) / view.height()) * 2.0 - 1.0];
-            let dir = b.forward + b.right * (ndc[0] * tan * view.width() / view.height()) - b.up * (ndc[1] * tan);
-            let d = dir.normalize();
-            if let Some(t) = scene.renderer.pick(camera.eye, [d.x as f64, d.y as f64, d.z as f64], 50000.0) {
-                self.light.focus = (t * d.dot(b.forward) as f64) as f32;
-                if self.light.aperture == 0.0 {
-                    self.light.aperture = 0.4;
-                }
+            let f = orbit.camera(fov).forward();
+            self.light.focus = (t * (dir[0] * f.x as f64 + dir[1] * f.y as f64 + dir[2] * f.z as f64)) as f32;
+            if self.light.aperture == 0.0 {
+                self.light.aperture = 0.4;
             }
         }
 
@@ -1130,16 +1304,22 @@ impl RenderSide {
                 let span = extent.width.max(extent.depth) as f64 * 16.0;
                 let (min_y, max_y) = (doc.dimension().min_y as f64, doc.dimension().max_y as f64);
                 well(ui, |ui| {
+                    // Where the eye stands, to the tenth of a block.
                     let c = extent.center();
-                    row(ui, tr!("Looks at X"), |ui| {
-                        ui.add(Field::new(&mut orbit.target[0], c[0] - span..=c[0] + span).max_decimals(0));
+                    let mut eye = orbit.eye();
+                    let before = eye;
+                    row(ui, tr!("Location X"), |ui| {
+                        ui.add(Field::new(&mut eye[0], c[0] - span * 2.0..=c[0] + span * 2.0).max_decimals(1));
                     });
-                    row(ui, tr!("Looks at Y"), |ui| {
-                        ui.add(Field::new(&mut orbit.target[1], min_y..=max_y + 512.0).max_decimals(0));
+                    row(ui, tr!("Location Y"), |ui| {
+                        ui.add(Field::new(&mut eye[1], min_y..=max_y + 4096.0).max_decimals(1));
                     });
-                    row(ui, tr!("Looks at Z"), |ui| {
-                        ui.add(Field::new(&mut orbit.target[2], c[2] - span..=c[2] + span).max_decimals(0));
+                    row(ui, tr!("Location Z"), |ui| {
+                        ui.add(Field::new(&mut eye[2], c[2] - span * 2.0..=c[2] + span * 2.0).max_decimals(1));
                     });
+                    if eye != before {
+                        *orbit = Orbit::from_eye(eye, orbit.yaw, orbit.pitch, orbit.distance);
+                    }
                     let mut turn = orbit.yaw.to_degrees().rem_euclid(360.0);
                     row(ui, tr!("Turn"), |ui| {
                         if ui.add(Field::new(&mut turn, 0.0..=360.0).suffix("°").max_decimals(0)).changed() {
@@ -1159,13 +1339,36 @@ impl RenderSide {
                 if ui.button(theme::with_icon(Icon::Focus, tr!("Frame the whole map"))).clicked() {
                     *orbit = framing(&extent, render_reach(), doc.world.meta.sea_level as f64);
                 }
+                // The camera apart from the view, as Blender's: unlocked,
+                // the view moves alone and stills, keyframes and the video
+                // keep to the camera until it is aligned to the view.
+                let view = *orbit;
+                well(ui, |ui| {
+                    row(ui, tr!("Lock Camera to View"), |ui| {
+                        if crate::widgets::switch(ui, &mut self.lock_camera).changed() && !self.lock_camera {
+                            self.camera = Some(view);
+                        }
+                    });
+                });
+                if !self.lock_camera {
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.button(tr!("Align Camera to View")).on_hover_text(tr!("Put the camera where the view is (Ctrl+Alt+Numpad 0)")).clicked() {
+                            self.camera = Some(view);
+                        }
+                        if ui.button(tr!("View through Camera")).on_hover_text(tr!("Put the view where the camera is (Numpad 0)")).clicked()
+                            && let (Some(c), Some(o)) = (self.camera, self.orbit.as_mut())
+                        {
+                            *o = c;
+                        }
+                    });
+                }
             }
             _ => {
                 ui.label(RichText::new(tr!("The camera is placed once the Render Viewport shows the map.")).size(11.5).color(pal.weak));
             }
         }
         ui.add_space(4.0);
-        ui.label(RichText::new(tr!("Drag: turn · right-drag: look around · W A S D, Q E: walk (Shift: faster, wheel: speed) · middle-drag: slide · wheel: closer · shift-click: focus there · double-click: the whole map")).size(11.0).color(pal.weak));
+        ui.label(RichText::new(tr!("Drag: turn about the point there · Shift-drag: slide · wheel: toward the pointer · right-drag: look around · W A S D, Q E: walk (Shift faster, Alt slower, wheel: speed) · double-click or .: in close there · Shift-click: focus there · Numpad 1 3 7: views")).size(11.0).color(pal.weak));
     }
 
     /// Render Output: how the image is exposed, and saving it.
@@ -1296,7 +1499,8 @@ impl RenderSide {
             None => {}
         }
         if start
-            && let (Some(scene), Some(orbit)) = (&mut self.scene, self.orbit)
+            && let (Some(orbit), true) = (self.shot(), self.scene.is_some())
+            && let Some(scene) = &mut self.scene
         {
             let size = STILL_SIZES[self.still_size.min(STILL_SIZES.len() - 1)].1.unwrap_or(self.view_px);
             if !scene.renderer.fits(size[0], size[1]) {
@@ -1760,4 +1964,83 @@ fn framing(map: &Extent, reach: Option<f64>, sea: f64) -> Orbit {
     let extent = reach.and_then(|r| map.around(c[0], c[2], r)).unwrap_or(*map);
     let span = extent.width.max(extent.depth) as f64 * 16.0;
     Orbit { target: [c[0], sea, c[2]], yaw: 0.65, pitch: -0.55, distance: span * 0.8 }
+}
+
+/// How fast to walk with something `depth` blocks ahead (or below): a
+/// share of that distance a second, so that two blocks over the grass and
+/// two kilometres over the map are both in hand; times `factor` (the wheel
+/// while walking), Shift four times, Alt a quarter.
+fn walk_speed(depth: f64, factor: f64, fast: bool, slow: bool) -> f64 {
+    depth.clamp(2.0, 6000.0) * 0.8 * factor * if fast { 4.0 } else { 1.0 } * if slow { 0.25 } else { 1.0 }
+}
+
+#[cfg(test)]
+mod nav_tests {
+    use super::*;
+
+    fn close(a: [f64; 3], b: [f64; 3], tol: f64) -> bool {
+        (0..3).all(|k| (a[k] - b[k]).abs() < tol)
+    }
+
+    /// Orbiting about a point keeps it as far and in the same place on the
+    /// screen (the direction to it from the eye, in the view's own frame).
+    #[test]
+    fn orbiting_about_a_point_keeps_it_in_place() {
+        let mut o = Orbit { target: [100.0, 70.0, -40.0], yaw: 0.7, pitch: -0.4, distance: 80.0 };
+        let pivot = [130.0, 64.0, -90.0];
+        let rel = |o: &Orbit| {
+            let e = o.eye();
+            let b = o.camera(50.0).basis();
+            let d = glam::DVec3::new(pivot[0] - e[0], pivot[1] - e[1], pivot[2] - e[2]);
+            let f = |v: glam::Vec3| glam::DVec3::new(v.x as f64, v.y as f64, v.z as f64);
+            [d.dot(f(b.right)), d.dot(f(b.up)), d.dot(f(b.forward))]
+        };
+        let before = rel(&o);
+        o.orbit_about(pivot, 0.5, 0.2);
+        assert!(close(rel(&o), before, 1e-3), "{:?} {:?}", rel(&o), before);
+        assert!((o.yaw - 1.2).abs() < 1e-6 && (o.pitch + 0.2).abs() < 1e-6);
+    }
+
+    /// Zooming toward the point under the pointer keeps it under the pointer
+    /// (on the same ray from the eye) and comes that much closer.
+    #[test]
+    fn zooming_keeps_the_point_under_the_pointer() {
+        let mut o = Orbit { target: [0.0, 64.0, 0.0], yaw: 2.0, pitch: -0.5, distance: 300.0 };
+        let point = [40.0, 60.0, 25.0];
+        let ray = |o: &Orbit| {
+            let e = o.eye();
+            let d = glam::DVec3::new(point[0] - e[0], point[1] - e[1], point[2] - e[2]);
+            (d.normalize(), d.length())
+        };
+        let (dir, far) = ray(&o);
+        o.zoom_toward(point, 0.5);
+        let (dir2, far2) = ray(&o);
+        assert!(dir.dot(dir2) > 1.0 - 1e-9 && (far2 - far * 0.5).abs() < 1e-6);
+        // At 2 blocks and at 2000, the same wheel step is the same share.
+        let mut near = Orbit { target: [0.0, 64.0, 0.0], yaw: 0.0, pitch: -0.3, distance: 2.0 };
+        near.zoom_toward(near.target, 0.8);
+        assert!((near.distance - 1.6).abs() < 1e-9);
+    }
+
+    /// Sliding by pixels at a depth moves the view by that many pixels'
+    /// worth of blocks across it.
+    #[test]
+    fn sliding_follows_the_pointer() {
+        let mut o = Orbit { target: [0.0, 64.0, 0.0], yaw: 0.3, pitch: -0.6, distance: 50.0 };
+        let eye = o.eye();
+        o.pan(10.0, 0.0, 0.5);
+        let moved = o.eye();
+        let d = ((moved[0] - eye[0]).powi(2) + (moved[1] - eye[1]).powi(2) + (moved[2] - eye[2]).powi(2)).sqrt();
+        assert!((d - 5.0).abs() < 1e-6, "{d}");
+    }
+
+    /// Walking goes a share of the distance ahead a second: slow over the
+    /// grass, fast over the map; Shift and Alt as in Blender.
+    #[test]
+    fn walking_speed_follows_the_distance() {
+        assert!(walk_speed(2.0, 1.0, false, false) < 2.0);
+        assert!(walk_speed(2000.0, 1.0, false, false) > 1000.0);
+        assert_eq!(walk_speed(100.0, 1.0, true, false), walk_speed(100.0, 1.0, false, false) * 4.0);
+        assert_eq!(walk_speed(100.0, 1.0, false, true), walk_speed(100.0, 1.0, false, false) / 4.0);
+    }
 }

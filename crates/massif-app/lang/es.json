@@ -2888,9 +2888,6 @@
  "Keep the camera, its angle and the hour at the playhead (I or K)": "Guardar la cámara, su ángulo y la hora en el cabezal (I o K)",
  "Keyframes of the camera and the sun, to scrub and play": "Fotogramas clave de la cámara y el sol, para recorrer y reproducir",
  "Length": "Duración",
- "Looks at X": "Mira a X",
- "Looks at Y": "Mira a Y",
- "Looks at Z": "Mira a Z",
  "Next keyframe (↑)": "Fotograma clave siguiente (↑)",
  "Panel commands · drag the title to move it, with Shift onto an area to dock it there": "Órdenes del panel · arrastra el título para moverlo, con Mayús sobre un área para acoplarlo allí",
  "Panel commands · closing its window docks it back": "Comandos del panel · cerrar su ventana lo vuelve a acoplar",
@@ -4067,8 +4064,16 @@
  "A folder for the animation's images": "Una carpeta para las imágenes de la animación",
  "Rendering the animation: frame {n} of {all}": "Renderizando la animación: fotograma {n} de {all}",
  "Visibility": "Visibilidad",
- "Drag: turn · right-drag: look around · W A S D, Q E: walk (Shift: faster, wheel: speed) · middle-drag: slide · wheel: closer · shift-click: focus there · double-click: the whole map": "Arrastrar: girar · arrastrar con el derecho: mirar alrededor · W A S D, Q E: caminar (Mayús: más rápido, rueda: velocidad) · arrastrar con el central: desplazar · rueda: acercar · Mayús-clic: enfocar ahí · doble clic: todo el mapa",
  "Color Management": "Gestión del color",
  "Display Device": "Dispositivo de pantalla",
- "View Transform": "Transformación de vista"
+ "View Transform": "Transformación de vista",
+ "Drag: turn about the point there · Shift-drag: slide · wheel: toward the pointer · right-drag: look around · W A S D, Q E: walk (Shift faster, Alt slower, wheel: speed) · double-click or .: in close there · Shift-click: focus there · Numpad 1 3 7: views": "Arrastrar: girar alrededor del punto · Mayús-arrastrar: desplazar · rueda: hacia el puntero · arrastrar con el derecho: mirar alrededor · W A S D, Q E: caminar (Mayús más rápido, Alt más lento, rueda: velocidad) · doble clic o .: acercarse ahí · Mayús-clic: enfocar ahí · teclado numérico 1 3 7: vistas",
+ "Location X": "Posición X",
+ "Location Y": "Posición Y",
+ "Location Z": "Posición Z",
+ "Lock Camera to View": "Bloquear cámara a la vista",
+ "Align Camera to View": "Alinear cámara a la vista",
+ "View through Camera": "Ver a través de la cámara",
+ "Put the camera where the view is (Ctrl+Alt+Numpad 0)": "Poner la cámara donde está la vista (Ctrl+Alt+teclado numérico 0)",
+ "Put the view where the camera is (Numpad 0)": "Poner la vista donde está la cámara (teclado numérico 0)"
 }

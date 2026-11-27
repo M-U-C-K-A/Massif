@@ -3118,14 +3118,26 @@ camera and the output beside it; **Animation** the viewport over the
 timeline. Areas split, swap, float and change as on the other sides. One
 area draws the viewport at a time; a second one says where it is.
 
-- **Drag** to turn about the point looked at, **middle-drag** to slide
-  over the land, the **wheel** to come closer, **double-click** for the
-  whole map again, **Shift-click** to focus the lens there.
+- The view moves as Blender's: **drag** (or the middle button) turns about
+  the point under the pointer where the drag began, **Shift-drag** slides,
+  the point held following the pointer, the **wheel** (or a pinch) comes
+  closer to the point under the pointer, a share of the way each step, so
+  that two blocks over the grass and two kilometres over the map are both
+  in hand. **Double-click** (or **.**) comes in close on the point there;
+  on the sky, the whole map. **Numpad 1, 3, 7** look from the front, the
+  right, above (with **Ctrl**, the other side); **Shift-click** focuses the
+  lens there.
 - Walk as with Blender's walk navigation: hold the **right button** to look
-  around from where the camera stands, **W A S D** to move where you look,
-  **Q** and **E** to go down and up, **Shift** to go four times faster,
-  the **wheel** while walking to set the speed (24 blocks a second at
-  first). The view stays denoised at half its resolution while it moves.
+  around from where the camera stands, **W A S D** (by their places: Z Q S
+  D on an AZERTY keyboard) to move where you look, **Q** and **E** down and
+  up, at a speed by the distance to what is ahead, **Shift** four times
+  faster, **Alt** four times slower, the **wheel** while walking to set it.
+  The view stays denoised at half its resolution while it moves.
+- **Camera** ▸ **Position**: the eye's **Location** to the tenth of a block,
+  its **Turn** and **Tilt**. **Lock Camera to View** (on at first): off,
+  the view moves alone and stills, keyframes and the video keep to the
+  camera; **Align Camera to View** (Ctrl+Alt+Numpad 0) puts it where the
+  view is, **View through Camera** (Numpad 0) the view where it is.
 - **Sun and sky**: a **Look** to start from (Clear noon, Fair weather,
   Golden hour, Blue hour, Foggy morning, Night), then the **Time**, the
   **Day** of the year and the **Latitude** put the sun; **North** turns the

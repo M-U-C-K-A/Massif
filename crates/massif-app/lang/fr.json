@@ -2898,7 +2898,6 @@
  "Building the scene: {done} of {all} tiles": "Construction de la scène : {done} tuiles sur {all}",
  "Clear noon": "Midi clair",
  "Day": "Jour",
- "Drag: turn · right-drag: look around · W A S D, Q E: walk (Shift: faster, wheel: speed) · middle-drag: slide · wheel: closer · shift-click: focus there · double-click: the whole map": "Glisser : tourner · clic droit glissé : regarder autour · W A S D, Q E : marcher (Maj : plus vite, molette : vitesse) · clic du milieu glissé : glisser · molette : approcher · Maj-clic : mise au point ici · double-clic : toute la carte",
  "Drawing the image: {percent} %": "Calcul de l'image : {percent} %",
  "Fair weather": "Beau temps",
  "Focus": "Mise au point",
@@ -2956,9 +2955,6 @@
  "Keep the camera, its angle and the hour at the playhead (I or K)": "Garder la caméra, son angle et l'heure à la tête de lecture (I ou K)",
  "Keyframes of the camera and the sun, to scrub and play": "Images-clés de la caméra et du soleil, à parcourir et lire",
  "Length": "Durée",
- "Looks at X": "Vise X",
- "Looks at Y": "Vise Y",
- "Looks at Z": "Vise Z",
  "Next keyframe (↑)": "Image-clé suivante (↑)",
  "Panel commands · drag the title to move it, with Shift onto an area to dock it there": "Commandes du panneau · glissez le titre pour le déplacer, avec Maj sur une zone pour l'y ancrer",
  "Panel commands · closing its window docks it back": "Commandes du panneau · fermer sa fenêtre le remet dans la disposition",
@@ -4132,5 +4128,14 @@
  "Visibility": "Visibilité",
  "Color Management": "Gestion des couleurs",
  "Display Device": "Périphérique d'affichage",
- "View Transform": "Transformation de vue"
+ "View Transform": "Transformation de vue",
+ "Drag: turn about the point there · Shift-drag: slide · wheel: toward the pointer · right-drag: look around · W A S D, Q E: walk (Shift faster, Alt slower, wheel: speed) · double-click or .: in close there · Shift-click: focus there · Numpad 1 3 7: views": "Glisser : tourner autour du point visé · Maj-glisser : déplacer · molette : vers le pointeur · clic droit glissé : regarder autour · W A S D, Q E : marcher (Maj plus vite, Alt plus lentement, molette : vitesse) · double-clic ou . : s'approcher de ce point · Maj-clic : mise au point ici · pavé 1 3 7 : vues",
+ "Location X": "Position X",
+ "Location Y": "Position Y",
+ "Location Z": "Position Z",
+ "Lock Camera to View": "Verrouiller la caméra sur la vue",
+ "Align Camera to View": "Aligner la caméra sur la vue",
+ "View through Camera": "Voir par la caméra",
+ "Put the camera where the view is (Ctrl+Alt+Numpad 0)": "Mettre la caméra là où est la vue (Ctrl+Alt+pavé 0)",
+ "Put the view where the camera is (Numpad 0)": "Mettre la vue là où est la caméra (pavé 0)"
 }

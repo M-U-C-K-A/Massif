@@ -2891,9 +2891,6 @@
  "Keep the camera, its angle and the hour at the playhead (I or K)": "Kamera, Bildwinkel und Uhrzeit am Abspielkopf festhalten (I oder K)",
  "Keyframes of the camera and the sun, to scrub and play": "Schlüsselbilder von Kamera und Sonne, zum Scrubben und Abspielen",
  "Length": "Länge",
- "Looks at X": "Blickt auf X",
- "Looks at Y": "Blickt auf Y",
- "Looks at Z": "Blickt auf Z",
  "Next keyframe (↑)": "Nächstes Schlüsselbild (↑)",
  "Panel commands · drag the title to move it, with Shift onto an area to dock it there": "Panelbefehle · Titel ziehen zum Verschieben, mit Umschalt auf einen Bereich zum Andocken",
  "Panel commands · closing its window docks it back": "Panelbefehle · Schließen des Fensters dockt es wieder an",
@@ -4070,8 +4067,16 @@
  "A folder for the animation's images": "Ein Ordner für die Bilder der Animation",
  "Rendering the animation: frame {n} of {all}": "Animation wird gerendert: Bild {n} von {all}",
  "Visibility": "Sichtweite",
- "Drag: turn · right-drag: look around · W A S D, Q E: walk (Shift: faster, wheel: speed) · middle-drag: slide · wheel: closer · shift-click: focus there · double-click: the whole map": "Ziehen: drehen · Rechts ziehen: umsehen · W A S D, Q E: gehen (Umschalt: schneller, Mausrad: Tempo) · Mitte ziehen: schieben · Mausrad: näher · Umschalt-Klick: hier scharfstellen · Doppelklick: ganze Karte",
  "Color Management": "Farbmanagement",
  "Display Device": "Anzeigegerät",
- "View Transform": "Ansichtstransformation"
+ "View Transform": "Ansichtstransformation",
+ "Drag: turn about the point there · Shift-drag: slide · wheel: toward the pointer · right-drag: look around · W A S D, Q E: walk (Shift faster, Alt slower, wheel: speed) · double-click or .: in close there · Shift-click: focus there · Numpad 1 3 7: views": "Ziehen: um den Punkt dort drehen · Umschalt-Ziehen: schieben · Mausrad: zum Zeiger · Rechts ziehen: umsehen · W A S D, Q E: gehen (Umschalt schneller, Alt langsamer, Mausrad: Tempo) · Doppelklick oder .: dort heran · Umschalt-Klick: dort scharfstellen · Ziffernblock 1 3 7: Ansichten",
+ "Location X": "Position X",
+ "Location Y": "Position Y",
+ "Location Z": "Position Z",
+ "Lock Camera to View": "Kamera an Ansicht binden",
+ "Align Camera to View": "Kamera an Ansicht ausrichten",
+ "View through Camera": "Durch die Kamera sehen",
+ "Put the camera where the view is (Ctrl+Alt+Numpad 0)": "Die Kamera dorthin setzen, wo die Ansicht ist (Strg+Alt+Ziffernblock 0)",
+ "Put the view where the camera is (Numpad 0)": "Die Ansicht dorthin setzen, wo die Kamera ist (Ziffernblock 0)"
 }

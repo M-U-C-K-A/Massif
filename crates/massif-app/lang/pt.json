@@ -2888,9 +2888,6 @@
  "Keep the camera, its angle and the hour at the playhead (I or K)": "Guardar a câmera, o ângulo e a hora na agulha (I ou K)",
  "Keyframes of the camera and the sun, to scrub and play": "Quadros-chave da câmera e do sol, para percorrer e reproduzir",
  "Length": "Duração",
- "Looks at X": "Olha para X",
- "Looks at Y": "Olha para Y",
- "Looks at Z": "Olha para Z",
  "Next keyframe (↑)": "Quadro-chave seguinte (↑)",
  "Panel commands · drag the title to move it, with Shift onto an area to dock it there": "Comandos do painel · arraste o título para mover, com Shift sobre uma área para acoplá-lo lá",
  "Panel commands · closing its window docks it back": "Comandos do painel · fechar a sua janela volta a ancorá-lo",
@@ -4067,8 +4064,16 @@
  "A folder for the animation's images": "Uma pasta para as imagens da animação",
  "Rendering the animation: frame {n} of {all}": "A renderizar a animação: fotograma {n} de {all}",
  "Visibility": "Visibilidade",
- "Drag: turn · right-drag: look around · W A S D, Q E: walk (Shift: faster, wheel: speed) · middle-drag: slide · wheel: closer · shift-click: focus there · double-click: the whole map": "Arrastar: rodar · arrastar com o direito: olhar em volta · W A S D, Q E: andar (Shift: mais rápido, roda: velocidade) · arrastar com o do meio: deslizar · roda: aproximar · Shift-clique: focar aí · duplo clique: o mapa todo",
  "Color Management": "Gestão de cor",
  "Display Device": "Dispositivo de ecrã",
- "View Transform": "Transformação de vista"
+ "View Transform": "Transformação de vista",
+ "Drag: turn about the point there · Shift-drag: slide · wheel: toward the pointer · right-drag: look around · W A S D, Q E: walk (Shift faster, Alt slower, wheel: speed) · double-click or .: in close there · Shift-click: focus there · Numpad 1 3 7: views": "Arrastar: rodar à volta do ponto · Shift-arrastar: deslizar · roda: para o ponteiro · arrastar com o direito: olhar em volta · W A S D, Q E: andar (Shift mais rápido, Alt mais lento, roda: velocidade) · duplo clique ou .: aproximar-se aí · Shift-clique: focar aí · teclado numérico 1 3 7: vistas",
+ "Location X": "Posição X",
+ "Location Y": "Posição Y",
+ "Location Z": "Posição Z",
+ "Lock Camera to View": "Bloquear câmara à vista",
+ "Align Camera to View": "Alinhar câmara à vista",
+ "View through Camera": "Ver pela câmara",
+ "Put the camera where the view is (Ctrl+Alt+Numpad 0)": "Pôr a câmara onde está a vista (Ctrl+Alt+teclado numérico 0)",
+ "Put the view where the camera is (Numpad 0)": "Pôr a vista onde está a câmara (teclado numérico 0)"
 }
