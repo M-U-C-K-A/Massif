@@ -614,6 +614,9 @@ pub struct ToolState {
     /// Asked from a panel: open the rules of the automatic tools.
     #[serde(skip)]
     pub open_rules: bool,
+    /// The name typed to save Auto paint's style as a preset of one's own.
+    #[serde(skip)]
+    pub style_name: String,
     /// Asked from a panel: run an automatic tool over the whole map (biomes
     /// when `true`, paint otherwise).
     #[serde(skip)]
@@ -1300,6 +1303,7 @@ impl Default for ToolState {
             auto: massif_core::auto::AutoRules::default(),
             open_rules: false,
             run_auto: None,
+            style_name: String::new(),
             grow_trees: false,
             auto_done: None,
             river: RiverSettings::default(),

@@ -162,6 +162,10 @@ pub enum Ground {
 }
 
 impl Ground {
+    const fn bit(self) -> u16 {
+        1 << self as u16
+    }
+
     /// From the name of a block (`minecraft:grass_block[snowy=false]`).
     pub fn of_block(state: &str) -> Ground {
         let name = state.split('[').next().unwrap_or(state);
@@ -208,6 +212,29 @@ impl Ground {
                 }
             })
             .collect()
+    }
+}
+
+/// The grounds a biome of the game agrees with, as bits of [`Ground`]:
+/// a column already of that biome on such ground keeps it (a desert the
+/// Terrain Generator's climate painted on sand stays a desert, a savanna on
+/// grass a savanna). 0 for the biomes the land is read for afresh (plains,
+/// forests, the shores and the water).
+fn agrees(id: &str) -> u16 {
+    use Ground::*;
+    let any = |g: &[Ground]| g.iter().fold(0, |m, g| m | g.bit());
+    match id.rsplit(':').next().unwrap_or(id) {
+        "desert" => any(&[Sand]),
+        "badlands" | "eroded_badlands" | "wooded_badlands" => any(&[RedSand, Sand, Rock]),
+        "snowy_plains" | "ice_spikes" | "snowy_taiga" | "snowy_slopes" | "grove" | "frozen_peaks" | "jagged_peaks" => any(&[Snow, Rock]),
+        "jungle" | "bamboo_jungle" | "sparse_jungle" => any(&[Grass, Moss, ForestFloor]),
+        "swamp" | "mangrove_swamp" => any(&[Grass, Mud]),
+        "mushroom_fields" => any(&[Mycelium, Grass]),
+        "savanna" | "savanna_plateau" | "windswept_savanna" => any(&[Grass, ForestFloor]),
+        "taiga" | "old_growth_pine_taiga" | "old_growth_spruce_taiga" => any(&[Grass, ForestFloor]),
+        "windswept_hills" | "windswept_gravelly_hills" | "windswept_forest" => any(&[Grass, Rock]),
+        "stony_peaks" => any(&[Rock]),
+        _ => 0,
     }
 }
 
@@ -360,12 +387,166 @@ impl PaintRules {
     }
 }
 
-/// Both tables: the biome of the land, and the paint of the biomes.
+/// A style Auto paint paints with, whatever the biomes: a terrain for
+/// each part of the land, by name (empty: the part below it, the ground
+/// at the bottom; an empty ground leaves the column as it is).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PaintStyle {
+    pub name: String,
+    /// At the water's edge.
+    pub shore: String,
+    /// Below the hills' height.
+    pub ground: String,
+    /// From the hills' height, from the mountains', over the peaks'.
+    pub hills: String,
+    pub high: String,
+    pub peaks: String,
+    /// Slopes steeper than the cliffs' slope.
+    pub cliffs: String,
+    /// Under water.
+    pub underwater: String,
+}
+
+impl PaintStyle {
+    /// The name of the style that is changed by hand.
+    pub const CUSTOM: &'static str = "Custom";
+
+    /// The terrains of shore, ground, hills, high ground, peaks, cliffs and
+    /// what lies under water, in that order.
+    pub fn zones(&self) -> [&str; 7] {
+        [&self.shore, &self.ground, &self.hills, &self.high, &self.peaks, &self.cliffs, &self.underwater].map(String::as_str)
+    }
+
+    pub fn zones_mut(&mut self) -> [&mut String; 7] {
+        [&mut self.shore, &mut self.ground, &mut self.hills, &mut self.high, &mut self.peaks, &mut self.cliffs, &mut self.underwater]
+    }
+
+    fn of(name: &str, zones: [&str; 7]) -> Self {
+        let [shore, ground, hills, high, peaks, cliffs, underwater] = zones.map(str::to_owned);
+        Self { name: name.to_owned(), shore, ground, hills, high, peaks, cliffs, underwater }
+    }
+
+    /// The name of part `k` of the land, in the order of [`Self::zones`].
+    pub const fn label(k: usize) -> &'static str {
+        match k {
+            0 => "Shore",
+            1 => "Ground",
+            2 => "Hills",
+            3 => "Mountains",
+            4 => "Peaks",
+            5 => "Cliffs",
+            _ => "Under water",
+        }
+    }
+
+    /// The styles that come with Massif, of the terrains every map has.
+    pub fn built_in() -> Vec<PaintStyle> {
+        Preset::ALL.iter().map(|p| p.style()).collect()
+    }
+}
+
+/// A style that comes with Massif (see [`PaintStyle`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Preset {
+    Temperate,
+    Jungle,
+    Mountain,
+    Desert,
+    Badlands,
+    Taiga,
+    Snowy,
+    Savanna,
+    Coast,
+    Swamp,
+}
+
+impl Preset {
+    pub const ALL: [Preset; 10] = [Preset::Temperate, Preset::Jungle, Preset::Mountain, Preset::Desert, Preset::Badlands, Preset::Taiga, Preset::Snowy, Preset::Savanna, Preset::Coast, Preset::Swamp];
+
+    pub const fn name(self) -> &'static str {
+        match self {
+            Preset::Temperate => "Temperate forest",
+            Preset::Jungle => "Jungle",
+            Preset::Mountain => "Mountain",
+            Preset::Desert => "Desert",
+            Preset::Badlands => "Badlands",
+            Preset::Taiga => "Taiga",
+            Preset::Snowy => "Snowy",
+            Preset::Savanna => "Savanna",
+            Preset::Coast => "Coast",
+            Preset::Swamp => "Swamp",
+        }
+    }
+
+    pub const fn describe(self) -> &'static str {
+        match self {
+            Preset::Temperate => "Grass up to podzol on the mountains, stone peaks and cliffs, sandy shores",
+            Preset::Jungle => "Grass, moss on the mountains and the cliffs, mud under the water",
+            Preset::Mountain => "Grass low, stone higher, snow on the peaks, gravel shores",
+            Preset::Desert => "Sand everywhere, sandstone on the mountains and the cliffs",
+            Preset::Badlands => "Red sand low, terracotta on the hills and the cliffs",
+            Preset::Taiga => "Podzol, snow on the mountains, gravel shores",
+            Preset::Snowy => "Snow everywhere, ice on the peaks, stone cliffs",
+            Preset::Savanna => "Grass, coarse dirt on the hills, terracotta cliffs",
+            Preset::Coast => "Grass inland, wide sandy shores and sand under the water",
+            Preset::Swamp => "Mud low and by the water, grass higher",
+        }
+    }
+
+    /// Its terrains, in the order of [`PaintStyle::zones`].
+    const fn zones(self) -> [&'static str; 7] {
+        match self {
+            Preset::Temperate => ["Sand", "Grass", "Grass", "Podzol", "Stone", "Stone", "Gravel"],
+            Preset::Jungle => ["Sand", "Grass", "Grass", "Moss", "Stone", "Moss", "Mud"],
+            Preset::Mountain => ["Gravel", "Grass", "Grass", "Stone", "Snow", "Stone", "Gravel"],
+            Preset::Desert => ["Sand", "Sand", "Sand", "Sandstone", "Sandstone", "Sandstone", "Sand"],
+            Preset::Badlands => ["Red Sand", "Red Sand", "Terracotta", "Terracotta", "Terracotta", "Terracotta", "Red Sand"],
+            Preset::Taiga => ["Gravel", "Podzol", "Podzol", "Snow", "Snow", "Stone", "Gravel"],
+            Preset::Snowy => ["Gravel", "Snow", "Snow", "Snow", "Ice", "Stone", "Gravel"],
+            Preset::Savanna => ["Sand", "Grass", "Coarse Dirt", "Coarse Dirt", "Stone", "Terracotta", "Dirt"],
+            Preset::Coast => ["Sand", "Grass", "Grass", "Stone", "Stone", "Stone", "Sand"],
+            Preset::Swamp => ["Mud", "Mud", "Grass", "Grass", "Stone", "Dirt", "Mud"],
+        }
+    }
+
+    pub fn style(self) -> PaintStyle {
+        PaintStyle::of(self.name(), self.zones())
+    }
+
+    pub fn by_name(name: &str) -> Option<Preset> {
+        Preset::ALL.into_iter().find(|p| p.name() == name)
+    }
+}
+
+/// Both tables: the biome of the land, and the paint of the biomes; and
+/// the style Auto paint paints with.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AutoRules {
     pub land: BiomeRules,
     pub paint: PaintRules,
+    /// The style Auto paint paints with: empty, each column as its biome
+    /// asks; else the name of a style, built in, the user's own or
+    /// [`PaintStyle::CUSTOM`].
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub style: String,
+    /// The style changed by hand.
+    pub custom: PaintStyle,
+    /// The user's own styles.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub styles: Vec<PaintStyle>,
+}
+
+impl AutoRules {
+    /// The style Auto paint paints with; `None` to follow the biomes.
+    pub fn style(&self) -> Option<PaintStyle> {
+        match self.style.as_str() {
+            "" => None,
+            PaintStyle::CUSTOM => Some(self.custom.clone()),
+            name => self.styles.iter().find(|s| s.name == name).cloned().or_else(|| PaintStyle::built_in().into_iter().find(|s| s.name == name)),
+        }
+    }
 }
 
 /// The rules against a world's registry and sea: ready to read columns.
@@ -377,6 +558,11 @@ pub struct Reader<'a> {
     biome_of: Vec<Option<BiomeId>>,
     /// Ground, cliffs and underwater terrain of each biome of the registry.
     paint_of: Vec<[Option<TerrainId>; 3]>,
+    /// The grounds each biome of the registry agrees with (see [`agrees`]).
+    agrees: Vec<u16>,
+    /// The terrains of the style Auto paint paints with, whatever the
+    /// biome (see [`PaintStyle`]); `None`: each biome's own.
+    style: Option<[Option<TerrainId>; 7]>,
     /// The terrain the map was filled with (see [`base_terrain`]): read as
     /// grass, from the shape of the land, but at the water's edge.
     base: Option<u16>,
@@ -475,12 +661,16 @@ impl<'a> Reader<'a> {
                 None => [None; 3],
             })
             .collect();
+        let agrees = reg.biomes.iter().map(|b| if b.id.is_empty() { 0 } else { agrees(&b.id) }).collect();
+        let style = rules.style().map(|st| st.zones().map(terrain));
         Self {
             rules,
             sea: sea as f32,
             grounds: Ground::of_terrains(reg),
             biome_of,
             paint_of,
+            agrees,
+            style,
             base: None,
         }
     }
@@ -519,7 +709,9 @@ impl<'a> Reader<'a> {
         let own = self.grounds.get(c.terrain as usize).copied().unwrap_or(Ground::Grass);
         // The ground the map was filled with is read from the shape of the
         // land, as grass; at the water's edge it makes its own shore.
-        let ground = if self.base == Some(c.terrain) { Ground::Grass } else { own };
+        // Only a fill of rock: sand all over is a desert, snow all over a
+        // snowy land, as they look.
+        let ground = if self.base == Some(c.terrain) && own == Ground::Rock { Ground::Grass } else { own };
         let slope = s.slope(x, z);
         let steep = slope >= r.steep;
         let near = s.water_near[s.index(x, z)];
@@ -572,15 +764,68 @@ impl<'a> Reader<'a> {
         })
     }
 
-    /// The biome the land of column `(x, z)` calls for.
+    /// The biome the land of column `(x, z)` calls for: the one it has
+    /// when its ground agrees with it (a desert on sand), else the one of
+    /// its kind of land.
     pub fn biome(&self, s: &Survey, x: i32, z: i32) -> Option<BiomeId> {
+        if let Some(b) = self.kept(s, x, z) {
+            return Some(b);
+        }
         self.biome_of[self.land(s, x, z)? as usize]
+    }
+
+    /// The biome column `(x, z)` has, when its ground agrees with it (see
+    /// [`agrees`]), away from the water's edge, and on a cliff only for a
+    /// biome of rock.
+    fn kept(&self, s: &Survey, x: i32, z: i32) -> Option<BiomeId> {
+        let c = s.col(x, z)?;
+        if c.biome == 0 || c.depth > 0.0 {
+            return None;
+        }
+        let mask = *self.agrees.get(c.biome as usize)?;
+        let own = self.grounds.get(c.terrain as usize).copied().unwrap_or(Ground::Grass);
+        if mask & own.bit() == 0 {
+            return None;
+        }
+        let r = &self.rules.land;
+        let near = s.water_near[s.index(x, z)];
+        if !near.is_nan() && matches!(own, Ground::Sand | Ground::Snow | Ground::Rock) && c.height - near <= r.shore_height * BEACH_RISE {
+            return None;
+        }
+        if mask & Ground::Rock.bit() == 0 && s.slope(x, z) >= r.steep {
+            return None;
+        }
+        Some(BiomeId(c.biome))
     }
 
     /// The terrain the biome of column `(x, z)` calls for; `None` to leave
     /// the column as it is.
     pub fn terrain(&self, s: &Survey, x: i32, z: i32) -> Option<TerrainId> {
         let c = s.col(x, z)?;
+        if let Some([shore, ground, hills, high, peaks, cliffs, underwater]) = self.style {
+            // A style: by the shape of the land alone, whatever the biome.
+            if c.depth > 0.0 {
+                return underwater;
+            }
+            let r = &self.rules.land;
+            if s.slope(x, z) >= self.rules.paint.steep {
+                return cliffs.or(ground);
+            }
+            let near = s.water_near[s.index(x, z)];
+            if !near.is_nan() && c.height - near <= r.shore_height * BEACH_RISE {
+                return shore.or(ground);
+            }
+            let over = c.height - self.sea;
+            return if over >= r.peaks {
+                peaks.or(high).or(hills).or(ground)
+            } else if over >= r.mountains {
+                high.or(hills).or(ground)
+            } else if over >= r.hills {
+                hills.or(ground)
+            } else {
+                ground
+            };
+        }
         let biome = match c.biome {
             0 if self.rules.paint.read_the_land => self.biome(s, x, z)?.0,
             0 => return None,
@@ -1220,6 +1465,100 @@ mod tests {
         world
     }
 
+    /// The sample with its plain of grass (x 48 to 99) made `terrain`,
+    /// of biome `biome` (0: automatic), and a plateau over the plain's
+    /// south, 100 blocks over the sea, its east 150.
+    fn sample_with(terrain: &str, biome: &str) -> World {
+        let mut world = sample();
+        let reg = world.registry.clone();
+        let t = reg.terrain_by_name(terrain).unwrap().0;
+        let b = if biome.is_empty() { 0 } else { reg.biome_by_id(biome).unwrap().0 };
+        let tile = world.dims[0].ground_mut().tile_mut(TilePos::new(0, 0)).unwrap();
+        for z in 0..128 {
+            for x in 48..100 {
+                let i = local_index(x, z);
+                if tile.fluid.get(i) == NO_FLUID {
+                    tile.terrain.set(i, t);
+                    tile.biome.set(i, b);
+                }
+                if z >= 100 {
+                    tile.top.set(i, if x >= 74 { 212.0 } else { 162.0 });
+                }
+            }
+        }
+        world
+    }
+
+    fn read(world: &World, rules: &AutoRules, x: i32, z: i32) -> (String, Option<String>) {
+        let reg = &world.registry;
+        let reader = Reader::new(rules, reg, 62).with_base(base_terrain(&world.dims[0], reg));
+        let s = reader.survey(&world.dims[0], BlockRect::new(0, 0, 128, 128));
+        (reader.biome(&s, x, z).map(|b| reg.biome(b).id.clone()).unwrap_or_default(), reader.terrain(&s, x, z).map(|t| reg.terrain(t).name.clone()))
+    }
+
+    /// A desert stays a desert: sand the Terrain Generator's climate made a
+    /// desert keeps its biome, even where sand is nearly all the map; sand
+    /// with no biome yet, all around, becomes one; red sand badlands, snow
+    /// snowy plains; a savanna on grass stays; grass with no biome a plain,
+    /// and a desert on grass (repainted) is read again.
+    #[test]
+    fn auto_biome_keeps_and_finds_deserts() {
+        let rules = AutoRules::default();
+        let biome = |terrain: &str, biome: &str| read(&sample_with(terrain, biome), &rules, 60, 20).0;
+        assert_eq!(biome("Sand", "minecraft:desert"), "minecraft:desert");
+        assert_eq!(biome("Sand", ""), "minecraft:desert", "sand all around, no biome yet");
+        assert_eq!(biome("Red Sand", ""), "minecraft:badlands");
+        assert_eq!(biome("Snow", ""), "minecraft:snowy_plains");
+        assert_eq!(biome("Grass", "minecraft:savanna"), "minecraft:savanna");
+        assert_eq!(biome("Grass", "minecraft:jungle"), "minecraft:jungle");
+        assert_eq!(biome("Grass", ""), "minecraft:plains");
+        assert_eq!(biome("Grass", "minecraft:desert"), "minecraft:plains", "a desert repainted with grass");
+        // Mostly sand, as a desert map of the generator: the fill is no
+        // longer taken for grass.
+        let mut world = sample_with("Sand", "minecraft:desert");
+        let sand = world.registry.terrain_by_name("Sand").unwrap().0;
+        let tile = world.dims[0].ground_mut().tile_mut(TilePos::new(0, 0)).unwrap();
+        for i in 0..crate::coords::TILE_AREA {
+            tile.terrain.set(i, sand);
+        }
+        assert_eq!(base_terrain(&world.dims[0], &world.registry).map(|t| t.0), Some(sand));
+        assert_eq!(read(&world, &rules, 60, 20).0, "minecraft:desert");
+    }
+
+    /// Each style paints the land by its shape, whatever the biome: the
+    /// water's edge, the plain, the plateau, the peaks, the cliffs and under
+    /// the water each get the style's terrain, over a desert too; following
+    /// the biomes, the desert stays sand.
+    #[test]
+    fn auto_paint_styles_paint_whatever_the_biome() {
+        let world = sample_with("Sand", "minecraft:desert");
+        let mut rules = AutoRules::default();
+        assert_eq!(read(&world, &rules, 60, 20).1.as_deref(), Some("Sand"), "following the biome");
+        for style in PaintStyle::built_in() {
+            rules.style = style.name.clone();
+            let at = |x, z| read(&world, &rules, x, z).1.unwrap_or_default();
+            let names = style.zones();
+            assert_eq!(at(44, 20), names[0], "{}: shore", style.name);
+            assert_eq!(at(60, 20), names[1], "{}: ground", style.name);
+            assert_eq!(at(60, 112), names[3], "{}: mountains", style.name);
+            assert_eq!(at(90, 112), names[4], "{}: peaks", style.name);
+            assert_eq!(at(120, 20), names[5], "{}: cliffs", style.name);
+            assert_eq!(at(10, 20), names[6], "{}: under water", style.name);
+            for name in names {
+                assert!(world.registry.terrain_by_name(name).is_some(), "{}: {name} is a terrain of every map", style.name);
+            }
+        }
+        // Custom, and an empty part: the one below.
+        rules.style = PaintStyle::CUSTOM.into();
+        rules.custom = PaintStyle { ground: "Gravel".into(), ..Default::default() };
+        assert_eq!(read(&world, &rules, 60, 112).1.as_deref(), Some("Gravel"));
+        assert_eq!(read(&world, &rules, 44, 20).1.as_deref(), Some("Gravel"));
+        // A style of the user's, by its name.
+        rules.styles.push(PaintStyle { name: "Mine".into(), ground: "Clay".into(), ..Default::default() });
+        rules.style = "Mine".into();
+        assert_eq!(read(&world, &rules, 60, 20).1.as_deref(), Some("Clay"));
+    }
+
     #[test]
     fn grounds_are_told_from_their_blocks() {
         assert_eq!(Ground::of_block("minecraft:grass_block[snowy=false]"), Ground::Grass);
@@ -1317,16 +1656,17 @@ mod tests {
         assert_eq!(reader.land(&survey, 90, 100), Some(Land::Desert));
     }
 
-    /// A map filled with sand is read from the shape of its land: plains
-    /// and hills, beaches by the water.
+    /// A map filled with rock is read from the shape of its land: plains
+    /// and hills, a stony shore by the water. (A map filled with sand is a
+    /// desert: see auto_biome_keeps_and_finds_deserts.)
     #[test]
-    fn a_map_filled_with_sand_is_no_desert() {
+    fn a_map_filled_with_rock_is_read_from_its_shape() {
         let mut world = sample();
         let reg = world.registry.clone();
-        let sand = reg.terrain_by_name("Sand").unwrap();
-        world.dims[0].ground_mut().tile_mut(TilePos::new(0, 0)).unwrap().terrain = crate::plane::Plane::Uniform(sand.0);
+        let stone = reg.terrain_by_name("Stone").unwrap();
+        world.dims[0].ground_mut().tile_mut(TilePos::new(0, 0)).unwrap().terrain = crate::plane::Plane::Uniform(stone.0);
         let base = base_terrain(&world.dims[0], &reg);
-        assert_eq!(base, Some(sand));
+        assert_eq!(base, Some(stone));
         let mut rules = AutoRules::default();
         rules.land.hills = 5.0;
         let reader = Reader::new(&rules, &reg, 62).with_base(base);
@@ -1334,7 +1674,7 @@ mod tests {
         let land = |x: i32, z: i32| reader.land(&survey, x, z).unwrap();
         assert_eq!(land(60, 20), Land::Plains);
         assert_eq!(land(85, 20), Land::Hills);
-        assert_eq!(land(42, 20), Land::Beach, "its sand by the water is a beach");
+        assert_eq!(land(42, 20), Land::StonyShore, "its rock by the water is a stony shore");
         // A map of grass has no fill to see through.
         assert_eq!(base_terrain(&sample().dims[0], &reg), None);
     }

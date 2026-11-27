@@ -18137,6 +18137,68 @@ mod tests {
         h.render().unwrap().save(dir.join("auto-biome-preview-done.png")).unwrap();
     }
 
+    /// Auto paint's styles override the biomes: a desert of sand (its
+    /// biome desert) painted in the Jungle style turns to grass, moss and
+    /// stone by its shape; following the biomes it stays sand. Auto biome
+    /// keeps the desert. With MASSIF_SNAPSHOT_DIR, Tool Settings of both
+    /// tools (the style menu, a custom style, the legend) are rendered.
+    #[test]
+    fn auto_paint_styles_and_the_biome_legend() {
+        use massif_core::generate::{GenParams, Landform, generate};
+        let mut world = generate(&GenParams { tiles_x: 4, tiles_z: 4, landform: Landform::Hills, seed: 9, ..GenParams::default() });
+        let sand = world.registry.terrain_by_name("Sand").unwrap().0;
+        let desert = world.registry.biome_by_id("minecraft:desert").unwrap().0;
+        let positions: Vec<_> = world.dims[0].ground().positions().collect();
+        for pos in positions {
+            let tile = world.dims[0].ground_mut().tile_mut(pos).unwrap();
+            tile.terrain = massif_core::plane::Plane::Uniform(sand);
+            tile.biome = massif_core::plane::Plane::Uniform(desert);
+        }
+        let count = |doc: &crate::doc::Document, name: &str| {
+            let t = doc.world.registry.terrain_by_name(name).unwrap().0;
+            doc.dimension().ground().positions().map(|p| doc.dimension().ground().view(p).unwrap().terrain.dense().iter().filter(|&&v| v == t).count()).sum::<usize>()
+        };
+        let mut doc = crate::doc::Document::new(world.clone(), None, 13);
+        let mut rules = massif_core::auto::AutoRules::default();
+        doc.auto_biome(&rules);
+        let biomes: usize = doc.dimension().ground().positions().map(|p| doc.dimension().ground().view(p).unwrap().biome.dense().iter().filter(|&&b| b == desert).count()).sum();
+        let total = doc.dimension().ground().len() * massif_core::coords::TILE_AREA;
+        assert!(biomes * 2 > total, "the desert stays a desert: {biomes} of {total}");
+        doc.auto_paint(&rules);
+        assert_eq!(count(&doc, "Grass"), 0, "following the biome, the desert stays sand");
+        rules.style = "Jungle".into();
+        let mut doc = crate::doc::Document::new(world, None, 13);
+        doc.auto_paint(&rules);
+        let (grass, left) = (count(&doc, "Grass"), count(&doc, "Sand"));
+        assert!(grass * 2 > total && left < total / 4, "jungle over the desert: {grass} grass, {left} sand of {total}");
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        {
+            let app = h.state_mut();
+            app.doc = doc;
+            app.map_cache.invalidate_all();
+            app.view3d.invalidate_all();
+            app.tools.select(Tool::AutoPaint);
+            app.tools.auto.style = "Jungle".into();
+        }
+        h.run_steps(5);
+        h.render().unwrap().save(dir.join("auto-paint-style-jungle.png")).unwrap();
+        {
+            let app = h.state_mut();
+            app.tools.auto.custom = massif_core::auto::Preset::Mountain.style();
+            app.tools.auto.custom.name = massif_core::auto::PaintStyle::CUSTOM.into();
+            app.tools.auto.style = massif_core::auto::PaintStyle::CUSTOM.into();
+            app.tools.style_name = "Alps".into();
+        }
+        h.run_steps(5);
+        h.render().unwrap().save(dir.join("auto-paint-style-custom.png")).unwrap();
+        h.state_mut().tools.select(Tool::AutoBiome);
+        h.run_steps(5);
+        h.render().unwrap().save(dir.join("auto-biome-legend.png")).unwrap();
+    }
+
     /// Auto paint, hovered over the map: the columns it would repaint
     /// shown in their new colour before anything is painted. Needs a GPU:
     /// runs with MASSIF_SNAPSHOT_DIR.

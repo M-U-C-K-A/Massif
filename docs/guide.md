@@ -860,12 +860,29 @@ brush (and its options) or over the whole map at once:
   mud, mycelium, podzol, stone); sand at the water's edge is a beach, and
   sand away from it a desert only where sand is all around (seven tenths of
   the dry ground within 48 blocks): a patch of sand in a plain is the
-  plain. Each kind has a biome. A map filled with one terrain other than
-  grass (a WorldPainter world all of sand, for instance) is read from the
-  shape of its land there: its fill says nothing about it.
+  plain. Each kind has a biome. A column keeps the biome it has when its
+  ground agrees with it: a desert on sand (as the Terrain Generator's
+  climate paints it), badlands on red sand, a savanna, taiga or jungle on
+  grass, snowy biomes on snow; repainted otherwise (grass over a desert),
+  it is read again. A map filled with rock is read from the shape of its
+  land there: its fill says nothing about it. A map mostly of sand is a
+  desert, of snow a snowy land. Tool Settings lists what the colours of the
+  preview stand for: each biome the rules give, with the kinds of land that
+  get it.
 - **Auto paint** goes the other way: every biome has a terrain for its
   ground, one for its cliffs and one for what lies under its water. Where
-  no biome is set, the ground is painted as the land it is.
+  no biome is set, the ground is painted as the land it is. Its **Style**,
+  at the top of Tool Settings, is **Follow biome** by default; the other
+  styles paint by the shape of the land alone, whatever the biomes, so that
+  a desert can be painted as a jungle: **Temperate forest**, **Jungle**,
+  **Mountain**, **Desert**, **Badlands**, **Taiga**, **Snowy**, **Savanna**,
+  **Coast** and **Swamp** each give a terrain to the shore, the ground
+  below the hills, the hills, the mountains, the peaks, the cliffs and
+  what lies under water (the heights and slopes of **Rules…**). **Custom**
+  sets them one by one (a part left on **Below** takes the one below it),
+  starting from the style shown; **Save as preset** keeps it under a name
+  of yours, in the menu with the others, and **Delete** takes it out.
+  **Change…** makes a custom style of the one shown.
 
 Over the whole map (**Whole map** in Tool Settings, or Edit ▸ Auto biome /
 Auto paint: whole map) they run in the background, a progress bar and a

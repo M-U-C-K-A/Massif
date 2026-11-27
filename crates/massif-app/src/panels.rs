@@ -550,6 +550,10 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
         }
         Tool::AutoBiome | Tool::AutoPaint => {
             let biomes = tool == Tool::AutoBiome;
+            if !biomes {
+                auto_paint_style(ui, tools, doc);
+                ui.add_space(4.0);
+            }
             hint(ui, tr!("Hover: what changes shows in its new colour, what already is as the land calls for is hatched · drag: paint it."));
             if biomes {
                 hint(ui, tr!("Biomes show on the map in its Biome mode."));
@@ -577,6 +581,10 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
             });
             if let Some((_, changed)) = tools.auto_done.filter(|(b, _)| *b == biomes) {
                 hint(ui, &tr!("{changed} columns changed over the whole map.", changed));
+            }
+            if biomes {
+                ui.add_space(4.0);
+                auto_biome_legend(ui, &tools.auto, &doc.world.registry);
             }
         }
         Tool::River => {
@@ -4485,6 +4493,152 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
         }
     }
     feedback
+}
+
+/// What the colours of Auto biome's preview stand for: each biome the
+/// rules give, in its colour, with the kinds of land that get it; the
+/// hatching; and the biomes a column keeps.
+fn auto_biome_legend(ui: &mut Ui, rules: &massif_core::auto::AutoRules, reg: &Registry) {
+    use massif_core::auto::Land;
+    let pal = Palette::of(ui);
+    // The biomes in the order of their first kind of land, each once.
+    let mut given: Vec<(BiomeId, Vec<Land>)> = Vec::new();
+    for land in Land::ALL {
+        let Some(b) = reg.biome_by_id(rules.land.biome_of(land)) else { continue };
+        match given.iter_mut().find(|(id, _)| *id == b) {
+            Some((_, lands)) => lands.push(land),
+            None => given.push((b, vec![land])),
+        }
+    }
+    egui::CollapsingHeader::new(RichText::new(tr!("Colours")).strong()).id_salt("auto biome legend").default_open(true).show(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = 3.0;
+        for (b, lands) in &given {
+            let def = reg.biome(*b);
+            ui.horizontal(|ui| {
+                swatch(ui, theme::rgb(def.color));
+                ui.label(RichText::new(&def.name).size(12.0));
+                let of: Vec<&str> = lands.iter().map(|l| massif_core_name(l.label())).collect();
+                ui.label(RichText::new(of.join(", ")).size(11.5).color(pal.weak));
+            });
+        }
+        ui.horizontal(|ui| {
+            let (r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+            ui.painter().rect_filled(r, 3, pal.weak.gamma_multiply(0.25));
+            for k in 0..4 {
+                let x = r.left() + 2.0 + k as f32 * 3.5;
+                ui.painter().line_segment([pos2(x, r.bottom()), pos2(x + 3.0, r.top())], Stroke::new(1.0, pal.weak));
+            }
+            ui.label(RichText::new(tr!("Hatched: already as the land calls for")).size(12.0));
+        });
+        hint(ui, tr!("A column keeps a biome its ground agrees with: a desert on sand, a savanna or a jungle on grass, snowy biomes on snow."));
+    });
+}
+
+/// A name massif-core gives, in the language of the interface.
+fn massif_core_name(name: &str) -> &str {
+    crate::i18n::tr_name(name)
+}
+
+/// Auto paint's style: following each column's biome, or one of Massif's
+/// styles, the user's own or one made by hand, which paint the land by its
+/// shape whatever the biomes.
+fn auto_paint_style(ui: &mut Ui, tools: &mut ToolState, doc: &Document) {
+    use massif_core::auto::{PaintStyle, Preset};
+    let rules = &mut tools.auto;
+    let shown = match rules.style.as_str() {
+        "" => tr!("Follow biome").to_owned(),
+        PaintStyle::CUSTOM => tr!("Custom").to_owned(),
+        name => massif_core_name(name).to_owned(),
+    };
+    ui.horizontal(|ui| {
+        side_label(ui, tr!("Style"));
+        let width = (ui.available_width() - ui.spacing().item_spacing.x).clamp(80.0, 180.0);
+        crate::widgets::combo("auto paint style").selected_text(shown).width(width).height(360.0).truncate().show_ui(ui, |ui| {
+            if ui.selectable_label(rules.style.is_empty(), tr!("Follow biome")).clicked() {
+                rules.style.clear();
+            }
+            ui.separator();
+            for p in Preset::ALL {
+                if ui.selectable_label(rules.style == p.name(), massif_core_name(p.name())).on_hover_text(massif_core_name(p.describe())).clicked() {
+                    rules.style = p.name().to_owned();
+                }
+            }
+            if !rules.styles.is_empty() {
+                ui.separator();
+                for name in rules.styles.iter().map(|s| s.name.clone()).collect::<Vec<_>>() {
+                    if ui.selectable_label(rules.style == name, &name).clicked() {
+                        rules.style = name;
+                    }
+                }
+            }
+            ui.separator();
+            if ui.selectable_label(rules.style == PaintStyle::CUSTOM, tr!("Custom")).clicked() && rules.style != PaintStyle::CUSTOM {
+                // Made from the style shown, to change.
+                rules.custom = rules.style().unwrap_or_else(|| Preset::Temperate.style());
+                rules.custom.name = PaintStyle::CUSTOM.to_owned();
+                rules.style = PaintStyle::CUSTOM.to_owned();
+            }
+        });
+    });
+    let own = rules.styles.iter().position(|s| s.name == rules.style);
+    match rules.style.as_str() {
+        "" => hint(ui, tr!("Each column painted as its biome asks (Rules…), its biome read from the land where it has none.")),
+        PaintStyle::CUSTOM => {
+            hint(ui, tr!("Painted by the shape of the land, whatever the biomes. A part left on Below takes the terrain of the part below it."));
+            crate::widgets::well(ui, |ui| {
+                for (k, zone) in rules.custom.zones_mut().into_iter().enumerate() {
+                    crate::widgets::row(ui, massif_core_name(PaintStyle::label(k)), |ui| {
+                        let below = if k == 1 { tr!("As it is") } else { tr!("Below") };
+                        let shown = if zone.is_empty() { below.to_owned() } else { zone.clone() };
+                        crate::widgets::combo(("auto style zone", k)).selected_text(shown).width(130.0).height(320.0).truncate().show_ui(ui, |ui| {
+                            if ui.selectable_label(zone.is_empty(), below).clicked() {
+                                zone.clear();
+                            }
+                            for t in &doc.world.registry.terrains {
+                                if ui.selectable_label(*zone == t.name, &t.name).clicked() {
+                                    *zone = t.name.clone();
+                                }
+                            }
+                        });
+                    });
+                }
+            });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                let name = tools.style_name.trim().to_owned();
+                let taken = name.is_empty() || name == PaintStyle::CUSTOM || Preset::by_name(&name).is_some();
+                ui.add(egui::TextEdit::singleline(&mut tools.style_name).hint_text(tr!("Name")).desired_width(110.0));
+                if ui.add_enabled(!taken, egui::Button::new(tr!("Save as preset"))).clicked() {
+                    let mut style = rules.custom.clone();
+                    style.name = name.clone();
+                    match rules.styles.iter_mut().find(|s| s.name == name) {
+                        Some(s) => *s = style,
+                        None => rules.styles.push(style),
+                    }
+                    rules.style = name;
+                    tools.style_name.clear();
+                }
+            });
+        }
+        name => {
+            if let Some(p) = Preset::by_name(name) {
+                hint(ui, massif_core_name(p.describe()));
+            }
+            ui.horizontal_wrapped(|ui| {
+                if ui.button(tr!("Change…")).on_hover_text(tr!("Make a custom style of it, to change")).clicked() {
+                    rules.custom = rules.style().unwrap_or_default();
+                    rules.custom.name = PaintStyle::CUSTOM.to_owned();
+                    rules.style = PaintStyle::CUSTOM.to_owned();
+                }
+                if let Some(k) = own
+                    && ui.button(theme::with_icon(Icon::Trash2, tr!("Delete"))).clicked()
+                {
+                    rules.styles.remove(k);
+                    rules.style.clear();
+                }
+            });
+        }
+    }
 }
 
 fn swatch(ui: &mut Ui, color: Color32) {

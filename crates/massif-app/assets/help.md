@@ -197,8 +197,8 @@ A block palette says what the terrains are made of: the grass, rock, sand, grave
 
 ## Automatic biomes and paint
 - **Auto biome** reads the land and gives it biomes: water, rivers and beaches, lowland, hills, mountains, peaks, cliffs, from its water, height, slope and ground. Sand at the water's edge is a beach; sand far from the water is a desert only where sand is all around, not a patch in a plain.
-- **Auto paint** paints the ground as its biome calls for: a terrain for its ground, one for its cliffs, one under its water.
-A map filled with one terrain other than grass (a WorldPainter map all of sand, for instance) is read from the shape of its land: its fill says nothing about it.
+- **Auto paint** paints the ground as its biome calls for: a terrain for its ground, one for its cliffs, one under its water. Its **Style** (top of Tool Settings) is **Follow biome** by default; **Temperate forest**, **Jungle**, **Mountain**, **Desert**, **Badlands**, **Taiga**, **Snowy**, **Savanna**, **Coast** and **Swamp** paint by the shape of the land alone, whatever the biomes (a desert painted as a jungle): a terrain for the shore, the ground, the hills, the mountains, the peaks, the cliffs and under water. **Custom** sets them one by one; **Save as preset** keeps it under your name for it, **Delete** takes it out, **Change…** makes a custom style of the one shown.
+A column keeps the biome it has when its ground agrees with it: a desert on sand (as the Terrain Generator's climate paints it), badlands on red sand, a savanna, taiga or jungle on grass, snowy biomes on snow. A map filled with rock is read from the shape of its land; one mostly of sand is a desert. Auto biome's Tool Settings list what the preview's colours stand for.
 
 Hovered over the map, they show what the brush would change, in its new colour; what already has what the land calls for (painted by an earlier stroke, say) is hatched, and a bar under the map names what the columns become and how much stays as it is. Biomes show on the map in its **Biome** mode.
 
