@@ -1098,19 +1098,90 @@ pub fn display_name(path: &std::path::Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
-/// Reveal a file or folder in the system file manager.
+/// What the button that reveals a file is called on this system.
+pub fn reveal_label() -> &'static str {
+    if cfg!(target_os = "macos") {
+        tr!("Show in Finder")
+    } else if cfg!(target_os = "windows") {
+        tr!("Show in Explorer")
+    } else {
+        tr!("Show in folder")
+    }
+}
+
+/// Reveal a file or folder in the system file manager: the Finder selects it,
+/// Explorer opens the folder it is in with it selected, and elsewhere the
+/// folder it is in opens. A path gone since (a world deleted) shows the
+/// nearest folder still there.
 pub fn reveal(path: &std::path::Path) {
+    let Some(path) = existing(path) else {
+        log::warn!("could not reveal {}: nothing there", path.display());
+        return;
+    };
     #[cfg(target_os = "macos")]
-    let result = std::process::Command::new("open").arg("-R").arg(path).spawn();
+    let result = std::process::Command::new("open").arg("-R").arg(&path).spawn();
     #[cfg(target_os = "windows")]
-    let result = std::process::Command::new("explorer").arg("/select,").arg(path).spawn();
+    let result = {
+        use std::os::windows::process::CommandExt;
+        // Explorer reads its own command line: `/select,` and the path in one
+        // argument, the path quoted and with backslashes. Given a path with
+        // forward slashes or the `\\?\` prefix, it opens This PC instead.
+        std::process::Command::new("explorer.exe").raw_arg(explorer_select(&path.to_string_lossy())).spawn()
+    };
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let result = std::process::Command::new("xdg-open")
-        .arg(path.parent().unwrap_or(path))
-        .spawn();
+    let result = std::process::Command::new("xdg-open").arg(path.parent().unwrap_or(&path)).spawn();
     if let Err(e) = result {
         log::warn!("could not reveal {}: {e}", path.display());
     }
+}
+
+/// Open a folder itself in the system file manager.
+pub fn open_folder(dir: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open").arg(dir).spawn();
+    #[cfg(target_os = "windows")]
+    let result = {
+        use std::os::windows::process::CommandExt;
+        std::process::Command::new("explorer.exe").raw_arg(quoted(&windows_path(&dir.to_string_lossy()))).spawn()
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let result = std::process::Command::new("xdg-open").arg(dir).spawn();
+    result.map(|_| ())
+}
+
+/// The path itself if it is there, else its nearest folder that is.
+fn existing(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    path.ancestors().find(|p| !p.as_os_str().is_empty() && p.exists()).map(|p| p.to_path_buf())
+}
+
+/// A path as Explorer understands it: backslashes, without the verbatim
+/// `\\?\` prefix `canonicalize` gives (`\\?\UNC\server` back to
+/// `\\server`), without a trailing separator unless it is a drive's root.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn windows_path(path: &str) -> String {
+    let mut p = path.replace('/', "\\");
+    if let Some(rest) = p.strip_prefix("\\\\?\\UNC\\") {
+        p = format!("\\\\{rest}");
+    } else if let Some(rest) = p.strip_prefix("\\\\?\\") {
+        p = rest.to_owned();
+    }
+    while p.ends_with('\\') && !(p.len() == 3 && p.as_bytes()[1] == b':') && p.len() > 1 {
+        p.pop();
+    }
+    p
+}
+
+/// A path in double quotes, as one argument of Explorer's command line (a
+/// Windows path cannot hold a double quote).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn quoted(path: &str) -> String {
+    format!("\"{path}\"")
+}
+
+/// Explorer's argument that opens a path's folder with the path selected.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn explorer_select(path: &str) -> String {
+    format!("/select,{}", quoted(&windows_path(path)))
 }
 
 /// Run `load` in the threads kept for what the app loads as it starts (the
@@ -1142,6 +1213,28 @@ pub fn in_loading_pool<R: Send>(load: impl FnOnce() -> R + Send) -> R {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn explorer_gets_a_windows_path_in_one_argument() {
+        use super::{explorer_select, windows_path};
+        assert_eq!(explorer_select(r"C:\Users\Kitt\AppData\Roaming\.minecraft\saves\New World"), r#"/select,"C:\Users\Kitt\AppData\Roaming\.minecraft\saves\New World""#);
+        // Forward slashes, as launchers' settings write them.
+        assert_eq!(explorer_select("C:/Users/Kitt/curseforge/minecraft/Instances/Pack/saves/Mon monde é"), r#"/select,"C:\Users\Kitt\curseforge\minecraft\Instances\Pack\saves\Mon monde é""#);
+        assert_eq!(windows_path(r"C:\Users/Kitt\saves/World/"), r"C:\Users\Kitt\saves\World");
+        // canonicalize's verbatim prefix.
+        assert_eq!(windows_path(r"\\?\D:\Мир\карта"), r"D:\Мир\карта");
+        assert_eq!(windows_path(r"\\?\UNC\nas\share\World"), r"\\nas\share\World");
+        assert_eq!(windows_path(r"\\nas\share\World\"), r"\\nas\share\World");
+        // A drive's root keeps its backslash.
+        assert_eq!(windows_path("E:/"), r"E:\");
+        assert_eq!(windows_path(r"\\?\E:\"), r"E:\");
+    }
+
+    #[test]
+    fn a_path_gone_reveals_its_nearest_folder() {
+        let dir = std::env::temp_dir();
+        assert_eq!(super::existing(&dir.join("massif-gone-world").join("region")), Some(dir.clone()));
+        assert_eq!(super::existing(&dir), Some(dir));
+    }
     use super::*;
     use std::time::Duration;
 

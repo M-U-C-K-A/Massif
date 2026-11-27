@@ -359,14 +359,7 @@ impl BrushLibrary {
     pub fn open_folder(&self) -> std::io::Result<()> {
         let dir = self.own_dir.clone().ok_or_else(|| std::io::Error::other("no folder for brushes"))?;
         std::fs::create_dir_all(&dir)?;
-        let opener = if cfg!(target_os = "macos") {
-            "open"
-        } else if cfg!(target_os = "windows") {
-            "explorer"
-        } else {
-            "xdg-open"
-        };
-        std::process::Command::new(opener).arg(&dir).spawn().map(|_| ())
+        crate::jobs::open_folder(&dir)
     }
 }
 

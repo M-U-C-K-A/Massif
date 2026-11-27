@@ -73,7 +73,7 @@ On the left are the ways in:
 - **Import from WorldPainter…**: a WorldPainter world (`.world`). See [Importing](#importing).
 - **Import a Minecraft world…**: a Minecraft Java world, its folder or its region files (`.mca`). See [Importing a Minecraft world](import-minecraft.md).
 - **Samples**: three small maps made from templates (see [Samples](#samples)).
-- **Recent maps**: the maps opened lately, each with its picture and when it was opened. Right-click one for **Show in Finder** (Explorer on Windows) or **Remove from the list**.
+- **Recent maps**: the maps opened lately, each with its picture and when it was opened. Right-click one for **Show in Finder** (**Show in Explorer** on Windows, **Show in folder** on Linux) or **Remove from the list**.
 - **Settings** (⌘,), and a line naming a new version of Massif when one is out.
 
 A `.massif`, a `.world` or a height map dropped on the window opens too.

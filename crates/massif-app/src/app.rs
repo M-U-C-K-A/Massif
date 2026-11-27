@@ -4905,7 +4905,7 @@ impl MassifApp {
                             ui.label(RichText::new(theme::glyph(icon).to_string()).color(color).size(13.0));
                             ui.add(egui::Label::new(RichText::new(text).size(12.5).color(if *error { pal.danger } else { pal.text })).wrap());
                             if let Some(path) = path
-                                && ui.button(tr!("Show in Finder")).clicked()
+                                && ui.button(jobs::reveal_label()).clicked()
                             {
                                 reveal = Some(path.clone());
                             }

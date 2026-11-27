@@ -418,7 +418,7 @@ impl Home {
                         *action = Some(HomeAction::OpenRecent(path.clone()));
                     }
                     row.context_menu(|ui| {
-                        if ui.button(theme::with_icon(Icon::FolderSearch, tr!("Show in Finder"))).clicked() {
+                        if ui.button(theme::with_icon(Icon::FolderSearch, crate::jobs::reveal_label())).clicked() {
                             *action = Some(HomeAction::Reveal(path.clone()));
                         }
                         if ui.button(theme::with_icon(Icon::X, tr!("Remove from the list"))).clicked() {
