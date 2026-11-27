@@ -3379,14 +3379,24 @@ fn height_limits(ui: &mut Ui, f: &mut massif_core::filter::Filter, heights: Opti
     let top = max_y - 1;
     crate::widgets::well(ui, |ui| {
         land_profile(ui, f, heights, min_y, max_y, sea);
+        // The heights typed last, kept while a limit is off so that turning it
+        // on again brings them back.
+        let kept = egui::Id::unique("height limits kept");
+        let (mut last_above, mut last_below): (Option<i32>, Option<i32>) = ui.ctx().data_mut(|d| d.get_persisted(kept)).unwrap_or_default();
+        if f.above.is_some() {
+            last_above = f.above;
+        }
+        if f.below.is_some() {
+            last_below = f.below;
+        }
         crate::widgets::row(ui, tr!("At or above"), |ui| {
             let mut on = f.above.is_some();
             if crate::widgets::switch(ui, &mut on).changed() {
-                // From the sea up, or under the other limit.
-                f.above = on.then(|| f.below.map_or(sea, |b| b.min(sea)).clamp(min_y, top));
+                // The height typed last, else from the sea up, or under the other limit.
+                f.above = on.then(|| last_above.unwrap_or_else(|| f.below.map_or(sea, |b| b.min(sea))).clamp(min_y, top));
             }
             ui.add_space(6.0);
-            let mut v = f.above.unwrap_or(sea);
+            let mut v = f.above.or(last_above).unwrap_or(sea);
             if ui.add_enabled(on, crate::widgets::Field::new(&mut v, min_y..=top).width(64.0)).changed() {
                 f.above = Some(f.below.map_or(v, |b| v.min(b)));
             }
@@ -3394,15 +3404,17 @@ fn height_limits(ui: &mut Ui, f: &mut massif_core::filter::Filter, heights: Opti
         crate::widgets::row(ui, tr!("At or below"), |ui| {
             let mut on = f.below.is_some();
             if crate::widgets::switch(ui, &mut on).changed() {
-                // A little over the sea, or over the other limit.
-                f.below = on.then(|| f.above.map_or(sea + 24, |a| a.max(sea + 24)).clamp(min_y, top));
+                // The height typed last, else a little over the sea, or over the other limit.
+                f.below = on.then(|| last_below.unwrap_or_else(|| f.above.map_or(sea + 24, |a| a.max(sea + 24))).clamp(min_y, top));
             }
             ui.add_space(6.0);
-            let mut v = f.below.unwrap_or(sea + 24);
+            let mut v = f.below.or(last_below).unwrap_or(sea + 24);
             if ui.add_enabled(on, crate::widgets::Field::new(&mut v, min_y..=top).width(64.0)).changed() {
                 f.below = Some(f.above.map_or(v, |a| v.max(a)));
             }
         });
+        let now = (f.above.or(last_above), f.below.or(last_below));
+        ui.ctx().data_mut(|d| d.insert_persisted(kept, now));
         if f.above.is_some() && f.below.is_some() {
             crate::widgets::row(ui, tr!("Acts"), |ui| {
                 if let Some(k) = crate::widgets::button_group(ui, "height band side", &[tr!("Between"), tr!("Outside")], &[!f.beyond, f.beyond]) {
