@@ -67,7 +67,7 @@ Massif opens on its home screen, **What will you build?**. **Help ▸ Home scree
 On the left are the ways in:
 
 - **New map**: the settings of a new map in the middle (below).
-- **From a height map**: a greyscale picture from Gaea, World Machine or an image editor (16-bit PNG, JPEG, `.r16` or `.r32`): its **Scale** in blocks a pixel and the heights black and white stand for (**Black is Y**, **White is Y**). See [Height maps](#height-maps).
+- **From a height map**: a greyscale picture from Gaea, World Machine or an image editor (16-bit PNG, JPEG, OpenEXR, `.r16` or `.r32`): its **Scale** in blocks a pixel and the heights black and white stand for (**Black is Y**, **White is Y**). See [Height maps](#height-maps).
 - **From a real place**: the relief of a place on the Earth, at the scale you choose. See [Real places](#real-places).
 - **Open a map…**: a Massif map (`.massif`).
 - **Import from WorldPainter…**: a WorldPainter world (`.world`). See [Importing](#importing).
@@ -2461,10 +2461,17 @@ Massif brings in what you already have:
 ## Height maps
 
 - **File ▸ New World from Height Map…** makes a world of a greyscale image
-  — a 16-bit PNG from Gaea, World Machine or an image editor (JPEG, and raw
-  square `.r16` / `.r32` are read too): what height black and white stand
-  for, how many blocks a pixel covers, the sea's level; terrains are painted
-  from height and slope. The home screen offers it too.
+  — a 16-bit PNG from Gaea, World Machine or an image editor (JPEG,
+  OpenEXR, and raw square `.r16` / `.r32` are read too): what height black
+  and white stand for, how many blocks a pixel covers, the sea's level;
+  terrains are painted from height and slope. The home screen offers it
+  too.
+- **OpenEXR** (`.exr`) height maps keep their floats whole, half or 32-bit:
+  Massif reads their `Y` channel (or the luminance of `R`, `G` and `B`),
+  shows the file's lowest and highest values, and starts with black and
+  white at those very heights (within the world's limits), so that heights
+  in blocks come back where they were; an EXR of fractions from 0 to 1
+  starts at the usual heights.
 - **File ▸ Share Image…** draws pictures of the map ready to post on
   Discord or Reddit, and shows them as a carousel to pick from (the arrows,
   the thumbnails or ← →): **Diorama**, the whole map as a block with its
@@ -2480,15 +2487,20 @@ Massif brings in what you already have:
   clipboard, **Save PNG…** saves it.
 - **File ▸ Export Height Map…** saves the map's surface (with its levels and
   what was sculpted) as a 16-bit PNG, black the bottom of the world, white
-  its top.
+  its top, or, with the **OpenEXR** format picked in the dialog, as an EXR
+  of one 32-bit float channel `Y` holding each column's height in blocks,
+  for Gaea, World Machine or Houdini.
 - In a graph, the **File input** node brings in a file as relief: a height
   map (stretched over the terrain, black and white set to any height), a
   WorldPainter `.world` or a `.massif` (fitted to the terrain, or read at
   its own place). Its Height, Water and Colour outputs work like the Map
   node's, and the file is read again when it changes. The arrow beside
   the Generator Viewer's **Apply to map** saves what a graph makes as a 16-bit PNG height
-  map (**Height map: Save…**), a block a sample, without writing it into
-  the map.
+  map, or an OpenEXR of its heights in blocks (**Height map: Save…**), a
+  block a sample, without writing it into the map.
+- The Terrain Generator's **Heightmap** node reads OpenEXR too, its lowest
+  value as black and its highest as white; beside the file, the two values
+  are shown, and a click on them makes them **Low** and **High**.
 
 ![The home screen's From a height map page with a 16-bit PNG chosen](images/from-height-map.png)
 
@@ -2624,8 +2636,10 @@ Import mask does: a plan drawn in an image editor, a forest mask from
 another tool, a biome map, a heightmap of a part of the map. Massif reads
 PNG (8 or 16 bits, grey, colour or palette, with or without alpha), TIFF
 (8, 16 or 32-bit integers or floats, in strips or tiles), BMP (1 to 32
-bits) and JPEG. The image is read once in the background, for the range of
-its values and a picture of it, then the dialog opens.
+bits), JPEG and OpenEXR (as greys, its floats as they are; black and white
+of a height then start at its lowest and highest values). The image is read
+once in the background, for the range of its values and a picture of it,
+then the dialog opens.
 
 ![Edit ▸ Import Mask… with two pictures: what the first paints, its levels and threshold](images/import-mask.png)
 
@@ -3238,8 +3252,15 @@ area draws the viewport at a time; a second one says where it is.
   **Samples a pixel** (more: cleaner and slower) and **Denoise** (for an
   image of few samples: past some 128 it changes nothing), then **Save image…**
   asks where and draws the image a band of rows at a time, the view showing
-  it as it comes, with its progress and **Cancel**; it is written as a PNG.
-  A size larger than the graphics card can draw is refused.
+  it as it comes, with its progress and **Cancel**; it is written as a PNG,
+  or as an **OpenEXR** when that format is picked in the dialog: the light
+  as traced, linear and before Colour Management's view, look and exposure,
+  in half floats (`R`, `G`, `B`, `A`), above 1 where it is brighter than
+  white, with the denoiser's guides as layers of the same file:
+  `Depth.Z` (blocks from the camera, 32-bit), `Normal.X/Y/Z` and
+  `Albedo.R/G/B`. It is denoised by Open Image Denoise when **Denoise** is
+  on and it is there. A size larger than the graphics card can draw is
+  refused.
 - **Scene**: tiles built, chunks, the time they took, the graphics
   memory, and the samples a second.
 

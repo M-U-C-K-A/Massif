@@ -66,7 +66,7 @@ Outputs:
 
 ### Heightmap — `input.heightmap`
 
-A heightmap image turned into relief: black at Low, white at High, laid over a rectangle of the terrain. Choose the file (PNG, TIFF, JPEG, BMP or a square RAW of 16-bit samples; 16-bit greys keep their precision), then where it lies: X, Z, Width and Depth as shares of the terrain, Rotation, and how its shape fits. Outside it, the relief is Low (or the image repeats when Tile is on); the Mask output says where the image lies, fading over Edge fade, to blend several heightmaps or a heightmap into a generated relief.
+A heightmap image turned into relief: black at Low, white at High, laid over a rectangle of the terrain. Choose the file (PNG, TIFF, JPEG, BMP, OpenEXR or a square RAW of 16-bit samples; 16-bit greys and EXR floats keep their precision, an EXR's lowest value black and its highest white), then where it lies: X, Z, Width and Depth as shares of the terrain, Rotation, and how its shape fits. Outside it, the relief is Low (or the image repeats when Tile is on); the Mask output says where the image lies, fading over Edge fade, to blend several heightmaps or a heightmap into a generated relief.
 
 It reads the files its settings name, and follows them when they change.
 
@@ -77,7 +77,7 @@ Outputs:
 
 | Setting | Kind | Default | Range | What it does |
 |---|---|---|---|---|
-| `file` | file | — | .png, .tif, .tiff, .jpg, .jpeg, .bmp, .raw, .r16 | The heightmap: an image (16-bit greys keep their precision) or a square RAW of 16-bit samples. |
+| `file` | file | — | .png, .tif, .tiff, .jpg, .jpeg, .bmp, .raw, .r16, .exr | The heightmap: an image (16-bit greys keep their precision), an OpenEXR of floats (its lowest value black, its highest white) or a square RAW of 16-bit samples. |
 | `low` | number | 40 | -2048 to 4096 blocks | The height black stands for, in blocks. Usually -64 to 320. |
 | `high` | number | 200 | -2048 to 4096 blocks | The height white stands for, in blocks. Usually -64 to 320. |
 | `x` | number | 0 | -4 to 4 fraction of the terrain's side | Where the image's west edge lies, as a share of the terrain. In fraction of the terrain's side. Usually -0.5 to 1.5. |
@@ -113,7 +113,7 @@ Outputs:
 
 | Setting | Kind | Default | Range | What it does |
 |---|---|---|---|---|
-| `file` | file | — | .png, .tif, .tiff, .jpg, .jpeg, .bmp | The image: a climate map, a painted mask, a colour map. |
+| `file` | file | — | .png, .tif, .tiff, .jpg, .jpeg, .bmp, .exr | The image: a climate map, a painted mask, a colour map. |
 | `channel` | choice | `luminance` | `luminance`, `red`, `green`, `blue`, `alpha` | Which of the image's values makes the mask. `luminance`: The image's brightness. `red`: The red channel. `green`: The green channel. `blue`: The blue channel. `alpha`: The alpha (opacity) channel. |
 | `low` | number | 0 | -1000 to 1000 | The value read as 0. Usually 0 to 1. |
 | `high` | number | 1 | -1000 to 1000 | The value read as 1. Usually 0 to 1. |

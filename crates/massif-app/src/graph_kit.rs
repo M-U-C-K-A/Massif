@@ -849,7 +849,7 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
                         .set_title(tr!("A height map or a world"))
                         .add_filter(
                             tr!("Height maps and worlds"),
-                            &["png", "jpg", "jpeg", "r16", "r32", "raw", "world", "massif"],
+                            &["png", "jpg", "jpeg", "exr", "r16", "r32", "raw", "world", "massif"],
                         )
                         .pick_file()
                 {
@@ -858,7 +858,7 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             });
             let file = std::path::Path::new(path.as_str());
             let state = if path.is_empty() {
-                tr!("PNG, JPEG, .r16, .r32, .world or .massif").to_owned()
+                tr!("PNG, JPEG, EXR, .r16, .r32, .world or .massif").to_owned()
             } else if massif_core::graph::is_world(file) {
                 row(ui, tr!("Fit to terrain"), |ui| crate::widgets::checkbox(ui, fit, ""));
                 tr!("A world: its surface, water and terrain colours.").to_owned()

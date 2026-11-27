@@ -529,7 +529,8 @@ impl TerrainPanel {
 
     /// Saves the graph's height over its whole terrain, a sample a block, as
     /// a 16-bit PNG at `path` (black the world's lowest Y, white its
-    /// highest), on a thread of its own: [`Self::heightmap`] says when done.
+    /// highest) or, for an `.exr` path, an OpenEXR of the heights in blocks,
+    /// on a thread of its own: [`Self::heightmap`] says when done.
     pub fn save_heightmap(&mut self, path: std::path::PathBuf) {
         let Some(engine) = self.engine().cloned() else { return };
         let graph = self.document();
@@ -547,6 +548,12 @@ impl TerrainPanel {
                 let grid = engine.whole(&c, h, 0, &|| false).map_err(|e| e.to_string())?;
                 let n = grid.rect.w as usize;
                 let (lo, hi) = (lo as f32, hi as f32);
+                if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("exr")) {
+                    let heights = &grid.data[..n * n];
+                    let (low, high) = heights.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), &v| (a.min(v), b.max(v)));
+                    massif_core::heightmap::write_exr(&path, n, n, heights).map_err(|e| t!("The height map could not be saved: {e}", e = e))?;
+                    return Ok(t!("Saved the terrain as an EXR height map of {n} × {n} in {s} s, heights in blocks from Y {lo} to {hi}", n = n, s = format!("{:.1}", started.elapsed().as_secs_f64()), lo = format!("{low:.1}"), hi = format!("{high:.1}")));
+                }
                 let samples: Vec<f32> = grid.data[..n * n].iter().map(|v| (v - lo) / (hi - lo)).collect();
                 massif_core::heightmap::write_png16(&path, n, n, &samples).map_err(|e| t!("The height map could not be saved: {e}", e = e))?;
                 Ok(t!("Saved the terrain as a height map of {n} × {n} in {s} s: black is Y {lo}, white Y {hi}", n = n, s = format!("{:.1}", started.elapsed().as_secs_f64()), lo = format!("{lo:.0}"), hi = format!("{hi:.0}")))

@@ -200,6 +200,9 @@ pub struct Samples {
     pub color: Vec<f32>,
     pub albedo: Vec<f32>,
     pub normal: Vec<f32>,
+    /// How far the eyes' rays went to what they first met, in blocks, a
+    /// float a pixel (the sky some 15,000 and more).
+    pub depth: Vec<f32>,
 }
 
 /// A half float's value.
@@ -1125,7 +1128,7 @@ impl Renderer {
         let data = buffer.get_mapped_range(..).ok()?;
         let words: &[u32] = bytemuck::cast_slice(&data);
         let n = (w * h) as usize;
-        let (mut color, mut albedo, mut normal) = (Vec::with_capacity(n * 3), Vec::with_capacity(n * 3), Vec::with_capacity(n * 3));
+        let (mut color, mut albedo, mut normal, mut depth) = (Vec::with_capacity(n * 3), Vec::with_capacity(n * 3), Vec::with_capacity(n * 3), Vec::with_capacity(n));
         let half = |u: u32| -> [f32; 2] { [f16_to_f32(u as u16), f16_to_f32((u >> 16) as u16)] };
         let snorm = |u: u32| -> [f32; 2] { [(u as u16 as i16) as f32 / 32767.0, ((u >> 16) as u16 as i16) as f32 / 32767.0] };
         for i in 0..n {
@@ -1137,6 +1140,7 @@ impl Renderer {
             }
             let (rg, bd) = (half(a[4]), half(a[5]));
             albedo.extend_from_slice(&[rg[0].clamp(0.0, 1.0), rg[1].clamp(0.0, 1.0), bd[0].clamp(0.0, 1.0)]);
+            depth.push(bd[1]);
             // The normal, octahedral; none (the sky) as zero.
             let e = snorm(a[7]);
             let sky = bd[1] >= 15000.0;
@@ -1151,7 +1155,7 @@ impl Renderer {
         }
         drop(data);
         buffer.unmap();
-        Some(Samples { width: w, height: h, samples: self.samples, tone: self.tone, color, albedo, normal })
+        Some(Samples { width: w, height: h, samples: self.samples, tone: self.tone, color, albedo, normal, depth })
     }
 
     /// Show `linear` (three floats a pixel, the image's size) in place of

@@ -55,13 +55,15 @@ impl FileSource {
             })
         } else {
             let map = massif_core::heightmap::read(&path)?;
+            // An EXR's own values, metres most often.
+            let [low, high] = map.range.filter(|[lo, hi]| hi - lo > 1.5).unwrap_or([0.0, 1000.0]);
             Ok(Self {
                 path,
                 map: Arc::new(map),
                 tiff: false,
                 metres_per_px: 30.0,
-                low: 0.0,
-                high: 1000.0,
+                low,
+                high,
                 nodata: None,
             })
         }
@@ -426,7 +428,7 @@ impl RealForm {
             if ui.button(theme::with_icon(Icon::FolderOpen, tr!("Choose…"))).clicked()
                 && let Some(path) = rfd::FileDialog::new()
                     .set_title(tr!("A file of heights"))
-                    .add_filter(tr!("Heights"), &["tif", "tiff", "png", "r16", "r32", "raw"])
+                    .add_filter(tr!("Heights"), &["tif", "tiff", "png", "exr", "r16", "r32", "raw"])
                     .pick_file()
             {
                 match FileSource::read(path) {

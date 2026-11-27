@@ -1259,6 +1259,7 @@ pub fn read_tiff(path: &std::path::Path) -> Result<Tiff, String> {
             width: w as usize,
             height: h as usize,
             data,
+            range: None,
         },
         metres_per_px,
         nodata,
@@ -1516,6 +1517,7 @@ mod tests {
             width: 3,
             height: 3,
             data: vec![0.0, 0.5, 1.0, 0.0, 0.5, 1.0, -9999.0, 0.5, 1.0],
+            range: None,
         };
         let grid = Grid { map: Arc::new(map), metres_per_px: 10.0, low: 100.0, high: 300.0, nodata: Some(-9999.0) };
         let area = Area { lat: 0.0, lon: 0.0, blocks_per_metre: 1.0, width: 30, depth: 30 };

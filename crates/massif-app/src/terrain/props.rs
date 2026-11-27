@@ -1013,6 +1013,23 @@ fn param_row(p: &mut TerrainPanel, ui: &mut Ui, id: &str, q: &'static ParamSpec,
                     }
                 }
                 let shown = if s.is_empty() { t!("none").to_owned() } else { std::path::Path::new(s).file_name().map_or(s.clone(), |f| f.to_string_lossy().into_owned()) };
+                // An EXR's own lowest and highest values (read as 0 and 1):
+                // on a Heightmap, a click makes them its Low and High.
+                let file = std::path::Path::new(s);
+                let range = file.extension().is_some_and(|e| e.eq_ignore_ascii_case("exr")).then(|| massif_core::heightmap::cached(file).ok()).flatten().and_then(|m| m.range);
+                if let Some([lo, hi]) = range {
+                    let node: Option<&'static NodeSpec> = p.graph.nodes.get(id).and_then(|n| massif_terrain::registry::spec(&n.kind)).filter(|sp| sp.id == "input.heightmap");
+                    let spec = |name: &str| node.and_then(|sp| sp.params.iter().find(|q| q.name == name));
+                    let text = format!("{lo:.1} – {hi:.1}");
+                    if let (Some(low), Some(high)) = (spec("low"), spec("high")) {
+                        if ui.add(egui::Button::new(egui::RichText::new(text).size(12.0).color(pal.accent)).frame(false)).on_hover_text(t!("The file's lowest and highest values: click to make them Low and High")).clicked() {
+                            set(p, id, low, &Value::Num(lo as f64));
+                            set(p, id, high, &Value::Num(hi as f64));
+                        }
+                    } else {
+                        ui.label(egui::RichText::new(text).size(12.0).color(pal.weak));
+                    }
+                }
                 ui.add(egui::Label::new(egui::RichText::new(shown).size(12.0).color(pal.weak)).truncate());
             }
             (ParamKind::Points { .. } | ParamKind::Curve { .. }, Value::Points(pts)) => {

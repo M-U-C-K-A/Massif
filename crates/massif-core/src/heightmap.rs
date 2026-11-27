@@ -1,11 +1,14 @@
 //! Height maps: greyscale images of a relief, to and from other tools
 //! (Gaea, World Machine, WorldPainter, image editors).
 //!
-//! Read: PNG or JPEG, 8 or 16 bits a channel (colour is made grey), or raw
+//! Read: PNG or JPEG, 8 or 16 bits a channel (colour is made grey), raw
 //! square grids of little-endian 16-bit (`.r16`, `.raw`) or 32-bit float
-//! (`.r32`) samples. Written: 16-bit greyscale PNG. Values are fractions,
-//! 0 for black and 1 for white; what heights they stand for is the
-//! caller's.
+//! (`.r32`) samples, or OpenEXR (`.exr`, half or full floats, its `Y`
+//! channel or its colours' luminance). Written: 16-bit greyscale PNG, or
+//! OpenEXR of one float channel `Y`. Values are fractions, 0 for black and
+//! 1 for white; what heights they stand for is the caller's. An EXR's own
+//! values (heights in metres or blocks most often) are fitted to 0–1, its
+//! lowest and highest kept in [`Heightmap::range`].
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -18,6 +21,9 @@ pub struct Heightmap {
     pub width: usize,
     pub height: usize,
     pub data: Vec<f32>,
+    /// The file's own lowest and highest values, which 0 and 1 stand for,
+    /// when they were not fractions already (OpenEXR).
+    pub range: Option<[f32; 2]>,
 }
 
 impl Heightmap {
@@ -54,11 +60,16 @@ pub fn read(path: &Path) -> Result<Heightmap, String> {
             width: side,
             height: side,
             data: values,
+            range: None,
         })
     };
     match ext.as_str() {
         "r16" | "raw" => raw(2),
         "r32" => raw(4),
+        "exr" => {
+            let grey = read_exr(path)?;
+            Ok(fitted(grey.width, grey.height, grey.data))
+        }
         _ => {
             let img = image::open(path).map_err(|e| e.to_string())?.into_luma16();
             let (w, h) = img.dimensions();
@@ -66,6 +77,7 @@ pub fn read(path: &Path) -> Result<Heightmap, String> {
                 width: w as usize,
                 height: h as usize,
                 data: img.into_raw().into_iter().map(|v| v as f32 / 65535.0).collect(),
+                range: None,
             })
         }
     }
@@ -97,6 +109,81 @@ pub fn write_png16(path: &Path, width: usize, height: usize, samples: &[f32]) ->
     crate::atomic::write(path, &png, true).map_err(|e| crate::atomic::describe(&e, path))
 }
 
+/// Values of any range made 0 to 1, their lowest and highest kept; a flat
+/// map all 0. What is not a number counts as the lowest.
+fn fitted(width: usize, height: usize, mut data: Vec<f32>) -> Heightmap {
+    let (lo, hi) = data.iter().filter(|v| v.is_finite()).fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+    let (lo, hi) = if lo <= hi { (lo, hi) } else { (0.0, 0.0) };
+    let span = hi - lo;
+    for v in &mut data {
+        *v = if v.is_finite() && span > 0.0 { (*v - lo) / span } else { 0.0 };
+    }
+    Heightmap { width, height, data, range: Some([lo, hi]) }
+}
+
+/// An OpenEXR image as greys: its values as stored, row by row from the
+/// top, and its alpha if it has one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExrGrey {
+    pub width: usize,
+    pub height: usize,
+    pub data: Vec<f32>,
+    pub alpha: Option<Vec<f32>>,
+    /// Whether the greys came from colours (their luminance).
+    pub colour: bool,
+    /// Bits a sample of the channel read: 16 (half) or 32.
+    pub bits: u8,
+}
+
+/// Read the first layer of an OpenEXR file as greys: its `Y` channel, else
+/// the luminance of `R`, `G` and `B` (a grey kept as it is where they are
+/// equal), else its first channel that is not alpha. Full precision.
+pub fn read_exr(path: &Path) -> Result<ExrGrey, String> {
+    use exr::prelude::*;
+    let image = read_first_flat_layer_from_file(path).map_err(|e| e.to_string())?;
+    let layer = image.layer_data;
+    let (width, height) = (layer.size.x(), layer.size.y());
+    let channels = &layer.channel_data.list;
+    // Channels by name ("Y", "R"…), the image's own first; else in a layer
+    // ("height.Y"), when the image has none of its own.
+    let own = |name: &str| channels.iter().find(|c| c.name.to_string().eq_ignore_ascii_case(name));
+    let layered = |name: &str| channels.iter().find(|c| c.name.to_string().rsplit('.').next().is_some_and(|n| n.eq_ignore_ascii_case(name)));
+    let has_own = own("Y").is_some() || own("R").is_some();
+    let find = |name: &str| if has_own { own(name) } else { layered(name) };
+    let values = |c: &AnyChannel<FlatSamples>| -> Vec<f32> { c.sample_data.values_as_f32().collect() };
+    let bits = |c: &AnyChannel<FlatSamples>| if matches!(c.sample_data, FlatSamples::F16(_)) { 16 } else { 32 };
+    let alpha = find("A").map(values);
+    let (data, colour, bits) = if let Some(y) = find("Y") {
+        (values(y), false, bits(y))
+    } else if let (Some(r), Some(g), Some(b)) = (find("R"), find("G"), find("B")) {
+        let (vr, vg, vb) = (values(r), values(g), values(b));
+        let data = vr.iter().zip(&vg).zip(&vb).map(|((&r, &g), &b)| if r == g && g == b { r } else { 0.2126 * r + 0.7152 * g + 0.0722 * b }).collect();
+        (data, true, bits(r))
+    } else if let Some(c) = channels.iter().find(|c| !c.name.to_string().rsplit('.').next().is_some_and(|n| n.eq_ignore_ascii_case("A"))).or(channels.first()) {
+        (values(c), false, bits(c))
+    } else {
+        return Err("the EXR file has no channels".into());
+    };
+    if width < 1 || height < 1 || data.len() != width * height {
+        return Err("the EXR file has no image".into());
+    }
+    Ok(ExrGrey { width, height, data, alpha, colour, bits })
+}
+
+/// Write `samples` (`width` × `height`, row by row from the top) as an
+/// OpenEXR file of one 32-bit float channel `Y`, as they are.
+pub fn write_exr(path: &Path, width: usize, height: usize, samples: &[f32]) -> Result<(), String> {
+    use exr::prelude::*;
+    if samples.len() != width * height {
+        return Err("the image does not have its size".into());
+    }
+    let channels = AnyChannels::sort(SmallVec::from_vec(vec![AnyChannel::new("Y", FlatSamples::F32(samples.to_vec()))]));
+    let layer = Layer::new((width, height), LayerAttributes::named("height"), Encoding::SMALL_LOSSLESS, channels);
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    Image::from_layer(layer).write().to_buffered(&mut bytes).map_err(|e| e.to_string())?;
+    crate::atomic::write(path, bytes.get_ref(), true).map_err(|e| crate::atomic::describe(&e, path))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,6 +208,55 @@ mod tests {
         assert_eq!((raw.width, raw.height), (16, 16));
         assert!((raw.data[255] - 255.0 * 256.0 / 65535.0).abs() < 1e-5);
         assert!(cached(&png).is_ok() && Arc::ptr_eq(&cached(&png).unwrap(), &cached(&png).unwrap()));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Heights in blocks go out to an EXR and come back bit for bit; read
+    /// as a height map, they are fitted to 0–1 and their range kept.
+    #[test]
+    fn exr_height_maps_go_out_and_back_exactly() {
+        let dir = std::env::temp_dir().join(format!("massif-heightmap-exr-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (w, h) = (37, 23);
+        let heights: Vec<f32> = (0..w * h).map(|k| -64.0 + (k as f32 * 0.734_291).sin() * 180.5 + (k / w) as f32 * 1.0e-3).collect();
+        let exr = dir.join("relief.exr");
+        write_exr(&exr, w, h, &heights).unwrap();
+        let grey = read_exr(&exr).unwrap();
+        assert_eq!((grey.width, grey.height, grey.bits, grey.colour), (w, h, 32, false));
+        assert!(grey.data.iter().zip(&heights).all(|(a, b)| a.to_bits() == b.to_bits()), "every float kept");
+        let map = read(&exr).unwrap();
+        let [lo, hi] = map.range.unwrap();
+        assert_eq!(lo, heights.iter().cloned().fold(f32::INFINITY, f32::min));
+        assert_eq!(hi, heights.iter().cloned().fold(f32::NEG_INFINITY, f32::max));
+        assert!(map.data.iter().zip(&heights).all(|(v, b)| (lo + (hi - lo) * v - b).abs() < 1e-4));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// An EXR the crate makes of known values, half floats in R, G, B and
+    /// A as tools write them: read as greys, colours by their luminance.
+    #[test]
+    fn exr_of_known_values_is_read() {
+        use exr::prelude::*;
+        let dir = std::env::temp_dir().join(format!("massif-heightmap-exr-rgb-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rgba.exr");
+        let (w, h) = (4usize, 3usize);
+        // Grey where R = G = B, the last pixel pure red.
+        write_rgba_file(&path, w, h, |x, y| {
+            let v = (y * w + x) as f32 * 0.25;
+            if (x, y) == (3, 2) { (f16::from_f32(1.0), f16::from_f32(0.0), f16::from_f32(0.0), f16::from_f32(0.5)) } else { (f16::from_f32(v), f16::from_f32(v), f16::from_f32(v), f16::from_f32(1.0)) }
+        })
+        .unwrap();
+        let grey = read_exr(&path).unwrap();
+        assert_eq!((grey.width, grey.height, grey.bits, grey.colour), (w, h, 16, true));
+        for k in 0..w * h - 1 {
+            assert_eq!(grey.data[k], k as f32 * 0.25);
+        }
+        assert!((grey.data[w * h - 1] - 0.2126).abs() < 1e-6);
+        assert_eq!(grey.alpha.as_ref().unwrap()[w * h - 1], 0.5);
+        let map = super::read(&path).unwrap();
+        assert_eq!(map.range, Some([0.0, 2.5]));
+        assert_eq!(map.data[10], 1.0);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -1108,7 +1108,9 @@ impl RenderSide {
                 // the writing thread), or by the graphics card's filter
                 // without it.
                 let intel = still.denoise && massif_render::oidn::available();
-                let samples = if intel { scene.renderer.read_samples() } else { None };
+                // An EXR keeps the light as traced: the samples themselves.
+                let exr = self.movie.is_none() && still.path.extension().is_some_and(|e| e.eq_ignore_ascii_case("exr"));
+                let samples = if intel || exr { scene.renderer.read_samples() } else { None };
                 if still.denoise
                     && samples.is_none()
                     && let Some(cmd) = scene.renderer.denoise(1.0)
@@ -1141,6 +1143,21 @@ impl RenderSide {
                 let took = still.started.elapsed().as_secs_f64();
                 std::thread::spawn(move || {
                     let name = still.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    if exr {
+                        let result = match samples {
+                            Some(s) => {
+                                let mut color = s.color.clone();
+                                if intel && let Err(e) = massif_render::oidn::denoise(&mut color, Some(&s.albedo), Some(&s.normal), s.width as usize, s.height as usize) {
+                                    log::warn!("denoising the image: {e}");
+                                    color.clone_from(&s.color);
+                                }
+                                massif_render::exr::write(&still.path, &s, &color, true).map(|()| format!("{name} · {w} × {h} · {took:.0} s", w = s.width, h = s.height))
+                            }
+                            None => Err(tr!("the graphics card gave no image").to_owned()),
+                        };
+                        let _ = tx.send(result.map_err(|e| tr!("The image could not be saved: {e}", e)));
+                        return;
+                    }
                     let image = match samples {
                         Some(mut s) => match massif_render::oidn::denoise(&mut s.color, Some(&s.albedo), Some(&s.normal), s.width as usize, s.height as usize) {
                             Ok(()) => Some((s.width, s.height, s.tone.map(&s.color))),
@@ -1683,7 +1700,7 @@ impl RenderSide {
             }
         } else if ui
             .add_enabled(ready && self.writing.is_none(), theme::primary_button(ui, theme::with_icon(Icon::Camera, tr!("Save image…"))))
-            .on_hover_text(tr!("Render the view at full quality and save it as a PNG"))
+            .on_hover_text(tr!("Render the view at full quality and save it as a PNG, or as an OpenEXR of its linear light"))
             .on_disabled_hover_text(tr!("Show the Render Viewport first"))
             .clicked()
         {
@@ -1705,7 +1722,7 @@ impl RenderSide {
             let size = STILL_SIZES[self.still_size.min(STILL_SIZES.len() - 1)].1.unwrap_or(self.view_px);
             if !scene.renderer.fits(size[0], size[1]) {
                 self.saved = Some(Err(tr!("This size is larger than the graphics card can draw").to_owned()));
-            } else if let Some(path) = rfd::FileDialog::new().set_file_name(format!("{}.png", doc.title())).add_filter(tr!("PNG image"), &["png"]).save_file() {
+            } else if let Some(path) = rfd::FileDialog::new().set_file_name(format!("{}.png", doc.title())).add_filter(tr!("PNG image"), &["png"]).add_filter(tr!("OpenEXR, linear light with depth, normal and albedo"), &["exr"]).save_file() {
                 self.saved = None;
                 self.still = Some(Still { path, size, samples: self.still_samples, camera: orbit.camera(self.fov), light: self.light, denoise: self.still_denoise, row: 0, started: Instant::now() });
                 scene.renderer.restart();

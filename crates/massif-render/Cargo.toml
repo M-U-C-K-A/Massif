@@ -20,6 +20,7 @@ fastnbt = "2.6"
 serde_json.workspace = true
 image = { version = "0.25", default-features = false, features = ["png"] }
 libloading = "0.8"
+exr.workspace = true
 
 [dev-dependencies]
 massif-format.workspace = true

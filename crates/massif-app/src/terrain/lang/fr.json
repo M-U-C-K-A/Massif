@@ -533,7 +533,6 @@
   "The graph's Map Output takes no Height: nothing to save": "La Map Output du graphe ne reçoit aucune hauteur : rien à enregistrer",
   "The height map could not be saved: {e}": "La carte des hauteurs n'a pas pu être enregistrée : {e}",
   "Saved the terrain as a height map of {n} × {n} in {s} s: black is Y {lo}, white Y {hi}": "Terrain enregistré en carte des hauteurs de {n} × {n} en {s} s : le noir est Y {lo}, le blanc Y {hi}",
-  "A 16-bit PNG of the terrain, a block a sample. The map is left as it is.": "Un PNG 16 bits du terrain, un bloc par échantillon. La carte reste telle quelle.",
   "Add a node (⇧A)": "Ajouter un nœud (⇧A)",
   "Bypass (M)": "Court-circuiter (M)",
   "Collapse (H)": "Replier (H)",
@@ -552,5 +551,10 @@
   "View (V)": "Afficher (V)",
   "View options": "Options d'affichage",
   "What Apply to map writes, and where.": "Ce qu'écrit Appliquer à la carte, et où.",
-  "Wires what the nodes fed from what fed them.": "Relie ce que les nœuds alimentaient à ce qui les alimentait."
+  "Wires what the nodes fed from what fed them.": "Relie ce que les nœuds alimentaient à ce qui les alimentait.",
+  "A 16-bit PNG of the terrain, or an OpenEXR of its heights in blocks, a block a sample. The map is left as it is.": "Un PNG 16 bits du terrain, ou un OpenEXR de ses hauteurs en blocs, un bloc par échantillon. La carte reste telle quelle.",
+  "16-bit PNG": "PNG 16 bits",
+  "OpenEXR, heights in blocks": "OpenEXR, hauteurs en blocs",
+  "Saved the terrain as an EXR height map of {n} × {n} in {s} s, heights in blocks from Y {lo} to {hi}": "Terrain enregistré en carte des hauteurs EXR de {n} × {n} en {s} s, hauteurs en blocs de Y {lo} à {hi}",
+  "The file's lowest and highest values: click to make them Low and High": "Les valeurs la plus basse et la plus haute du fichier : cliquez pour en faire Bas et Haut"
 }

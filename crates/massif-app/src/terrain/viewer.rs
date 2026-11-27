@@ -469,13 +469,13 @@ fn map_options(p: &mut TerrainPanel, ui: &mut Ui) {
             let busy = p.heightmap.is_some();
             let label = if busy { t!("Saving…") } else { t!("Save…") };
             if ui.add_enabled(!busy, egui::Button::new(label)).clicked()
-                && let Some(path) = rfd::FileDialog::new().set_file_name(t!("terrain height map.png")).add_filter(t!("PNG image"), &["png"]).save_file()
+                && let Some(path) = rfd::FileDialog::new().set_file_name(t!("terrain height map.png")).add_filter(t!("16-bit PNG"), &["png"]).add_filter(t!("OpenEXR, heights in blocks"), &["exr"]).save_file()
             {
                 p.save_heightmap(path);
                 ui.close();
             }
         });
-        ui.add(egui::Label::new(egui::RichText::new(t!("A 16-bit PNG of the terrain, a block a sample. The map is left as it is.")).size(11.0).color(pal.weak)).wrap());
+        ui.add(egui::Label::new(egui::RichText::new(t!("A 16-bit PNG of the terrain, or an OpenEXR of its heights in blocks, a block a sample. The map is left as it is.")).size(11.0).color(pal.weak)).wrap());
         ui.add_space(4.0);
     });
 }

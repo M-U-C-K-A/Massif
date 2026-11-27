@@ -900,7 +900,7 @@ impl MassifApp {
     fn pick_heightmap(&mut self, ctx: &egui::Context) {
         if let Some(path) = rfd::FileDialog::new()
             .set_title(tr!("A height map to make a map of"))
-            .add_filter(tr!("Height maps"), &["png", "jpg", "jpeg", "r16", "r32", "raw"])
+            .add_filter(tr!("Height maps"), &["png", "jpg", "jpeg", "exr", "r16", "r32", "raw"])
             .pick_file()
         {
             self.take_heightmap(ctx, path);
@@ -1052,7 +1052,7 @@ impl MassifApp {
             HomeAction::Dropped(path) => {
                 let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
                 match ext.as_str() {
-                    "png" | "jpg" | "jpeg" | "r16" | "r32" | "raw" => self.take_heightmap(ctx, path),
+                    "png" | "jpg" | "jpeg" | "exr" | "r16" | "r32" | "raw" => self.take_heightmap(ctx, path),
                     "world" => self.request(ctx, Pending::Open(Some(path))),
                     "mca" | "dat" => self.scan_minecraft(ctx, vec![path]),
                     _ if path.is_dir() => self.scan_minecraft(ctx, vec![path]),
@@ -1105,8 +1105,8 @@ impl MassifApp {
         }
     }
 
-    /// Save the map's surface as a 16-bit height map: black the bottom of
-    /// the world, white its top.
+    /// Save the map's surface as a 16-bit height map (black the bottom of
+    /// the world, white its top) or an OpenEXR of its heights in blocks.
     fn export_heightmap(&mut self, ctx: &egui::Context) {
         if self.doc.dimension().bounds().is_none() {
             self.say(ctx, tr!("The map is empty"), true, None);
@@ -1115,6 +1115,7 @@ impl MassifApp {
         let Some(path) = rfd::FileDialog::new()
             .set_title(tr!("Save the height map"))
             .add_filter(tr!("16-bit PNG"), &["png"])
+            .add_filter(tr!("OpenEXR, heights in blocks"), &["exr"])
             .set_file_name(tr!("{name} height map.png", name = self.doc.world.meta.name))
             .save_file()
         else {
@@ -1123,7 +1124,8 @@ impl MassifApp {
         self.save_heightmap(ctx, &path);
     }
 
-    /// Save the map's surface at `path` as a 16-bit height map.
+    /// Save the map's surface at `path` as a 16-bit height map, or, for an
+    /// `.exr` path, as an OpenEXR of its heights in blocks (32-bit floats).
     fn save_heightmap(&mut self, ctx: &egui::Context, path: &std::path::Path) {
         let dim = self.doc.dimension();
         let Some((lo, hi)) = dim.bounds() else { return };
@@ -1137,6 +1139,21 @@ impl MassifApp {
         // Only the map itself, not the square around it.
         let k = n as f32 / side as f32;
         let (pw, pd) = (((w as f32) * k).round() as usize, ((d as f32) * k).round() as usize);
+        let exr = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("exr"));
+        if exr {
+            let heights: Vec<f32> = (0..pw * pd).map(|c| read.heights.data[(c / pw) * n + c % pw]).collect();
+            let (lo, hi) = heights.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+            match massif_core::heightmap::write_exr(path, pw, pd, &heights) {
+                Ok(()) => self.say(
+                    ctx,
+                    tr!("Saved an EXR height map of {pw} × {pd}, heights in blocks from Y {lo} to {hi}{value}", lo = format!("{lo:.1}"), hi = format!("{hi:.1}"), value = if k < 1.0 { tr!(", {k:.1} blocks a pixel", k = 1.0 / k) } else { String::new() }, pw, pd),
+                    false,
+                    path.parent().map(|p| p.to_path_buf()),
+                ),
+                Err(e) => self.say(ctx, tr!("The height map could not be saved: {e}", e), true, None),
+            }
+            return;
+        }
         let samples: Vec<f32> = (0..pw * pd).map(|c| (read.heights.data[(c / pw) * n + c % pw] - min_y) / (max_y - min_y)).collect();
         match massif_core::heightmap::write_png16(path, pw, pd, &samples) {
             Ok(()) => self.say(
@@ -3145,7 +3162,7 @@ impl MassifApp {
     fn pick_mask(&mut self, ctx: &egui::Context, more: bool) {
         if let Some(paths) = rfd::FileDialog::new()
             .set_title(tr!("Images to import as masks"))
-            .add_filter(tr!("Images"), &["png", "jpg", "jpeg", "tif", "tiff", "bmp"])
+            .add_filter(tr!("Images"), &["png", "jpg", "jpeg", "tif", "tiff", "bmp", "exr"])
             .pick_files()
             && !paths.is_empty()
         {
@@ -10957,6 +10974,23 @@ mod tests {
         let viewed = middle(shown.as_raw(), shown.width() as usize, Rect::from_min_max(area.min * ppp, area.max * ppp));
         eprintln!("render side: middle of the view {viewed:.1}, of the still {saved:.1}");
         assert!((viewed / saved - 1.0).abs() < 0.2, "the view as bright as the still: {viewed:.1} against {saved:.1}");
+        // A still saved as an EXR: the light as traced, brighter than white
+        // where the sun lights it, with the denoiser's guides as layers.
+        let exr = out.with_extension("exr");
+        let _ = std::fs::remove_file(&exr);
+        h.state_mut().render_side.save_still(exr.clone(), [480, 270], 16);
+        let started = std::time::Instant::now();
+        while h.state().render_side.saving() && started.elapsed().as_secs() < 120 {
+            h.step();
+        }
+        assert!(matches!(h.state().render_side.saved(), Some(Ok(_))), "{:?}", h.state().render_side.saved());
+        let light = massif_core::heightmap::read_exr(&exr).unwrap();
+        assert_eq!((light.width, light.height, light.bits, light.colour), (480, 270, 16, true));
+        // Linear: its middle darker than the PNG's sRGB greys (88 of 255,
+        // some 0.35, is some 0.1 of linear light).
+        let mean = light.data.iter().map(|&v| v as f64).sum::<f64>() / light.data.len() as f64;
+        eprintln!("render side: EXR still, mean {mean:.3}, brightest {:.2}", light.data.iter().cloned().fold(0.0f32, f32::max));
+        assert!(mean > 0.005 && mean < saved / 255.0 * 0.8, "linear light, not the view's: {mean} against {saved}");
         h.get_by_label_contains(&label(Icon::Map, "World")).click();
         h.run_steps(3);
         assert_eq!((h.state().layout.side(), h.state().layout.active), (Side::World, world));

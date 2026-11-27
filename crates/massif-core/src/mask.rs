@@ -6,7 +6,8 @@
 //! bits, grey, colour, palette, with or without alpha), TIFF (8, 16 or
 //! 32-bit integers or floats, in strips or tiles), BMP (1 to 32 bits, not
 //! compressed). JPEG, and BMP of a compressed kind, are decoded whole at
-//! their 8 bits, then handed out by rows the same way. An import reads the
+//! their 8 bits, then handed out by rows the same way; OpenEXR is decoded
+//! whole as greys, its floats as stored. An import reads the
 //! file twice: [`survey`] once, for the range of its values and a small
 //! picture of it, then [`apply`] once more, a band of 128 rows of the map
 //! at a time while a thread of its own decodes the next rows.
@@ -65,7 +66,7 @@ pub struct Header {
     pub alpha: bool,
     /// Samples of floating point.
     pub float: bool,
-    /// The kind of file: "PNG", "TIFF", "BMP", "JPEG".
+    /// The kind of file: "PNG", "TIFF", "BMP", "JPEG", "OpenEXR".
     pub format: &'static str,
     /// Compressed with loss: its blacks are not quite black.
     pub lossy: bool,
@@ -98,8 +99,10 @@ fn open(path: &Path) -> Result<Box<dyn Rows>, String> {
         }
     } else if magic.starts_with(&[0xff, 0xd8]) {
         WholeRows::open(path, "JPEG")
+    } else if magic.starts_with(&[0x76, 0x2f, 0x31, 0x01]) {
+        ExrRows::open(path)
     } else {
-        Err("not an image Massif reads: PNG, JPEG, TIFF or BMP".into())
+        Err("not an image Massif reads: PNG, JPEG, TIFF, BMP or OpenEXR".into())
     }
 }
 
@@ -539,6 +542,43 @@ impl Rows for WholeRows {
         let line = self.header.width * channels;
         let bytes = &self.image.as_bytes()[self.y * line..(self.y + 1) * line];
         fill_row(row, bytes, channels, 255.0, |s| s as f32);
+        self.y += 1;
+        Ok(true)
+    }
+}
+
+/// An OpenEXR image, decoded whole as greys (see
+/// [`crate::heightmap::read_exr`]): its floats as stored, 1 for white.
+struct ExrRows {
+    image: crate::heightmap::ExrGrey,
+    header: Header,
+    y: usize,
+}
+
+impl ExrRows {
+    fn open(path: &Path) -> Result<Box<dyn Rows>, String> {
+        let image = crate::heightmap::read_exr(path)?;
+        let header = Header { width: image.width, height: image.height, bits: image.bits, colour: false, alpha: image.alpha.is_some(), float: true, format: "OpenEXR", lossy: false };
+        Ok(Box::new(Self { image, header, y: 0 }))
+    }
+}
+
+impl Rows for ExrRows {
+    fn header(&self) -> &Header {
+        &self.header
+    }
+
+    fn next(&mut self, row: &mut Row) -> Result<bool, String> {
+        if self.y >= self.header.height {
+            return Ok(false);
+        }
+        let w = self.header.width;
+        let span = self.y * w..(self.y + 1) * w;
+        row.clear();
+        row.grey.extend_from_slice(&self.image.data[span.clone()]);
+        if let Some(alpha) = &self.image.alpha {
+            row.alpha.extend(alpha[span].iter().map(|a| (a * 255.0).round().clamp(0.0, 255.0) as u8));
+        }
         self.y += 1;
         Ok(true)
     }
@@ -2174,6 +2214,24 @@ mod tests {
         import(&mut w, &png, settings(Target::Cover(2)));
         assert_eq!(at(&w, 5, 0, |t| &t.cover), 1, "the locked cover stays");
         assert_eq!(at(&w, 5, 1, |t| &t.cover), 2);
+    }
+
+    #[test]
+    fn an_exr_of_heights_in_blocks_sets_them_from_its_lowest_to_its_highest() {
+        let mut w = world(1);
+        let path = dir().join("height.exr");
+        let heights: Vec<f32> = (0..128 * 128).map(|k| 70.0 + (k % 128) as f32 * 0.5).collect();
+        crate::heightmap::write_exr(&path, 128, 128, &heights).unwrap();
+        let info = survey(&path, &Steps::default()).unwrap();
+        assert_eq!((info.header.format, info.header.bits, info.header.float), ("OpenEXR", 32, true));
+        assert_eq!((info.low, info.high), (70.0, 133.5));
+        let mut s = settings(Target::Height { black: info.low, white: info.high });
+        s.mapping.black_is_none = false;
+        s.mapping.full_range = false;
+        import(&mut w, &path, s);
+        assert_eq!(at(&w, 0, 0, |t| &t.top), 70.0);
+        let h = at(&w, 127, 5, |t| &t.top);
+        assert!((h - 133.5).abs() < 0.01, "{h}");
     }
 
     #[test]

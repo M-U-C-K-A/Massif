@@ -169,7 +169,7 @@ fn luminance(img: &Image, u: f64, v: f64, tile: bool) -> f32 {
 const HEIGHTMAP_PARAMS: [ParamSpec; 12] = {
     let [x, z, width, depth, rotation, fit] = placement(Section::Shape);
     [
-        ParamSpec::file("file", "File", &["png", "tif", "tiff", "jpg", "jpeg", "bmp", "raw", "r16"], "The heightmap: an image (16-bit greys keep their precision) or a square RAW of 16-bit samples."),
+        ParamSpec::file("file", "File", &["png", "tif", "tiff", "jpg", "jpeg", "bmp", "raw", "r16", "exr"], "The heightmap: an image (16-bit greys keep their precision), an OpenEXR of floats (its lowest value black, its highest white) or a square RAW of 16-bit samples."),
         ParamSpec::float("low", "Low", Unit::Blocks, 40.0, -2048.0, 4096.0, "The height black stands for, in blocks.").soft(-64.0, 320.0),
         ParamSpec::float("high", "High", Unit::Blocks, 200.0, -2048.0, 4096.0, "The height white stands for, in blocks.").soft(-64.0, 320.0),
         x,
@@ -189,8 +189,8 @@ pub static HEIGHTMAP: NodeSpec = NodeSpec {
     label: "Heightmap",
     family: Family::Input,
     summary: "A heightmap image turned into relief: black at Low, white at High, laid over a rectangle of the terrain.",
-    help: "Choose the file (PNG, TIFF, JPEG, BMP or a square RAW of 16-bit samples; 16-bit greys keep their precision), then where it lies: X, Z, Width and Depth as shares of the terrain, Rotation, and how its shape fits. Outside it, the relief is Low (or the image repeats when Tile is on); the Mask output says where the image lies, fading over Edge fade, to blend several heightmaps or a heightmap into a generated relief.",
-    keywords: &["heightmap", "dem", "image", "import", "png", "tiff", "raw", "elevation", "file"],
+    help: "Choose the file (PNG, TIFF, JPEG, BMP, OpenEXR or a square RAW of 16-bit samples; 16-bit greys and EXR floats keep their precision, an EXR's lowest value black and its highest white), then where it lies: X, Z, Width and Depth as shares of the terrain, Rotation, and how its shape fits. Outside it, the relief is Low (or the image repeats when Tile is on); the Mask output says where the image lies, fading over Edge fade, to blend several heightmaps or a heightmap into a generated relief.",
+    keywords: &["heightmap", "dem", "image", "import", "png", "tiff", "raw", "exr", "openexr", "elevation", "file"],
     inputs: &[],
     outputs: &[PortSpec::new("height", "Height", PortKind::Height, "The relief the image gives."), PortSpec::new("mask", "Mask", PortKind::Mask, "1 where the image lies, fading at its edges.")],
     params: &HEIGHTMAP_PARAMS,
@@ -233,7 +233,7 @@ const CHANNELS: &[Choice] = &[
 const IMAGE_PARAMS: [ParamSpec; 13] = {
     let [x, z, width, depth, rotation, fit] = placement(Section::Shape);
     [
-        ParamSpec::file("file", "File", &["png", "tif", "tiff", "jpg", "jpeg", "bmp"], "The image: a climate map, a painted mask, a colour map."),
+        ParamSpec::file("file", "File", &["png", "tif", "tiff", "jpg", "jpeg", "bmp", "exr"], "The image: a climate map, a painted mask, a colour map."),
         ParamSpec::choice("channel", "Channel", CHANNELS, "luminance", "Which of the image's values makes the mask."),
         ParamSpec::float("low", "Low", Unit::Ratio, 0.0, -1000.0, 1000.0, "The value read as 0.").soft(0.0, 1.0),
         ParamSpec::float("high", "High", Unit::Ratio, 1.0, -1000.0, 1000.0, "The value read as 1.").soft(0.0, 1.0),

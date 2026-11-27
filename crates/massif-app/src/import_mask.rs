@@ -186,6 +186,13 @@ impl MaskForm {
             threshold: if info.header.bits <= 8 && !info.header.float { Some(0.5) } else { None },
             ..Mapping::default()
         };
+        // Floats over more than 0 to 1 (an EXR of heights in blocks or
+        // metres): black and white at the image's lowest and highest.
+        let (black, white) = if info.header.float && info.high - info.low > 1.5 {
+            (info.low.clamp(heights.0 as f32, heights.1 as f32), info.high.clamp(heights.0 as f32, heights.1 as f32))
+        } else {
+            (heights.0.max(0) as f32, (heights.0.max(0) + 128).min(heights.1) as f32)
+        };
         let mut form = Self {
             path,
             info,
@@ -202,8 +209,8 @@ impl MaskForm {
             biomes,
             biome,
             water: sea,
-            black: heights.0.max(0) as f32,
-            white: (heights.0.max(0) + 128).min(heights.1) as f32,
+            black,
+            white,
             heights,
             mapping,
             mode: Mode::Replace,
@@ -514,7 +521,10 @@ impl MaskForm {
         } else {
             tr!("grey")
         };
-        let about = tr!("{name}: {w} × {h} pixels, {bits}-bit {what} {format}", name, w = h.width, h = h.height, bits = h.bits, what, format = h.format);
+        let mut about = tr!("{name}: {w} × {h} pixels, {bits}-bit {what} {format}", name, w = h.width, h = h.height, bits = h.bits, what, format = h.format);
+        if h.float {
+            about += &tr!(", values {low} to {high}", low = format!("{:.3}", self.info.low), high = format!("{:.3}", self.info.high));
+        }
         ui.add(egui::Label::new(RichText::new(about).size(12.0).color(pal.weak)).wrap());
         ui.add_space(8.0);
         self.images_ui(ui, &mut choice);

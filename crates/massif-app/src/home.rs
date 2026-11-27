@@ -124,17 +124,24 @@ impl HeightmapPick {
             .collect();
         let picture = ctx.load_texture("height map", egui::ColorImage::from_gray([w, h], &pixels), egui::TextureOptions::LINEAR);
         let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or(tr!("Height map")).to_owned();
+        let (min_y, max_y) = massif_core::generate::VANILLA_LIMITS;
+        // An EXR of heights (blocks or metres): its lowest and highest at
+        // their own heights, fitted into the world's.
+        let (low, high) = match map.range {
+            Some([lo, hi]) if hi - lo > 1.5 => (lo.clamp(min_y as f32 + 1.0, max_y as f32 - 2.0), hi.clamp(min_y as f32 + 2.0, max_y as f32 - 1.0)),
+            _ => (20.0, 230.0),
+        };
         Ok(Self {
             path,
             map: Arc::new(map),
             how: FromHeightmap {
                 name,
                 scale: 1.0,
-                low: 20.0,
-                high: 230.0,
+                low,
+                high,
                 sea_level: 63,
-                min_y: massif_core::generate::VANILLA_LIMITS.0,
-                max_y: massif_core::generate::VANILLA_LIMITS.1,
+                min_y,
+                max_y,
             },
             picture: Some(picture),
             rows: 5.0 * (ROW_H + 14.0) - 14.0,
@@ -484,7 +491,7 @@ impl Home {
         let links: [(Icon, &str, &str, HomeAction); 4] = [
             (Icon::FolderOpen, tr!("Open a map"), tr!("A Massif map (.massif)"), HomeAction::Open),
             (Icon::Import, tr!("Import from WorldPainter"), tr!("A WorldPainter world (.world)"), HomeAction::Import),
-            (Icon::ImageUp, tr!("From a height map"), tr!("A greyscale picture: 16-bit PNG, JPEG, .r16 or .r32"), HomeAction::PickHeightmap),
+            (Icon::ImageUp, tr!("From a height map"), tr!("A greyscale picture: 16-bit PNG, JPEG, EXR, .r16 or .r32"), HomeAction::PickHeightmap),
             (Icon::Earth, tr!("From a real place"), tr!("The relief of a place on the Earth, at the scale you choose"), HomeAction::RealPlace),
         ];
         if let Some(a) = link_row(ui, &links) {
@@ -656,7 +663,7 @@ impl Home {
             };
             line(theme::glyph(Icon::ImageUp).to_string(), 28.0, if lit { pal.accent } else { art_weak(&pal) }, -28.0);
             line(tr!("Choose a height map").to_owned(), 15.0, pal.text, 10.0);
-            line(tr!("16-bit PNG, JPEG, .r16 or .r32 — or drop one here").to_owned(), 12.0, art_weak(&pal), 32.0);
+            line(tr!("16-bit PNG, JPEG, EXR, .r16 or .r32 — or drop one here").to_owned(), 12.0, art_weak(&pal), 32.0);
             if response.clicked() {
                 *action = Some(HomeAction::PickHeightmap);
             }
@@ -715,9 +722,13 @@ impl Home {
         ui.add_space(10.0);
         ui.horizontal(|ui| {
             let (w, d) = (pick.map.width as f32 * pick.how.scale, pick.map.height as f32 * pick.how.scale);
+            let mut about = tr!("{width} × {height} pixels  →  {w:.0} × {d:.0} blocks, Y {low:.0} to {high:.0}", width = pick.map.width, height = pick.map.height, low = pick.how.low, high = pick.how.high, w, d);
+            if let Some([lo, hi]) = pick.map.range {
+                about += &tr!(" · the file's values {low} to {high}", low = format!("{lo:.2}"), high = format!("{hi:.2}"));
+            }
             art_label(
                 ui,
-                RichText::new(tr!("{width} × {height} pixels  →  {w:.0} × {d:.0} blocks, Y {low:.0} to {high:.0}", width = pick.map.width, height = pick.map.height, low = pick.how.low, high = pick.how.high, w, d))
+                RichText::new(about)
                     .size(11.5)
                     .color(art_weak(&pal)),
             );

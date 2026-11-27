@@ -834,6 +834,7 @@ mod giant {
             width: 300,
             height: 200,
             data: (0..300 * 200).map(|k| (k % 300) as f32 / 299.0).collect(),
+            range: None,
         };
         let how = FromHeightmap {
             name: "Ramp".into(),

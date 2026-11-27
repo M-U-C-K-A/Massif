@@ -40,9 +40,16 @@ pub fn stamp(path: &Path) -> u64 {
 
 /// An image file decoded: grey images as one channel, others as four
 /// (RGBA); integers from 0 to 1, floating-point values as stored. A
-/// `.raw` or `.r16` file is a square of little-endian 16-bit samples.
+/// `.raw` or `.r16` file is a square of little-endian 16-bit samples. An
+/// OpenEXR file is read as one grey channel (its `Y`, or its colours'
+/// luminance) fitted from its lowest to its highest value to 0–1, as
+/// [`massif_core::heightmap::read`] does.
 pub fn decode(path: &Path) -> Option<Image> {
     let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+    if ext == "exr" {
+        let map = massif_core::heightmap::read(path).ok()?;
+        return Some(Image { width: map.width as u32, height: map.height as u32, channels: 1, data: map.data });
+    }
     if ext == "raw" || ext == "r16" {
         let bytes = std::fs::read(path).ok()?;
         let n = ((bytes.len() / 2) as f64).sqrt() as usize;

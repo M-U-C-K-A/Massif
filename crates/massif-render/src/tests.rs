@@ -945,3 +945,46 @@ fn the_views_of_color_management() {
         image::save_buffer(dir.join(format!("color-{name}.png")), &tone.map(&s.color), s.width, s.height, image::ColorType::Rgba8).unwrap();
     }
 }
+
+/// A render saved as an EXR keeps the light as traced: looking toward the
+/// sun, the sky around it is far brighter than white, which a PNG clips.
+#[test]
+fn an_exr_keeps_the_light_brighter_than_white() {
+    let Some((device, queue)) = device() else { return };
+    let world = generate(&GenParams { tiles_x: 1, tiles_z: 1, landform: Landform::Flat, seed: 3, ..GenParams::default() });
+    let sea = world.meta.sea_level as f64;
+    let target = map_source::target_for(None);
+    let extent = Extent::of_map(&world, 0, &target).unwrap();
+    let materials = Arc::new(Materials::new(None, device.limits().max_texture_array_layers as usize));
+    let center = extent.center();
+    let tiles = map_source::tiles_by_distance(&world, 0, center[0], center[2]);
+    let built = MapBuilder::start(world, 0, target, materials.clone(), tiles).wait_all();
+    let mut r = Renderer::new(&device, &queue, extent);
+    r.sea_level = sea;
+    r.sync_materials(&materials);
+    for b in built {
+        assert!(r.put(b.chunks));
+    }
+    let mut light = Light::default();
+    light.set_time(16.0, 172.0, 45.0, 0.0);
+    let ground = r.surface(center[0], center[2]).unwrap_or(sea);
+    let camera = Camera { eye: [center[0], ground + 3.0, center[2]], yaw: light.sun_azimuth, pitch: light.sun_elevation * 0.8, fov_y: 60f32.to_radians() };
+    r.resize(160, 90);
+    while r.samples < 8 {
+        let cmd = r.render(&camera, &light, false).unwrap();
+        queue.submit([cmd]);
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    }
+    let s = r.read_samples().unwrap();
+    let bytes = crate::exr::encode(&s, &s.color, true).unwrap();
+    let dir = std::env::temp_dir().join(format!("massif-render-exr-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("sun.exr");
+    std::fs::write(&path, bytes).unwrap();
+    let back = massif_core::heightmap::read_exr(&path).unwrap();
+    let brightest = back.data.iter().cloned().fold(0.0f32, f32::max);
+    let over = back.data.iter().filter(|&&v| v > 1.0).count();
+    eprintln!("  toward the sun: brightest {brightest:.1}, {over} of {} pixels above 1", back.data.len());
+    assert!(brightest > 1.0 && over > 0, "the light above 1 where the sun is: {brightest}");
+    let _ = std::fs::remove_dir_all(dir);
+}

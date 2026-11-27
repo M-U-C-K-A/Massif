@@ -13,6 +13,7 @@ pub mod camera;
 pub mod chunk;
 pub mod color;
 pub mod diorama;
+pub mod exr;
 pub mod gpu;
 pub mod map_source;
 pub mod materials;

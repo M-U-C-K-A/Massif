@@ -5741,7 +5741,7 @@
     },
     "input.heightmap": {
       "additionalProperties": false,
-      "description": "A heightmap image turned into relief: black at Low, white at High, laid over a rectangle of the terrain. Choose the file (PNG, TIFF, JPEG, BMP or a square RAW of 16-bit samples; 16-bit greys keep their precision), then where it lies: X, Z, Width and Depth as shares of the terrain, Rotation, and how its shape fits. Outside it, the relief is Low (or the image repeats when Tile is on); the Mask output says where the image lies, fading over Edge fade, to blend several heightmaps or a heightmap into a generated relief.",
+      "description": "A heightmap image turned into relief: black at Low, white at High, laid over a rectangle of the terrain. Choose the file (PNG, TIFF, JPEG, BMP, OpenEXR or a square RAW of 16-bit samples; 16-bit greys and EXR floats keep their precision, an EXR's lowest value black and its highest white), then where it lies: X, Z, Width and Depth as shares of the terrain, Rotation, and how its shape fits. Outside it, the relief is Low (or the image repeats when Tile is on); the Mask output says where the image lies, fading over Edge fade, to blend several heightmaps or a heightmap into a generated relief.",
       "properties": {
         "bypass": {
           "description": "Left out of the graph: what it feeds takes its first input instead.",
@@ -5792,7 +5792,7 @@
               "x-unit": "blocks"
             },
             "file": {
-              "description": "The heightmap: an image (16-bit greys keep their precision) or a square RAW of 16-bit samples.",
+              "description": "The heightmap: an image (16-bit greys keep their precision), an OpenEXR of floats (its lowest value black, its highest white) or a square RAW of 16-bit samples.",
               "title": "File",
               "type": "string",
               "x-extensions": [
@@ -5803,7 +5803,8 @@
                 "jpeg",
                 "bmp",
                 "raw",
-                "r16"
+                "r16",
+                "exr"
               ],
               "x-section": "main"
             },
@@ -6034,7 +6035,8 @@
                 "tiff",
                 "jpg",
                 "jpeg",
-                "bmp"
+                "bmp",
+                "exr"
               ],
               "x-section": "main"
             },
