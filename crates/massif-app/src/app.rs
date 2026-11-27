@@ -11648,6 +11648,176 @@ mod tests {
         assert_eq!(h.state().render_side.pose_now().unwrap().eye, before.eye, "only over the view");
     }
 
+    /// A left drag over the Render view turns it about the point under the
+    /// pointer whatever else is on: while walking, with the camera apart
+    /// from the view, after a double-click in close, after looking around
+    /// with the right button, seen from above; Shift with it slides
+    /// instead, and the wheel comes closer to the pointer even while a walk
+    /// key is held.
+    #[test]
+    fn a_left_drag_always_turns_the_render_view() {
+        use crate::layout::Side;
+        use egui::{Key, PointerButton, Vec2};
+        let mut h = harness(ThemeChoice::Light);
+        h.run_steps(3);
+        h.state_mut().layout.show_side(Side::Render);
+        h.run_steps(3);
+        let started = std::time::Instant::now();
+        while h.state().render_side.building() && started.elapsed().as_secs() < 120 {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let areas: Vec<(crate::layout::AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+        let view = areas.iter().find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::RenderView)).map(|(_, r)| *r).unwrap();
+        // Off the minimap and the view's buttons, on the map.
+        let from = view.center() + vec2(-view.width() * 0.1, view.height() * 0.1);
+        let drag = |h: &mut egui_kittest::Harness<'static, MassifApp>, button: PointerButton, by: Vec2, mods: Modifiers| {
+            h.event(egui::Event::ModifiersChanged(mods));
+            h.event(egui::Event::PointerMoved(from));
+            h.step();
+            h.event(egui::Event::PointerButton { pos: from, button, pressed: true, modifiers: mods });
+            h.step();
+            for k in 1..=8 {
+                h.event(egui::Event::PointerMoved(from + by * (k as f32 / 8.0)));
+                h.step();
+            }
+            h.event(egui::Event::PointerButton { pos: from + by, button, pressed: false, modifiers: mods });
+            h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+            h.run_steps(2);
+        };
+        let turns = |h: &mut egui_kittest::Harness<'static, MassifApp>, what: &str| {
+            let (yaw, _, _, eye) = h.state().render_side.view_now().unwrap();
+            drag(h, PointerButton::Primary, vec2(120.0, 0.0), Modifiers::NONE);
+            let (yaw2, _, _, eye2) = h.state().render_side.view_now().unwrap();
+            assert!((yaw2 - yaw).abs() > 0.3, "{what}: a left drag turned the view ({yaw} to {yaw2})");
+            assert!((0..3).any(|k| (eye2[k] - eye[k]).abs() > 0.5), "{what}: the eye went round the point held");
+        };
+        turns(&mut h, "at first");
+        // Walking: W held through the drag.
+        h.key_down(Key::W);
+        h.run_steps(2);
+        turns(&mut h, "walking");
+        h.key_up(Key::W);
+        h.run_steps(2);
+        // The camera apart from the view: the view turns, the camera stays.
+        h.state_mut().render_side.set_lock_camera(false);
+        h.run_steps(2);
+        let camera = h.state().render_side.pose_now().unwrap();
+        turns(&mut h, "Lock Camera to View off");
+        assert_eq!(h.state().render_side.pose_now().unwrap().eye, camera.eye, "the camera stayed");
+        h.state_mut().render_side.set_lock_camera(true);
+        // After a double-click in close.
+        h.event(egui::Event::PointerMoved(from));
+        h.step();
+        for _ in 0..2 {
+            h.event(egui::Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+            h.step();
+            h.event(egui::Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+            h.step();
+        }
+        h.run_steps(3);
+        turns(&mut h, "after a double-click");
+        // After looking around with the right button.
+        drag(&mut h, PointerButton::Secondary, vec2(-60.0, 20.0), Modifiers::NONE);
+        turns(&mut h, "after looking around");
+        // Seen from above (Numpad 7).
+        h.event(egui::Event::PointerMoved(from));
+        h.key_press(Key::Num7);
+        h.run_steps(3);
+        turns(&mut h, "from above");
+        // Shift: slides, the view's direction kept.
+        let (yaw, pitch, target, _) = h.state().render_side.view_now().unwrap();
+        drag(&mut h, PointerButton::Primary, vec2(80.0, 40.0), Modifiers::SHIFT);
+        let (yaw2, pitch2, target2, _) = h.state().render_side.view_now().unwrap();
+        assert!((yaw2 - yaw).abs() < 1e-4 && (pitch2 - pitch).abs() < 1e-4, "Shift-drag kept the direction");
+        assert!((0..3).any(|k| (target2[k] - target[k]).abs() > 0.5), "Shift-drag slid the view");
+        // The wheel comes closer, W held or not.
+        h.state_mut().render_side.set_view([500.0, 300.0, 500.0], [700.0, 64.0, 700.0]);
+        h.run_steps(2);
+        for walking in [false, true] {
+            if walking {
+                h.key_down(Key::W);
+            }
+            h.event(egui::Event::PointerMoved(view.center()));
+            h.step();
+            let (_, _, _, eye) = h.state().render_side.view_now().unwrap();
+            h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, 120.0), phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel, modifiers: Modifiers::NONE });
+            h.run_steps(12);
+            if walking {
+                h.key_up(Key::W);
+                h.run_steps(2);
+            }
+            let (_, _, _, eye2) = h.state().render_side.view_now().unwrap();
+            assert!(eye2[1] < eye[1] - 5.0, "the wheel came closer (W held: {walking}): {} to {}", eye[1], eye2[1]);
+        }
+    }
+
+    /// Space goes up and C down in the Render view, as flying in the game,
+    /// unless a Timeline is shown, where Space plays.
+    #[test]
+    fn space_flies_up_in_the_render_view() {
+        use crate::layout::Side;
+        use egui::Key;
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(ThemeChoice::Light);
+        h.run_steps(3);
+        h.state_mut().layout.show_side(Side::Render);
+        h.run_steps(3);
+        let started = std::time::Instant::now();
+        while h.state().render_side.building() && started.elapsed().as_secs() < 120 {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let view = |h: &egui_kittest::Harness<'static, MassifApp>| {
+            let areas: Vec<(crate::layout::AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+            areas.iter().find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::RenderView)).map(|(_, r)| *r).unwrap()
+        };
+        let hold = |h: &mut egui_kittest::Harness<'static, MassifApp>, key: Key| {
+            h.event(egui::Event::PointerMoved(view(h).center()));
+            h.step();
+            let y = h.state().render_side.view_now().unwrap().3[1];
+            h.key_down(key);
+            h.run_steps(10);
+            h.key_up(key);
+            h.run_steps(2);
+            h.state().render_side.view_now().unwrap().3[1] - y
+        };
+        assert!(hold(&mut h, Key::Space) > 0.5, "Space went up");
+        assert!(hold(&mut h, Key::C) < -0.5, "C went down");
+        // A Timeline shown: Space is its own.
+        h.get_by_label("Animation").click();
+        h.run_steps(3);
+        assert_eq!(hold(&mut h, Key::Space), 0.0, "Space did not move the camera with a Timeline shown");
+        assert!(hold(&mut h, Key::E) > 0.5, "E still goes up");
+        // A camera path playing: Space plays it, a left drag stops it and
+        // turns the view.
+        {
+            let app = h.state_mut();
+            let pose = app.render_side.pose_now().unwrap();
+            let anim = app.doc.world.meta.animation.get_or_insert_default();
+            anim.set(0.0, pose);
+            anim.set(2.0, massif_core::animation::Pose { eye: [pose.eye[0] + 200.0, pose.eye[1], pose.eye[2]], ..pose });
+        }
+        let from = view(&h).center() + vec2(-40.0, 30.0);
+        h.event(egui::Event::PointerMoved(from));
+        h.step();
+        h.key_press(Key::Space);
+        h.run_steps(3);
+        assert!(h.state().render_side.playing(), "Space played, a Timeline shown");
+        let yaw = h.state().render_side.view_now().unwrap().0;
+        h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.step();
+        for k in 1..=8 {
+            h.event(egui::Event::PointerMoved(from + vec2(15.0 * k as f32, 0.0)));
+            h.step();
+        }
+        h.event(egui::Event::PointerButton { pos: from + vec2(120.0, 0.0), button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+        assert!(!h.state().render_side.playing(), "the drag stopped it");
+        let yaw2 = h.state().render_side.view_now().unwrap().0;
+        assert!((yaw2 - yaw).abs() > 0.3, "and turned the view: {yaw} to {yaw2}");
+    }
+
     /// Settings keyed on the Timeline follow the playhead: the clouds'
     /// cover keyed at 0 s and 2 s is halfway at 1 s, eased, and held after;
     /// the hour keyed too sets the sun (MASSIF_SNAPSHOT_DIR: the Render

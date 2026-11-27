@@ -3213,7 +3213,9 @@ area draws the viewport at a time; a second one says where it is.
   in hand. **Double-click** (or **.**) comes in close on the point there;
   on the sky, the whole map. **Numpad 1, 3, 7** look from the front, the
   right, above (with **Ctrl**, the other side); **Shift-click** focuses the
-  lens there.
+  lens there. The left drag turns the view whatever else is on: while
+  walking, with the camera unlocked, after a double-click or looking
+  around. Moving the camera by hand stops a camera path playing.
 - The **map** button at the view's top right shows a minimap of the whole
   map (remembered): the camera on it with what it sees, and the Timeline's
   path. A click on it puts the camera over that place, its height and its
@@ -3221,9 +3223,12 @@ area draws the viewport at a time; a second one says where it is.
   animation is being saved.
 - Walk as with Blender's walk navigation: hold the **right button** to look
   around from where the camera stands, **W A S D** (by their places: Z Q S
-  D on an AZERTY keyboard) to move where you look, **Q** and **E** down and
-  up, at a speed by the distance to what is ahead, **Shift** four times
-  faster, **Alt** four times slower, the **wheel** while walking to set it.
+  D on an AZERTY keyboard) to move where you look, **E** or **Space** up and
+  **Q** or **C** down, as flying in the game, at a speed by the distance to
+  what is ahead, **Shift** four times faster, **Alt** four times slower, the
+  **wheel** with the right button held to set it. While a Timeline is
+  shown, **Space** plays and pauses instead; a field being typed in keeps
+  its keys.
   The view stays denoised at half its resolution while it moves.
 - **Camera** ▸ **Position**: the eye's **Location** to the tenth of a block,
   its **Turn** and **Tilt**. **Lock Camera to View** (on at first): off,

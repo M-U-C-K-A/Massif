@@ -368,6 +368,8 @@ pub struct RenderSide {
     /// The pass a setting's diamond was last under the pointer in (I keys
     /// the setting then, not the camera); the samples the view adds up to.
     key_hover: u64,
+    /// The frame a Timeline was last drawn in: Space plays there.
+    timeline_pass: u64,
     most_samples: u32,
     /// The render camera, as Blender's camera object, apart from the view
     /// while it is not locked to it: what stills, keyframes and the video
@@ -425,6 +427,7 @@ impl Default for RenderSide {
             minimap_asked: None,
             minimap_shown: None,
             key_hover: 0,
+            timeline_pass: 0,
             most_samples: MOST_SAMPLES,
             lock_camera: true,
             camera: None,
@@ -692,6 +695,28 @@ impl RenderSide {
         }
     }
 
+    /// The view: its yaw, pitch, the point it turns about and the eye
+    /// (tests).
+    #[cfg(test)]
+    pub fn view_now(&self) -> Option<(f32, f32, [f64; 3], [f64; 3])> {
+        self.orbit.map(|o| (o.yaw, o.pitch, o.target, o.eye()))
+    }
+
+    /// Lock Camera to View on or off, as its switch (tests).
+    #[cfg(test)]
+    pub fn set_lock_camera(&mut self, on: bool) {
+        if !on && self.lock_camera {
+            self.camera = self.orbit;
+        }
+        self.lock_camera = on;
+    }
+
+    /// Whether the Timeline's camera path plays (tests).
+    #[cfg(test)]
+    pub fn playing(&self) -> bool {
+        self.playback.playing
+    }
+
     /// The Timeline's playhead, seconds (tests).
     #[cfg(test)]
     pub fn playhead(&self) -> f32 {
@@ -923,9 +948,12 @@ impl RenderSide {
         // began; Shift with them slides, the point held following the
         // pointer; the wheel and a pinch come closer to the point under
         // the pointer; the right button held looks around from where the
-        // camera stands, and W A S D, Q E walk (by their places on the
-        // keyboard: Z Q S D, A E on an AZERTY one), Shift faster, Alt
-        // slower, the wheel while walking setting the speed. Every speed
+        // camera stands (the wheel then setting the walking speed), and
+        // W A S D walk, E or Space up, Q or C down, as flying in the game
+        // (by their places on the keyboard: Z Q S D, A E on an AZERTY
+        // one; Space plays instead while a Timeline is shown), Shift
+        // faster, Alt slower. A left drag turns the view whatever else is
+        // held. Every speed
         // goes by the distance to what is under the pointer or ahead, so
         // that two blocks over the grass and two kilometres over the map
         // are both in hand. Double-click: in close on the point there (on
@@ -954,9 +982,11 @@ impl RenderSide {
         // keyboard.
         ui.input(|i| {
             for e in &i.events {
-                if let egui::Event::Key { key, physical_key, pressed, repeat: false, .. } = e {
+                if let egui::Event::Key { key, physical_key, pressed, repeat: false, modifiers } = e {
                     let k = physical_key.unwrap_or(*key);
-                    if *pressed {
+                    // (A key pressed with Cmd is a shortcut: macOS does not
+                    // say when it is let go, and it would walk on.)
+                    if *pressed && !modifiers.command {
                         self.held.insert(k);
                     } else {
                         self.held.remove(&k);
@@ -967,6 +997,8 @@ impl RenderSide {
                 self.held.clear();
             }
         });
+        // Space goes up unless a Timeline is shown, where it plays.
+        let timeline_shown = self.timeline_pass + 2 >= ui.ctx().cumulative_pass_nr();
         let (mods, pointer, scroll, pinch, dt) = ui.input(|i| (i.modifiers, i.pointer.hover_pos(), i.smooth_scroll_delta.y + i.smooth_scroll_delta.x, i.zoom_delta(), i.stable_dt.min(0.1) as f64));
         let orbiting = response.dragged_by(PointerButton::Primary) || response.dragged_by(PointerButton::Middle);
         if response.drag_started_by(PointerButton::Primary) || response.drag_started_by(PointerButton::Middle) {
@@ -999,12 +1031,19 @@ impl RenderSide {
             let eye = orbit.eye();
             orbit.orbit_about(eye, d.x * 0.004, -d.y * 0.004);
         }
-        if (response.hovered() || looking) && self.still.is_none() && !ui.ctx().egui_wants_keyboard_input() {
+        if (response.hovered() || looking || orbiting) && self.still.is_none() && !ui.ctx().egui_wants_keyboard_input() {
             use egui::Key;
             let k = |key: Key| self.held.contains(&key) as i32 as f64;
-            let keys = if mods.command || mods.ctrl { [0.0; 3] } else { [k(Key::W) - k(Key::S), k(Key::D) - k(Key::A), k(Key::E) - k(Key::Q)] };
+            let up = k(Key::E).max(if timeline_shown { 0.0 } else { k(Key::Space) });
+            let down = k(Key::Q).max(k(Key::C));
+            let keys = if mods.command || mods.ctrl { [0.0; 3] } else { [k(Key::W) - k(Key::S), k(Key::D) - k(Key::A), up - down] };
             let walking = keys != [0.0; 3];
-            if walking || looking {
+            // Moving the camera by hand stops a camera path playing, which
+            // would take it back.
+            if (walking || orbiting || looking) && self.playback.playing {
+                self.playback.playing = false;
+            }
+            if looking {
                 if scroll != 0.0 {
                     self.walk_factor = (self.walk_factor * (scroll as f64 * 0.004).exp()).clamp(0.02, 50.0);
                 }
@@ -1619,7 +1658,7 @@ impl RenderSide {
             }
         }
         ui.add_space(4.0);
-        ui.label(RichText::new(tr!("Drag: turn about the point there · Shift-drag: slide · wheel: toward the pointer · right-drag: look around · W A S D, Q E: walk (Shift faster, Alt slower, wheel: speed) · double-click or .: in close there · Shift-click: focus there · Numpad 1 3 7: views")).size(11.0).color(pal.weak));
+        ui.label(RichText::new(tr!("Drag: turn about the point there · Shift-drag: slide · wheel: toward the pointer · right-drag: look around (wheel: walking speed) · W A S D: walk, E or Space up, Q or C down (Shift faster, Alt slower; Space plays while a Timeline is shown) · double-click or .: in close there · Shift-click: focus there · Numpad 1 3 7: views")).size(11.0).color(pal.weak));
         if keys.hovered {
             self.key_hover = ui.ctx().cumulative_pass_nr();
         }
@@ -2063,6 +2102,7 @@ impl RenderSide {
     /// playhead to scrub, play and step from key to key. Scrubbed, the
     /// Render Viewport shows the animation there.
     pub fn timeline_ui(&mut self, ui: &mut Ui, doc: &mut Document) {
+        self.timeline_pass = ui.ctx().cumulative_pass_nr();
         let pal = Palette::of(ui);
         let reduce = theme::reduce_motion(ui.ctx());
         let mut anim = doc.world.meta.animation.clone().unwrap_or_default();
