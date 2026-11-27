@@ -110,6 +110,9 @@ jobs:
           </dict>
           </plist>
           EOF
+          # Open Image Denoise, the Render side's denoiser (Apache-2.0): its
+          # pinned release, checked, in Contents/Frameworks, signed.
+          tools/oidn.sh macos "$app"
           # The .massif and .massifpack file types and the Quick Look extension that shows
           # a map as its file's icon. Not notarized: signed ad hoc so that
           # Apple silicon runs it.
@@ -133,6 +136,9 @@ jobs:
           # Explorer's thumbnails of .massif files: Massif registers it when it starts.
           Copy-Item target/release/massif_thumbnails.dll dist/Massif/MassifThumbnails.dll
           Copy-Item README.md dist/Massif/README.md
+          # Open Image Denoise, the Render side's denoiser (Apache-2.0).
+          bash tools/oidn.sh windows dist/Massif
+          if ($LASTEXITCODE -ne 0) { exit 1 }
           New-Item -ItemType Directory -Force -Path out | Out-Null
           Compress-Archive -Path dist/Massif -DestinationPath "out/Massif-$env:VERSION-windows-x86_64.zip"
 
@@ -152,6 +158,8 @@ jobs:
           Icon=massif
           Categories=Graphics;Game;
           EOF
+          # Open Image Denoise, the Render side's denoiser (Apache-2.0).
+          tools/oidn.sh linux "$dir"
           mkdir -p out
           tar -C dist -czf "out/Massif-${VERSION}-linux-x86_64.tar.gz" "massif-${VERSION}"
 
