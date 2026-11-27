@@ -189,6 +189,45 @@ struct Image {
     denoise: [wgpu::BindGroup; 2],
 }
 
+/// What the samples of an image hold, read back (see
+/// [`Renderer::read_samples`]).
+pub struct Samples {
+    pub width: u32,
+    pub height: u32,
+    pub samples: u32,
+    pub exposure: f32,
+    pub color: Vec<f32>,
+    pub albedo: Vec<f32>,
+    pub normal: Vec<f32>,
+}
+
+/// Linear light to sRGB bytes, as `tone` in `params.wgsl` does it (ACES
+/// fitted, then the display's gamma), opaque.
+pub fn tone_map(linear: &[f32], exposure: f32) -> Vec<u8> {
+    let mut out = Vec::with_capacity(linear.len() / 3 * 4);
+    for p in linear.as_chunks::<3>().0 {
+        for &c in p {
+            let x = c * exposure;
+            let m = ((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14)).clamp(0.0, 1.0);
+            out.push((m.powf(1.0 / 2.2) * 255.0 + 0.5) as u8);
+        }
+        out.push(255);
+    }
+    out
+}
+
+/// A half float's value.
+fn f16_to_f32(h: u16) -> f32 {
+    let sign = if h & 0x8000 != 0 { -1.0 } else { 1.0 };
+    let exp = ((h >> 10) & 0x1f) as i32;
+    let frac = (h & 0x3ff) as f32;
+    match exp {
+        0 => sign * frac * 2f32.powi(-24),
+        31 => if frac == 0.0 { sign * f32::INFINITY } else { f32::NAN },
+        e => sign * (1.0 + frac / 1024.0) * 2f32.powi(e - 15),
+    }
+}
+
 /// The denoiser's passes at most: prepare, five of the filter, write the
 /// image.
 const DENOISE_PASSES: u32 = 7;
@@ -268,6 +307,15 @@ pub struct Renderer {
     full: bool,
     /// Samples added up in the image so far.
     pub samples: u32,
+    /// The exposure of the last sample drawn.
+    exposure: f32,
+    /// Counts the times the samples started over: an image denoised from
+    /// those of another round is of another image.
+    pub round: u64,
+    /// The image shown is kept: the samples add up without drawing it (a
+    /// denoised one is shown, made on the processor; see
+    /// [`Self::show_linear`]).
+    pub hold: bool,
     /// The image shown denoised: drawn by [`Self::denoise`] (see
     /// [`Self::denoise_due`]), not by each sample.
     pub denoise: bool,
@@ -413,6 +461,9 @@ impl Renderer {
             full: false,
             samples: 0,
             denoise: false,
+            exposure: 1.0,
+            hold: false,
+            round: 0,
             frame: 0,
             max_binding,
         };
@@ -591,7 +642,7 @@ impl Renderer {
             self.pbr_layers = normals.len().min(room) as u32;
         }
         self.materials_revision = revision;
-        self.samples = 0;
+        self.start_over();
     }
 
     fn stride(&self) -> u32 {
@@ -605,7 +656,7 @@ impl Renderer {
         for chunk in chunks {
             fits &= self.put_one(chunk);
         }
-        self.samples = 0;
+        self.start_over();
         fits
     }
 
@@ -795,7 +846,7 @@ impl Renderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: IMAGE_FORMAT,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
         let storage_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -823,7 +874,7 @@ impl Renderer {
         let denoise = [group(0), group(1)];
         self.image = Some(Image { size, texture, storage: storage_view, view, accum, denoise });
         self.bind_group = None;
-        self.samples = 0;
+        self.start_over();
     }
 
     /// The image's size in pixels, once there is one.
@@ -838,7 +889,12 @@ impl Renderer {
 
     /// Start adding samples up again (the view or the light changed).
     pub fn restart(&mut self) {
+        self.start_over();
+    }
+
+    fn start_over(&mut self) {
         self.samples = 0;
+        self.round = self.round.wrapping_add(1);
     }
 
     /// Add a sample a pixel of the view from `camera` under `light`: every
@@ -847,7 +903,11 @@ impl Renderer {
     pub fn render(&mut self, camera: &Camera, light: &Light, coarse: bool) -> Option<wgpu::CommandBuffer> {
         let h = self.image.as_ref()?.size[1];
         let cmd = self.encode(camera, light, coarse, 0, h)?;
-        self.samples = if coarse { 0 } else { self.samples + 1 };
+        if coarse {
+            self.start_over();
+        } else {
+            self.samples += 1;
+        }
         Some(cmd)
     }
 
@@ -902,7 +962,7 @@ impl Renderer {
             }));
         }
         if coarse {
-            self.samples = 0;
+            self.start_over();
         }
         let e = self.extent;
         let origin = [e.x0 as f64 * 16.0, e.min_y as f64, e.z0 as f64 * 16.0];
@@ -924,7 +984,7 @@ impl Renderer {
         let state = SkyState { sun: sun.to_array(), rayleigh: light.air, mie: light.haze, mie_g: light.haze_g, altitude };
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("massif render") });
         if self.sky.update(&self.queue, &mut encoder, state) && !coarse {
-            self.samples = 0;
+            self.start_over();
         }
         let tint = tint.map(|c| c * strength);
         let params = Params {
@@ -945,11 +1005,12 @@ impl Renderer {
             size: [w, h, self.frame.wrapping_mul(2654435761).wrapping_add(1), self.samples],
             grid: [e.width as i32, e.depth as i32, e.height(), e.sections as i32],
             info: [self.stride(), self.pyramid.levels.len() as u32, light.bounces, coarse as u32],
-            flags: [self.denoising() as u32, light.grass_blades, light.grass_height.clamp(0.1, 1.0).to_bits(), 0],
+            flags: [(self.denoising() || self.hold) as u32, light.grass_blades, light.grass_height.clamp(0.1, 1.0).to_bits(), 0],
             level_off,
             level_w,
         };
         self.queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
+        self.exposure = light.exposure;
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("massif render trace"), timestamp_writes: None });
             pass.set_pipeline(&self.pipeline);
@@ -1021,6 +1082,73 @@ impl Renderer {
             }
         }
         Some(encoder.finish())
+    }
+
+    /// What the samples added up hold, for a denoiser on the processor:
+    /// the light (linear, the mean of the samples), the albedo and the
+    /// normal the rays first met, three floats a pixel each, the image's
+    /// width and height. Waits for the graphics card.
+    pub fn read_samples(&self) -> Option<Samples> {
+        let image = self.image.as_ref()?;
+        let [w, h] = image.size;
+        let bytes = image.accum.size();
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor { label: Some("massif render samples readback"), size: bytes, usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ, mapped_at_creation: false });
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("massif render samples readback") });
+        encoder.copy_buffer_to_buffer(&image.accum, 0, &buffer, 0, bytes);
+        self.queue.submit([encoder.finish()]);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer.map_async(wgpu::MapMode::Read, .., move |r| {
+            let _ = tx.send(r);
+        });
+        self.device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+        rx.recv().ok()?.ok()?;
+        let data = buffer.get_mapped_range(..).ok()?;
+        let words: &[u32] = bytemuck::cast_slice(&data);
+        let n = (w * h) as usize;
+        let (mut color, mut albedo, mut normal) = (Vec::with_capacity(n * 3), Vec::with_capacity(n * 3), Vec::with_capacity(n * 3));
+        let half = |u: u32| -> [f32; 2] { [f16_to_f32(u as u16), f16_to_f32((u >> 16) as u16)] };
+        let snorm = |u: u32| -> [f32; 2] { [(u as u16 as i16) as f32 / 32767.0, ((u >> 16) as u16 as i16) as f32 / 32767.0] };
+        for i in 0..n {
+            let a = &words[i * 8..i * 8 + 8];
+            let count = f32::from_bits(a[3]).max(1.0);
+            for &bits in &a[..3] {
+                let v = f32::from_bits(bits) / count;
+                color.push(if v.is_finite() { v.max(0.0) } else { 0.0 });
+            }
+            let (rg, bd) = (half(a[4]), half(a[5]));
+            albedo.extend_from_slice(&[rg[0].clamp(0.0, 1.0), rg[1].clamp(0.0, 1.0), bd[0].clamp(0.0, 1.0)]);
+            // The normal, octahedral; none (the sky) as zero.
+            let e = snorm(a[7]);
+            let sky = bd[1] >= 15000.0;
+            let mut nv = [e[0], e[1], 1.0 - e[0].abs() - e[1].abs()];
+            if nv[2] < 0.0 {
+                let (x, y) = (nv[0], nv[1]);
+                nv[0] = (1.0 - y.abs()) * x.signum();
+                nv[1] = (1.0 - x.abs()) * y.signum();
+            }
+            let len = (nv[0] * nv[0] + nv[1] * nv[1] + nv[2] * nv[2]).sqrt().max(1e-6);
+            normal.extend(nv.map(|c| if sky { 0.0 } else { c / len }));
+        }
+        drop(data);
+        buffer.unmap();
+        Some(Samples { width: w, height: h, samples: self.samples, exposure: self.exposure, color, albedo, normal })
+    }
+
+    /// Show `linear` (three floats a pixel, the image's size) in place of
+    /// the image drawn, tone mapped as the shader does.
+    pub fn show_linear(&self, linear: &[f32], exposure: f32) {
+        let Some(image) = self.image.as_ref() else { return };
+        let [w, h] = image.size;
+        if linear.len() != (w * h * 3) as usize {
+            return;
+        }
+        let rgba = tone_map(linear, exposure);
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &image.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            &rgba,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
     }
 
     /// The image last drawn, RGBA in sRGB, for tests and stills.

@@ -180,6 +180,13 @@ pub struct RenderSide {
     /// The view shown denoised, and the stills saved so.
     denoise: bool,
     still_denoise: bool,
+    /// Open Image Denoise on the view: the image it is working on (the
+    /// renderer's round of samples), the round last seen, the samples last
+    /// denoised, and whether its image is the one shown.
+    intel: Option<(u64, Receiver<Denoised>)>,
+    round: u64,
+    intel_at: u32,
+    intel_shown: bool,
     /// The grass drawn as blades of grass (detailed), not as the game's.
     blades: bool,
     still: Option<Still>,
@@ -217,6 +224,10 @@ impl Default for RenderSide {
             still_samples: 256,
             denoise: true,
             still_denoise: true,
+            intel: None,
+            round: 0,
+            intel_at: 0,
+            intel_shown: false,
             blades: false,
             still: None,
             writing: None,
@@ -228,6 +239,13 @@ impl Default for RenderSide {
         }
     }
 }
+
+/// An image denoised on the processor: its light (linear) and exposure.
+type Denoised = Result<(Vec<f32>, f32), String>;
+
+/// The samples a pixel at which the view is denoised by Open Image
+/// Denoise (and at the last, where it stops).
+const INTEL_AT: [u32; 6] = [1, 4, 16, 64, 256, 1024];
 
 /// A muted title over a well.
 fn title(ui: &mut Ui, text: &str) {
@@ -567,16 +585,32 @@ impl RenderSide {
             if scene.renderer.samples >= still.samples {
                 // Done: read it back, and write it away from the frames.
                 let still = self.still.take().expect("drawn above");
+                // Denoised as Blender's renders are (Open Image Denoise, on
+                // the writing thread), or by the graphics card's filter
+                // without it.
+                let intel = still.denoise && massif_render::oidn::available();
+                let samples = if intel { scene.renderer.read_samples() } else { None };
                 if still.denoise
+                    && samples.is_none()
                     && let Some(cmd) = scene.renderer.denoise(1.0)
                 {
                     queue.submit([cmd]);
                 }
-                let image = scene.renderer.read_image();
+                let image = if samples.is_some() { None } else { scene.renderer.read_image() };
                 let (tx, rx) = std::sync::mpsc::channel();
                 let took = still.started.elapsed().as_secs_f64();
                 std::thread::spawn(move || {
                     let name = still.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    let image = match samples {
+                        Some(mut s) => match massif_render::oidn::denoise(&mut s.color, Some(&s.albedo), Some(&s.normal), s.width as usize, s.height as usize) {
+                            Ok(()) => Some((s.width, s.height, massif_render::gpu::tone_map(&s.color, s.exposure))),
+                            Err(e) => {
+                                log::warn!("denoising the image: {e}");
+                                Some((s.width, s.height, massif_render::gpu::tone_map(&s.color, s.exposure)))
+                            }
+                        },
+                        None => image,
+                    };
                     let result = match image {
                         Some((w, h, rgba)) => {
                             let mut png = Vec::new();
@@ -606,8 +640,15 @@ impl RenderSide {
             // sooner and stops there.
             // Denoised as the samples come (the samples kept as they are);
             // turned on or off, the image made from them again.
+            // The graphics card's filter at once; Open Image Denoise (as
+            // Blender's) as the samples settle, its image shown in place
+            // of the filter's once it comes.
             let toggled = scene.renderer.denoise != self.denoise;
             scene.renderer.denoise = self.denoise;
+            if toggled && !self.denoise {
+                scene.renderer.hold = false;
+                self.intel_shown = false;
+            }
             let mut drawn = false;
             if moving || scene.renderer.samples < most {
                 if let Some(cmd) = scene.renderer.render(&orbit.camera(self.fov), &self.light, moving) {
@@ -616,11 +657,50 @@ impl RenderSide {
                 }
                 ui.ctx().request_repaint();
             }
+            let n = scene.renderer.samples;
+            if scene.renderer.round != self.round {
+                // Started again: what was denoised is of another image.
+                self.round = scene.renderer.round;
+                self.intel = None;
+                self.intel_at = 0;
+                self.intel_shown = false;
+                scene.renderer.hold = false;
+            }
             // (And once more on the last sample, where the image stops.)
-            if (toggled || (drawn && (scene.renderer.denoise_due() || (self.denoise && scene.renderer.samples >= most))))
+            if !self.intel_shown
+                && (toggled || (drawn && (scene.renderer.denoise_due() || (self.denoise && n >= most))))
                 && let Some(cmd) = scene.renderer.denoise(if self.denoise { 1.0 } else { 0.0 })
             {
                 queue.submit([cmd]);
+            }
+            if self.denoise && !moving && self.intel.is_none() && n != self.intel_at && n > 0 && (INTEL_AT.contains(&n) || n >= most) && massif_render::oidn::available()
+                && let Some(mut s) = scene.renderer.read_samples()
+            {
+                let (tx, rx) = std::sync::mpsc::channel();
+                std::thread::spawn(move || {
+                    let result = massif_render::oidn::denoise(&mut s.color, Some(&s.albedo), Some(&s.normal), s.width as usize, s.height as usize).map(|()| (s.color, s.exposure));
+                    let _ = tx.send(result);
+                });
+                self.intel = Some((self.round, rx));
+                self.intel_at = n;
+            }
+            if let Some((round, rx)) = &self.intel {
+                match rx.try_recv() {
+                    Ok(result) => {
+                        match result {
+                            Ok((linear, exposure)) if *round == self.round && self.denoise => {
+                                scene.renderer.show_linear(&linear, exposure);
+                                scene.renderer.hold = true;
+                                self.intel_shown = true;
+                            }
+                            Ok(_) => {}
+                            Err(e) => log::warn!("denoising the view: {e}"),
+                        }
+                        self.intel = None;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => ui.ctx().request_repaint_after(Duration::from_millis(30)),
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => self.intel = None,
+                }
             }
         }
         if let Some(rx) = &self.writing {

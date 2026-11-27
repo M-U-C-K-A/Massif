@@ -679,6 +679,8 @@ fn the_denoiser_settles_the_image_sooner() {
     r.restart();
     let mut raw = Vec::new();
     let mut clean = Vec::new();
+    // Open Image Denoise, where it is here: its error at the milestones.
+    let mut intel = Vec::new();
     while r.samples < 256 {
         let cmd = r.render(&camera, &light, false).unwrap();
         wait(cmd);
@@ -692,7 +694,17 @@ fn the_denoiser_settles_the_image_sooner() {
         clean.push(error(&linear(&r.read_image().unwrap().2), &reference));
         if [1, 4, 16, 64, 256].contains(&n) {
             save(&r, &format!("{n:04}-denoised"));
+            if oidn::available() {
+                let mut s = r.read_samples().unwrap();
+                oidn::denoise(&mut s.color, Some(&s.albedo), Some(&s.normal), s.width as usize, s.height as usize).unwrap();
+                r.show_linear(&s.color, s.exposure);
+                intel.push((n, error(&linear(&r.read_image().unwrap().2), &reference)));
+                save(&r, &format!("{n:04}-oidn"));
+            }
         }
+    }
+    for (n, e) in &intel {
+        eprintln!("  {n:>3} samples: error {e:.4} with Open Image Denoise");
     }
     for n in [1usize, 4, 16, 64, 256] {
         eprintln!("  {n:>3} samples: error {:.4} raw, {:.4} denoised", raw[n - 1], clean[n - 1]);
@@ -735,6 +747,21 @@ fn the_denoiser_settles_the_image_sooner() {
         .collect();
     times.sort();
     let best_trace = trace.iter().min().unwrap();
+    if oidn::available() {
+        let mut s = r.read_samples().unwrap();
+        let t = Instant::now();
+        let _ = r.read_samples().unwrap();
+        let read = t.elapsed();
+        let mut best = Duration::MAX;
+        for _ in 0..5 {
+            let mut c = s.color.clone();
+            let t = Instant::now();
+            oidn::denoise(&mut c, Some(&s.albedo), Some(&s.normal), 1920, 1080).unwrap();
+            best = best.min(t.elapsed());
+        }
+        oidn::denoise(&mut s.color, Some(&s.albedo), Some(&s.normal), 1920, 1080).unwrap();
+        eprintln!("  at 1920 × 1080: Open Image Denoise {:.0} ms best of 5, reading the samples back {:.0} ms", best.as_secs_f64() * 1000.0, read.as_secs_f64() * 1000.0);
+    }
     eprintln!("  at 1920 × 1080: a denoising {:.2} ms best, {:.2} ms middle; a sample {:.1} ms best", times[0].as_secs_f64() * 1000.0, times[10].as_secs_f64() * 1000.0, best_trace.as_secs_f64() * 1000.0);
 }
 
