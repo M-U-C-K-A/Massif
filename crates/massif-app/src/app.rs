@@ -5854,6 +5854,19 @@ impl MassifApp {
                     let ctx = ui.ctx().clone();
                     self.command(&ctx, Command::ReplaceTerrain(Some(t)));
                 }
+                // A terrain dragged to sort: one step to undo.
+                if let Some((t, target, after)) = self.tools.place_terrain.take() {
+                    let mut new = self.doc.world.registry.clone();
+                    new.place_terrain(t, target, after);
+                    if new != self.doc.world.registry {
+                        let meta = self.doc.world.meta.clone();
+                        self.doc.history.replace_settings(&mut self.doc.world, meta, new, tr!("Move a terrain"));
+                        edited = true;
+                    }
+                }
+                if std::mem::take(&mut self.tools.terrain_recoloured) {
+                    self.map_cache.invalidate_all();
+                }
                 // The categories are the map's: saved with it.
                 if edited {
                     self.doc.mark_changed();

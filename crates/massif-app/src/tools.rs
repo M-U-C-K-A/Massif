@@ -688,6 +688,14 @@ pub struct ToolState {
     /// window opens Replace terrain… with it.
     #[serde(skip)]
     pub replace_terrain: Option<u16>,
+    /// A terrain dragged onto another in the Terrain panel: put before it
+    /// (or after, `true`), one step to undo, by the window.
+    #[serde(skip)]
+    pub place_terrain: Option<(u16, u16, bool)>,
+    /// A terrain's map colour changed in the Terrain panel: the map is
+    /// drawn again.
+    #[serde(skip)]
+    pub terrain_recoloured: bool,
     /// The column the Eyedropper tool was clicked on, with several things
     /// to paint with there: the window offers them by the pointer.
     #[serde(skip)]
@@ -1333,6 +1341,8 @@ impl Default for ToolState {
             filter_pick: None,
             filter_pick_at: None,
             replace_terrain: None,
+            place_terrain: None,
+            terrain_recoloured: false,
             eyedrop_at: None,
             region_pick: None,
             select_mode: Default::default(),

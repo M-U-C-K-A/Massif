@@ -2296,6 +2296,22 @@ mod tests {
             .unwrap();
     }
 
+    /// A terrain's map colour set by the user draws its columns in it;
+    /// Auto draws them in its own colour again.
+    #[test]
+    fn a_terrain_colour_set_by_hand_is_drawn() {
+        let mut w = world();
+        let t = w.registry.terrain_by_name("Grass").unwrap().0;
+        let at = Sample { height: 70.0, levels: 1, terrain: t, ..Sample::EMPTY };
+        let pixel = |reg: &Registry| Colorizer::new(reg, MapStyle::default(), 63.0).pixel(&at, None, &at, &at, &at, &at, 1.0, 1.0, None, None, None);
+        let own = pixel(&w.registry);
+        w.registry.set_terrain_color(t, Some([255, 0, 0]));
+        let red = pixel(&w.registry);
+        assert!(red.r() > own.r() && red.g() < own.g(), "drawn red: {red:?} against {own:?}");
+        w.registry.set_terrain_color(t, None);
+        assert_eq!(pixel(&w.registry), own);
+    }
+
     /// Close up, each block is shaded against its neighbour on the side
     /// the light comes from: a step is one block wide, ground a fraction of
     /// a block higher looks the same, and a block alone above the others

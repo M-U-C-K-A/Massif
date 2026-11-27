@@ -615,6 +615,15 @@ pub struct Registry {
     /// the map, listed under Hidden).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_terrains: Vec<u16>,
+    /// The order of the terrains in the Terrain panel, as the user dragged
+    /// them (only those placed; the others after, by their number). Only
+    /// the lists: the map and the export never read it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub terrain_order: Vec<u16>,
+    /// The terrains whose map colour the user set, each with the colour it
+    /// had before (its own, from its blocks), to go back to with Auto.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub terrain_colors: Vec<(u16, [u8; 3])>,
     /// Layers shown alone, as WorldPainter's solo: kept with the map so
     /// that the visibility from before comes back exactly, even after the
     /// map is opened again.
@@ -787,6 +796,8 @@ impl Registry {
             palettes: Vec::new(),
             terrain_groups: Vec::new(),
             hidden_terrains: Vec::new(),
+            terrain_order: Vec::new(),
+            terrain_colors: Vec::new(),
             solo: None,
             tree_sizes: vanilla_tree_sizes(),
             annotations: Default::default(),
@@ -1212,6 +1223,60 @@ impl Registry {
         }
     }
 
+    /// The terrains in the order of the Terrain panel: those the user
+    /// placed, then the others by their number.
+    pub fn terrains_in_order(&self) -> Vec<u16> {
+        let n = self.terrains.len() as u16;
+        let mut out: Vec<u16> = Vec::with_capacity(n as usize);
+        for &t in &self.terrain_order {
+            if t < n && !out.contains(&t) {
+                out.push(t);
+            }
+        }
+        let placed = out.clone();
+        out.extend((0..n).filter(|t| !placed.contains(t)));
+        out
+    }
+
+    /// Terrain `t` put just before (or after) terrain `target`, in its
+    /// category: the Terrain panel's drag to sort.
+    pub fn place_terrain(&mut self, t: u16, target: u16, after: bool) {
+        let n = self.terrains.len() as u16;
+        if t == target || t >= n || target >= n {
+            return;
+        }
+        let group = self.terrains[target as usize].group.clone();
+        if self.terrains[t as usize].group != group {
+            self.move_terrain(t, &group);
+        }
+        let mut order = self.terrains_in_order();
+        order.retain(|&o| o != t);
+        let at = order.iter().position(|&o| o == target).expect("listed") + usize::from(after);
+        order.insert(at, t);
+        self.terrain_order = order;
+    }
+
+    /// Terrain `t` shown on the map in `color`, or (`None`) in its own
+    /// colour again.
+    pub fn set_terrain_color(&mut self, t: u16, color: Option<[u8; 3]>) {
+        let Some(def) = self.terrains.get_mut(t as usize) else { return };
+        let own = self.terrain_colors.iter().position(|(o, _)| *o == t);
+        match (color, own) {
+            (Some(c), Some(_)) => def.color = c,
+            (Some(c), None) => {
+                self.terrain_colors.push((t, def.color));
+                def.color = c;
+            }
+            (None, Some(k)) => def.color = self.terrain_colors.remove(k).1,
+            (None, None) => {}
+        }
+    }
+
+    /// Whether the user set terrain `t`'s map colour.
+    pub fn terrain_color_set(&self, t: u16) -> bool {
+        self.terrain_colors.iter().any(|(o, _)| *o == t)
+    }
+
     /// Terrain `t` hidden from the lists (`true`) or shown again.
     pub fn hide_terrain(&mut self, t: u16, hidden: bool) {
         self.hidden_terrains.retain(|&h| h != t);
@@ -1224,6 +1289,39 @@ impl Registry {
 
 #[cfg(test)]
 mod tests {
+    /// Terrains dragged to sort: placed before or after another, into its
+    /// category; a colour set, then Auto again; both in the file only once
+    /// set.
+    #[test]
+    fn terrains_sorted_and_coloured_by_hand() {
+        let mut reg = super::Registry::vanilla();
+        let json = serde_json::to_string(&reg).unwrap();
+        assert!(!json.contains("terrain_order") && !json.contains("terrain_colors"));
+        let n = reg.terrains.len() as u16;
+        assert_eq!(reg.terrains_in_order(), (0..n).collect::<Vec<_>>());
+        let (a, b) = (reg.terrain_by_name("Grass").unwrap().0, reg.terrain_by_name("Sand").unwrap().0);
+        reg.place_terrain(b, a, false);
+        let order = reg.terrains_in_order();
+        assert_eq!(order.len(), n as usize);
+        let at = |t: u16, o: &[u16]| o.iter().position(|&x| x == t).unwrap();
+        assert_eq!(at(b, &order) + 1, at(a, &order));
+        assert_eq!(reg.terrains[b as usize].group, reg.terrains[a as usize].group);
+        reg.place_terrain(b, a, true);
+        let order = reg.terrains_in_order();
+        assert_eq!(at(a, &order) + 1, at(b, &order));
+        let own = reg.terrains[a as usize].color;
+        reg.set_terrain_color(a, Some([255, 0, 0]));
+        reg.set_terrain_color(a, Some([0, 0, 255]));
+        assert_eq!(reg.terrains[a as usize].color, [0, 0, 255]);
+        assert!(reg.terrain_color_set(a));
+        let back: super::Registry = serde_json::from_str(&serde_json::to_string(&reg).unwrap()).unwrap();
+        assert_eq!(back.terrain_order, reg.terrain_order);
+        assert_eq!(back.terrain_colors, reg.terrain_colors);
+        reg.set_terrain_color(a, None);
+        assert_eq!(reg.terrains[a as usize].color, own);
+        assert!(!reg.terrain_color_set(a));
+    }
+
     /// The Terrain panel's categories: ordered, renamed (merged into one of
     /// the same name), deleted into another, kept in the file with the
     /// hidden terrains, only when set.

@@ -571,8 +571,14 @@ named at once. Right-click a category to rename it (or double-click its
 title), move it up or down, hide its terrains, or delete it (its terrains
 go to Other; none is removed). **Hide from the list** takes a terrain out of
 the lists without touching the map: it is listed under **Hidden**, at the
-end, where **Show in the list** brings it back. The map keeps its
-categories, their order and the hidden terrains.
+end, where **Show in the list** brings it back. Drag a terrain onto
+another to put it before or after it (by the half it is let go on, an
+accent line shows where), in its category or another one, as one step to
+undo; the order only changes the lists, never the export. Right-click a
+terrain ▸ **Map colour** to choose its colour on the 2D map and in its
+swatches; **Auto** gives it back its own colour, from its blocks. The map
+keeps its categories, their order, the terrains' order and colours and the
+hidden terrains.
 
 **Blocks of your game and mods, as terrains.** Under the map's terrains,
 **From your game and mods** lists the blocks that make ground, by source and

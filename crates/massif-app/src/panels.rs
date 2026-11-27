@@ -4651,7 +4651,8 @@ fn swatch(ui: &mut Ui, color: Color32) {
     ui.painter().rect(r, 3, color, Stroke::new(1.0, Color32::from_black_alpha(60)), StrokeKind::Inside);
 }
 
-/// A terrain being dragged to another category of the Terrain panel.
+/// A terrain being dragged in the Terrain panel: onto another terrain to
+/// sort it there, or onto another category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TerrainDrag(u16);
 
@@ -4670,6 +4671,10 @@ enum GroupAction {
     Delete(String),
     /// Replace terrain… with this terrain to replace.
     Replace(u16),
+    /// A terrain dropped on another: before it, or after (`true`).
+    Place(u16, u16, bool),
+    /// A terrain's map colour, or its own again (`None`).
+    Colour(u16, Option<[u8; 3]>),
 }
 
 /// The Terrain panel: the map's terrains in categories the user orders,
@@ -4751,11 +4756,39 @@ pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &mut Registry, sol
         terrain_icon(ui, rect.shrink(4.0), reg, i as u16, blocks);
         let name = reg.terrain(TerrainId(i as u16)).name.clone();
         response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &name));
+        // Another terrain held over it: put before it or after, by the
+        // half it is let go on, the accent line showing where.
+        if let Some(held) = egui::DragAndDrop::payload::<TerrainDrag>(ui.ctx())
+            && held.0 as usize != i
+            && let Some(p) = ui.ctx().pointer_hover_pos().or_else(|| ui.ctx().pointer_latest_pos()).filter(|p| rect.expand(2.0).contains(*p))
+        {
+            let after = p.x > rect.center().x;
+            if ui.input(|i| i.pointer.any_released()) {
+                egui::DragAndDrop::clear_payload(ui.ctx());
+                actions.push(GroupAction::Place(held.0, i as u16, after));
+            } else {
+                let x = if after { rect.right() + 2.0 } else { rect.left() - 2.0 };
+                ui.painter().line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], Stroke::new(2.0, pal.accent));
+            }
+        }
         let response = response.on_hover_text(describe_terrain(reg, i as u16));
         if response.clicked() {
             *picked = Some(i as u16);
         }
         response.context_menu(|ui| {
+            // Its colour on the map, the user's or its own.
+            let set = reg.terrain_color_set(i as u16);
+            ui.horizontal(|ui| {
+                let mut rgb = reg.terrains[i].color;
+                ui.label(tr!("Map colour"));
+                if ui.color_edit_button_srgb(&mut rgb).changed() {
+                    actions.push(GroupAction::Colour(i as u16, Some(rgb)));
+                }
+                if set && ui.button(tr!("Auto")).on_hover_text(tr!("Back to its own colour, from its blocks")).clicked() {
+                    actions.push(GroupAction::Colour(i as u16, None));
+                }
+            });
+            ui.separator();
             ui.menu_button(theme::with_icon(Icon::FolderInput, tr!("Move to")), |ui| {
                 for g in names {
                     let here = reg.terrains[i].group == *g;
@@ -4781,14 +4814,20 @@ pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &mut Registry, sol
             }
         });
     };
+    // Each terrain's place in the lists, as the user sorted them.
+    let mut rank = vec![0usize; reg.terrains.len()];
+    for (k, t) in reg.terrains_in_order().into_iter().enumerate() {
+        rank[t as usize] = k;
+    }
     for (k, group) in names.iter().enumerate() {
-        let members: Vec<usize> = reg
+        let mut members: Vec<usize> = reg
             .terrains
             .iter()
             .enumerate()
             .filter(|(i, t)| t.group == *group && !reg.hidden_terrains.contains(&(*i as u16)) && (needle.is_empty() || t.name.to_lowercase().contains(&needle) || group.to_lowercase().contains(&needle)))
             .map(|(i, _)| i)
             .collect();
+        members.sort_by_key(|&i| rank[i]);
         // An empty category shows only while nothing is searched for.
         if members.is_empty() && !needle.is_empty() {
             continue;
@@ -4915,7 +4954,7 @@ pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &mut Registry, sol
         actions.push(GroupAction::NewGroup(None));
     }
     let made = ground_blocks(ui, reg, blocks, &needle);
-    let mut edited = sorted_imported || actions.iter().any(|a| !matches!(a, GroupAction::Replace(_)));
+    let mut edited = sorted_imported || actions.iter().any(|a| !matches!(a, GroupAction::Replace(_) | GroupAction::Place(..)));
     for action in actions {
         match action {
             GroupAction::Move(t, g) => reg.move_terrain(t, &g),
@@ -4940,6 +4979,11 @@ pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &mut Registry, sol
             }
             GroupAction::Delete(g) => reg.delete_terrain_group(&g, if g == "Other" { "Imported" } else { "Other" }),
             GroupAction::Replace(t) => tools.replace_terrain = Some(t),
+            GroupAction::Place(t, target, after) => tools.place_terrain = Some((t, target, after)),
+            GroupAction::Colour(t, c) => {
+                reg.set_terrain_color(t, c);
+                tools.terrain_recoloured = true;
+            }
         }
     }
     // A block of the game or a mod picked: a terrain of the map, in its
@@ -5690,6 +5734,82 @@ mod tests {
         }
     }
 
+    /// A terrain dragged onto another is put before or after it, by the
+    /// half it is let go on, into that terrain's category; a terrain's menu
+    /// sets its map colour and Auto gives it back its own. Rendered with
+    /// MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn terrains_are_sorted_by_dragging_and_coloured() {
+        use egui_kittest::kittest::Queryable;
+        struct S {
+            tools: ToolState,
+            reg: Registry,
+            blocks: BlockLibrary,
+        }
+        let draw = |ui: &mut Ui, s: &mut S| {
+            crate::theme::install(ui.ctx());
+            let (mut solo, mut search) = (false, String::new());
+            terrain_panel(ui, &mut s.tools, &mut s.reg, &mut solo, &mut search, &mut s.blocks);
+            // As the window does, one step to undo there.
+            if let Some((t, target, after)) = s.tools.place_terrain.take() {
+                s.reg.place_terrain(t, target, after);
+            }
+        };
+        let reg = Registry::vanilla();
+        let (sand, grass) = (reg.terrain_by_name("Sand").unwrap().0, reg.terrain_by_name("Grass").unwrap().0);
+        // The terrain in hand, named under the lists: none of those dragged.
+        let last = reg.terrains.iter().rposition(|t| !["Grass", "Sand"].contains(&t.name.as_str())).unwrap() as u16;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(320.0, 1600.0)).build_ui_state(draw, S { tools: ToolState { terrain: last, ..ToolState::default() }, reg, blocks: BlockLibrary::default() });
+        h.run_steps(2);
+        let at = |reg: &Registry, t: u16| reg.terrains_in_order().iter().position(|&o| o == t).unwrap();
+        let mut drag = |h: &mut egui_kittest::Harness<S>, from: &str, to: &str, dx: f32| {
+            let from = h.get_by_label(from).rect().center();
+            let to = h.get_by_label(to).rect().center() + vec2(dx, 0.0);
+            h.drag_at(from);
+            h.run_steps(1);
+            h.hover_at(from + vec2(0.0, -6.0));
+            h.run_steps(1);
+            h.hover_at(to);
+            h.run_steps(1);
+            h.drop_at(to);
+            h.run_steps(2);
+        };
+        // Onto Grass's left half: just before it, in its category.
+        drag(&mut h, "Sand", "Grass", -8.0);
+        let reg = &h.state().reg;
+        assert_eq!(at(reg, sand) + 1, at(reg, grass));
+        assert_eq!(reg.terrains[sand as usize].group, reg.terrains[grass as usize].group);
+        // Onto its right half: just after it, and the tiles drawn so.
+        drag(&mut h, "Sand", "Grass", 8.0);
+        let reg = &h.state().reg;
+        assert_eq!(at(reg, grass) + 1, at(reg, sand));
+        assert!(h.get_by_label("Grass").rect().left() < h.get_by_label("Sand").rect().left());
+        // The colour: none set, no Auto; set, Auto takes it back.
+        let own = h.state().reg.terrains[grass as usize].color;
+        h.get_by_label("Grass").click_secondary();
+        h.run_steps(2);
+        h.get_by_label("Map colour");
+        assert!(h.query_by_label("Auto").is_none());
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        h.state_mut().reg.set_terrain_color(grass, Some([200, 30, 30]));
+        h.get_by_label("Grass").click_secondary();
+        h.run_steps(2);
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from) {
+            let s = h.state_mut();
+            let mut r = egui_kittest::Harness::builder().with_size(vec2(320.0, 700.0)).with_pixels_per_point(2.0).with_accessibility_check(false).wgpu().build_ui_state(draw, S { tools: ToolState { terrain: last, ..ToolState::default() }, reg: s.reg.clone(), blocks: BlockLibrary::default() });
+            r.run_steps(2);
+            r.get_by_label("Grass").click_secondary();
+            r.run_steps(3);
+            r.render().unwrap().save(dir.join("terrain-sort-colour.png")).unwrap();
+        }
+        h.get_by_label("Auto").click();
+        h.run_steps(2);
+        assert_eq!(h.state().reg.terrains[grass as usize].color, own);
+        assert!(!h.state().reg.terrain_color_set(grass));
+        assert!(h.state().tools.terrain_recoloured);
+    }
+
     /// Info at a narrow panel's width: the Blocks menu, opened, and its
     /// help stay inside the panel, the mod's palette offered beside the
     /// game's (rendered with MASSIF_SNAPSHOT_DIR).
@@ -5718,6 +5838,11 @@ mod tests {
                 crate::theme::install(ui.ctx());
                 let (mut solo, mut search) = (false, String::new());
                 s.edited |= terrain_panel(ui, &mut s.tools, &mut s.reg, &mut solo, &mut search, &mut s.blocks).1;
+                // As the window does: one step to undo, the map changed.
+                if let Some((t, target, after)) = s.tools.place_terrain.take() {
+                    s.reg.place_terrain(t, target, after);
+                    s.edited = true;
+                }
             },
             S { tools: ToolState { terrain: last, ..ToolState::default() }, reg, blocks: BlockLibrary::default(), edited: false },
         );
