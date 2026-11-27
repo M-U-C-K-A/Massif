@@ -52,6 +52,59 @@ struct Still {
     started: Instant,
 }
 
+/// What a frame of an animation gives its writer: the samples to denoise
+/// (Open Image Denoise, on the writer's thread), or the image.
+enum FrameData {
+    Samples(massif_render::gpu::Samples),
+    Image(u32, u32, Vec<u8>),
+}
+
+/// An animation being drawn along the Timeline's camera path, a still a
+/// frame, each written (MP4 or PNG images) on a thread of its own.
+struct Movie {
+    anim: Animation,
+    /// The frames, the first drawn (a PNG sequence goes on where it was
+    /// left), the one being drawn.
+    frames: u32,
+    first: u32,
+    frame: u32,
+    size: [u32; 2],
+    samples: u32,
+    denoise: bool,
+    light: Light,
+    time: Time,
+    tx: Option<std::sync::mpsc::SyncSender<(u32, FrameData)>>,
+    written: Arc<std::sync::atomic::AtomicU32>,
+    result: Receiver<Result<String, String>>,
+    started: Instant,
+}
+
+impl Movie {
+    /// The still of frame `frame`: the camera and the hour the path has
+    /// then.
+    fn still(&self, frame: u32) -> Option<Still> {
+        let t = frame as f32 / self.anim.fps.max(1) as f32;
+        let pose = self.anim.sample(t)?;
+        let mut light = self.light;
+        light.set_time(pose.hour, self.time.day, self.time.latitude, self.time.north);
+        light.time = t;
+        let camera = Orbit::between(pose.eye, pose.target).camera(pose.fov.clamp(10.0, 100.0));
+        Some(Still { path: PathBuf::new(), size: self.size, samples: self.samples, camera, light, denoise: self.denoise, row: 0, started: Instant::now() })
+    }
+
+    /// Frames drawn and written so far, of those to draw this time.
+    fn progress(&self) -> (u32, u32) {
+        (self.written.load(std::sync::atomic::Ordering::Relaxed), self.frames - self.first)
+    }
+}
+
+/// How an animation is written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MovieFormat {
+    Mp4,
+    Png,
+}
+
 /// The time and place the sun is put by.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Time {
@@ -151,6 +204,8 @@ struct Playback {
     dragging: Option<usize>,
     /// The playhead the view was last put at: moved since, the view follows.
     applied: Option<f32>,
+    /// Home pressed: the view frames the whole map.
+    frame_all: bool,
 }
 
 pub struct RenderSide {
@@ -190,6 +245,12 @@ pub struct RenderSide {
     /// The grass drawn as blades of grass (detailed), not as the game's.
     blades: bool,
     still: Option<Still>,
+    /// The animation being drawn, how it is written and with how many
+    /// samples a frame, and what became of the last.
+    movie: Option<Movie>,
+    movie_format: MovieFormat,
+    movie_samples: u32,
+    movie_saved: Option<Result<String, String>>,
     writing: Option<Receiver<Result<String, String>>>,
     saved: Option<Result<String, String>>,
     /// The size the image's texture was shown at.
@@ -230,6 +291,10 @@ impl Default for RenderSide {
             intel_shown: false,
             blades: false,
             still: None,
+            movie: None,
+            movie_format: if crate::video::mp4_supported() { MovieFormat::Mp4 } else { MovieFormat::Png },
+            movie_samples: 64,
+            movie_saved: None,
             writing: None,
             saved: None,
             texture_size: [0; 2],
@@ -284,6 +349,22 @@ impl RenderSide {
         self.scene.as_ref()?.renderer.read_image()
     }
 
+    /// Draw the map's animation now into `target`, without asking where
+    /// (tests): an MP4, or PNG images when `png`.
+    #[cfg(test)]
+    pub fn render_movie(&mut self, anim: Animation, target: PathBuf, png: bool, size: [u32; 2], samples: u32) {
+        self.movie_format = if png { MovieFormat::Png } else { MovieFormat::Mp4 };
+        self.movie_samples = samples;
+        self.launch_movie("frames", anim, target, size);
+    }
+
+    /// Whether an animation is being drawn or written, and what became of
+    /// the last (tests).
+    #[cfg(test)]
+    pub fn movie_state(&self) -> (bool, Option<&Result<String, String>>) {
+        (self.movie.is_some(), self.movie_saved.as_ref())
+    }
+
     /// Draw a still now, without asking where: for tests.
     #[cfg(test)]
     pub fn save_still(&mut self, path: PathBuf, size: [u32; 2], samples: u32) {
@@ -309,6 +390,12 @@ impl RenderSide {
     #[cfg(test)]
     pub fn scrub(&mut self, time: f32) {
         self.playback.playhead = time;
+    }
+
+    /// The Timeline's playhead, seconds (tests).
+    #[cfg(test)]
+    pub fn playhead(&self) -> f32 {
+        self.playback.playhead
     }
 
     /// Where the camera stands and looks, its angle and the hour (tests).
@@ -524,7 +611,7 @@ impl RenderSide {
                 orbit.distance = (orbit.distance * (-scroll as f64 * 0.003).exp()).clamp(3.0, span * 3.0 + 2000.0);
             }
         }
-        if response.double_clicked() {
+        if response.double_clicked() || std::mem::take(&mut self.playback.frame_all) {
             *orbit = framing(&map, reach, doc.world.meta.sea_level as f64);
         }
         // Shift-click: in focus there.
@@ -597,6 +684,27 @@ impl RenderSide {
                     queue.submit([cmd]);
                 }
                 let image = if samples.is_some() { None } else { scene.renderer.read_image() };
+                if let Some(movie) = &mut self.movie {
+                    // A frame of an animation: to its writer, then the next.
+                    let data = match (samples, image) {
+                        (Some(s), _) => Some(FrameData::Samples(s)),
+                        (None, Some((w, h, rgba))) => Some(FrameData::Image(w, h, rgba)),
+                        _ => None,
+                    };
+                    if let (Some(data), Some(tx)) = (data, &movie.tx) {
+                        let _ = tx.send((movie.frame, data));
+                    }
+                    movie.frame += 1;
+                    if movie.frame < movie.frames {
+                        self.still = movie.still(movie.frame);
+                    } else {
+                        // All drawn: the writer closes the file.
+                        movie.tx = None;
+                    }
+                    scene.renderer.restart();
+                    ui.ctx().request_repaint();
+                    return;
+                }
                 let (tx, rx) = std::sync::mpsc::channel();
                 let took = still.started.elapsed().as_secs_f64();
                 std::thread::spawn(move || {
@@ -703,6 +811,16 @@ impl RenderSide {
                 }
             }
         }
+        if let Some(movie) = &self.movie {
+            match movie.result.try_recv() {
+                Ok(result) => {
+                    self.movie_saved = Some(result);
+                    self.movie = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.movie = None,
+                Err(std::sync::mpsc::TryRecvError::Empty) => ui.ctx().request_repaint_after(Duration::from_millis(100)),
+            }
+        }
         if let Some(rx) = &self.writing {
             match rx.try_recv() {
                 Ok(result) => {
@@ -731,6 +849,10 @@ impl RenderSide {
 
         // What it is at, over the bottom left of the image.
         let status = match (&scene.builder, scene.full) {
+            _ if self.movie.is_some() => {
+                let m = self.movie.as_ref().expect("checked");
+                tr!("Rendering the animation: frame {n} of {all}", n = (m.frame + 1).min(m.frames), all = m.frames)
+            }
             _ if self.still.is_some() => {
                 let s = self.still.as_ref().expect("checked");
                 let done = (scene.renderer.samples as f32 + s.row as f32 / s.size[1].max(1) as f32) / s.samples.max(1) as f32;
@@ -1009,6 +1131,7 @@ impl RenderSide {
                 scene.renderer.restart();
             }
         }
+        self.movie_ui(ui, doc);
         let Some(scene) = &self.scene else { return };
         title(ui, tr!("Scene"));
         let memory = scene.renderer.memory();
@@ -1037,6 +1160,164 @@ impl RenderSide {
         });
     }
 
+    /// Animation to save: the Timeline's camera path drawn frame by frame
+    /// (each a still of the size and samples asked, denoised), written as
+    /// an MP4 or as PNG images; its progress, the time left and Cancel.
+    fn movie_ui(&mut self, ui: &mut Ui, doc: &Document) {
+        let pal = Palette::of(ui);
+        let anim = doc.world.meta.animation.clone().unwrap_or_default();
+        title(ui, tr!("Animation to save"));
+        well(ui, |ui| {
+            row(ui, tr!("Format"), |ui| {
+                let labels = [tr!("MP4 video"), tr!("PNG images")];
+                let on = [self.movie_format == MovieFormat::Mp4, self.movie_format == MovieFormat::Png];
+                if let Some(k) = crate::widgets::button_group(ui, "render movie format", &labels, &on) {
+                    self.movie_format = if k == 0 && crate::video::mp4_supported() { MovieFormat::Mp4 } else { MovieFormat::Png };
+                }
+            });
+            row(ui, tr!("Samples a frame"), |ui| {
+                ui.add(Field::new(&mut self.movie_samples, 4..=4096).logarithmic(true));
+            });
+            row(ui, tr!("Frames"), |ui| {
+                ui.label(format!("{} · {} fps · {:.1} s", anim.frames(), anim.fps, anim.duration));
+            });
+        });
+        if !crate::video::mp4_supported() && self.movie_format == MovieFormat::Mp4 {
+            self.movie_format = MovieFormat::Png;
+        }
+        if let Some(m) = &self.movie {
+            let (done, all) = m.progress();
+            let left = (done > 0).then(|| m.started.elapsed().as_secs_f64() / done as f64 * (all - done) as f64);
+            let mut cancel = false;
+            ui.horizontal(|ui| {
+                ui.add(egui::ProgressBar::new(done as f32 / all.max(1) as f32).desired_width(ui.available_width() - 90.0));
+                cancel = ui.button(tr!("Cancel")).clicked();
+            });
+            let left = left.map_or_else(String::new, |s| format!(" · {}", tr!("{min} min {sec} s left", min = (s / 60.0) as u32, sec = (s % 60.0) as u32)));
+            ui.label(RichText::new(format!("{}{left}", tr!("{done} of {all} frames", done, all))).size(11.5).color(pal.weak));
+            if cancel {
+                // The frames drawn so far stay written (an MP4 closed on
+                // them; a PNG sequence goes on from there next time).
+                self.still = None;
+                if let Some(m) = &mut self.movie {
+                    m.tx = None;
+                }
+                if let Some(scene) = &mut self.scene {
+                    scene.renderer.restart();
+                }
+            }
+        } else {
+            let ready = self.scene.is_some() && self.still.is_none() && self.writing.is_none() && anim.keys.len() >= 2;
+            if ui
+                .add_enabled(ready, theme::primary_button(ui, theme::with_icon(Icon::Film, tr!("Render animation…"))))
+                .on_hover_text(tr!("Draw the Timeline's camera path frame by frame and save it"))
+                .on_disabled_hover_text(tr!("Add two keyframes on the Timeline, with the Render Viewport shown"))
+                .clicked()
+            {
+                self.start_movie(doc, anim);
+            }
+        }
+        match &self.movie_saved {
+            Some(Ok(name)) => {
+                ui.label(RichText::new(tr!("Saved {name}", name)).size(11.5).color(pal.weak));
+            }
+            Some(Err(e)) => {
+                ui.label(RichText::new(e.as_str()).size(11.5).color(pal.danger));
+            }
+            None => {}
+        }
+    }
+
+    /// Ask where, then draw `anim`'s frames, written on a thread of their
+    /// own as they come.
+    fn start_movie(&mut self, doc: &Document, anim: Animation) {
+        let stem = doc.title();
+        let target = match self.movie_format {
+            MovieFormat::Mp4 => rfd::FileDialog::new().set_file_name(format!("{stem}.mp4")).add_filter(tr!("MP4 video"), &["mp4"]).save_file(),
+            MovieFormat::Png => rfd::FileDialog::new().set_title(tr!("A folder for the animation's images")).pick_folder(),
+        };
+        if let Some(target) = target {
+            let size = STILL_SIZES[self.still_size.min(STILL_SIZES.len() - 1)].1.unwrap_or(self.view_px);
+            self.launch_movie(&stem, anim, target, size);
+        }
+    }
+
+    /// Draw `anim` at `size` (made even) into `target`: the MP4's file, or
+    /// the folder of the PNG images, named after `stem`.
+    fn launch_movie(&mut self, stem: &str, anim: Animation, target: PathBuf, size: [u32; 2]) {
+        let Some(scene) = &mut self.scene else { return };
+        // Even, as H.264 takes.
+        let size = [size[0] & !1, size[1] & !1];
+        if !scene.renderer.fits(size[0], size[1]) {
+            self.movie_saved = Some(Err(tr!("This size is larger than the graphics card can draw").to_owned()));
+            return;
+        }
+        let frames = anim.frames();
+        let (sink, first, name) = match self.movie_format {
+            MovieFormat::Mp4 => {
+                let path = target;
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                match crate::video::Sink::mp4(&path, size[0], size[1], anim.fps) {
+                    Ok(sink) => (sink, 0, name),
+                    Err(e) => {
+                        self.movie_saved = Some(Err(tr!("The animation could not be saved: {e}", e)));
+                        return;
+                    }
+                }
+            }
+            MovieFormat::Png => {
+                let dir = target;
+                // Going on from the first frame not written yet.
+                let first = (0..frames).find(|&k| !crate::video::png_path(&dir, stem, k).exists()).unwrap_or(frames);
+                let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                (crate::video::Sink::Png { dir, stem: stem.to_owned() }, first, name)
+            }
+        };
+        if first >= frames {
+            self.movie_saved = Some(Ok(name));
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::sync_channel::<(u32, FrameData)>(2);
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let written = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let count = written.clone();
+        let started = Instant::now();
+        std::thread::Builder::new()
+            .name("massif animation writer".into())
+            .spawn(move || {
+                let mut sink = sink;
+                let mut failed = None;
+                for (index, data) in rx {
+                    let (w, h, rgba) = match data {
+                        FrameData::Image(w, h, rgba) => (w, h, rgba),
+                        FrameData::Samples(mut s) => {
+                            if let Err(e) = massif_render::oidn::denoise(&mut s.color, Some(&s.albedo), Some(&s.normal), s.width as usize, s.height as usize) {
+                                log::warn!("denoising a frame: {e}");
+                            }
+                            (s.width, s.height, massif_render::gpu::tone_map(&s.color, s.exposure))
+                        }
+                    };
+                    if failed.is_none()
+                        && let Err(e) = sink.push(index, &rgba, w, h)
+                    {
+                        failed = Some(e);
+                    }
+                    count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                let result = match (failed, sink.finish()) {
+                    (Some(e), _) | (None, Err(e)) => Err(tr!("The animation could not be saved: {e}", e)),
+                    (None, Ok(())) => Ok(format!("{name} · {} × {} · {:.0} s", size[0], size[1], started.elapsed().as_secs_f64())),
+                };
+                let _ = done_tx.send(result);
+            })
+            .expect("a thread for the animation");
+        let movie = Movie { anim, frames, first, frame: first, size, samples: self.movie_samples, denoise: self.denoise, light: self.light, time: self.time, tx: Some(tx), written, result: done_rx, started };
+        self.still = movie.still(first);
+        self.movie = Some(movie);
+        self.movie_saved = None;
+        scene.renderer.restart();
+    }
+
     /// The Timeline: keyframes of the camera and the sun over time, a
     /// playhead to scrub, play and step from key to key. Scrubbed, the
     /// Render Viewport shows the animation there.
@@ -1060,6 +1341,63 @@ impl RenderSide {
         }
         let pose = self.pose();
         let pb = &mut self.playback;
+        // Blender's keys, unless a field is being typed in: Space plays,
+        // I (or K) keeps the camera at the playhead, Alt+I removes the key
+        // there, ← → a frame, ↑ ↓ the previous or next key, Shift+← → the
+        // start or the end, Home the whole map.
+        if !ui.ctx().egui_wants_keyboard_input() {
+            use egui::{Key, Modifiers};
+            let frame = 1.0 / anim.fps.max(1) as f32;
+            let (prev_key, next_key) = anim.neighbours(pb.playhead);
+            ui.input_mut(|i| {
+                if i.consume_key(Modifiers::NONE, Key::Space) && !reduce && anim.keys.len() > 1 {
+                    pb.playing = !pb.playing;
+                }
+                // (Alt+I first: a key without Alt matches it too.)
+                if i.consume_key(Modifiers::ALT, Key::I) {
+                    if let Some(k) = anim.key_at(pb.playhead) {
+                        anim.remove(k);
+                        pb.selected = None;
+                    }
+                } else if (i.consume_key(Modifiers::NONE, Key::I) || i.consume_key(Modifiers::NONE, Key::K))
+                    && let Some(pose) = pose
+                {
+                    pb.selected = Some(anim.set(pb.playhead, pose));
+                    pb.applied = Some(pb.playhead);
+                }
+                if i.consume_key(Modifiers::SHIFT, Key::ArrowLeft) {
+                    pb.playhead = 0.0;
+                    pb.playing = false;
+                }
+                if i.consume_key(Modifiers::SHIFT, Key::ArrowRight) {
+                    pb.playhead = anim.duration;
+                    pb.playing = false;
+                }
+                if i.consume_key(Modifiers::NONE, Key::ArrowLeft) {
+                    pb.playhead = ((pb.playhead / frame).round() - 1.0).max(0.0) * frame;
+                    pb.playing = false;
+                }
+                if i.consume_key(Modifiers::NONE, Key::ArrowRight) {
+                    pb.playhead = (((pb.playhead / frame).round() + 1.0) * frame).min(anim.duration);
+                    pb.playing = false;
+                }
+                if i.consume_key(Modifiers::NONE, Key::ArrowDown)
+                    && let Some(k) = prev_key
+                {
+                    pb.playhead = anim.keys[k].time;
+                    pb.selected = Some(k);
+                }
+                if i.consume_key(Modifiers::NONE, Key::ArrowUp)
+                    && let Some(k) = next_key
+                {
+                    pb.playhead = anim.keys[k].time;
+                    pb.selected = Some(k);
+                }
+                if i.consume_key(Modifiers::NONE, Key::Home) {
+                    pb.frame_all = true;
+                }
+            });
+        }
         let at_key = anim.key_at(pb.playhead);
         let (prev, next) = anim.neighbours(pb.playhead);
 
@@ -1067,10 +1405,10 @@ impl RenderSide {
         let icon = |i: Icon| RichText::new(theme::glyph(i).to_string()).size(14.0);
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            if ui.button(icon(Icon::SkipBack)).on_hover_text(tr!("To the start")).clicked() {
+            if ui.button(icon(Icon::SkipBack)).on_hover_text(tr!("To the start (Shift+←)")).clicked() {
                 pb.playhead = 0.0;
             }
-            if ui.add_enabled(prev.is_some(), egui::Button::new(icon(Icon::ChevronFirst))).on_hover_text(tr!("Previous keyframe")).clicked()
+            if ui.add_enabled(prev.is_some(), egui::Button::new(icon(Icon::ChevronFirst))).on_hover_text(tr!("Previous keyframe (↓)")).clicked()
                 && let Some(k) = prev
             {
                 pb.playhead = anim.keys[k].time;
@@ -1079,19 +1417,19 @@ impl RenderSide {
             let play = if pb.playing { icon(Icon::Pause) } else { icon(Icon::Play) };
             if ui
                 .add_enabled(!reduce && anim.keys.len() > 1, egui::Button::new(play))
-                .on_hover_text(if pb.playing { tr!("Pause") } else { tr!("Play") })
+                .on_hover_text(if pb.playing { tr!("Pause (Space)") } else { tr!("Play (Space)") })
                 .on_disabled_hover_text(if reduce { tr!("With less motion on, scrub the timeline instead") } else { tr!("Add two keyframes to play the path between them") })
                 .clicked()
             {
                 pb.playing = !pb.playing;
             }
-            if ui.add_enabled(next.is_some(), egui::Button::new(icon(Icon::ChevronLast))).on_hover_text(tr!("Next keyframe")).clicked()
+            if ui.add_enabled(next.is_some(), egui::Button::new(icon(Icon::ChevronLast))).on_hover_text(tr!("Next keyframe (↑)")).clicked()
                 && let Some(k) = next
             {
                 pb.playhead = anim.keys[k].time;
                 pb.selected = Some(k);
             }
-            if ui.button(icon(Icon::SkipForward)).on_hover_text(tr!("To the end")).clicked() {
+            if ui.button(icon(Icon::SkipForward)).on_hover_text(tr!("To the end (Shift+→)")).clicked() {
                 pb.playhead = anim.duration;
             }
             ui.separator();
@@ -1100,7 +1438,7 @@ impl RenderSide {
             let add = if at_key.is_some() { tr!("Update keyframe") } else { tr!("Add keyframe") };
             if ui
                 .add_enabled(pose.is_some(), egui::Button::new(theme::with_icon(Icon::DiamondPlus, add)))
-                .on_hover_text(tr!("Keep the camera, its angle and the hour at the playhead"))
+                .on_hover_text(tr!("Keep the camera, its angle and the hour at the playhead (I or K)"))
                 .on_disabled_hover_text(tr!("Show the Render Viewport first"))
                 .clicked()
                 && let Some(pose) = pose

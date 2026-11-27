@@ -1,0 +1,3 @@
+**Render the Timeline as a video**
+
+Render Output has an Animation to save section: Render animation… draws the Timeline's camera path frame by frame, each frame denoised like a still, and saves it as an MP4 video (on macOS, through the system's own encoder) or as numbered PNG images, with the frames done, the time left and Cancel; PNG images asked again into the same folder go on from where they stopped. The Timeline also answers Blender's keys: Space plays, I or K keeps a keyframe, Alt+I removes it, the arrows step a frame or jump between keyframes, Shift with them goes to the start or the end, and Home frames the whole map.

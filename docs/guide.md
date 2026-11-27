@@ -3195,8 +3195,22 @@ area draws the viewport at a time; a second one says where it is.
   the view there; **Play** runs it (not with less motion: scrub instead);
   the buttons beside go to the start, the previous or next keyframe, the
   end. **Length** and **Frames a second** say how the animation will be
-  drawn. The keyframes are saved with the map. Rendering the frames to
-  images is to come.
+  drawn. The keyframes are saved with the map.
+- The Timeline answers Blender's keys (not while a field is being typed
+  in): **Space** plays and pauses, **I** (or **K**) keeps a keyframe at
+  the playhead, **Alt+I** removes the one there, **←** and **→** go a
+  frame back or on, **↓** and **↑** to the previous or next keyframe,
+  **Shift+←** and **Shift+→** to the start or the end, **Home** frames the
+  whole map.
+- **Animation to save** (Render Output): **Render animation…** draws the
+  Timeline's camera path frame by frame, each frame a still of the **Size**
+  set for images and of so many **Samples a frame**, denoised as the stills
+  are, and saves it as an **MP4 video** (H.264, through macOS's own
+  encoder; on Windows and Linux, PNG images only for now) or as **PNG
+  images** in a folder you pick (`name_00001.png` on). The progress shows
+  the frames done and the time left; **Cancel** stops, the frames drawn so
+  far kept: an MP4 closed on them, and PNG images asked again into the same
+  folder go on from the first one missing.
 
 A map larger than the graphics card's buffers is drawn in part, and says
 so. With less motion (Settings ▸ Accessibility), the view stops at 64

@@ -62,7 +62,7 @@ libc = "0.2"
 objc2 = "0.6"
 # The system's Quit read and answered (`quit`): its Apple Event, and the
 # answer given from the run loop.
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSURL", "NSString", "NSAppleEventDescriptor", "NSAppleEventManager", "NSRunLoop", "NSDate", "NSObjCRuntime", "NSLocale"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSURL", "NSString", "NSAppleEventDescriptor", "NSAppleEventManager", "NSRunLoop", "NSDate", "NSObjCRuntime", "NSLocale", "NSDictionary", "NSValue", "NSError"] }
 # The menus in the system's menu bar (`menubar`), and the screens a
 # floating panel's window opens on (`screens`).
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSMenu", "NSMenuItem", "NSEvent", "NSCell", "NSScreen"] }

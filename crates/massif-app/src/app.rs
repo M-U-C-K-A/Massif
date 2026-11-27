@@ -11087,6 +11087,96 @@ mod tests {
         assert!(moved > 4.0, "the plateau lowered shows: {moved:.2}");
     }
 
+    /// The Timeline's camera path drawn as an animation: an MP4 (on
+    /// macOS) and PNG images, frame after frame, each denoised; the PNG
+    /// sequence asked again goes on from where it is (here: done). The
+    /// Timeline's keys: → a frame on, Shift+→ the end, ↓ the previous key,
+    /// I a key at the playhead, Alt+I removes it.
+    #[test]
+    fn the_render_side_renders_its_animation() {
+        use crate::layout::Side;
+        use egui::{Key, Modifiers};
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(ThemeChoice::Light);
+        h.run_steps(3);
+        h.state_mut().layout.show_side(Side::Render);
+        h.run_steps(2);
+        h.get_by_label("Animation").click();
+        h.run_steps(3);
+        let started = std::time::Instant::now();
+        while h.state().render_side.building() && started.elapsed().as_secs() < 120 {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        h.run_steps(4);
+        // Two keys half a second apart, 8 frames a second: 4 frames.
+        {
+            let app = h.state_mut();
+            let pose = app.render_side.pose_now().unwrap();
+            let anim = app.doc.world.meta.animation.get_or_insert_default();
+            anim.fps = 8;
+            anim.duration = 0.5;
+            anim.set(0.0, pose);
+            let mut later = pose;
+            later.eye[0] += 40.0;
+            anim.set(0.5, later);
+        }
+        h.run_steps(2);
+        // The keys, as in Blender.
+        h.state_mut().render_side.scrub(0.0);
+        h.run_steps(2);
+        h.key_press(Key::ArrowRight);
+        h.run_steps(2);
+        assert!((h.state().render_side.playhead() - 0.125).abs() < 1e-4, "→ a frame on: {}", h.state().render_side.playhead());
+        h.key_press_modifiers(Modifiers::SHIFT, Key::ArrowRight);
+        h.run_steps(2);
+        assert!((h.state().render_side.playhead() - 0.5).abs() < 1e-4, "Shift+→ the end");
+        h.state_mut().render_side.scrub(0.25);
+        h.run_steps(2);
+        h.key_press(Key::I);
+        h.run_steps(2);
+        assert_eq!(h.state().doc.world.meta.animation.as_ref().unwrap().keys.len(), 3, "I keeps a key at the playhead");
+        h.key_press_modifiers(Modifiers::ALT, Key::I);
+        h.run_steps(2);
+        assert_eq!(h.state().doc.world.meta.animation.as_ref().unwrap().keys.len(), 2, "Alt+I removes it");
+        h.key_press(Key::ArrowDown);
+        h.run_steps(2);
+        assert!(h.state().render_side.playhead().abs() < 1e-4, "↓ the previous key");
+        let wait = |h: &mut egui_kittest::Harness<'static, MassifApp>| {
+            let started = std::time::Instant::now();
+            while h.state().render_side.movie_state().0 && started.elapsed().as_secs() < 120 {
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            assert!(!h.state().render_side.movie_state().0, "the animation was drawn");
+        };
+        let dir = std::env::temp_dir().join(format!("massif-movie-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        if crate::video::mp4_supported() {
+            let mp4 = dir.join("path.mp4");
+            let anim = h.state().doc.world.meta.animation.clone().unwrap();
+            h.state_mut().render_side.render_movie(anim, mp4.clone(), false, [160, 96], 4);
+            wait(&mut h);
+            assert!(matches!(h.state().render_side.movie_state().1, Some(Ok(_))), "{:?}", h.state().render_side.movie_state().1);
+            let bytes = std::fs::read(&mp4).unwrap();
+            assert_eq!(&bytes[4..8], b"ftyp");
+            if let Some(out) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+                std::fs::copy(&mp4, out.join("render-animation.mp4")).unwrap();
+            }
+        }
+        let anim = h.state().doc.world.meta.animation.clone().unwrap();
+        h.state_mut().render_side.render_movie(anim.clone(), dir.clone(), true, [160, 96], 4);
+        wait(&mut h);
+        for k in 0..4 {
+            assert!(crate::video::png_path(&dir, "frames", k).exists(), "frame {k}");
+        }
+        assert!(!crate::video::png_path(&dir, "frames", 4).exists());
+        // Asked again: nothing left to draw.
+        h.state_mut().render_side.render_movie(anim, dir.clone(), true, [160, 96], 4);
+        assert!(!h.state().render_side.movie_state().0, "every frame was there");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Let the Render side's image settle, with less motion (it stops at
     /// 64 samples a pixel), so that a snapshot does not wait on the graphics
     /// card path-tracing frame after frame (at 2x, it would time out).

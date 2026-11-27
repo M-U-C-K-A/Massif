@@ -6,6 +6,7 @@ mod i18n;
 mod inspect;
 mod access;
 mod analysis;
+mod video;
 mod app;
 mod autosave;
 mod backdrop;
