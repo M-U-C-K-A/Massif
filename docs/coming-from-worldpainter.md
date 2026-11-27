@@ -105,7 +105,10 @@ becomes a layer of the Layers panel, painted where it was:
   keeping its precise height, and its top becomes
   the full block they are layers of, as the mods' recipes and names tell it
   (Conquest's slabs by eighths, `*_slab[layers=N]`, count too) (its terrain
-  stays when it already is). Smooth terrain then lays layers on the whole
+  stays when its top already has all the cover's blocks). A cover of the
+  layers of several blocks makes one terrain of those blocks, mixed in the
+  cover's weights, over the terrain it lies on (and one more, named "… on
+  …", for each other terrain it lies on), not one terrain a block. Smooth terrain then lays layers on the whole
   map, the ground with no cover too, so that ground that had a cover and
   ground that had none meet level, with no seam a block high where the
   cover ended (WorldPainter lays the cover over the ground, a block higher

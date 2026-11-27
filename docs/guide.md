@@ -1105,6 +1105,10 @@ grass as sand makes the smoothing follow.
 - **Vertical slabs**, at the foot of a cliff of two blocks or more, against
   it; **Corners**, corner pieces at the outer corners of steps.
 
+On a steep slope, where the land beside a column is two blocks or more
+higher, its foot is filled as at a step of one block (half a block of
+layers, or a stair facing the slope) unless vertical slabs are allowed.
+
 The page lists the terrains painted on the map (**Every terrain** shows them
 all), each with the pieces it may use: a box per kind, greyed where its top
 block has none in the game or the mods read. Those you change are in bold;

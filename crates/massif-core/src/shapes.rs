@@ -153,6 +153,12 @@ pub fn top_block(reg: &Registry, t: TerrainId) -> Option<BlockId> {
     reg.terrain(t).strata.first().and_then(|s| s.blocks.first()).map(|b| b.0)
 }
 
+/// The block of terrain `t`'s top at `(x, y, z)` in a world of seed
+/// `seed`: of its mix, the one the column has there.
+pub fn surface_block(reg: &Registry, t: TerrainId, x: i32, y: i32, z: i32, seed: u64) -> Option<BlockId> {
+    reg.terrain(t).strata.first().filter(|s| !s.blocks.is_empty()).map(|s| crate::compose::stratum_block(s, x, y, z, seed))
+}
+
 // ------------------------------------------------- the profiles' data --
 
 /// What a mod profile says of its partial blocks (`profile.json` ▸
@@ -569,11 +575,15 @@ pub fn choose(c: &Column, may: ShapeSet, slab_layers: bool) -> Option<Piece> {
     } else {
         None
     };
-    // A step up beside it: what fills its foot, on the column.
+    // A step up beside it: what fills its foot, on the column. On a steep
+    // slope, the land two blocks or more higher beside it, the same
+    // (vertical slabs, where allowed, still stand against a cliff): its
+    // foot filled as at a step of one block, not left a wall.
     let on = |kind| Some(Piece { y: c.y1, kind, replaces: false });
-    let ups: Vec<usize> = (0..4).filter(|k| c.up & (1 << k) != 0).collect();
+    let rise = if c.cliff != 0 && may.has(Shape::VerticalSlab) { c.up } else { c.up | c.cliff };
+    let ups: Vec<usize> = (0..4).filter(|k| rise & (1 << k) != 0).collect();
     let step = if !ups.is_empty() {
-        let corner = (0..4).find(|&k| c.up & (1 << k) != 0 && c.up & (1 << ((k + 1) % 4)) != 0);
+        let corner = (0..4).find(|&k| rise & (1 << k) != 0 && rise & (1 << ((k + 1) % 4)) != 0);
         if may.has(Shape::Stairs) {
             match (corner, ups.len()) {
                 (Some(k), 2) => on(Kind::Stairs(Side::ALL[k], StairShape::InnerRight)),
@@ -801,6 +811,15 @@ mod tests {
         // Grass: layers at the foot of a step, when its height asks none.
         assert_eq!(choose(&c(8, 0b0001, 0, 0), layers, false).map(|p| p.kind), Some(Kind::Layers(4)));
         assert_eq!(choose(&c(8, 0b0001, 0, 0), ShapeSet::NONE, false), None);
+        // A steep slope, the land two blocks higher beside: its foot filled
+        // as at a step (layers, or the larger of them and its own height, a
+        // stair facing it), a vertical slab where allowed.
+        assert_eq!(choose(&c(8, 0, 0, 0b0001), layers, false).map(|p| p.kind), Some(Kind::Layers(4)));
+        assert_eq!(choose(&c(10, 0, 0, 0b0001), layers, false).map(|p| (p.y, p.kind)), Some((64, Kind::Layers(4))));
+        assert_eq!(choose(&c(12, 0, 0, 0b0001), layers, false).map(|p| (p.y, p.kind)), Some((64, Kind::Layers(4))));
+        assert_eq!(choose(&c(5, 0, 0, 0b0001), layers, false), Some(Piece { y: 63, kind: Kind::Layers(5), replaces: true }), "its own height under the top first");
+        assert_eq!(choose(&c(8, 0, 0, 0b0100), rock, false).map(|p| p.kind), Some(Kind::Stairs(Side::South, StairShape::Straight)));
+        assert_eq!(choose(&c(8, 0, 0, 0b0100), all, false).map(|p| p.kind), Some(Kind::VerticalSlab(Side::South)));
     }
 
     #[test]

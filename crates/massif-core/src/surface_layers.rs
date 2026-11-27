@@ -137,9 +137,13 @@ pub fn to_ground(dimension: &Dimension, meta: &WorldMeta, registry: &Registry, c
     let mut dim = dimension.clone();
     let seed = meta.seed as u64;
     let by_cover: HashMap<u16, &SurfaceCover> = chosen.iter().map(|c| (c.cover, c)).collect();
-    // The terrain of each (terrain under it, full block), made once.
-    let mut terrains: HashMap<(u16, String), u16> = HashMap::new();
-    let mut made: HashMap<(u16, String), u16> = HashMap::new();
+    // The terrain of each (terrain under it, cover), made once: the
+    // terrain under it where its top already has all the cover's blocks,
+    // else one of the cover's blocks in its mix over that terrain (one
+    // terrain for a cover of several blocks, not one a block).
+    let mut terrains: HashMap<(u16, u16), u16> = HashMap::new();
+    // The terrains made, with the cover, the terrain under and the columns.
+    let mut made: Vec<(u16, u16, u16, usize)> = Vec::new();
     let mut columns = 0;
     let positions: Vec<TilePos> = dim.ground().positions().collect();
     for pos in positions {
@@ -163,22 +167,37 @@ pub fn to_ground(dimension: &Dimension, meta: &WorldMeta, registry: &Registry, c
             let Some(def) = reg.cover(cover.cover) else { continue };
             let color = def.color;
             let Some(growth) = def.growth(x, z, seed) else { continue };
-            let Some(Some((full, _))) = cover.plants.get(growth.plant) else { continue };
+            let weights: Vec<u32> = def.plants.iter().map(|p| p.1 as u32).collect();
+            if !matches!(cover.plants.get(growth.plant), Some(Some(_))) {
+                continue;
+            }
             let base = tile.terrain.get(i);
-            let terrain = *terrains.entry((base, full.clone())).or_insert_with(|| {
-                if crate::shapes::top_block(&reg, TerrainId(base)).is_some_and(|b| reg.block(b).name() == full) {
+            let terrain = *terrains.entry((base, cover.cover)).or_insert_with(|| {
+                // The cover's full blocks, weighed as its plants.
+                let mut mix: Vec<(String, u32)> = Vec::new();
+                for ((full, _), w) in cover.plants.iter().zip(&weights).filter_map(|(p, w)| p.as_ref().map(|p| (p, *w))) {
+                    match mix.iter_mut().find(|(b, _)| b == full) {
+                        Some(m) => m.1 += w.max(1),
+                        None => mix.push((full.clone(), w.max(1))),
+                    }
+                }
+                let under = reg.terrain(TerrainId(base)).clone();
+                let tops: Vec<&str> = under.strata.first().map(|s| s.blocks.iter().map(|b| reg.block(b.0).name()).collect()).unwrap_or_default();
+                if mix.iter().all(|(b, _)| tops.contains(&b.as_str())) {
                     return base;
                 }
-                *made.entry((cover.cover, full.clone())).or_insert_with(|| {
-                    let under = reg.terrain(TerrainId(base)).clone();
-                    let block = reg.intern_block(full, color);
-                    let mut strata = vec![Stratum { blocks: vec![(block, 1000)], depth: (1, 1), mix: Default::default() }];
-                    strata.extend(under.strata.iter().skip(1).cloned());
-                    let name = unique_name(&reg, &cover.name);
-                    reg.terrains.push(TerrainDef { name, group: under.group.clone(), color, strata, submerged_top: None, biome_hint: under.biome_hint });
-                    (reg.terrains.len() - 1) as u16
-                })
+                let blocks = mix.iter().map(|(b, w)| (reg.intern_block(b, color), (*w).min(u16::MAX as u32) as u16)).collect();
+                let mut strata = vec![Stratum { blocks, depth: (1, 1), mix: Default::default() }];
+                strata.extend(under.strata.iter().skip(1).cloned());
+                let name = unique_name(&reg, &cover.name);
+                reg.terrains.push(TerrainDef { name, group: under.group.clone(), color, strata, submerged_top: None, biome_hint: under.biome_hint });
+                let t = (reg.terrains.len() - 1) as u16;
+                made.push((t, cover.cover, base, 0));
+                t
             });
+            if let Some(m) = made.iter_mut().find(|m| m.0 == terrain) {
+                m.3 += 1;
+            }
             // The cover's layers become the top of the land where it is:
             // the ground keeps its precise height, its top block the full
             // block, smoothed with layers as the land around it, so that
@@ -194,6 +213,18 @@ pub fn to_ground(dimension: &Dimension, meta: &WorldMeta, registry: &Registry, c
             columns += 1;
         }
         tile.compact();
+    }
+    // A cover lying on several terrains: the terrain made over the one it
+    // covers most takes the cover's name, the others say what they lie on.
+    for m in &made {
+        reg.terrains[m.0 as usize].name.clear();
+    }
+    let mut order = made.clone();
+    order.sort_by_key(|m| (m.1, std::cmp::Reverse(m.3), m.0));
+    for (k, &(t, cover, base, _)) in order.iter().enumerate() {
+        let own = &by_cover[&cover].name;
+        let name = if k == 0 || order[k - 1].1 != cover { own.clone() } else { format!("{own} on {}", reg.terrains[base as usize].name) };
+        reg.terrains[t as usize].name = unique_name(&reg, &name);
     }
     dim.ground_mut().take_dirty();
     dim.ground_mut().freeze();
@@ -304,6 +335,51 @@ mod tests {
         assert!(g.registry.covers[thin as usize - 1].removed && g.registry.covers[full as usize - 1].removed && !g.registry.covers[stones as usize - 1].removed);
         assert!(g.meta.smooth.on, "the whole map smoothed");
         assert!((0..g.registry.terrains.len()).all(|t| g.meta.smooth.shapes_of(&g.registry, TerrainId(t as u16)) == crate::shapes::ShapeSet::of(&[Shape::Layers])), "every terrain with layers, and only layers");
+    }
+
+    /// Jack's "Mixed Upland Layer": one cover of the layers of several
+    /// blocks (and small stones) over a terrain. Turned into ground it makes
+    /// one terrain of those blocks in their weights, not one a block; over
+    /// a second terrain, one more, named for it; a cover whose blocks the
+    /// terrain's top already has makes none.
+    #[test]
+    fn a_cover_of_several_blocks_makes_one_terrain() {
+        let mods = mods();
+        let k = known(&mods);
+        let mut world = crate::generate::generate(&crate::generate::GenParams { tiles_x: 1, tiles_z: 1, ..Default::default() });
+        let reg = &mut world.registry;
+        let grass = reg.terrain_by_name("Grass").unwrap().0;
+        let dirt = reg.terrain_by_name("Dirt").unwrap().0;
+        let mut def = |name: &str, plants: &[(&str, u16)]| {
+            let mut c = CoverDef::new(name, [90, 140, 60], plants, 1.0);
+            c.soil_only = false;
+            reg.add_cover(c)
+        };
+        let upland = def("Upland Layer", &[("conquest:grass_block_layer[layers=3]", 2), ("conquest:sand_layer[layers=2]", 1), ("minecraft:snow[layers=1]", 1), ("conquest:small_stones", 1)]);
+        let plain = def("Grass layers", &[("conquest:grass_block_layer[layers=5]", 1)]);
+        let found: Vec<SurfaceCover> = surface_covers(&world.registry, &k).into_iter().filter(|c| c.cover == upland || c.cover == plain).collect();
+        let pos = world.dims[0].ground().positions().next().unwrap();
+        let mut tile = Tile::ground(70.0, grass, NO_FLUID);
+        for i in 0..crate::TILE_AREA {
+            let row = i / 128;
+            tile.terrain.set(i, if row >= 112 { dirt } else { grass });
+            tile.cover.set(i, if row < 16 { plain } else { upland });
+        }
+        world.dims[0].ground_mut().insert(pos, tile);
+        let before = world.registry.terrains.len();
+        let g = to_ground(&world.dims[0], &world.meta, &world.registry, &found);
+        let made: Vec<&TerrainDef> = g.registry.terrains[before..].iter().collect();
+        let names: Vec<&str> = made.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names.len(), 2, "one terrain a terrain under the cover, not one a block: {names:?}");
+        let main = made.iter().find(|t| t.name == "Upland Layer").unwrap_or_else(|| panic!("{names:?}"));
+        assert!(made.iter().any(|t| t.name == "Upland Layer on Dirt"), "{names:?}");
+        let top: Vec<(&str, u16)> = main.strata[0].blocks.iter().map(|&(b, w)| (g.registry.block(b).name(), w)).collect();
+        assert_eq!(top, [("minecraft:grass_block", 2), ("conquest:sand", 1), ("minecraft:snow_block", 1)]);
+        assert_eq!(main.strata[1..], g.registry.terrains[grass as usize].strata[1..], "over the grass's own strata");
+        let t = g.dimension.ground().view(pos).unwrap();
+        assert!((0..16 * 128).all(|i| t.terrain.get(i) == grass && t.cover.get(i) == 0), "grass layers over grass: the grass itself");
+        let stones = (16 * 128..crate::TILE_AREA).filter(|&i| t.cover.get(i) == upland).count();
+        assert!(stones > 1500 && (16 * 128..crate::TILE_AREA).all(|i| (t.cover.get(i) == upland) == (t.terrain.get(i) == grass || t.terrain.get(i) == dirt)), "the stones stay a cover over the terrain: {stones}");
     }
 
     /// A WorldPainter map of Conquest Reforged, the mod not read: its covers

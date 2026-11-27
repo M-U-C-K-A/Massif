@@ -330,11 +330,10 @@ fn object_runs(dim: &Dimension, s: Standing, x0: i32, z0: i32, w: usize, d: usiz
 /// where (`i`, `j` in the tile), at what height and how many eighths high,
 /// and their colour and material. A piece in place of its column's top
 /// block lowers the column in `grid` a block. Pieces of a terrain's mix
-/// take its first block's.
-fn smooth_pieces(dim: &Dimension, reg: &Registry, tile: TilePos, grid: &mut Grid) -> Vec<(usize, usize, i32, u8, [u8; 3], u16)> {
-    use massif_core::shapes::{Shape, ShapeSet, choose, family, plan_tile, top_block};
-    let settings = smooth_settings();
-    let plan = plan_tile(dim, &settings, tile);
+/// take the column's own top block's, as the export does.
+fn smooth_pieces(dim: &Dimension, reg: &Registry, seed: i64, settings: &massif_core::shapes::SmoothSettings, tile: TilePos, grid: &mut Grid) -> Vec<(usize, usize, i32, u8, [u8; 3], u16)> {
+    use massif_core::shapes::{Shape, ShapeSet, choose, family, plan_tile, surface_block};
+    let plan = plan_tile(dim, settings, tile);
     if plan.is_empty() {
         return Vec::new();
     }
@@ -348,7 +347,7 @@ fn smooth_pieces(dim: &Dimension, reg: &Registry, tile: TilePos, grid: &mut Grid
     for c in plan {
         let (i, j) = (c.cell as usize % n, c.cell as usize / n);
         let (x, z) = (cx + i as i32, cz + j as i32);
-        let Some(block) = c.block.or_else(|| top_block(reg, c.terrain)) else { continue };
+        let Some(block) = c.block.or_else(|| surface_block(reg, c.terrain, x, c.y1 - 1, z, seed as u64)) else { continue };
         let f = families.entry(block.0).or_insert_with(|| family(reg.block(block).name(), &known));
         let mut may = massif_core::shapes::usable(
             match c.block {
@@ -974,7 +973,7 @@ fn build_tile_part(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: T
     // Smooth terrain: the piece of each column, as the export lays it (of
     // its terrain's top block); a piece in place of its top block lowers
     // the column a block first.
-    let smoothed = if every.is_none() { smooth_pieces(dim, reg, tile, &mut grid) } else { Vec::new() };
+    let smoothed = if every.is_none() { smooth_pieces(dim, reg, seed, &smooth_settings(), tile, &mut grid) } else { Vec::new() };
     let wk = reg.well_known;
     let colors = Colors {
         reg,
@@ -7986,6 +7985,30 @@ mod tests {
         // None on grass, north of z = 0.
         let b = build_tile(dim, &w.registry, 63.0, w.meta.seed, TilePos::new(-1, 0), STYLE);
         assert!(!b.faces.solid.iter().any(|f| f.dir >> 3 != 0), "grass has no pieces of its own");
+    }
+
+    /// Smooth terrain over a terrain of a mix (Jack's "Mixed Upland"): each
+    /// column's piece is of the block its top has there, as the export
+    /// lays it, not all of the mix's first block.
+    #[test]
+    fn smooth_pieces_follow_the_mix() {
+        use massif_core::registry::{Mix, Stratum, TerrainDef};
+        let mut w = World::new(massif_core::world::WorldMeta::default());
+        let reg = &mut w.registry;
+        let blocks: Vec<(massif_core::BlockId, u16)> = ["minecraft:stone", "minecraft:cobblestone", "minecraft:andesite"].iter().map(|b| (reg.intern_block(b, [128, 128, 128]), 1)).collect();
+        let ids: Vec<u16> = blocks.iter().map(|b| b.0.0).collect();
+        reg.terrains.push(TerrainDef { name: "Mixed".into(), group: "Test".into(), color: [128, 128, 128], strata: vec![Stratum { blocks, depth: (3, 3), mix: Mix::Patches { size: 4.0 } }], submerged_top: None, biome_hint: None });
+        let t = (reg.terrains.len() - 1) as u16;
+        let tile = TilePos::new(0, 0);
+        // Half a block over the top block: a slab on each.
+        w.dims[0].ground_mut().insert(tile, massif_core::tile::Tile::ground(64.6, t, massif_core::NO_FLUID));
+        let settings = massif_core::shapes::SmoothSettings { on: true, terrains: [("Mixed".to_owned(), massif_core::shapes::ShapeSet::of(&[massif_core::shapes::Shape::Slab]))].into() };
+        let mut grid = compose_area(&w.dims[0], -1, -1, 130, 130, MapMode::Terrain, false, massif_core::compose::Caves::Openings, None);
+        let pieces = smooth_pieces(&w.dims[0], &w.registry, w.meta.seed, &settings, tile, &mut grid);
+        assert!(pieces.len() > 10_000, "{}", pieces.len());
+        let count = |id: u16| pieces.iter().filter(|p| p.5 == id).count();
+        let counts: Vec<usize> = ids.iter().map(|&b| count(b)).collect();
+        assert!(counts.iter().all(|&n| n > pieces.len() / 6), "every block of the mix has its pieces: {counts:?}");
     }
 
     /// Columns of plain ground go to the tracer at their exact height; the
