@@ -3144,7 +3144,10 @@ area draws the viewport at a time; a second one says where it is.
   camera; **Align Camera to View** (Ctrl+Alt+Numpad 0) puts it where the
   view is, **View through Camera** (Numpad 0) the view where it is.
 - **Sun and sky**: a **Look** to start from (Clear noon, Fair weather,
-  Golden hour, Blue hour, Foggy morning, Night), then the **Time**, the
+  Golden hour, Blue hour, Foggy morning, Night, Valley mist: a thin bright
+  mist in the low ground at sunrise, the air clear above; the fog and the
+  mist lie on the floor of the map's valleys, measured from the scene,
+  whatever the map's height), then the **Time**, the
   **Day** of the year and the **Latitude** put the sun; **North** turns the
   map under it. **Sun** and **Sky** set their light. At night, a moon.
 - A **Look** sets everything of the sky it owns: the hour, the sun's and

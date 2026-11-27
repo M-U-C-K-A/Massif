@@ -147,3 +147,41 @@ fn the_caves_under_a_height() {
     h.run_steps(2);
     assert!(!h.state().diorama.caves);
 }
+
+/// The sky's looks on the village map, from a hillside over the valley
+/// (MASSIF_SNAPSHOT_DIR: look-<n>.png, MASSIF_LOOK_TAG naming them for a
+/// before and an after).
+#[test]
+fn the_looks_over_the_village() {
+    let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from) else { return };
+    let tag = std::env::var("MASSIF_LOOK_TAG").unwrap_or_default();
+    let (mut h, _) = diorama(1.0);
+    h.state_mut().layout.show_side(crate::layout::Side::Render);
+    h.run_steps(3);
+    let (vx, vz) = massif_render::diorama::sample::VILLAGE;
+    let ground = |h: &Harness<'_, MassifApp>, x: i32, z: i32| crate::tools::probe(&h.state().doc, x, z).map_or(70.0, |p| p.height as f64);
+    let eye = [vx as f64 - 140.0, ground(&h, vx - 140, vz + 120) + 40.0, vz as f64 + 120.0];
+    let target = [vx as f64 + 20.0, ground(&h, vx + 20, vz), vz as f64];
+    h.state_mut().render_side.set_view(eye, target);
+    let started = std::time::Instant::now();
+    while h.state().render_side.building() && started.elapsed().as_secs() < 300 {
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.state_mut().settings.reduce_motion = crate::access::Follow::On;
+    for k in 0..7 {
+        let app = h.state_mut();
+        let was = app.render_side.sky();
+        if app.render_side.sky_edit(Some(k), was, &mut app.doc) != k {
+            break;
+        }
+        let started = std::time::Instant::now();
+        while h.state().render_side.samples() < 64 && started.elapsed().as_secs() < 120 {
+            h.step();
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        h.run_steps(3);
+        let (w, hh, rgba) = h.state().render_side.image().unwrap();
+        image::save_buffer(dir.join(format!("look-{k}{tag}.png")), &rgba, w, hh, image::ColorType::Rgba8).unwrap();
+    }
+}

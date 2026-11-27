@@ -1198,6 +1198,21 @@ impl Renderer {
         Some((w, h, out))
     }
 
+    /// The floor of the valleys, in the world's blocks: the tops of the
+    /// scene's chunks a fifth of the way up from the lowest (their trees a
+    /// few blocks off), if it has any; what a mist lies on.
+    pub fn valley_floor(&self) -> Option<f64> {
+        let e = self.extent;
+        let cells = (e.width * e.depth) as usize;
+        let mut tops: Vec<u32> = self.pyramid.data[..cells.min(self.pyramid.data.len())].iter().copied().filter(|&t| t > 0).collect();
+        if tops.is_empty() {
+            return None;
+        }
+        let k = tops.len() / 5;
+        let (_, top, _) = tops.select_nth_unstable(k);
+        Some((e.min_y + *top as i32) as f64 - 4.0)
+    }
+
     /// The height of the highest block a ray can reach in the chunk of
     /// `(x, z)` (the world's blocks), if any.
     pub fn surface(&self, x: f64, z: f64) -> Option<f64> {

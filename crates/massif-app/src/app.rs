@@ -11205,7 +11205,7 @@ mod tests {
             rgba.chunks(4).map(|p| (p[0] as f64 + p[1] as f64 + p[2] as f64) / 3.0).sum::<f64>() / (rgba.len() / 4) as f64
         };
         let mut seen = Vec::new();
-        for k in 0..6 {
+        for k in 0..7 {
             let app = h.state_mut();
             let was = app.render_side.sky();
             assert_eq!(app.render_side.sky_edit(Some(k), was, &mut app.doc), k);
@@ -11213,7 +11213,8 @@ mod tests {
             seen.push(mean(&h));
         }
         eprintln!("the looks' mean brightness: {seen:.0?}");
-        let [noon, fair, golden, blue, foggy, night] = seen[..] else { unreachable!() };
+        let [noon, fair, golden, blue, foggy, night, mist] = seen[..] else { unreachable!() };
+        assert!(mist > night && mist < 170.0, "the valley mist is light, not a white wash: {mist:.0}");
         assert!(night < noon / 3.0, "the night is dark: {night:.0} against {noon:.0}");
         assert!(night > 8.0, "not black: {night:.0}");
         assert!(golden < noon && blue < noon && blue > night, "the low sun's looks are darker than noon, the blue hour lighter than the night");

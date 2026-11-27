@@ -127,16 +127,17 @@ impl Default for Time {
 }
 
 /// The ready-made looks of the sky, by name.
-const PRESETS: [&str; 6] = [tn!("Clear noon"), tn!("Fair weather"), tn!("Golden hour"), tn!("Blue hour"), tn!("Foggy morning"), tn!("Night")];
+const PRESETS: [&str; 7] = [tn!("Clear noon"), tn!("Fair weather"), tn!("Golden hour"), tn!("Blue hour"), tn!("Foggy morning"), tn!("Night"), tn!("Valley mist")];
 
-/// Put a ready-made look of the sky on `light`, its sun by `time` (the fog
-/// and clouds from the sea level `sea`).
+/// Put a ready-made look of the sky on `light`, its sun by `time` (the
+/// clouds from the sea level `sea`, the fog and the mist lying on the floor
+/// of the map's valleys `valley`, whatever the map's height).
 ///
 /// A look sets everything of the sky it owns (the hour, the sun's and the
 /// sky's strength, the air, the haze, the fog, the clouds, the exposure),
 /// and leaves the rest (the lens, the bounces, the grass, the water) as it
 /// was.
-fn preset(k: usize, light: &mut Light, time: &mut Time, sea: f32) {
+fn preset(k: usize, light: &mut Light, time: &mut Time, sea: f32, valley: f32) {
     let d = Light::default();
     let base = Light {
         sun_strength: d.sun_strength,
@@ -146,7 +147,7 @@ fn preset(k: usize, light: &mut Light, time: &mut Time, sea: f32) {
         haze: d.haze,
         haze_g: d.haze_g,
         fog: 0.0,
-        fog_height: sea + 8.0,
+        fog_height: valley + 8.0,
         fog_falloff: d.fog_falloff,
         fog_g: d.fog_g,
         moon: d.moon,
@@ -166,8 +167,12 @@ fn preset(k: usize, light: &mut Light, time: &mut Time, sea: f32) {
         // times dimmer than day: exposed for them, as a camera would be.
         3 => (20.1, Light { haze: 2.0, exposure: 60.0, ..base }),
         // Fog one sees 300 blocks through, lying in the low ground.
-        4 => (7.5, Light { fog: 3.912 / 300.0, fog_falloff: 16.0, haze: 1.5, exposure: 0.7, ..base }),
-        _ => (23.0, Light { exposure: 40.0, moon: 1.0 / 150.0, ..base }),
+        4 => (7.5, Light { fog: 3.912 / 300.0, fog_height: valley + 6.0, fog_falloff: 10.0, haze: 1.5, exposure: 0.8, ..base }),
+        // A thin bright mist in the low ground at sunrise, the air clear
+        // above it.
+        6 => (6.6, Light { fog: 3.912 / 120.0, fog_height: valley + 2.0, fog_falloff: 6.0, fog_g: 0.75, haze: 1.2, exposure: 1.6, ..base }),
+        5 => (23.0, Light { exposure: 40.0, moon: 1.0 / 150.0, ..base }),
+        _ => (12.5, base),
     };
     *light = l;
     time.hour = hour;
@@ -635,6 +640,12 @@ impl RenderSide {
     #[cfg(test)]
     pub fn light_mut(&mut self) -> &mut Light {
         &mut self.light
+    }
+
+    /// Put the camera at `eye` looking at `target` (tests).
+    #[cfg(test)]
+    pub fn set_view(&mut self, eye: [f64; 3], target: [f64; 3]) {
+        self.orbit = Some(Orbit::between(eye, target));
     }
 
     /// The Timeline's playhead, seconds (tests).
@@ -1406,9 +1417,10 @@ impl RenderSide {
     fn after_sky(&mut self, picked: Option<usize>, light_was: Light, time_was: Time, doc: &mut Document) {
         let sea = doc.world.meta.sea_level as f32;
         let (light, time) = (&mut self.light, &mut self.time);
+        let valley = self.scene.as_ref().and_then(|s| s.renderer.valley_floor()).map_or(sea, |v| (v as f32).max(sea));
         if let Some(k) = picked {
             self.preset = k;
-            preset(k, light, time, sea);
+            preset(k, light, time, sea, valley);
         } else if *light != light_was || *time != time_was {
             self.preset = usize::MAX;
         }
