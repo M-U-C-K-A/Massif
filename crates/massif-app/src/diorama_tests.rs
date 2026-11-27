@@ -329,3 +329,80 @@ fn apply_with_the_diorama_open() {
         eprintln!("APPLY with the {}: {:.2} s ({:.2} s by Apply), {frames} frames, slowest frame {:.0} ms", if open { "Diorama open" } else { "2D map" }, t0.elapsed().as_secs_f64(), done.seconds, slowest.as_secs_f64() * 1000.0);
     }
 }
+
+/// Apply to map as the user does it, from the Terrain Generator's panel
+/// through the app's frames, with two Diorama areas open: once done, each
+/// draws the new map, every tile as a Diorama made afresh draws it, of the
+/// same size and of a larger one.
+#[test]
+fn both_dioramas_follow_apply_from_the_panel() {
+    use crate::layout::{Dir, Node};
+    let (mut h, _) = diorama(1.0);
+    let ids = [9201, 9202];
+    let area = |k: usize| Box::new(Node::Area { id: ids[k], editor: EditorKind::Diorama });
+    {
+        let app = h.state_mut();
+        let root = Node::Split { dir: Dir::Row, ratio: 0.5, a: area(0), b: area(1) };
+        app.layout.workspaces.push(crate::layout::Workspace { name: "Two dioramas".into(), root, maximized: None, terrain: false, render: false, floating: Vec::new() });
+        let layout = std::mem::take(&mut app.layout).sanitize();
+        app.layout = layout;
+        app.layout.activate(app.layout.workspaces.len() - 1);
+    }
+    h.run_steps(4);
+    assert_eq!(h.state().extra_dioramas.len(), 1, "two Dioramas");
+    let all_settled = |h: &Harness<'_, MassifApp>| h.state().diorama.settled() && h.state().extra_dioramas[0].settled();
+    let wait = |h: &mut Harness<'_, MassifApp>| {
+        let started = std::time::Instant::now();
+        while !all_settled(h) && started.elapsed().as_secs() < 240 {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        h.run_steps(4);
+        assert!(all_settled(h), "both built: {:?} {:?}", h.state().diorama.progress(), h.state().extra_dioramas[0].progress());
+    };
+    for d in std::iter::once(&mut h.state_mut().diorama) {
+        d.zoom = 0.3;
+    }
+    h.state_mut().extra_dioramas[0].zoom = 0.3;
+    wait(&mut h);
+    let (before, _) = h.state().diorama.surfaces();
+    let graph = massif_terrain::model::Graph::from_json(r#"{ "nodes": {
+        "land": { "type": "noise.fbm", "params": { "scale": 300, "height": 50, "base": 55 } },
+        "out": { "type": "output.map", "inputs": { "height": "land" } } } }"#).unwrap();
+    let (lo, hi) = h.state().doc.dimension().bounds().unwrap();
+    let side = ((hi.x - lo.x + 1).max(hi.z - lo.z + 1) * massif_core::TILE_SIZE) as u32;
+    let mut bigger = graph.clone();
+    bigger.terrain.size = Some(side * 2);
+    for (k, g) in [graph, bigger].into_iter().enumerate() {
+        {
+            let mut p = crate::terrain::TerrainPanel::with_graph(Arc::new(massif_terrain::engine::Engine::new(Default::default())), g);
+            p.apply_asked = true;
+            h.state_mut().terrain_panel = Some(p);
+        }
+        let started = std::time::Instant::now();
+        while h.state().terrain_panel.as_ref().is_some_and(|p| p.applying.is_some() || p.apply_asked) {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            assert!(started.elapsed().as_secs() < 240, "Apply never finished");
+        }
+        wait(&mut h);
+        let tiles = h.state().doc.dimension().ground().len();
+        let shown = [h.state().diorama.surfaces(), h.state().extra_dioramas[0].surfaces()];
+        if k == 0 {
+            assert!(shown[0].0.iter().any(|(t, s)| before.get(t).is_some_and(|b| b != s)), "the first Diorama shows the map changed");
+        }
+        // Afresh, on the map as it now is.
+        let mut fresh = crate::diorama::Diorama::default();
+        fresh.zoom = 0.3;
+        let kept = std::mem::replace(&mut h.state_mut().diorama, fresh);
+        h.run_steps(3);
+        settle(&mut h);
+        let (fresh, _) = h.state().diorama.surfaces();
+        h.state_mut().diorama = kept;
+        for (n, (after, drawn)) in shown.iter().enumerate() {
+            assert_eq!(*drawn, tiles, "Apply {k}: Diorama {n} drew every tile");
+            let old: Vec<_> = after.iter().filter(|(t, s)| fresh.get(t).is_none_or(|f| f != *s)).map(|(t, _)| *t).collect();
+            assert!(old.is_empty(), "Apply {k}: Diorama {n}: {} of {} tiles not as the new map", old.len(), after.len());
+        }
+    }
+}

@@ -117,9 +117,12 @@ impl MapBuilder {
         let thread = std::thread::Builder::new()
             .name("massif render scene".into())
             .spawn(move || -> Result<(), String> {
-                // In the builders' own threads: never in the pool the
-                // interface's brushes and map work in, which would wait for them.
-                crate::builder_pool().install(move || -> Result<(), String> {
+                // Each batch in the builders' own pool, never in the one the
+                // interface's brushes and map work in, which would wait for
+                // them; the scene's loop on this thread, outside it (a worker
+                // that stole it would hold the batch under it, a Diorama's,
+                // until the whole scene is built).
+                (move || -> Result<(), String> {
                     let d = world.dims.get(dim).ok_or("no such dimension")?;
                     let ctx = ExportContext::new(&world, d, &target)?;
                     let sections = ((ctx.max_y - ctx.min_y) / 16) as usize;
@@ -130,7 +133,7 @@ impl MapBuilder {
                         if stop.load(Ordering::Relaxed) {
                             break;
                         }
-                        batch
+                        crate::builder_pool().install(|| batch
                             .par_iter()
                             .map_init(
                                 || (Scratch::new(&ctx), crate::materials::Lookup::default()),
@@ -188,10 +191,10 @@ impl MapBuilder {
                                     let _ = tx.send(built);
                                 }
                                 count.fetch_add(1, Ordering::Relaxed);
-                            });
+                            }));
                     }
                     Ok(())
-                })
+                })()
             })
             .expect("a thread for the scene");
         Self { rx, cancel, done, total, thread: Some(thread), error: None }

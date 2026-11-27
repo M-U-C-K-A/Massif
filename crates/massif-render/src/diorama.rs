@@ -349,9 +349,13 @@ impl Builder {
         let thread = std::thread::Builder::new()
             .name("massif diorama".into())
             .spawn(move || -> Result<(), String> {
-                // In the builders' own threads: never in the pool the
-                // interface's brushes and map work in, which would wait for them.
-                crate::builder_pool().install(move || -> Result<(), String> {
+                // The batches in the builders' own pool, never in the one the
+                // interface's brushes and map work in, which would wait for
+                // them; this thread waits for tiles outside it. (A worker of
+                // the pool waiting there would be taken by another builder's
+                // batch it steals, and the batch under it would never end:
+                // its view stood still.)
+                (move || -> Result<(), String> {
                     let d = world.dims.get(dim).ok_or("no such dimension")?;
                     let ctx = ExportContext::new(&world, d, &target)?;
                     let planner = (!world.meta.lava).then(|| massif_core::water::Planner::new(d));
@@ -373,7 +377,7 @@ impl Builder {
                             working.fetch_add(g.tiles.len() - n, Ordering::Relaxed);
                             g.tiles.split_off(n)
                         };
-                        batch
+                        crate::builder_pool().install(|| batch
                             .par_iter()
                             .rev()
                             .map_init(
@@ -438,10 +442,10 @@ impl Builder {
                                 if let Some(built) = built {
                                     let _ = tx.send(built);
                                 }
-                            });
+                            }));
                         working.store(0, Ordering::Relaxed);
                     }
-                })
+                })()
             })
             .map_err(|e| e.to_string())?;
         Ok(Self { rx, queue, cancel, busy, thread: Some(thread), error: None, materials, min_y, max_y })
