@@ -154,3 +154,18 @@ fn every_node_evaluates_with_its_defaults() {
         }
     }
 }
+
+#[test]
+fn a_volcano_has_no_seam_west_of_its_centre() {
+    // The gullies go round the volcano: where the angle wraps from a half
+    // turn to minus a half turn, west of the centre, they drew a line.
+    let c = compiled(r#"{ "nodes": { "v": { "type": "mountain.volcano", "params": { "roughness": 0 } } } }"#);
+    let g = whole(&c, "v", None, 1);
+    // At 2 blocks a sample, the centre at (1024, 1024), the foot 400 samples away.
+    let step = |x: i32, z: i32| (g.at(x, z + 1) - g.at(x, z)).abs();
+    let across = |x0: i32, x1: i32| (x0..x1).map(|x| step(x, 1023)).fold(0.0f32, f32::max);
+    let (west, east) = (across(700, 950), across(1100, 1350));
+    // The same steps elsewhere round it, a row away from the wrap.
+    let near = (700..950).map(|x| step(x, 1030).max(step(x, 1016))).fold(0.0f32, f32::max);
+    assert!(west < near.max(east) * 1.5 + 0.5, "west {west}, east {east}, near rows {near}");
+}

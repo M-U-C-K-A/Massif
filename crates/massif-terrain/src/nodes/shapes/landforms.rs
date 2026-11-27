@@ -4,7 +4,7 @@
 use super::{Relief, Warp, bounds, finest, samples, smoothstep};
 use crate::kernel::Ctx;
 use crate::nodes::height_out;
-use crate::noise::{Fbm, noise1, voronoi};
+use crate::noise::{Fbm, noise1, noise2, voronoi};
 use crate::params::Point;
 use crate::registry::{Choice, Family, Field, Kernel, NodeSpec, ParamSpec, PortKind, PortSpec, Section, Unit};
 use crate::util::mix32;
@@ -111,9 +111,12 @@ fn volcano_cpu(ctx: &Ctx, _: &[Option<&[f32]>], out: &mut [Vec<f32>]) {
                 let lip = if dist > crater { volcano_profile(kind, u).min(rim) } else { floor + (rim - floor) * inside };
                 v = lip;
             }
-            // Channels down the flanks, strongest halfway down.
-            let angle = (dz as f32).atan2(dx as f32);
-            let g = (1.0 - noise1((angle / std::f32::consts::TAU * count) as f64 + 0.35 * noise1(dist as f64 * 4.0, s) as f64, s).abs()).powf(3.0);
+            // Channels down the flanks, strongest halfway down: noise read
+            // round a circle `count` cells long, so that it closes on itself
+            // where the angle wraps, west of the centre.
+            let turn = count as f64 / std::f64::consts::TAU;
+            let angle = (dz).atan2(dx) + 0.35 * noise1(dist as f64 * 4.0, s) as f64 / turn;
+            let g = (1.0 - noise2(turn * angle.cos(), turn * angle.sin() + 0.37, s).abs()).powf(3.0);
             v -= gullies * 0.12 * g * 4.0 * u * (1.0 - u) * v.max(0.0).sqrt();
             // Smaller cones on the flanks.
             for c in 0..cones {
