@@ -215,9 +215,10 @@ impl History {
             self.begin(label, dim.min(world.dims.len().saturating_sub(1)));
         }
         let step = self.open.as_mut().expect("begun above");
+        let sea = world.meta.sea_level.clamp(i16::MIN as i32 + 1, i16::MAX as i32) as i16;
         let dim = &mut world.dims[step.dim];
         assert!(level < dim.levels.len(), "no such level");
-        Edit { dim, step, level, locks: &self.locks }
+        Edit { dim, step, level, locks: &self.locks, sea }
     }
 
     /// Undo the open step, as far as it went, and drop it: after an error
@@ -548,9 +549,16 @@ pub struct Edit<'a> {
     step: &'a mut Step,
     level: usize,
     locks: &'a crate::registry::Locks,
+    /// The world's sea level (its water's default level).
+    sea: i16,
 }
 
 impl Edit<'_> {
+    /// The world's sea level: the level of the water a new tile has.
+    pub fn sea_level(&self) -> i16 {
+        self.sea
+    }
+
     pub fn dim(&self) -> &Dimension {
         self.dim
     }

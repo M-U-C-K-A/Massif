@@ -148,10 +148,18 @@ fn edit_heights_by_tile<G>(
     let footprint = BlockRect::around(cx, cz, brush.reach());
     // Whether a column went down: only then can water fill what it left.
     let lowered = std::sync::atomic::AtomicBool::new(false);
+    // The ground level's water: a dry column keeps a water level under its
+    // ground (a WorldPainter map one in every column, a generated one the
+    // sea's), which stands over it once it is lowered under it. Over the
+    // sea's level (a lake's level left under the land, say) it is brought
+    // down to the sea's, so that land lowered by the sea never stands
+    // under higher water; the water beside it fills it as before.
+    let sea = (edit.level_index() == 0 && edit.dim().kind == crate::world::DimensionKind::Overworld).then(|| edit.sea_level());
     edit.par_tiles(footprint.tiles(), footprint, false, |pos, clip, tile| {
         let mut down = false;
+        let mut sunk = false;
         let mut f = per_tile(pos, clip);
-        let Tile { top, bottom, .. } = tile;
+        let Tile { top, bottom, fluid, .. } = tile;
         let top = top.dense_mut();
         let mut bottom = bottom.as_mut().map(Plane::dense_mut);
         for z in clip.z0..clip.z1 {
@@ -179,8 +187,20 @@ fn edit_heights_by_tile<G>(
                         }
                     }
                 }
-                down |= top[i] < was;
+                if top[i] < was {
+                    down = true;
+                    if let Some(sea) = sea {
+                        let water = fluid.get(i);
+                        if water != NO_FLUID && water > sea && water as i32 <= block_top(was) && water as i32 > block_top(top[i]) {
+                            fluid.set(i, sea);
+                            sunk = true;
+                        }
+                    }
+                }
             }
+        }
+        if sunk {
+            fluid.compact();
         }
         if down {
             lowered.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -2914,6 +2934,61 @@ mod tests {
         // its radius.
         assert_eq!(h(&w, 13, 0), 69.0);
         assert_eq!(h(&w, 9, 9), 64.0);
+    }
+
+    /// Smoothing a coast never raises the sea: the land keeps a water
+    /// level of 65 under its ground, as a WorldPainter map's does, and
+    /// the land lowered under it fills from the sea at 63, or stays dry,
+    /// never at 65 (Kitt's coasts). The lake a Flood made keeps its own.
+    #[test]
+    fn smoothing_a_coast_keeps_the_sea_level() {
+        let mut w = world(1);
+        let ground = w.dims[0].ground_mut();
+        for z in -TILE_SIZE..TILE_SIZE {
+            for x in -TILE_SIZE..TILE_SIZE {
+                let tile = ground.tile_mut(TilePos::containing(x, z)).unwrap();
+                let i = local_index(x, z);
+                // The sea west of x = 0, falling away; land east, rising
+                // from 67 to 75, with a stale water level of 65 under it;
+                // a lake at 68 in a hollow far east.
+                let (top, water) = if x < 0 { (60.0 + x as f32 / 20.0, 63) } else if x > 100 && (z - 10).abs() < 5 { (66.0, 68) } else { (67.0 + x as f32 / 15.0, 65) };
+                tile.top.set(i, top);
+                tile.fluid.set(i, water);
+            }
+        }
+        let wet = |w: &World| {
+            let mut levels = std::collections::BTreeSet::new();
+            for z in -TILE_SIZE..TILE_SIZE {
+                for x in -TILE_SIZE..100 {
+                    let t = w.dims[0].ground().view(TilePos::containing(x, z)).unwrap();
+                    let i = local_index(x, z);
+                    let (top, f) = (block_top(t.top.get(i)), t.fluid.get(i));
+                    if f != NO_FLUID && f as i32 > top {
+                        levels.insert(f);
+                    }
+                }
+            }
+            levels
+        };
+        assert_eq!(wet(&w), [63].into());
+        let mut hist = History::default();
+        hist.begin("Smooth", 0);
+        for k in 0..40 {
+            let z = -60.0 + k as f32 * 3.0;
+            smooth(&mut hist.edit(&mut w, 0), &hard_brush(14.0), 0.0, z, Surface::Top);
+            smooth(&mut hist.edit(&mut w, 0), &hard_brush(14.0), 6.0, z, Surface::Top);
+        }
+        // And the land dug under the sea's level, away from it: the sea's
+        // water, as digging under it always gave, not the 65 kept there.
+        raise(&mut hist.edit(&mut w, 0), &hard_brush(4.0), 60.0, 40.0, -14.0, Surface::Top);
+        hist.commit();
+        assert!(h(&w, 2, 0) < 64.5, "the coast smoothed: {}", h(&w, 2, 0));
+        assert_eq!(wet(&w), [63].into(), "only the sea's water by the coast");
+        let t = w.dims[0].ground().view(TilePos::containing(60, 40)).unwrap();
+        assert!(block_top(t.top.get(local_index(60, 40))) < 63, "dug under the sea");
+        assert_eq!(t.fluid.get(local_index(60, 40)), 63, "a hole inland holds the sea's level");
+        let t = w.dims[0].ground().view(TilePos::containing(110, 10)).unwrap();
+        assert_eq!(t.fluid.get(local_index(110, 10)), 68, "the lake keeps its level");
     }
 
     #[test]
