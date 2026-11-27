@@ -5682,7 +5682,7 @@ impl MassifApp {
                 let catalogue = self.blocks.catalogue.clone();
                 self.render_side.viewport_ui(&mut cui, id, frame, &mut self.doc, catalogue);
             }
-            EditorKind::RenderSky => scrolled(&mut cui, &mut |ui| self.render_side.sky_ui(ui, &self.doc)),
+            EditorKind::RenderSky => scrolled(&mut cui, &mut |ui| self.render_side.sky_ui(ui, &mut self.doc)),
             EditorKind::RenderCamera => scrolled(&mut cui, &mut |ui| self.render_side.camera_ui(ui, &self.doc)),
             EditorKind::RenderOutput => scrolled(&mut cui, &mut |ui| self.render_side.output_ui(ui, &self.doc)),
             EditorKind::Timeline => {
@@ -10907,7 +10907,11 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(!h.state().render_side.building(), "the scene was built");
-        h.run_steps(24);
+        // (A sample at a time on the graphics card: as fast as it draws them.)
+        let started = std::time::Instant::now();
+        while h.state().render_side.samples() <= 8 && started.elapsed().as_secs() < 60 {
+            h.step();
+        }
         assert!(h.state().render_side.samples() > 8, "samples add up while the view stays still");
         settle_render(&mut h);
         // The picture read back from the card: under the load of the other
@@ -11109,12 +11113,12 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         h.run_steps(4);
-        // Two keys half a second apart, 8 frames a second: 4 frames.
+        // Two keys half a second apart, 12 frames a second: 6 frames.
         {
             let app = h.state_mut();
             let pose = app.render_side.pose_now().unwrap();
             let anim = app.doc.world.meta.animation.get_or_insert_default();
-            anim.fps = 8;
+            anim.fps = 12;
             anim.duration = 0.5;
             anim.set(0.0, pose);
             let mut later = pose;
@@ -11127,7 +11131,7 @@ mod tests {
         h.run_steps(2);
         h.key_press(Key::ArrowRight);
         h.run_steps(2);
-        assert!((h.state().render_side.playhead() - 0.125).abs() < 1e-4, "→ a frame on: {}", h.state().render_side.playhead());
+        assert!((h.state().render_side.playhead() - 1.0 / 12.0).abs() < 1e-4, "→ a frame on: {}", h.state().render_side.playhead());
         h.key_press_modifiers(Modifiers::SHIFT, Key::ArrowRight);
         h.run_steps(2);
         assert!((h.state().render_side.playhead() - 0.5).abs() < 1e-4, "Shift+→ the end");
@@ -11167,14 +11171,66 @@ mod tests {
         let anim = h.state().doc.world.meta.animation.clone().unwrap();
         h.state_mut().render_side.render_movie(anim.clone(), dir.clone(), true, [160, 96], 4);
         wait(&mut h);
-        for k in 0..4 {
+        for k in 0..6 {
             assert!(crate::video::png_path(&dir, "frames", k).exists(), "frame {k}");
         }
-        assert!(!crate::video::png_path(&dir, "frames", 4).exists());
+        assert!(!crate::video::png_path(&dir, "frames", 6).exists());
         // Asked again: nothing left to draw.
         h.state_mut().render_side.render_movie(anim, dir.clone(), true, [160, 96], 4);
         assert!(!h.state().render_side.movie_state().0, "every frame was there");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A look of the sky sets what it owns: each renders recognisably (the
+    /// night much darker than noon, the golden hour too), a setting changed
+    /// by hand afterwards makes the look Custom, and the camera path's
+    /// keyframes take the look's hour (or they would put theirs back).
+    #[test]
+    fn the_render_side_s_looks_set_what_they_own() {
+        use crate::layout::Side;
+        let mut h = harness(ThemeChoice::Light);
+        h.run_steps(3);
+        h.state_mut().layout.show_side(Side::Render);
+        h.run_steps(3);
+        let started = std::time::Instant::now();
+        while h.state().render_side.building() && started.elapsed().as_secs() < 120 {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let mean = |h: &egui_kittest::Harness<'static, MassifApp>| {
+            let (_, _, rgba) = h.state().render_side.image().unwrap();
+            rgba.chunks(4).map(|p| (p[0] as f64 + p[1] as f64 + p[2] as f64) / 3.0).sum::<f64>() / (rgba.len() / 4) as f64
+        };
+        let mut seen = Vec::new();
+        for k in 0..6 {
+            let app = h.state_mut();
+            let was = app.render_side.sky();
+            assert_eq!(app.render_side.sky_edit(Some(k), was, &mut app.doc), k);
+            settle_render(&mut h);
+            seen.push(mean(&h));
+        }
+        eprintln!("the looks' mean brightness: {seen:.0?}");
+        let [noon, fair, golden, blue, foggy, night] = seen[..] else { unreachable!() };
+        assert!(night < noon / 3.0, "the night is dark: {night:.0} against {noon:.0}");
+        assert!(night > 8.0, "not black: {night:.0}");
+        assert!(golden < noon && blue < noon && blue > night, "the low sun's looks are darker than noon, the blue hour lighter than the night");
+        assert!(fair > night && foggy > night);
+        // (A morning mist is bright; a white wash is some 230.)
+        assert!(foggy < noon * 1.3 && foggy < 170.0, "the fog does not wash the image out white: {foggy:.0} against {noon:.0}");
+        // A setting changed by hand: Custom.
+        let app = h.state_mut();
+        let was = app.render_side.sky();
+        app.render_side.light_mut().haze += 1.0;
+        assert_eq!(app.render_side.sky_edit(None, was, &mut app.doc), usize::MAX, "Custom");
+        // The camera path's keyframes take the look's hour.
+        let was = app.render_side.sky();
+        app.render_side.sky_edit(Some(0), was, &mut app.doc);
+        let pose = app.render_side.pose_now().unwrap();
+        app.doc.world.meta.animation.get_or_insert_default().set(0.0, massif_core::animation::Pose { hour: 15.0, ..pose });
+        let was = app.render_side.sky();
+        app.render_side.sky_edit(Some(5), was, &mut app.doc);
+        let key = app.doc.world.meta.animation.as_ref().unwrap().keys[0].pose.hour;
+        assert!((key - (15.0 + 23.0 - 12.5)).rem_euclid(24.0) < 1e-3, "the key's hour moved with the looks: {key}");
     }
 
     /// Let the Render side's image settle, with less motion (it stops at

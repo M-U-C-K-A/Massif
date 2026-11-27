@@ -675,6 +675,15 @@ fn the_denoiser_settles_the_image_sooner() {
     }
     let reference = linear(&r.read_image().unwrap().2);
     save(&r, "reference-1024");
+    // The view moving: a ray for 2 × 2 pixels, raw and denoised.
+    let cmd = r.render(&camera, &light, true).unwrap();
+    wait(cmd);
+    save(&r, "moving-raw");
+    let moving_raw = error(&linear(&r.read_image().unwrap().2), &reference);
+    let cmd = r.denoise(1.0).unwrap();
+    wait(cmd);
+    save(&r, "moving-denoised");
+    eprintln!("  moving (a ray for 2 × 2 pixels): error {moving_raw:.4} raw, {:.4} denoised", error(&linear(&r.read_image().unwrap().2), &reference));
     // Every sample's error, raw and denoised.
     r.restart();
     let mut raw = Vec::new();

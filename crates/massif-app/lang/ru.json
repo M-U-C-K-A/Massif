@@ -4034,5 +4034,6 @@
  "Rendering the animation: frame {n} of {all}": "Отрисовка анимации: кадр {n} из {all}",
  "Filmic": "Кинематографичный",
  "Punchy": "Контрастный",
- "Tones": "Тона"
+ "Tones": "Тона",
+ "Visibility": "Видимость"
 }

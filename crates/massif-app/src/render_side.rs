@@ -107,7 +107,7 @@ enum MovieFormat {
 
 /// The time and place the sun is put by.
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct Time {
+pub(crate) struct Time {
     /// Local solar time, hours.
     hour: f32,
     /// Day of the year.
@@ -129,15 +129,43 @@ const PRESETS: [&str; 6] = [tn!("Clear noon"), tn!("Fair weather"), tn!("Golden 
 
 /// Put a ready-made look of the sky on `light`, its sun by `time` (the fog
 /// and clouds from the sea level `sea`).
+///
+/// A look sets everything of the sky it owns (the hour, the sun's and the
+/// sky's strength, the air, the haze, the fog, the clouds, the exposure),
+/// and leaves the rest (the lens, the bounces, the grass, the water) as it
+/// was.
 fn preset(k: usize, light: &mut Light, time: &mut Time, sea: f32) {
-    let base = Light { fog_height: sea + 8.0, cloud_height: sea + 1200.0, aperture: light.aperture, focus: light.focus, bounces: light.bounces, ..Light::default() };
+    let d = Light::default();
+    let base = Light {
+        sun_strength: d.sun_strength,
+        sun_tint: d.sun_tint,
+        sky_strength: d.sky_strength,
+        air: d.air,
+        haze: d.haze,
+        haze_g: d.haze_g,
+        fog: 0.0,
+        fog_height: sea + 8.0,
+        fog_falloff: d.fog_falloff,
+        fog_g: d.fog_g,
+        moon: d.moon,
+        cloud_cover: 0.0,
+        cloud_height: sea + 1200.0,
+        cloud_thickness: d.cloud_thickness,
+        cloud_density: d.cloud_density,
+        cloud_size: d.cloud_size,
+        exposure: d.exposure,
+        ..*light
+    };
     let (hour, l) = match k {
         0 => (12.5, base),
         1 => (14.5, Light { cloud_cover: 0.42, ..base }),
         2 => (18.8, Light { haze: 4.0, cloud_cover: 0.2, exposure: 2.5, ..base }),
-        3 => (20.25, Light { haze: 2.0, exposure: 7.0, ..base }),
-        4 => (7.0, Light { fog: 0.02, fog_falloff: 16.0, haze: 2.0, exposure: 1.4, ..base }),
-        _ => (23.0, Light { exposure: 6.0, moon: 1.0 / 150.0, ..base }),
+        // Twilight and moonlight are a thousand and some hundred thousand
+        // times dimmer than day: exposed for them, as a camera would be.
+        3 => (20.1, Light { haze: 2.0, exposure: 60.0, ..base }),
+        // Fog one sees 300 blocks through, lying in the low ground.
+        4 => (7.5, Light { fog: 3.912 / 300.0, fog_falloff: 16.0, haze: 1.5, exposure: 0.7, ..base }),
+        _ => (23.0, Light { exposure: 40.0, moon: 1.0 / 150.0, ..base }),
     };
     *light = l;
     time.hour = hour;
@@ -392,6 +420,26 @@ impl RenderSide {
         self.playback.playhead = time;
     }
 
+    /// Put look `k` on as the panel does, or (None) note the settings
+    /// changed by hand since `was`; the look now (tests).
+    #[cfg(test)]
+    pub fn sky_edit(&mut self, k: Option<usize>, was: (Light, Time), doc: &mut Document) -> usize {
+        self.after_sky(k, was.0, was.1, doc);
+        self.preset
+    }
+
+    /// The light and the time now (tests).
+    #[cfg(test)]
+    pub fn sky(&self) -> (Light, Time) {
+        (self.light, self.time)
+    }
+
+    /// The light, to change in tests.
+    #[cfg(test)]
+    pub fn light_mut(&mut self) -> &mut Light {
+        &mut self.light
+    }
+
     /// The Timeline's playhead, seconds (tests).
     #[cfg(test)]
     pub fn playhead(&self) -> f32 {
@@ -635,9 +683,14 @@ impl RenderSide {
 
         // The image: as large as the view, in pixels; a still's own size
         // while one is drawn.
+        // A pixel of the image a point of the view, as Blender's Pixel Size
+        // set to Automatic: on a Retina screen, a quarter of the rays (the
+        // still saved keeps its own size).
         let ppp = ui.ctx().pixels_per_point();
-        let px = [(view.width() * ppp).round().max(1.0) as u32, (view.height() * ppp).round().max(1.0) as u32];
-        self.view_px = px;
+        let scale = if ppp > 1.0 { 1.0 } else { ppp };
+        let px = [(view.width() * scale).round().max(1.0) as u32, (view.height() * scale).round().max(1.0) as u32];
+        // (A still of the view's size has its pixels.)
+        self.view_px = [(view.width() * ppp).round().max(1.0) as u32, (view.height() * ppp).round().max(1.0) as u32];
         let wanted = self.still.as_ref().map_or(px, |s| s.size);
         scene.renderer.resize(wanted[0], wanted[1]);
         if scene.renderer.size() != Some(self.texture_size) || self.texture.is_none() {
@@ -758,9 +811,14 @@ impl RenderSide {
                 self.intel_shown = false;
             }
             let mut drawn = false;
-            if moving || scene.renderer.samples < most {
-                if let Some(cmd) = scene.renderer.render(&orbit.camera(self.fov), &self.light, moving) {
-                    queue.submit([cmd]);
+            // A sample at a time on the graphics card (never frames behind
+            // the interface), none while the window is in the background.
+            let focused = ui.input(|i| i.focused);
+            if (moving || scene.renderer.samples < most) && focused {
+                if !scene.renderer.busy()
+                    && let Some(cmd) = scene.renderer.render(&orbit.camera(self.fov), &self.light, moving)
+                {
+                    scene.renderer.submit(cmd);
                     drawn = true;
                 }
                 ui.ctx().request_repaint();
@@ -874,13 +932,14 @@ impl RenderSide {
 
     /// Sun and Sky: a look to start from, the sun by the hour and the place,
     /// the air and the clouds.
-    pub fn sky_ui(&mut self, ui: &mut Ui, doc: &Document) {
+    pub fn sky_ui(&mut self, ui: &mut Ui, doc: &mut Document) {
         ui.spacing_mut().item_spacing.y = 6.0;
         let sea = doc.world.meta.sea_level as f32;
         let (light, time) = (&mut self.light, &mut self.time);
         let mut picked = None;
         title(ui, tr!("Sun and sky"));
         let before = *time;
+        let (light_was, time_was) = (*light, *time);
         well(ui, |ui| {
             row(ui, tr!("Look"), |ui| {
                 let name = PRESETS.get(self.preset).map_or(tr!("Custom"), |n| crate::i18n::tr_name(n));
@@ -920,17 +979,31 @@ impl RenderSide {
                 ui.add(Field::new(&mut light.air, 0.0..=4.0).max_decimals(2));
             });
             row(ui, tr!("Haze"), |ui| {
-                ui.add(Field::new(&mut light.haze, 0.0..=30.0).logarithmic(false).max_decimals(1));
+                ui.add(Field::new(&mut light.haze, 0.0..=8.0).max_decimals(1));
             });
+            // Fog by how far one sees through it at its base (where it
+            // takes 98 % of the light: an extinction of 3.9 over that
+            // distance), from 40 blocks to 4000: never a white wall.
+            let mut fog = light.fog > 0.0;
             row(ui, tr!("Fog"), |ui| {
-                ui.add(Field::new(&mut light.fog, 0.0..=0.1).max_decimals(3));
+                if crate::widgets::switch(ui, &mut fog).changed() {
+                    light.fog = if fog { 3.912 / 400.0 } else { 0.0 };
+                }
             });
-            row(ui, tr!("Fog height"), |ui| {
-                ui.add(Field::new(&mut light.fog_height, sea - 64.0..=sea + 256.0).max_decimals(0));
-            });
-            row(ui, tr!("Fog fade"), |ui| {
-                ui.add(Field::new(&mut light.fog_falloff, 2.0..=200.0).suffix(" blocks").max_decimals(0));
-            });
+            if fog {
+                row(ui, tr!("Visibility"), |ui| {
+                    let mut seen = (3.912 / light.fog.max(1e-6)).clamp(40.0, 4000.0);
+                    if ui.add(Field::new(&mut seen, 40.0..=4000.0).logarithmic(true).suffix(" blocks").max_decimals(0)).changed() {
+                        light.fog = 3.912 / seen;
+                    }
+                });
+                row(ui, tr!("Fog height"), |ui| {
+                    ui.add(Field::new(&mut light.fog_height, sea - 64.0..=sea + 256.0).max_decimals(0));
+                });
+                row(ui, tr!("Fog fade"), |ui| {
+                    ui.add(Field::new(&mut light.fog_falloff, 2.0..=200.0).suffix(" blocks").max_decimals(0));
+                });
+            }
             row(ui, tr!("Shafts of light"), |ui| {
                 crate::widgets::switch(ui, &mut light.shafts);
             });
@@ -959,9 +1032,31 @@ impl RenderSide {
                 ui.add(Field::new(&mut light.wind[0], 0.0..=20000.0).max_decimals(0));
             });
         });
+        self.after_sky(picked, light_was, time_was, doc);
+    }
+
+    /// After the Sun and Sky panel: the look `picked` put on, or a setting
+    /// changed by hand (from `light_was`, `time_was`) making the look one of
+    /// your own; the hour moved while the camera path has keyframes moving
+    /// theirs as much, or the path would put the old hour back at once.
+    fn after_sky(&mut self, picked: Option<usize>, light_was: Light, time_was: Time, doc: &mut Document) {
+        let sea = doc.world.meta.sea_level as f32;
+        let (light, time) = (&mut self.light, &mut self.time);
         if let Some(k) = picked {
             self.preset = k;
             preset(k, light, time, sea);
+        } else if *light != light_was || *time != time_was {
+            self.preset = usize::MAX;
+        }
+        let shift = time.hour - time_was.hour;
+        if shift != 0.0
+            && let Some(anim) = doc.world.meta.animation.as_mut()
+            && !anim.keys.is_empty()
+        {
+            for key in &mut anim.keys {
+                key.pose.hour = (key.pose.hour + shift).rem_euclid(24.0);
+            }
+            doc.mark_changed();
         }
     }
 
@@ -1464,7 +1559,8 @@ impl RenderSide {
             let shortest = anim.keys.last().map_or(0.5, |k| k.time.max(0.5));
             ui.add(Field::new(&mut anim.duration, shortest..=600.0).suffix(" s").max_decimals(1));
             ui.label(RichText::new(tr!("Frames a second")).color(pal.weak));
-            ui.add(Field::new(&mut anim.fps, 1..=120));
+            anim.fps = anim.fps.clamp(12, 60);
+            ui.add(Field::new(&mut anim.fps, 12..=60));
         });
         ui.add_space(6.0);
 

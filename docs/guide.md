@@ -3125,7 +3125,20 @@ area draws the viewport at a time; a second one says where it is.
   Golden hour, Blue hour, Foggy morning, Night), then the **Time**, the
   **Day** of the year and the **Latitude** put the sun; **North** turns the
   map under it. **Sun** and **Sky** set their light. At night, a moon.
-- **Atmosphere**: the **Air**'s blue, **Haze**, a **Fog** that fills the
+- A **Look** sets everything of the sky it owns: the hour, the sun's and
+  the sky's strength, the air, the haze, the fog, the clouds and the
+  exposure (the Blue hour and the Night exposed for their dim light, as a
+  camera would be); the lens, the bounces and the grass stay as they were.
+  Touching one of its settings afterwards makes the look **Custom**. When
+  the camera path has keyframes, a look or the **Time** moved by hand moves
+  their hours as much, so that the path does not put the old hour back.
+- While the view moves it is drawn at half the resolution and denoised
+  every frame; on a Retina screen the view draws a pixel a point, as
+  Blender's automatic pixel size, a quarter of the rays; the graphics card
+  is sent one sample at a time, and none while Massif is in the
+  background, so that the rest of the app stays smooth.
+- **Atmosphere**: the **Air**'s blue, **Haze**, a **Fog** (set by its
+  **Visibility**, how far one sees through it, 40 to 4000 blocks) that fills the
   low ground first (its **height** and how fast it **fades** above),
   **Shafts of light** through it, and a **Sea around the map** out to the
   horizon.

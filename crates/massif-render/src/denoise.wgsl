@@ -26,7 +26,8 @@
 @group(0) @binding(4) var<storage, read_write> dst: array<vec2<u32>>;
 @group(0) @binding(5) var out_image: texture_storage_2d<rgba8unorm, write>;
 // The pass, the step between taps (pixels), the denoised image's share of
-// the shown one.
+// the shown one, the pixels a sample stands for on a side (2 while the view
+// moves: neighbours that differ are that far apart).
 @group(0) @binding(6) var<uniform> D: vec4<u32>;
 
 const SKY: f32 = 15000.0;
@@ -97,9 +98,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (n < 4.0) {
             var s1 = 0.0;
             var s2 = 0.0;
+            let block = i32(max(D.w, 1u));
             for (var dy = -1; dy <= 1; dy++) {
                 for (var dx = -1; dx <= 1; dx++) {
-                    let q = clamp(p + vec2<i32>(dx, dy), vec2<i32>(0), vec2<i32>(i32(w) - 1, i32(h) - 1));
+                    let q = clamp(p + vec2<i32>(dx, dy) * block, vec2<i32>(0), vec2<i32>(i32(w) - 1, i32(h) - 1));
                     let lq = luminance(demodulated(u32(q.y) * w + u32(q.x)));
                     s1 += lq;
                     s2 += lq * lq;
@@ -127,9 +129,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // The variance at the middle, a little blurred (3 × 3), so that its
     // own noise does not decide the edges.
     var vblur = 0.0;
+    let vstep = i32(max(D.w, 1u));
     for (var dy = -1; dy <= 1; dy++) {
         for (var dx = -1; dx <= 1; dx++) {
-            let q = clamp(p + vec2<i32>(dx, dy), vec2<i32>(0), vec2<i32>(i32(w) - 1, i32(h) - 1));
+            let q = clamp(p + vec2<i32>(dx, dy) * vstep, vec2<i32>(0), vec2<i32>(i32(w) - 1, i32(h) - 1));
             let k = select(0.25, 0.5, dx == 0) * select(0.25, 0.5, dy == 0);
             vblur += load(u32(q.y) * w + u32(q.x)).w * k;
         }

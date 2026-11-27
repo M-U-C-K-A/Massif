@@ -320,6 +320,10 @@ pub struct Renderer {
     full: bool,
     /// Samples added up in the image so far.
     pub samples: u32,
+    /// The last sample drawn was coarse (a ray for 2 × 2 pixels).
+    coarse: bool,
+    /// Work sent through [`Self::submit`] the graphics card has not done.
+    in_flight: std::sync::Arc<std::sync::atomic::AtomicU32>,
     /// The exposure and the look of the last sample drawn.
     exposure: f32,
     look: u32,
@@ -479,6 +483,8 @@ impl Renderer {
             denoise: false,
             exposure: 1.0,
             look: 0,
+            coarse: false,
+            in_flight: Default::default(),
             hold: false,
             round: 0,
             frame: 0,
@@ -904,6 +910,27 @@ impl Renderer {
         self.image.as_ref().map(|i| &i.view)
     }
 
+    /// Send `cmd` to the graphics card, counted until it is done (see
+    /// [`Self::busy`]).
+    pub fn submit(&self, cmd: wgpu::CommandBuffer) {
+        use std::sync::atomic::Ordering;
+        self.in_flight.fetch_add(1, Ordering::AcqRel);
+        self.queue.submit([cmd]);
+        let count = self.in_flight.clone();
+        self.queue.on_submitted_work_done(move || {
+            count.fetch_sub(1, Ordering::AcqRel);
+        });
+    }
+
+    /// Whether work sent through [`Self::submit`] is still being done: the
+    /// view sends no more until it is, so that the graphics card never runs
+    /// frames behind the interface.
+    pub fn busy(&self) -> bool {
+        // (The callbacks of work done run as the device is polled.)
+        let _ = self.device.poll(wgpu::PollType::Poll);
+        self.in_flight.load(std::sync::atomic::Ordering::Acquire) > 0
+    }
+
     /// Start adding samples up again (the view or the light changed).
     pub fn restart(&mut self) {
         self.start_over();
@@ -1029,6 +1056,7 @@ impl Renderer {
         self.queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
         self.exposure = light.exposure;
         self.look = light.look;
+        self.coarse = coarse;
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("massif render trace"), timestamp_writes: None });
             pass.set_pipeline(&self.pipeline);
@@ -1066,15 +1094,18 @@ impl Renderer {
     pub fn denoise(&mut self, strength: f32) -> Option<wgpu::CommandBuffer> {
         let image = self.image.as_ref()?;
         let [w, h] = image.size;
-        let (passes, fade) = denoise_schedule(self.samples.max(1));
+        // While the view moves, a sample stands for 2 × 2 pixels: the
+        // filter's taps start that far apart, all its passes, at full share.
+        let block = if self.coarse { 2 } else { 1 };
+        let (passes, fade) = if self.coarse { (5, 1.0) } else { denoise_schedule(self.samples.max(1)) };
         let strength = (strength * fade).clamp(0.0, 1.0);
         // Prepare; the filter's passes; write the image.
         let mut steps = vec![(0u32, 1u32)];
-        steps.extend((0..passes).map(|k| (1, 1 << k)));
+        steps.extend((0..passes).map(|k| (1, block << k)));
         steps.push((6, 1));
         let mut words = vec![0u8; (DENOISE_STRIDE * steps.len() as u64) as usize];
         for (k, &(kind, step)) in steps.iter().enumerate() {
-            let d = [kind, step, (strength * 65535.0).round() as u32, 0];
+            let d = [kind, step, (strength * 65535.0).round() as u32, block];
             words[k * DENOISE_STRIDE as usize..][..16].copy_from_slice(bytemuck::cast_slice(&d));
         }
         self.queue.write_buffer(&self.denoise_params, 0, &words);
