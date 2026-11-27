@@ -58,6 +58,7 @@ mod region_export;
 mod schem_export;
 mod report;
 mod report_view;
+mod render_minimap;
 mod render_side;
 mod references;
 mod diorama;

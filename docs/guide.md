@@ -3136,6 +3136,11 @@ area draws the viewport at a time; a second one says where it is.
   on the sky, the whole map. **Numpad 1, 3, 7** look from the front, the
   right, above (with **Ctrl**, the other side); **Shift-click** focuses the
   lens there.
+- The **map** button at the view's top right shows a minimap of the whole
+  map (remembered): the camera on it with what it sees, and the Timeline's
+  path. A click on it puts the camera over that place, its height and its
+  way kept; a drag slides it. It is not drawn while an image or an
+  animation is being saved.
 - Walk as with Blender's walk navigation: hold the **right button** to look
   around from where the camera stands, **W A S D** (by their places: Z Q S
   D on an AZERTY keyboard) to move where you look, **Q** and **E** down and

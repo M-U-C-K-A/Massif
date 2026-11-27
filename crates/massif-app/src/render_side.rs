@@ -353,6 +353,13 @@ pub struct RenderSide {
     /// walking); the keys held, by their places; the point a drag turns
     /// about (or slides) and how far it is; `.` pressed: in close there.
     walk_factor: f64,
+    /// The minimap: drawn at the document's revision (its texture and the
+    /// blocks it covers), being drawn, when it was last asked.
+    minimap: Option<(u64, egui::TextureHandle, [f64; 4])>,
+    minimap_job: Option<(u64, Receiver<Option<crate::render_minimap::Picture>>)>,
+    minimap_asked: Option<Instant>,
+    /// Where the minimap was last drawn.
+    minimap_shown: Option<Rect>,
     /// The pass a setting's diamond was last under the pointer in (I keys
     /// the setting then, not the camera); the samples the view adds up to.
     key_hover: u64,
@@ -406,6 +413,10 @@ impl Default for RenderSide {
             drawn: None,
             playback: Playback::default(),
             walk_factor: 1.0,
+            minimap: None,
+            minimap_job: None,
+            minimap_asked: None,
+            minimap_shown: None,
             key_hover: 0,
             most_samples: MOST_SAMPLES,
             lock_camera: true,
@@ -646,6 +657,17 @@ impl RenderSide {
     #[cfg(test)]
     pub fn set_view(&mut self, eye: [f64; 3], target: [f64; 3]) {
         self.orbit = Some(Orbit::between(eye, target));
+    }
+
+    /// Whether the minimap has been drawn, and where it is (tests).
+    #[cfg(test)]
+    pub fn has_minimap(&self) -> bool {
+        self.minimap.is_some()
+    }
+
+    #[cfg(test)]
+    pub fn minimap_rect(&self) -> Option<Rect> {
+        self.minimap_shown
     }
 
     /// The Timeline's playhead, seconds (tests).
@@ -1285,6 +1307,11 @@ impl RenderSide {
         let back = Rect::from_min_size(at - vec2(0.0, galley.size().y + 8.0), galley.size() + vec2(16.0, 8.0));
         ui.painter().rect(back, theme::PILL, pal.panel, Stroke::new(1.0, pal.border), StrokeKind::Inside);
         ui.painter().galley(back.min + vec2(8.0, 4.0), galley, pal.text);
+        // The minimap, over the top right of the view (not while an image
+        // or an animation is drawn).
+        if self.still.is_none() && self.movie.is_none() {
+            self.minimap_ui(ui, view, doc);
+        }
     }
 
     /// Sun and Sky: a look to start from, the sun by the hour and the place,
@@ -1873,6 +1900,95 @@ impl RenderSide {
         self.movie = Some(movie);
         self.movie_saved = None;
         scene.renderer.restart();
+    }
+
+    /// The minimap in the view's top right corner, and the button that
+    /// shows or hides it (remembered): the whole map, the camera on it with
+    /// what it sees, the Timeline's path. A click there puts the camera
+    /// over that place, its height and its way kept; a drag slides it.
+    fn minimap_ui(&mut self, ui: &mut Ui, view: Rect, doc: &Document) {
+        let pal = Palette::of(ui);
+        let id = egui::Id::unique("render minimap on");
+        let mut on = ui.data_mut(|d| d.get_persisted::<bool>(id)).unwrap_or(false);
+        let button = Rect::from_min_size(pos2(view.right() - theme::PAD - 28.0, view.top() + theme::PAD), vec2(28.0, 28.0));
+        let response = ui.interact(button, egui::Id::unique("render minimap button"), Sense::click()).on_hover_text(if on { tr!("Hide the map") } else { tr!("Show the map") });
+        ui.painter().rect(button, theme::PILL, if on { pal.accent } else { pal.panel }, Stroke::new(1.0, pal.border), StrokeKind::Inside);
+        ui.painter().text(button.center(), Align2::CENTER_CENTER, theme::glyph(Icon::Map).to_string(), FontId::proportional(14.0), if on { pal.panel } else { pal.text });
+        if response.clicked() {
+            on = !on;
+            ui.data_mut(|d| d.insert_persisted(id, on));
+        }
+        if !on {
+            return;
+        }
+        // The picture, drawn again away from the frames when the map has
+        // changed (at most every two seconds).
+        let revision = doc.revision ^ doc.generation.rotate_left(32) ^ (doc.dim as u64).rotate_left(48);
+        if let Some((rev, rx)) = &self.minimap_job {
+            match rx.try_recv() {
+                Ok(picture) => {
+                    let rev = *rev;
+                    self.minimap_job = None;
+                    if let Some(p) = picture {
+                        let image = egui::ColorImage::from_rgba_unmultiplied(p.size, &p.rgba);
+                        let texture = ui.ctx().load_texture("render minimap", image, egui::TextureOptions::LINEAR);
+                        self.minimap = Some((rev, texture, p.blocks));
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => ui.ctx().request_repaint_after(Duration::from_millis(100)),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.minimap_job = None,
+            }
+        }
+        if self.minimap_job.is_none() && self.minimap.as_ref().is_none_or(|m| m.0 != revision) && self.minimap_asked.is_none_or(|t| t.elapsed() >= Duration::from_secs(2)) {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (world, dim) = (doc.world.copy_unfrozen(), doc.dim);
+            std::thread::spawn(move || {
+                let _ = tx.send(crate::render_minimap::draw(&world, dim, 256));
+            });
+            self.minimap_job = Some((revision, rx));
+            self.minimap_asked = Some(Instant::now());
+        }
+        let Some((_, texture, blocks)) = &self.minimap else { return };
+        let (bw, bh) = (blocks[2] - blocks[0], blocks[3] - blocks[1]);
+        let side = 190.0f32.min(view.width() * 0.35).min(view.height() * 0.45);
+        let k = side / bw.max(bh) as f32;
+        let size = vec2(bw as f32 * k, bh as f32 * k);
+        let rect = Rect::from_min_size(pos2(button.right() - size.x, button.bottom() + 6.0), size);
+        self.minimap_shown = Some(rect);
+        let frame = rect.expand(3.0);
+        ui.painter().rect(frame, theme::TILE_RADIUS, pal.panel, Stroke::new(1.0, pal.border), StrokeKind::Inside);
+        ui.painter().image(texture.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        let to_screen = |x: f64, z: f64| pos2(rect.left() + ((x - blocks[0]) / bw) as f32 * size.x, rect.top() + ((z - blocks[1]) / bh) as f32 * size.y);
+        let to_world = |p: egui::Pos2| (blocks[0] + ((p.x - rect.left()) / size.x) as f64 * bw, blocks[1] + ((p.y - rect.top()) / size.y) as f64 * bh);
+        // The Timeline's path.
+        if let Some(anim) = doc.world.meta.animation.as_ref().filter(|a| a.keys.len() > 1) {
+            let points: Vec<egui::Pos2> = (0..=64).filter_map(|k| anim.sample(anim.duration * k as f32 / 64.0)).map(|p| to_screen(p.eye[0], p.eye[2])).collect();
+            ui.painter().add(egui::Shape::line(points, Stroke::new(1.5, pal.accent.gamma_multiply(0.7))));
+        }
+        let response = ui.interact(rect, egui::Id::unique("render minimap"), Sense::click_and_drag());
+        let Some(orbit) = self.orbit.as_mut() else { return };
+        // A click: the camera over that place; a drag: the view slides
+        // with the pointer.
+        if (response.clicked() || response.drag_started())
+            && let Some(at) = response.interact_pointer_pos()
+        {
+            let eye = orbit.eye();
+            let (x, z) = to_world(at);
+            *orbit = Orbit::from_eye([x, eye[1], z], orbit.yaw, orbit.pitch, orbit.distance);
+        } else if response.dragged() {
+            let d = response.drag_delta();
+            let eye = orbit.eye();
+            let (dx, dz) = (d.x as f64 / size.x as f64 * bw, d.y as f64 / size.y as f64 * bh);
+            *orbit = Orbit::from_eye([eye[0] + dx, eye[1], eye[2] + dz], orbit.yaw, orbit.pitch, orbit.distance);
+        }
+        // The camera and what it sees.
+        let camera = orbit.camera(self.fov);
+        let eye = to_screen(camera.eye[0], camera.eye[2]);
+        let half = (self.fov.to_radians() * 0.5 * view.width() / view.height().max(1.0)).min(1.4);
+        let reach = 26.0;
+        let side_ray = |a: f32| eye + vec2((camera.yaw + a).sin(), -(camera.yaw + a).cos()) * reach;
+        ui.painter().add(egui::Shape::convex_polygon(vec![eye, side_ray(-half), side_ray(half)], pal.accent.gamma_multiply(0.25), Stroke::new(1.0, pal.accent)));
+        ui.painter().circle(eye, 3.5, pal.accent, Stroke::new(1.0, pal.panel));
     }
 
     /// The Timeline: keyframes of the camera and the sun over time, a

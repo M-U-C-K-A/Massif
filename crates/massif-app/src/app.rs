@@ -11324,6 +11324,50 @@ mod tests {
         }
     }
 
+    /// The Render view's minimap: off at first, its button shows it, the
+    /// whole map is drawn there, and a click on it puts the camera over
+    /// that place, its height kept (MASSIF_SNAPSHOT_DIR: the view with it).
+    #[test]
+    fn the_render_view_shows_a_minimap() {
+        use crate::layout::Side;
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(ThemeChoice::Light);
+        h.run_steps(3);
+        h.state_mut().layout.show_side(Side::Render);
+        h.run_steps(3);
+        let started = std::time::Instant::now();
+        while h.state().render_side.building() && started.elapsed().as_secs() < 120 {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        h.get_by_label("Show the map").click();
+        let started = std::time::Instant::now();
+        while !h.state().render_side.has_minimap() && started.elapsed().as_secs() < 60 {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(h.state().render_side.has_minimap(), "the map was drawn small");
+        h.run_steps(2);
+        let rect = h.state().render_side.minimap_rect().expect("shown");
+        let before = h.state().render_side.pose_now().unwrap();
+        // A click near the map's east edge, halfway down (the camera starts
+        // over the south-west).
+        let at = egui::pos2(rect.left() + rect.width() * 0.9, rect.center().y);
+        h.input_mut().events.push(egui::Event::PointerMoved(at));
+        h.run_steps(1);
+        h.input_mut().events.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+        h.run_steps(1);
+        h.input_mut().events.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+        h.run_steps(3);
+        let after = h.state().render_side.pose_now().unwrap();
+        assert!(after.eye[0] > before.eye[0] + 500.0, "the camera went east: {} to {}", before.eye[0], after.eye[0]);
+        assert!((after.eye[1] - before.eye[1]).abs() < 1e-6, "its height kept");
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            settle_render(&mut h);
+            h.render().unwrap().save(dir.join("render-minimap.png")).unwrap();
+        }
+    }
+
     /// Let the Render side's image settle, with less motion (it stops at
     /// 64 samples a pixel), so that a snapshot does not wait on the graphics
     /// card path-tracing frame after frame (at 2x, it would time out).
