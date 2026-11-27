@@ -185,3 +185,147 @@ fn the_looks_over_the_village() {
         image::save_buffer(dir.join(format!("look-{k}{tag}.png")), &rgba, w, hh, image::ColorType::Rgba8).unwrap();
     }
 }
+
+/// The map made another size in place, its generation kept, as the
+/// Terrain Generator's Apply to map does: the Diorama builds the new map,
+/// where it showed nothing (0 chunks) before.
+#[test]
+fn the_diorama_follows_the_map_made_bigger() {
+    let (mut h, _) = diorama(1.0);
+    settle(&mut h);
+    let (before, _) = h.state().diorama.scene_map().expect("a scene");
+    let generation = h.state().doc.generation;
+    let bigger = massif_core::generate::generate(&massif_core::generate::GenParams { tiles_x: 12, tiles_z: 12, landform: massif_core::generate::Landform::Hills, ..Default::default() });
+    let dimension = bigger.dims.into_iter().next().unwrap();
+    let count = dimension.ground().len();
+    assert_ne!(count, before, "another size");
+    h.state_mut().doc.replace_dimension(0, dimension, None, "Apply the terrain graph");
+    assert_eq!(h.state().doc.generation, generation, "the same map");
+    h.run_steps(3);
+    let (tiles, middle) = h.state().diorama.scene_map().expect("a scene");
+    assert_eq!(tiles, count, "the scene made for the new map");
+    let (lo, hi) = h.state().doc.dimension().bounds().unwrap();
+    let want = [((lo.x + hi.x + 1) as f64) * 64.0, ((lo.z + hi.z + 1) as f64) * 64.0];
+    assert_eq!(middle, want);
+    assert_eq!(h.state().diorama.center, Some(want), "the view on the new map");
+    settle(&mut h);
+    assert!(h.state().diorama.progress().built > 0, "tiles built");
+}
+
+/// A terrain graph applied with the Diorama open, the app drawing frames
+/// while the windows are written: once done, every tile it shows is the
+/// new map's, as a Diorama made afresh shows it, none left as it was.
+#[test]
+fn the_diorama_shows_the_graph_applied_whole() {
+    let (mut h, _) = diorama(1.0);
+    {
+        // The whole map built, not only around the view.
+        let d = &mut h.state_mut().diorama;
+        d.zoom = 0.3;
+    }
+    settle(&mut h);
+    let (before, _) = h.state().diorama.surfaces();
+    let graph = massif_terrain::model::Graph::from_json(r#"{ "nodes": {
+        "land": { "type": "noise.fbm", "params": { "scale": 300, "height": 50, "base": 55 } },
+        "out": { "type": "output.map", "inputs": { "height": "land" } } } }"#).unwrap();
+    let blocks = crate::blocks::BlockLibrary::default();
+    let engine = Arc::new(massif_terrain::engine::Engine::new(Default::default()));
+    let env: Arc<dyn massif_terrain::kernel::Env> = Arc::new(massif_terrain::world::MapEnv::new(&h.state().doc.world, 0, 1, "."));
+    let shape = (h.state().doc.dimension().bounds(), h.state().doc.dimension().ground().len());
+    let mut a = crate::terrain::apply::Applying::start(engine, &graph, &mut h.state_mut().doc, env, 1, false).unwrap();
+    let started = std::time::Instant::now();
+    loop {
+        let out = a.step(&mut h.state_mut().doc, &blocks, None);
+        h.step();
+        if let Some(r) = out {
+            r.unwrap();
+            break;
+        }
+        assert!(started.elapsed().as_secs() < 120, "Apply never finished");
+    }
+    assert_eq!((h.state().doc.dimension().bounds(), h.state().doc.dimension().ground().len()), shape, "the map kept its size");
+    settle(&mut h);
+    let (after, drawn) = h.state().diorama.surfaces();
+    let tiles = h.state().doc.dimension().ground().len();
+    // Afresh, on the map as it now is.
+    h.state_mut().diorama = crate::diorama::Diorama::default();
+    h.state_mut().diorama.zoom = 0.3;
+    h.run_steps(3);
+    settle(&mut h);
+    let (fresh, _) = h.state().diorama.surfaces();
+    assert_eq!(drawn, tiles, "every tile drawn");
+    let old: Vec<_> = after.iter().filter(|(t, s)| fresh.get(t).is_some_and(|f| f != *s)).map(|(t, _)| *t).collect();
+    assert!(old.is_empty(), "{} of {} tiles not as the new map: {:?}", old.len(), after.len(), &old[..old.len().min(8)]);
+    assert!(after.iter().any(|(t, s)| before.get(t).is_some_and(|b| b != s)), "the map changed");
+
+    // A graph larger than the map: Apply makes the map its size, and the
+    // Diorama shows the new map whole (it kept the old map's tiles).
+    let (lo, hi) = h.state().doc.dimension().bounds().unwrap();
+    let side = ((hi.x - lo.x + 1).max(hi.z - lo.z + 1) * massif_core::TILE_SIZE) as u32;
+    let mut bigger = graph.clone();
+    bigger.terrain.size = Some(side * 2);
+    let engine = Arc::new(massif_terrain::engine::Engine::new(Default::default()));
+    let env: Arc<dyn massif_terrain::kernel::Env> = Arc::new(massif_terrain::world::MapEnv::new(&h.state().doc.world, 0, 1, "."));
+    let mut a = crate::terrain::apply::Applying::start(engine, &bigger, &mut h.state_mut().doc, env, 2, false).unwrap();
+    loop {
+        let out = a.step(&mut h.state_mut().doc, &blocks, None);
+        h.step();
+        if let Some(r) = out {
+            r.unwrap();
+            break;
+        }
+        assert!(started.elapsed().as_secs() < 240, "Apply never finished");
+    }
+    let tiles = h.state().doc.dimension().ground().len();
+    assert!(tiles > shape.1, "the map made bigger: {tiles} tiles");
+    settle(&mut h);
+    let (after, drawn) = h.state().diorama.surfaces();
+    assert_eq!(drawn, tiles, "every tile of the new map drawn");
+    assert_eq!(h.state().diorama.scene_map().map(|m| m.0), Some(tiles));
+    h.state_mut().diorama = crate::diorama::Diorama::default();
+    h.state_mut().diorama.zoom = 0.3;
+    h.run_steps(3);
+    settle(&mut h);
+    let (fresh, _) = h.state().diorama.surfaces();
+    let old: Vec<_> = after.iter().filter(|(t, s)| fresh.get(t).is_some_and(|f| f != *s)).map(|(t, _)| *t).collect();
+    assert!(old.is_empty(), "{} of {} tiles not as the new map", old.len(), after.len());
+}
+
+/// How long Apply takes on a map of 4096² blocks with the Diorama open,
+/// against with the 2D map: the Diorama's builder must not hold it up.
+#[test]
+#[ignore]
+fn apply_with_the_diorama_open() {
+    let graph = massif_terrain::model::Graph::from_json(r#"{ "nodes": {
+        "land": { "type": "noise.fbm", "params": { "scale": 600, "height": 60, "base": 60 } },
+        "out": { "type": "output.map", "inputs": { "height": "land" } } } }"#).unwrap();
+    let blocks = crate::blocks::BlockLibrary::default();
+    for open in [true, false] {
+        let (mut h, id) = diorama(1.0);
+        h.state_mut().doc = crate::doc::Document::new(massif_core::generate::generate(&massif_core::generate::GenParams { tiles_x: 32, tiles_z: 32, landform: massif_core::generate::Landform::Flat, ..Default::default() }), None, 12);
+        if !open {
+            h.state_mut().layout.current_mut().root.set_editor(id, EditorKind::Map);
+        }
+        h.state_mut().diorama.zoom = 0.1;
+        h.run_steps(5);
+        if open {
+            settle(&mut h);
+        }
+        let engine = Arc::new(massif_terrain::engine::Engine::new(Default::default()));
+        let env: Arc<dyn massif_terrain::kernel::Env> = Arc::new(massif_terrain::world::MapEnv::new(&h.state().doc.world, 0, 1, "."));
+        let t0 = std::time::Instant::now();
+        let mut a = crate::terrain::apply::Applying::start(engine, &graph, &mut h.state_mut().doc, env, 1, false).unwrap();
+        let (mut frames, mut slowest) = (0, std::time::Duration::ZERO);
+        let done = loop {
+            let out = a.step(&mut h.state_mut().doc, &blocks, None);
+            let f = std::time::Instant::now();
+            h.step();
+            slowest = slowest.max(f.elapsed());
+            frames += 1;
+            if let Some(r) = out {
+                break r.unwrap();
+            }
+        };
+        eprintln!("APPLY with the {}: {:.2} s ({:.2} s by Apply), {frames} frames, slowest frame {:.0} ms", if open { "Diorama open" } else { "2D map" }, t0.elapsed().as_secs_f64(), done.seconds, slowest.as_secs_f64() * 1000.0);
+    }
+}

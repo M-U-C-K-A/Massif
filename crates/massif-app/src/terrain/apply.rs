@@ -49,6 +49,11 @@ pub struct Applying {
     rx: Receiver<Msg>,
     cancel: Arc<AtomicBool>,
     made: Arc<AtomicUsize>,
+    /// Nanoseconds the thread took making the windows.
+    making: Arc<std::sync::atomic::AtomicU64>,
+    timings: Timings,
+    /// When the phase underground began.
+    under_from: Option<Instant>,
     pub windows: usize,
     pub written: usize,
     pub phase: Phase,
@@ -81,11 +86,24 @@ pub struct Applying {
     kept: Option<massif_terrain::underground::HandEdits>,
 }
 
+/// Where Apply's time went, in seconds: the thread making the windows'
+/// terrain, the interface's thread writing them, what goes underground,
+/// the villages, the step closed.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Timings {
+    pub make: f64,
+    pub write: f64,
+    pub underground: f64,
+    pub villages: f64,
+    pub commit: f64,
+}
+
 /// What Apply did, to say.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Done {
     pub windows: usize,
     pub seconds: f64,
+    pub timings: Timings,
     pub caves: massif_terrain::underground::Applied,
     pub villages: usize,
     pub notes: Vec<String>,
@@ -143,12 +161,13 @@ impl Applying {
         let (tx, rx) = sync_channel::<Msg>(2);
         let kept = Some(massif_terrain::underground::HandEdits::capture(&compiled, doc.dimension()));
         doc.history.begin(t!("Apply the terrain graph"), doc.dim);
-        let (e, c, stop, count) = (engine.clone(), compiled.clone(), cancel.clone(), made.clone());
+        let making = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let (e, c, stop, count, took) = (engine.clone(), compiled.clone(), cancel.clone(), made.clone(), making.clone());
         std::thread::Builder::new()
             .name("terrain apply".into())
-            .spawn(move || work(e, c, side, per_row, tx, stop, count))
+            .spawn(move || work(e, c, side, per_row, tx, stop, count, took))
             .map_err(|e| e.to_string())?;
-        Ok(Applying { rx, cancel, made, windows, written: 0, phase: Phase::Terrain, started: Instant::now(), engine, compiled, folder, revision, geometry: None, notes: Vec::new(), heights, levels: None, over: over && heights, overlay: None, under: None, prepared: None, kept })
+        Ok(Applying { rx, cancel, made, making, timings: Timings::default(), under_from: None, windows, written: 0, phase: Phase::Terrain, started: Instant::now(), engine, compiled, folder, revision, geometry: None, notes: Vec::new(), heights, levels: None, over: over && heights, overlay: None, under: None, prepared: None, kept })
     }
 
     /// Stops it: what was written is taken back.
@@ -174,12 +193,15 @@ impl Applying {
         while self.phase == Phase::Terrain && t0.elapsed().as_millis() < 40 {
             match self.rx.try_recv() {
                 Ok(Msg::Window(extent, outputs, tiles)) => {
+                    let t = Instant::now();
                     self.write_window(doc, blocks, &extent, &outputs, &tiles);
+                    self.timings.write += t.elapsed().as_secs_f64();
                     self.written += 1;
                 }
                 Ok(Msg::Geometry(s, r)) => {
                     self.geometry = Some((s, r));
                     self.phase = Phase::Underground;
+                    self.under_from = Some(Instant::now());
                     // What goes underground, worked out off the interface's
                     // thread on the map as its ground now is; written next.
                     let dim = doc.world.dims[doc.dim].snapshot();
@@ -232,6 +254,7 @@ impl Applying {
                         }
                         let _ = dim;
                         self.phase = Phase::Villages;
+                        self.timings.underground = self.under_from.map_or(0.0, |t| t.elapsed().as_secs_f64());
                         self.under = Some(u);
                         None
                     }
@@ -242,12 +265,19 @@ impl Applying {
                 }
             }
             Phase::Villages => {
+                let t = Instant::now();
                 let villages = self.write_villages(doc, lib);
+                self.timings.villages = t.elapsed().as_secs_f64();
+                let t = Instant::now();
                 doc.commit();
                 doc.clamp_active_level();
+                self.timings.commit = t.elapsed().as_secs_f64();
+                self.timings.make = self.making.load(Ordering::Relaxed) as f64 / 1e9;
                 let caves = self.under.take().unwrap_or_default();
                 let notes: Vec<String> = std::mem::take(&mut self.notes);
-                Some(Ok(Done { windows: self.written, seconds: self.started.elapsed().as_secs_f64(), caves, villages, notes }))
+                let seconds = self.started.elapsed().as_secs_f64();
+                log::info!("terrain apply: {seconds:.2} s, {:?}", self.timings);
+                Some(Ok(Done { windows: self.written, seconds, timings: self.timings, caves, villages, notes }))
             }
         }
     }
@@ -364,7 +394,8 @@ impl Applying {
 }
 
 /// The thread: each window's terrain, then the geometry.
-fn work(engine: Arc<Engine>, c: Arc<Compiled>, side: u32, per_row: u32, tx: SyncSender<Msg>, stop: Arc<AtomicBool>, made: Arc<AtomicUsize>) {
+#[allow(clippy::too_many_arguments)]
+fn work(engine: Arc<Engine>, c: Arc<Compiled>, side: u32, per_row: u32, tx: SyncSender<Msg>, stop: Arc<AtomicBool>, made: Arc<AtomicUsize>, took: Arc<std::sync::atomic::AtomicU64>) {
     let cancel = || stop.load(Ordering::Relaxed);
     let n = c.space.samples(0);
     for wz in 0..per_row {
@@ -378,6 +409,7 @@ fn work(engine: Arc<Engine>, c: Arc<Compiled>, side: u32, per_row: u32, tx: Sync
             let x = (wx * side).min(n - side);
             let z = (wz * side).min(n - side);
             let rect = Rect::new(x as i32, z as i32, side, side);
+            let t = Instant::now();
             let out = match massif_terrain::world::outputs_in(&engine, &c, 0, rect, &cancel) {
                 Ok((extent, out)) => (extent, out),
                 Err(e) => {
@@ -390,6 +422,7 @@ fn work(engine: Arc<Engine>, c: Arc<Compiled>, side: u32, per_row: u32, tx: Sync
                 let (bx, bz) = (t.x * TILE_SIZE, t.z * TILE_SIZE);
                 bx >= own.x0 && bz >= own.z0 && bx < own.x1 && bz < own.z1
             }).collect();
+            took.fetch_add(t.elapsed().as_nanos() as u64, Ordering::Relaxed);
             made.fetch_add(1, Ordering::Relaxed);
             if tx.send(Msg::Window(out.0, Box::new(out.1), tiles)).is_err() {
                 return;

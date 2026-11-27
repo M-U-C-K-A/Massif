@@ -190,6 +190,22 @@ pub fn fractal(octaves: &[Octave], style: Style, di: f32, dj: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    /// A fractal stays within ±1, as the archipelago's skipping of far
+    /// islands takes it (with room to spare: it allows ±2).
+    #[test]
+    fn fractals_stay_within_one() {
+        let mut most = 0.0f32;
+        for seed in [1u32, 7, 0x9e37_79b9] {
+            let f = super::Fbm::down_to(900.0, 6.0, 0.55, seed);
+            for i in 0..400_000u32 {
+                let (x, z) = ((i % 631) as f64 * 3.71 + seed as f64, (i / 631) as f64 * 2.93);
+                most = most.max(f.at(x, z).abs()).max(super::noise2(x * 0.37, z * 0.41, seed).abs());
+            }
+        }
+        assert!(most <= 1.0 + 1e-5, "{most}");
+        assert!(most > 0.5, "{most}");
+    }
+
     use super::*;
 
     #[test]

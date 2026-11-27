@@ -1,0 +1,3 @@
+**Apply to map twice as fast, and the Diorama follows it**
+
+The Terrain Generator's Apply to map takes about half the time it did: a volcanic archipelago written over a map of 8192 × 8192 blocks went from 17.7 s to 7.5 s, of 4096 × 4096 from 6.4 s to 4.0 s, with the very same map as a result. The Archipelago node no longer works out the coast of islands too far away to matter, the Volcano node its relief away from the volcanoes, and the blocks the graph's colours pick are found in parallel. The Diorama, open while a graph is applied that makes the map another size, showed the old map's squares, some of them with the new map in them: it now draws the new map whole.

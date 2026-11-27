@@ -77,11 +77,22 @@ pub static ISLAND: NodeSpec = NodeSpec {
 /// ellipse `radius` long, `elongation` narrower across, turned by `angle`,
 /// its shore ragged by `outline` (about ±1) times `wobble` blocks.
 fn inside_isle(dx: f64, dz: f64, radius: f64, elongation: f64, angle: f64, outline: f64, wobble: f64) -> f64 {
-    let (s, c) = angle.sin_cos();
+    isle_base(dx, dz, radius, elongation, angle.sin_cos()) + wobble * outline
+}
+
+/// [`inside_isle`] but its outline: the island's ellipse alone, its angle's
+/// sine and cosine given.
+#[inline]
+fn isle_base(dx: f64, dz: f64, radius: f64, elongation: f64, (s, c): (f64, f64)) -> f64 {
     let (u, v) = (c * dx + s * dz, -s * dx + c * dz);
     let dist = u.hypot(v / (1.0 - 0.6 * elongation).max(0.1));
-    radius - dist + wobble * outline
+    radius - dist
 }
+
+/// The most an outline's noise ([`Fbm::at`]) reaches either way: its
+/// octaves are gradient noise of unit gradients, within ±1 (√2 · √2 / 2);
+/// twice that, so that rounding never matters.
+const OUTLINE_MOST: f64 = 2.0;
 
 fn island_cpu(ctx: &Ctx, _: &[Option<&[f32]>], out: &mut [Vec<f32>]) {
     let p = ctx.params;
@@ -198,12 +209,41 @@ fn archipelago_cpu(ctx: &Ctx, _: &[Option<&[f32]>], out: &mut [Vec<f32>]) {
     let outlines: Vec<Fbm> = near.iter().map(|i| Fbm::down_to(i.radius * 0.6, finest(ctx).max(6.0), 0.55, i.seed)).collect();
     let hills = Relief::new(p.num("largest") * 0.3, 0.5, 0.2, finest(ctx), ctx.seed ^ 0x77);
     let hill = p.f("hills");
+    let turns: Vec<(f64, f64)> = near.iter().map(|i| i.angle.sin_cos()).collect();
+    // At sea an island makes the floor deeper the farther from it (Depth
+    // not below 0): an island whose nearest it could be, whatever its
+    // outline, makes no more than what is here already cannot change the
+    // highest, and its outline's noise, most of the work, is not made.
+    let monotone = depth >= 0.0;
+    let mut order: Vec<(f64, f64, usize)> = Vec::with_capacity(near.len());
     for (k, x, z) in samples(ctx) {
         // The highest of what each island makes here: land wins over sea,
         // the shallower sea over the deeper, with no seam where they meet.
+        // The nearest first, so that the far ones are seen to matter not.
         let (mut h, mut land) = (-1.0 - depth * 2.5, 0.0f32);
+        order.clear();
         for (i, isle) in near.iter().enumerate() {
-            let d = inside_isle(x - isle.x, z - isle.z, isle.radius, isle.elongation, isle.angle, outlines[i].at(x, z) as f64, rough * isle.radius * 0.45);
+            let base = isle_base(x - isle.x, z - isle.z, isle.radius, isle.elongation, turns[i]);
+            let most = base + (rough * isle.radius * 0.45).abs() * OUTLINE_MOST;
+            // Out of reach whatever its outline.
+            if most < -reach {
+                continue;
+            }
+            order.push((most, base, i));
+        }
+        if monotone {
+            order.sort_unstable_by(|a, b| b.0.total_cmp(&a.0));
+        }
+        for &(most, base, i) in &order {
+            let isle = near[i];
+            // A block more than the most it could reach, for rounding.
+            if monotone && most + 1.0 < 0.0 {
+                let (hb, lb) = shore(ctx, most + 1.0, isle.height, isle.radius, shelf, depth, beach);
+                if hb <= h && lb <= land {
+                    continue;
+                }
+            }
+            let d = base + rough * isle.radius * 0.45 * outlines[i].at(x, z) as f64;
             if d < -reach {
                 continue;
             }

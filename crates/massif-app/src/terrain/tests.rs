@@ -1331,3 +1331,101 @@ fn the_viewer_options_stay_open_while_resolution_is_picked() {
     assert_eq!(h.state().look.resolution, 8192);
     assert!(h.query_by_label("Mask opacity").is_some(), "still open");
 }
+
+/// The CPU time this process has used, user and system, in seconds.
+fn cpu() -> f64 {
+    #[repr(C)]
+    struct Timeval {
+        sec: i64,
+        usec: i64,
+    }
+    #[repr(C)]
+    struct Rusage {
+        user: Timeval,
+        system: Timeval,
+        rest: [i64; 14],
+    }
+    unsafe extern "C" {
+        fn getrusage(who: i32, usage: *mut Rusage) -> i32;
+    }
+    let mut u = Rusage { user: Timeval { sec: 0, usec: 0 }, system: Timeval { sec: 0, usec: 0 }, rest: [0; 14] };
+    // SAFETY: getrusage fills the struct it is given.
+    if unsafe { getrusage(0, &mut u) } != 0 {
+        return 0.0;
+    }
+    let t = |t: &Timeval| t.sec as f64 + (t.usec & 0xffff_ffff) as f64 / 1e6;
+    t(&u.user) + t(&u.system)
+}
+
+/// How long Apply takes, the archipelago example written over new maps of
+/// 2048², 4096² and 8192² blocks (MASSIF_APPLY_SIZES), best of
+/// MASSIF_APPLY_RUNS: wall and CPU time, and where it went.
+#[test]
+#[ignore]
+fn apply_speed() {
+    let sizes: Vec<i32> = std::env::var("MASSIF_APPLY_SIZES").ok().map(|v| v.split(',').filter_map(|s| s.trim().parse().ok()).collect()).unwrap_or(vec![2048, 4096, 8192]);
+    let runs: usize = std::env::var("MASSIF_APPLY_RUNS").ok().and_then(|v| v.parse().ok()).unwrap_or(3);
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../massif-terrain/examples/graphs/archipelago.terrain.json");
+    let original = Graph::from_json(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let blocks = crate::blocks::BlockLibrary::default();
+    for size in sizes {
+        // The archipelago made the size of the map.
+        let mut graph = original.clone();
+        graph.terrain.size = Some(size as _);
+        let tiles = size / massif_core::TILE_SIZE;
+        let mut best: Option<(f64, f64, super::apply::Timings)> = None;
+        for _ in 0..runs {
+            let world = massif_core::generate::generate(&massif_core::generate::GenParams { tiles_x: tiles, tiles_z: tiles, landform: massif_core::generate::Landform::Flat, ..Default::default() });
+            let mut doc = crate::doc::Document::new(world, None, 1);
+            // On the graphics card, as the app's (MASSIF_APPLY_CPU: without).
+            let gpu = if std::env::var_os("MASSIF_APPLY_CPU").is_some() { None } else { Gpu::headless() };
+            let engine = Arc::new(match gpu {
+                Some(gpu) => Engine::with_gpu(gpu, Default::default()),
+                None => Engine::new(Default::default()),
+            });
+            let env: Arc<dyn massif_terrain::kernel::Env> = Arc::new(massif_terrain::world::MapEnv::new(&doc.world, 0, 1, "."));
+            let (t0, c0) = (std::time::Instant::now(), cpu());
+            let mut a = super::apply::Applying::start(engine.clone(), &graph, &mut doc, env, 1, false).unwrap();
+            let done = loop {
+                if let Some(r) = a.step(&mut doc, &blocks, None) {
+                    break r.unwrap();
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            };
+            if std::env::var_os("MASSIF_APPLY_NODES").is_some() {
+                let mut nodes: Vec<(String, (u64, f64))> = engine.counters.by_node.lock().unwrap().iter().map(|(k, v)| (k.clone(), *v)).collect();
+                nodes.sort_by(|a, b| b.1.1.total_cmp(&a.1.1));
+                for (name, (tiles, ms)) in nodes {
+                    eprintln!("    {name}: {tiles} tiles, {:.2} s", ms / 1000.0);
+                }
+            }
+            if std::env::var_os("MASSIF_APPLY_HASH").is_some() {
+                // Every tile of the map as written: the same whatever the
+                // speed-ups.
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                let dim = doc.dimension();
+                for level in &dim.levels {
+                    let mut tiles: Vec<massif_core::TilePos> = level.positions().collect();
+                    tiles.sort_by_key(|p| (p.z, p.x));
+                    for pos in tiles {
+                        pos.x.hash(&mut hasher);
+                        pos.z.hash(&mut hasher);
+                        level.view(pos).unwrap().encode().hash(&mut hasher);
+                    }
+                }
+                eprintln!("  {size}²: map hash {:016x}", hasher.finish());
+            }
+            let t = std::time::Instant::now();
+            let dirty = doc.take_dirty().len();
+            let after = t.elapsed().as_secs_f64();
+            let (wall, cpu) = (t0.elapsed().as_secs_f64(), cpu() - c0);
+            eprintln!("  {size}²{}: {wall:.2} s wall, {cpu:.2} s CPU · {:?} · take_dirty {dirty} tiles {after:.3} s", if engine.gpu().is_some() { " (GPU)" } else { " (CPU)" }, done.timings);
+            if best.is_none_or(|b| wall < b.0) {
+                best = Some((wall, cpu, done.timings));
+            }
+        }
+        let (wall, cpu, t) = best.unwrap();
+        eprintln!("APPLY {size}²: best {wall:.2} s wall, {cpu:.2} s CPU · make {:.2} · write {:.2} · underground {:.2} · villages {:.2} · commit {:.2}", t.make, t.write, t.underground, t.villages, t.commit);
+    }
+}

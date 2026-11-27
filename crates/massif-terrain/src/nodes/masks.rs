@@ -59,15 +59,13 @@ pub static HEIGHT: NodeSpec = NodeSpec {
     ..NodeSpec::BASE
 };
 
-fn band(p: &Params, h: f32) -> f32 {
-    let (from, to, soft) = (p.f("from"), p.f("to"), p.f("softness").max(1e-3) * 0.5);
-    smoothstep(from - soft, from + soft, h) * (1.0 - smoothstep(to - soft, to + soft, h))
-}
-
 fn height_cpu(ctx: &Ctx, inputs: &[Option<&[f32]>], out: &mut [Vec<f32>]) {
     let h = inputs[0].expect("the band has its input");
+    // The settings read once, not by name for every sample.
+    let p = ctx.params;
+    let (from, to, soft) = (p.f("from"), p.f("to"), p.f("softness").max(1e-3) * 0.5);
     for (o, &v) in out[0].iter_mut().zip(h) {
-        *o = band(ctx.params, v);
+        *o = smoothstep(from - soft, from + soft, v) * (1.0 - smoothstep(to - soft, to + soft, v));
     }
 }
 

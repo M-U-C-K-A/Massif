@@ -132,7 +132,9 @@ fn volcano_cpu(ctx: &Ctx, _: &[Option<&[f32]>], out: &mut [Vec<f32>]) {
             best = best.max(h * v.max(0.0));
             mask = mask.max(u.min(1.0));
         }
-        out[0][k] = base + best * (1.0 + roughness * 0.3 * (relief.at(x, z) - 0.5) * mask);
+        // Away from the volcanoes the relief counts for nothing (times a
+        // mask of 0: exactly `best`), and is not made.
+        out[0][k] = if mask > 0.0 { base + best * (1.0 + roughness * 0.3 * (relief.at(x, z) - 0.5) * mask) } else { base + best };
         out[1][k] = mask;
     }
 }

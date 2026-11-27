@@ -2421,7 +2421,9 @@ impl Nearest {
             let (dl, da, db) = ((a[0] - b[0]) * 0.55, a[1] - b[1], a[2] - b[2]);
             dl * dl + da * da + db * db
         };
+        // Each entry on its own: in parallel, the same table.
         let table = (0..LUT * LUT * LUT)
+            .into_par_iter()
             .map(|k| {
                 let c = oklab([k % LUT, (k / LUT) % LUT, k / (LUT * LUT)].map(|v| (v as f32 + 0.5) * 256.0 / LUT as f32));
                 (0..labs.len()).min_by(|&a, &b| distance(c, labs[a]).total_cmp(&distance(c, labs[b]))).unwrap_or(0) as u16

@@ -54,6 +54,10 @@ struct Scene {
     generation: u64,
     catalogue: Option<usize>,
     dim: usize,
+    /// The map's tile bounds and count when the scene was made: the map
+    /// made another size in place (the Terrain Generator's Apply to map, a
+    /// resize) makes the scene again.
+    shape: Shape,
     /// Tiles asked for and not built yet.
     asked: HashSet<TilePos>,
     started: Instant,
@@ -76,6 +80,14 @@ struct Scene {
     queued_whole: bool,
     around: Option<(i32, i32, i32, i32)>,
     wanted: usize,
+}
+
+/// The tile bounds and count of a dimension's ground.
+type Shape = (Option<(TilePos, TilePos)>, usize);
+
+fn shape_of(doc: &Document) -> Shape {
+    let d = doc.dimension();
+    (d.bounds(), d.ground().len())
 }
 
 /// The least time between two starts of a scene's builder on the edits of
@@ -150,6 +162,30 @@ impl Diorama {
         self.scene.as_ref().is_some_and(|s| s.builder.pending() == 0 && s.asked.is_empty() && s.stale.is_empty() && (s.far.len() >= s.tiles.len() || !s.queued_whole))
     }
 
+    /// Each built tile's surface as a hash, and how many tiles of the map
+    /// have their small image drawn.
+    #[cfg(test)]
+    pub fn surfaces(&self) -> (HashMap<TilePos, u64>, usize) {
+        use std::hash::{Hash, Hasher};
+        let Some(s) = &self.scene else { return (HashMap::new(), 0) };
+        let hashes = s
+            .floors
+            .iter()
+            .map(|(t, (f, _))| {
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                f.surface.hash(&mut h);
+                (*t, h.finish())
+            })
+            .collect();
+        (hashes, s.far.len())
+    }
+
+    /// The tiles of the map the scene was made for, and its middle.
+    #[cfg(test)]
+    pub fn scene_map(&self) -> Option<(usize, [f64; 2])> {
+        self.scene.as_ref().map(|s| (s.tiles.len(), s.middle))
+    }
+
     /// The header's commands: what is shown and how it is turned.
     pub fn header(&mut self, ui: &mut Ui) {
         let labels = [tr!("Surface"), tr!("Caves")];
@@ -174,7 +210,7 @@ impl Diorama {
         };
         let (device, queue) = (&render_state.device, &render_state.queue);
         let cat_key = catalogue.as_ref().map(|c| Arc::as_ptr(c) as usize);
-        if self.scene.as_ref().is_some_and(|s| s.generation != doc.generation || s.catalogue != cat_key || s.dim != doc.dim) {
+        if self.scene.as_ref().is_some_and(|s| s.generation != doc.generation || s.catalogue != cat_key || s.dim != doc.dim || s.shape != shape_of(doc)) {
             self.scene = None;
             self.center = None;
         }
@@ -629,6 +665,7 @@ fn make_scene(device: &wgpu::Device, queue: &wgpu::Queue, doc: &mut Document, ca
         generation: doc.generation,
         catalogue: cat_key,
         dim: doc.dim,
+        shape: shape_of(doc),
         started: Instant::now(),
         first: None,
         whole: None,
