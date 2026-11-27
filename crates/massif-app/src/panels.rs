@@ -5762,7 +5762,7 @@ mod tests {
         let mut h = egui_kittest::Harness::builder().with_size(vec2(320.0, 1600.0)).build_ui_state(draw, S { tools: ToolState { terrain: last, ..ToolState::default() }, reg, blocks: BlockLibrary::default() });
         h.run_steps(2);
         let at = |reg: &Registry, t: u16| reg.terrains_in_order().iter().position(|&o| o == t).unwrap();
-        let mut drag = |h: &mut egui_kittest::Harness<S>, from: &str, to: &str, dx: f32| {
+        let drag = |h: &mut egui_kittest::Harness<S>, from: &str, to: &str, dx: f32| {
             let from = h.get_by_label(from).rect().center();
             let to = h.get_by_label(to).rect().center() + vec2(dx, 0.0);
             h.drag_at(from);
