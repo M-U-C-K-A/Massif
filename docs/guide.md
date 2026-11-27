@@ -3148,8 +3148,9 @@ area draws the viewport at a time; a second one says where it is.
   the blocks sharp. The samples themselves are kept as they are: the
   filter only draws the image shown from them, and the more samples, the
   less it smooths, until past some 128 samples a pixel it leaves them be.
-  Where Intel's **Open Image Denoise** is installed (the denoiser Blender's
-  Cycles uses; on a Mac with Blender, Massif finds Blender's copy), it
+  Intel's **Open Image Denoise** (the denoiser Blender's Cycles uses,
+  version 2.5.1, Apache-2.0, its licence and third-party notices in the
+  app's folder) comes with Massif's builds; it
   takes over as the samples settle: after 1, 4, 16, 64, 256 and 1024
   samples and on the last, without holding up the view, and it denoises
   the image saved. Measured on a hilly map late in the day, against 1024
