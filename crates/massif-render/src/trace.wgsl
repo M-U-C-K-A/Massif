@@ -143,6 +143,24 @@ fn triangle(o: vec3<f32>, rd: vec3<f32>, a: vec3<f32>, b: vec3<f32>, c: vec3<f32
     return t;
 }
 
+// The level of a texture's detail on a surface `t` from where the ray
+// started, seen at `facing` (the cosine between the ray and the normal):
+// the texture's pixels about one a pixel of the image (the 16 of a block's
+// side over its size on screen), coarser the more slanting, so that far
+// land and leaves do not flicker; the finest up close, as crisp as the game.
+fn texture_lod(t: f32, facing: f32) -> f32 {
+    let size = t * P.up.w * 16.0 / sqrt(max(facing, 0.05));
+    return clamp(log2(max(size, 1e-6)), 0.0, 4.0);
+}
+
+// Whether a texture of alpha `a` (filtered: the share of its pixels there
+// that are not holes) stops this sample's ray in `cell`: as often as `a`
+// says, a threshold of its own each sample and each cell, so that leaves
+// far off add up to their coverage, not to a fixed pattern of holes.
+fn covers(a: f32, cell: vec3<i32>) -> bool {
+    return a > fract(LOD_U * 7.31 + hash3(cell));
+}
+
 // Blades of grass in `cell`, made up from its place (the same each
 // sample): so many, as high (P.flags.y, P.flags.z), in tufts of three from
 // one root, each leaning its own way, a ribbon of three triangles
@@ -316,7 +334,7 @@ fn shaped_hit(mat: u32, ro: vec3<f32>, rd: vec3<f32>, cell: vec3<i32>, t0: f32, 
         if (any(ab < vec2<f32>(0.0)) || any(ab > vec2<f32>(1.0))) {
             continue;
         }
-        if (q.holes && textureSampleLevel(atlas, atlas_sampler, quad_uv(q, ab), i32(q.layer), 0.0).a < 0.5) {
+        if (q.holes && !covers(textureSampleLevel(atlas, atlas_sampler, quad_uv(q, ab), i32(q.layer), texture_lod(t, 1.0)).a, cell)) {
             continue;
         }
         best = vec2<f32>(t, f32(k));
@@ -541,7 +559,7 @@ fn trace(ro: vec3<f32>, rd: vec3<f32>, tmax: f32, mode: u32) -> Hit {
             if (class_of(m) == CLASS_CUTOUT) {
                 // Through the holes of leaves and glass.
                 let uvl = face_uv(m, ro + rd * t, axis, rd);
-                stops = textureSampleLevel(atlas, atlas_sampler, uvl.xy, i32(uvl.z), 0.0).a >= 0.5;
+                stops = covers(textureSampleLevel(atlas, atlas_sampler, uvl.xy, i32(uvl.z), texture_lod(t, abs(rd[axis]))).a, v);
             }
             if (stops) {
                 h.found = true;
@@ -1295,7 +1313,7 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
             continue;
         }
         // Coarser textures the smaller a block is on screen.
-        let lod = clamp(log2(max(hit.t * P.up.w * 16.0, 1e-6)), 0.0, 4.0);
+        let lod = texture_lod(hit.t, abs(dot(n, rd)));
         let tex = textureSampleLevel(atlas, atlas_sampler, uvl.xy, i32(uvl.z), lod);
         var surf: Surface;
         surf.albedo = min(tex.rgb * tint * blade, vec3<f32>(1.0));
@@ -1433,7 +1451,16 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var seed = pcg(gid.x * 1973u + gid.y * 9277u + P.size.z * 26699u) | 1u;
     SUN_LIGHT = sun_through_air();
     let block = f32(1u << shift);
-    let jitter = vec2<f32>(rand(&seed), rand(&seed)) * block;
+    // Where in its pixel the ray goes: spread as a Gaussian of 0.5 pixel
+    // (Box-Muller, cut at 1.5 pixels), so that the samples add up to the
+    // pixel filtered as Cycles filters it, the edges smooth; a block's
+    // corner while the view moves (shift 1).
+    var jitter = vec2<f32>(rand(&seed), rand(&seed)) * block;
+    if (shift == 0u) {
+        let r = sqrt(-2.0 * log(max(rand(&seed), 1e-6))) * 0.5;
+        let a = 6.2831853 * rand(&seed);
+        jitter = vec2<f32>(0.5) + clamp(vec2<f32>(cos(a), sin(a)) * r, vec2<f32>(-1.5), vec2<f32>(1.5));
+    }
     let ndc = (vec2<f32>(px) + jitter) / vec2<f32>(f32(w), f32(h)) * 2.0 - 1.0;
     var dir = normalize(P.forward.xyz + P.right.xyz * (ndc.x * P.eye.w * P.right.w) - P.up.xyz * (ndc.y * P.eye.w));
     var eye = P.eye.xyz;

@@ -836,3 +836,58 @@ fn blades_of_grass() {
         }
     }
 }
+
+/// A wood's edge on the village map, leaves near and far, from among the
+/// trees: what the anti-aliasing and the textures' filtering are for. Saved
+/// after 16, 64 and 256 samples, raw and (where it is installed) through
+/// Open Image Denoise (MASSIF_SNAPSHOT_DIR, with MASSIF_FOREST_TAG naming
+/// the images: before and after a change).
+#[test]
+fn a_wood_s_edge() {
+    let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else { return };
+    let tag = std::env::var("MASSIF_FOREST_TAG").unwrap_or_default();
+    let Some((device, queue)) = device() else {
+        eprintln!("no GPU adapter: skipping");
+        return;
+    };
+    let cat = massif_assets::load_newest().and_then(Result::ok).map(Arc::new);
+    let world = diorama::sample::village();
+    let sea = world.meta.sea_level as f64;
+    let target = map_source::target_for(cat.as_ref().map(|c| c.version.as_str()));
+    let extent = Extent::of_map(&world, 0, &target).unwrap();
+    let (vx, vz) = diorama::sample::VILLAGE;
+    let materials = Arc::new(Materials::new(cat.clone(), device.limits().max_texture_array_layers as usize));
+    let tiles = map_source::tiles_by_distance(&world, 0, vx as f64, vz as f64);
+    let mut builder = MapBuilder::start(world, 0, target, materials.clone(), tiles);
+    let built = builder.wait_all();
+    let mut r = Renderer::new(&device, &queue, extent);
+    r.sea_level = sea;
+    r.sync_materials(&materials);
+    for b in built {
+        assert!(r.put(b.chunks));
+    }
+    let mut light = Light { haze: 1.5, ..Light::default() };
+    light.set_time(16.5, 172.0, 45.0, 0.0);
+    r.resize(1280, 720);
+    let (mx, mz) = (vx as f64 + 80.0, vz as f64 + 60.0);
+    let ground = r.surface(mx, mz).unwrap_or(sea);
+    let views = [("wood", Camera::orbit([mx, ground + 4.0, mz], 0.8, -0.02, 30.0, 55f32.to_radians())), ("far", Camera::orbit([mx, ground + 10.0, mz], 0.8, -0.12, 120.0, 40f32.to_radians()))];
+    for (view, camera) in views {
+        r.restart();
+        while r.samples < 256 {
+            let cmd = r.render(&camera, &light, false).unwrap();
+            queue.submit([cmd]);
+            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            let n = r.samples;
+            if [16, 64, 256].contains(&n) {
+                let (w, h, rgba) = r.read_image().unwrap();
+                image::save_buffer(dir.join(format!("forest-{view}-{n:03}-raw{tag}.png")), &rgba, w, h, image::ColorType::Rgba8).unwrap();
+                if oidn::available() {
+                    let mut s = r.read_samples().unwrap();
+                    oidn::denoise(&mut s.color, Some(&s.albedo), Some(&s.normal), s.width as usize, s.height as usize).unwrap();
+                    image::save_buffer(dir.join(format!("forest-{view}-{n:03}-oidn{tag}.png")), &gpu::tone_map(&s.color, s.exposure), w, h, image::ColorType::Rgba8).unwrap();
+                }
+            }
+        }
+    }
+}
