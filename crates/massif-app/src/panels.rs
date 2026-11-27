@@ -4516,9 +4516,13 @@ fn auto_biome_legend(ui: &mut Ui, rules: &massif_core::auto::AutoRules, reg: &Re
             let def = reg.biome(*b);
             ui.horizontal(|ui| {
                 swatch(ui, theme::rgb(def.color));
-                ui.label(RichText::new(&def.name).size(12.0));
-                let of: Vec<&str> = lands.iter().map(|l| massif_core_name(l.label())).collect();
-                ui.label(RichText::new(of.join(", ")).size(11.5).color(pal.weak));
+                ui.add(egui::Label::new(RichText::new(&def.name).size(12.0)).truncate());
+            });
+            // The kinds of land that get it, under its name, wrapped.
+            let of: Vec<&str> = lands.iter().map(|l| massif_core_name(l.label())).collect();
+            ui.horizontal(|ui| {
+                ui.add_space(20.0);
+                ui.add(egui::Label::new(RichText::new(of.join(", ")).size(11.5).color(pal.weak)).wrap());
             });
         }
         ui.horizontal(|ui| {
@@ -4528,7 +4532,7 @@ fn auto_biome_legend(ui: &mut Ui, rules: &massif_core::auto::AutoRules, reg: &Re
                 let x = r.left() + 2.0 + k as f32 * 3.5;
                 ui.painter().line_segment([pos2(x, r.bottom()), pos2(x + 3.0, r.top())], Stroke::new(1.0, pal.weak));
             }
-            ui.label(RichText::new(tr!("Hatched: already as the land calls for")).size(12.0));
+            ui.add(egui::Label::new(RichText::new(tr!("Hatched: already as the land calls for")).size(12.0)).wrap());
         });
         hint(ui, tr!("A column keeps a biome its ground agrees with: a desert on sand, a savanna or a jungle on grass, snowy biomes on snow."));
     });
