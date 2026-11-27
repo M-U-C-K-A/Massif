@@ -139,6 +139,8 @@ Massif's window has three **sides**, switched at the top left, each with its own
 
 The circle marks the brush footprint. The diorama on the right shows the village at block scale. [View full size](assets/workspaces/map-editor.webp).
 
+**Settings ▸ Appearance ▸ Compact mode** puts the top of the window on one row, for small screens: New, Open, Save and Export, the sides, the workspaces (scrolled sideways when the window is narrow), then the map's title as a menu (World Information, Save Point, Versions, Save As) and Versions. The favourite tools leave the bar for the Tools panel, Undo and Redo for the Edit menu and ⌘Z, and the hint about maximising and moving areas goes into the workspaces' tooltip. The gaps between the panels narrow too.
+
 ### Workspaces
 
 Workspaces are the tabs along the top: arrangements of panels. **+** duplicates the one in front; right-click a tab to **reset** it (back to how it came, a copy back to what it was copied from), duplicate it, rename it or delete it. **View ▸ Reset workspaces** puts every one back as it came. The layout is saved and comes back the next time Massif opens.

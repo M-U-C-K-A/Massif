@@ -109,6 +109,7 @@ The window is made of areas, as in Blender. Each area shows one editor: the map,
 ## Workspaces
 The tabs at the top are workspaces: arrangements of areas for a kind of work. The sides of Massif are switched at the top left, each remembering its workspace: **World**, the map editor (**Layout**, **Sculpting**, **Painting**, **3D**, **3D Sculpt**, **Maps**, **Minimal**, **WorldPainter**), **Terrain**, the terrain generator (**Generator**), and **Render** (Beta), where the map is path-traced and saved as images (**Still**, **Animation**; see Render).
 - `+` adds a copy of the workspace shown; **View ▸ Reset workspaces** puts them all back as they came.
+- **Settings ▸ Appearance ▸ Compact mode** puts the commands, the sides, the workspaces and the map's title (a menu) on one row at the top, with narrower gaps between the panels; the favourite tools stay in the Tools panel, Undo and Redo in the Edit menu.
 - Right-click a tab: **Reset** puts it back as it was at first, **Duplicate** copies it, **Delete** removes it.
 
 ## Moving around

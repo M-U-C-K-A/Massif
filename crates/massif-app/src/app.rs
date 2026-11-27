@@ -29,6 +29,13 @@ use std::path::PathBuf;
 
 const HEADER: f32 = theme::HEADER_H;
 const GAP: f32 = 4.0;
+/// The gap in compact mode.
+const COMPACT_GAP: f32 = 2.0;
+
+/// The gap between docked panels.
+fn gap(compact: bool) -> f32 {
+    if compact { COMPACT_GAP } else { GAP }
+}
 const MIN_AREA: f32 = 90.0;
 /// The smallest a floating panel is sized to.
 const FLOAT_MIN: egui::Vec2 = egui::vec2(240.0, 140.0);
@@ -130,6 +137,9 @@ struct Settings {
     /// The 2D map shows the biomes while a biome tool is in hand, the
     /// terrains while a terrain one is (Settings ▸ Appearance).
     map_follows_tool: bool,
+    /// Compact mode: the window's commands, sides and workspaces on one row
+    /// at the top, and narrower gaps between the panels.
+    compact: bool,
     /// The shared folders of the maps (see `collab::DepotState`), by map.
     depots: Vec<DepotLink>,
     /// The world rules saved under a name of one's own, offered in the
@@ -242,6 +252,7 @@ impl Default for Settings {
             no_slow_note: false,
             pack_author: String::new(),
             map_follows_tool: true,
+            compact: false,
             depots: Vec::new(),
             rule_presets: Vec::new(),
             language: crate::i18n::Language::System,
@@ -1585,6 +1596,10 @@ impl MassifApp {
             // Paint biome shows the map's biomes, Paint terrain its terrains.
             crate::widgets::row(ui, tr!("Switch the map's view with the tool"), |ui| {
                 crate::widgets::switch(ui, &mut self.settings.map_follows_tool);
+            });
+            // One row at the top and narrower gaps, for small screens.
+            crate::widgets::row(ui, tr!("Compact mode"), |ui| {
+                crate::widgets::switch(ui, &mut self.settings.compact);
             });
         });
         if crate::i18n::current() != crate::i18n::Language::English {
@@ -4521,6 +4536,7 @@ impl MassifApp {
             if !menus.is_empty() {
                 ui.separator();
             }
+            let compact = self.settings.compact;
             let busy = self.blocking_job().is_some();
             let icon = |ui: &mut Ui, icon: Icon, tip: &str, enabled: bool| {
                 let clicked = bar_button(ui, tip, enabled, false, |p, r, c| glyph_in(p, r, icon, c)).clicked();
@@ -4547,6 +4563,12 @@ impl MassifApp {
             }
             let commands = Rect::from_x_y_ranges(save_from..=ui.cursor().min.x - ui.spacing().item_spacing.x, ui.max_rect().y_range());
             crate::tour::mark(&ctx, crate::tour::Target::SaveExport, commands);
+            if compact {
+                // Undo, Redo and the favourite tools are left to the Edit
+                // menu, ⌘Z and the Tools panel.
+                self.compact_bar_rest(ui);
+                return;
+            }
             ui.separator();
             if icon(ui, Icon::Undo2, tr!("Undo (⌘Z)"), self.doc.history.can_undo()) {
                 self.undo(&ctx);
@@ -4570,46 +4592,7 @@ impl MassifApp {
             // The right end: the map's Versions button, and the offer of a
             // newer version, at the bar's margin as the first command is at
             // the left one.
-            self.sync_depot();
-            let right = ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                if let Some(r) = self.recording.as_ref().filter(|r| r.is_on() && !r.for_report)
-                    && recording_dot(ui, r.seconds()).clicked()
-                {
-                    self.stop_recording(&ctx);
-                }
-                // The map's versions: the one it stands on, its branch, and a
-                // dot when a contribution waits or is under review.
-                if self.has_map {
-                    let points = &self.doc.world.points;
-                    let head = self.doc.world.meta.head.and_then(|h| points.iter().find(|p| p.id == h));
-                    let label = match head {
-                        Some(p) if !p.branch.is_empty() => format!("{} · {}", p.branch, p.name),
-                        Some(p) => p.name.clone(),
-                        None => tr!("Versions").to_owned(),
-                    };
-                    let waiting = self.versions.depot.as_ref().map_or(0, |d| d.waiting.len());
-                    let reviewing = self.versions.reviewing.is_some();
-                    let dot = (waiting > 0 || reviewing).then_some(pal.accent);
-                    let tip = if reviewing {
-                        tr!("A contribution is under review in the Versions panel").to_owned()
-                    } else if waiting > 0 {
-                        trn!("{n} contribution waits in the shared folder", "{n} contributions wait in the shared folder", n = waiting)
-                    } else {
-                        tr!("The map's versions, branches and contributions").to_owned()
-                    };
-                    let branch = head.is_some_and(|p| !p.branch.is_empty());
-                    if versions_pill(ui, &label, branch, dot).on_hover_text(tip).clicked() {
-                        self.show_editor(EditorKind::Versions);
-                    }
-                }
-                if let Some(version) = self.update_offer().map(|r| r.tag_name.trim_start_matches('v').to_owned())
-                    && update_pill(ui, &version).clicked()
-                {
-                    self.dialog = Some(Dialog::Update);
-                }
-                ui.min_rect().left()
-            })
-            .inner;
+            let right = self.bar_right(ui, &ctx, None);
             // The title in the middle of the bar, or of the room the buttons
             // leave in a narrow window, cut with an ellipsis rather than
             // drawn over them.
@@ -4626,6 +4609,112 @@ impl MassifApp {
         if let Some(command) = picked {
             self.command(&ctx, command);
         }
+    }
+
+    /// The right end of the top bar: the offer of a newer version, the
+    /// map's Versions button and a recording's dot, at the bar's margin as
+    /// the first command is at the left one; in compact mode the map's
+    /// title menu before them. Gives the left edge of what it drew.
+    fn bar_right(&mut self, ui: &mut Ui, ctx: &egui::Context, title: Option<&str>) -> f32 {
+        let pal = Palette::of(ui);
+        self.sync_depot();
+        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+            if let Some(r) = self.recording.as_ref().filter(|r| r.is_on() && !r.for_report)
+                && recording_dot(ui, r.seconds()).clicked()
+            {
+                self.stop_recording(ctx);
+            }
+            // The map's versions: the one it stands on, its branch, and a
+            // dot when a contribution waits or is under review.
+            if self.has_map {
+                let points = &self.doc.world.points;
+                let head = self.doc.world.meta.head.and_then(|h| points.iter().find(|p| p.id == h));
+                let label = match head {
+                    Some(p) if !p.branch.is_empty() => format!("{} · {}", p.branch, p.name),
+                    Some(p) => p.name.clone(),
+                    None => tr!("Versions").to_owned(),
+                };
+                let waiting = self.versions.depot.as_ref().map_or(0, |d| d.waiting.len());
+                let reviewing = self.versions.reviewing.is_some();
+                let dot = (waiting > 0 || reviewing).then_some(pal.accent);
+                let tip = if reviewing {
+                    tr!("A contribution is under review in the Versions panel").to_owned()
+                } else if waiting > 0 {
+                    trn!("{n} contribution waits in the shared folder", "{n} contributions wait in the shared folder", n = waiting)
+                } else {
+                    tr!("The map's versions, branches and contributions").to_owned()
+                };
+                let branch = head.is_some_and(|p| !p.branch.is_empty());
+                if versions_pill(ui, &label, branch, dot).on_hover_text(tip).clicked() {
+                    self.show_editor(EditorKind::Versions);
+                }
+            }
+            if let Some(version) = self.update_offer().map(|r| r.tag_name.trim_start_matches('v').to_owned())
+                && update_pill(ui, &version).clicked()
+            {
+                self.dialog = Some(Dialog::Update);
+            }
+            if let Some(title) = title {
+                ui.add_space(4.0);
+                self.title_menu(ui, ctx, title);
+            }
+            ui.min_rect().left()
+        })
+        .inner
+    }
+
+    /// Compact mode's title: the map's name and level, cut to fit, as a
+    /// menu of what concerns the map as a whole.
+    fn title_menu(&mut self, ui: &mut Ui, ctx: &egui::Context, title: &str) {
+        let pal = Palette::of(ui);
+        let short: String = if title.chars().count() > 40 { format!("{}…", title.chars().take(39).collect::<String>()) } else { title.to_owned() };
+        let text = RichText::new(format!("{short}  {}", theme::glyph(Icon::ChevronDown))).size(13.0).color(pal.text);
+        let mut picked = None;
+        egui::containers::menu::MenuButton::from_button(egui::Button::new(text).fill(Color32::TRANSPARENT).stroke(Stroke::NONE).corner_radius(theme::PILL).min_size(vec2(0.0, 24.0))).ui(ui, |ui| {
+            if ui.button(theme::with_icon(Icon::Info, tr!("World Information…"))).clicked() {
+                picked = Some(Command::WorldInfo);
+            }
+            if ui.add_enabled(self.has_map, egui::Button::new(theme::with_icon(Icon::BookmarkPlus, tr!("Save Point…")))).clicked() {
+                picked = Some(Command::SavePoint);
+            }
+            if ui.add_enabled(self.has_map, egui::Button::new(theme::with_icon(Icon::GitBranch, tr!("Versions")))).clicked() {
+                self.show_editor(EditorKind::Versions);
+            }
+            ui.separator();
+            if ui.button(theme::with_icon(Icon::Save, tr!("Save As…"))).clicked() {
+                picked = Some(Command::SaveAs);
+            }
+        });
+        if let Some(command) = picked {
+            self.command(ctx, command);
+        }
+    }
+
+    /// Compact mode's top bar after the file commands: the sides and the
+    /// workspaces in the room the right end leaves, scrolled sideways in a
+    /// narrow window, then the title menu and Versions on the right.
+    fn compact_bar_rest(&mut self, ui: &mut Ui) {
+        let ctx = ui.ctx().clone();
+        let title = format!("{}{}", self.doc.title(), if self.doc.is_modified() { " •" } else { "" });
+        ui.add_space(8.0);
+        let left = ui.cursor().min.x;
+        // On the middle line of the file commands, which stand at the top
+        // of the bar (see `bar_button`).
+        let row = ui.max_rect().top()..=ui.max_rect().top() + BAR_BUTTON_H;
+        let right = self.bar_right(ui, &ctx, Some(&title));
+        let room = Rect::from_x_y_ranges(left..=(right - 8.0).max(left), row);
+        ui.scope_builder(egui::UiBuilder::new().max_rect(room).layout(egui::Layout::left_to_right(Align::Center)), |ui| {
+            // The pills' own padding, not the menu bar's roomier one.
+            ui.spacing_mut().button_padding = egui::Style::default().spacing.button_padding;
+            ui.spacing_mut().interact_size.y = 22.0;
+            egui::ScrollArea::horizontal().id_salt("compact tabs").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
+                ui.with_layout(egui::Layout::left_to_right(Align::Min), |ui| {
+                    self.side_switch(ui, true);
+                    ui.add_space(4.0);
+                    self.workspace_pills(ui, true);
+                });
+            });
+        });
     }
 
     /// What the menus depend on, now.
@@ -4788,108 +4877,120 @@ impl MassifApp {
     fn workspace_tabs(&mut self, ui: &mut Ui) {
         let pal = Palette::of(ui);
         ui.horizontal(|ui| {
-            // The three sides of Massif: the terrain generator (Gaea's), the
-            // map editor (WorldPainter's) and the renderer (Avoyd's).
-            use crate::layout::Side;
-            let shown = self.layout.side();
-            let sides = egui::Frame::new()
-                .fill(pal.panel)
-                .stroke(Stroke::new(1.0, pal.border))
-                .corner_radius(theme::PILL)
-                .inner_margin(egui::Margin::same(3))
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 2.0;
-                        for (side, icon, label, hint) in [
-                            (Side::Terrain, Icon::MountainSnow, tr!("Terrain"), tr!("Generate terrain from nodes, render it, convert it to the map")),
-                            (Side::World, Icon::Map, tr!("World"), tr!("Edit the map: sculpt, paint, levels, 3D, export")),
-                            (Side::Render, Icon::Aperture, tr!("Render"), tr!("Path-traced images of the map, under a real sky")),
-                        ] {
-                            let active = shown == side;
-                            let text = RichText::new(theme::with_icon(icon, label)).color(if active { pal.text } else { pal.weak });
-                            let mut button = egui::Button::new(if active { text.medium() } else { text })
-                                .fill(if active { pal.accent_soft } else { Color32::TRANSPARENT })
-                                .stroke(Stroke::NONE)
-                                .corner_radius(theme::PILL)
-                                .min_size(vec2(0.0, 24.0));
-                            if side == Side::Render {
-                                button = button.right_text(RichText::new(tr!("Beta")).size(10.5).strong().color(pal.accent));
-                            }
-                            if ui.add(button).on_hover_text(hint).clicked() && shown != side {
-                                self.layout.show_side(side);
-                                crate::sounds::play(Cue::Navigate);
-                            }
-                        }
-                    });
-                });
-            crate::tour::mark(ui.ctx(), crate::tour::Target::Sides, sides.response.rect);
+            self.side_switch(ui, false);
             ui.add_space(4.0);
-            // A segmented control: the workspaces of this side in one pill.
-            let mut remove = None;
-            egui::Frame::new()
-                .fill(pal.panel)
-                .stroke(Stroke::new(1.0, pal.border))
-                .corner_radius(theme::PILL)
-                .inner_margin(egui::Margin::same(3))
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 2.0;
-                        for i in 0..self.layout.workspaces.len() {
-                            if self.layout.workspaces[i].side() != shown {
-                                continue;
-                            }
-                            let active = self.layout.active == i;
-                            let name = crate::i18n::tr_name(&self.layout.workspaces[i].name).to_owned();
-                            let text = RichText::new(name).color(if active { pal.text } else { pal.weak });
-                            let button = egui::Button::new(if active { text.medium() } else { text })
-                                .fill(if active { pal.accent_soft } else { Color32::TRANSPARENT })
-                                .stroke(Stroke::NONE)
-                                .corner_radius(theme::PILL)
-                                .min_size(vec2(0.0, 24.0));
-                            let r = ui.add(button).on_hover_text(tr!("Right-click: reset, duplicate, delete"));
-                            if r.clicked() && !active {
-                                self.layout.activate(i);
-                                crate::sounds::play(Cue::Navigate);
-                            }
-                            r.context_menu(|ui| {
-                                if ui
-                                    .add_enabled(self.layout.can_reset(i), egui::Button::new(theme::with_icon(Icon::RotateCcw, tr!("Reset"))))
-                                    .on_hover_text(tr!("Back to how this workspace was at first"))
-                                    .clicked()
-                                {
-                                    self.layout.reset_workspace(i);
-                                }
-                                if ui.button(theme::with_icon(Icon::Copy, tr!("Duplicate"))).clicked() {
-                                    self.layout.activate(i);
-                                    self.layout.duplicate_current();
-                                }
-                                if ui.add_enabled(self.layout.side_len(i) > 1, egui::Button::new(theme::with_icon(Icon::Trash2, tr!("Delete")))).clicked() {
-                                    remove = Some(i);
-                                }
-                            });
-                        }
-                        let plus = egui::Button::new(RichText::new(theme::glyph(Icon::Plus).to_string()).color(pal.weak))
-                            .fill(Color32::TRANSPARENT)
-                            .stroke(Stroke::NONE)
-                            .corner_radius(theme::PILL)
-                            .min_size(vec2(24.0, 24.0));
-                        if ui.add(plus).on_hover_text(tr!("New workspace (a copy of this one)")).clicked() {
-                            self.layout.duplicate_current();
-                        }
-                    });
-                });
-            if let Some(i) = remove {
-                self.layout.remove_workspace(i);
-            }
+            self.workspace_pills(ui, false);
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                let keys = crate::keymap::get().label(crate::keymap::Action::MaximizeArea).unwrap_or_default();
-                ui.label(
-                    RichText::new(tr!("{keys}: maximise · drag a title: move", keys))
-                        .size(11.5)
-                        .color(pal.weak),
-                );
+                ui.label(RichText::new(maximise_hint()).size(11.5).color(pal.weak));
             });
         });
+    }
+
+    /// The three sides of Massif in one pill: the terrain generator
+    /// (Gaea's), the map editor (WorldPainter's) and the renderer (Avoyd's);
+    /// a little lower in compact mode.
+    fn side_switch(&mut self, ui: &mut Ui, compact: bool) {
+        use crate::layout::Side;
+        let pal = Palette::of(ui);
+        let (h, inset) = if compact { (22.0, 2) } else { (24.0, 3) };
+        let shown = self.layout.side();
+        let sides = egui::Frame::new()
+            .fill(pal.panel)
+            .stroke(Stroke::new(1.0, pal.border))
+            .corner_radius(theme::PILL)
+            .inner_margin(egui::Margin::same(inset))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    for (side, icon, label, hint) in [
+                        (Side::Terrain, Icon::MountainSnow, tr!("Terrain"), tr!("Generate terrain from nodes, render it, convert it to the map")),
+                        (Side::World, Icon::Map, tr!("World"), tr!("Edit the map: sculpt, paint, levels, 3D, export")),
+                        (Side::Render, Icon::Aperture, tr!("Render"), tr!("Path-traced images of the map, under a real sky")),
+                    ] {
+                        let active = shown == side;
+                        let text = RichText::new(theme::with_icon(icon, label)).color(if active { pal.text } else { pal.weak });
+                        let mut button = egui::Button::new(if active { text.medium() } else { text })
+                            .fill(if active { pal.accent_soft } else { Color32::TRANSPARENT })
+                            .stroke(Stroke::NONE)
+                            .corner_radius(theme::PILL)
+                            .min_size(vec2(0.0, h));
+                        if side == Side::Render {
+                            button = button.right_text(RichText::new(tr!("Beta")).size(10.5).strong().color(pal.accent));
+                        }
+                        if ui.add(button).on_hover_text(hint).clicked() && shown != side {
+                            self.layout.show_side(side);
+                            crate::sounds::play(Cue::Navigate);
+                        }
+                    }
+                });
+            });
+        crate::tour::mark(ui.ctx(), crate::tour::Target::Sides, sides.response.rect);
+    }
+
+    /// A segmented control: the workspaces of the side shown in one pill,
+    /// and + to add one. Compact mode, which has no room for the hint about
+    /// maximising and moving the areas, gives it in their tooltip.
+    fn workspace_pills(&mut self, ui: &mut Ui, compact: bool) {
+        let pal = Palette::of(ui);
+        let (h, inset) = if compact { (22.0, 2) } else { (24.0, 3) };
+        let shown = self.layout.side();
+        let tip = if compact { format!("{}\n{}", tr!("Right-click: reset, duplicate, delete"), maximise_hint()) } else { tr!("Right-click: reset, duplicate, delete").to_owned() };
+        let mut remove = None;
+        egui::Frame::new()
+            .fill(pal.panel)
+            .stroke(Stroke::new(1.0, pal.border))
+            .corner_radius(theme::PILL)
+            .inner_margin(egui::Margin::same(inset))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    for i in 0..self.layout.workspaces.len() {
+                        if self.layout.workspaces[i].side() != shown {
+                            continue;
+                        }
+                        let active = self.layout.active == i;
+                        let name = crate::i18n::tr_name(&self.layout.workspaces[i].name).to_owned();
+                        let text = RichText::new(name).color(if active { pal.text } else { pal.weak });
+                        let button = egui::Button::new(if active { text.medium() } else { text })
+                            .fill(if active { pal.accent_soft } else { Color32::TRANSPARENT })
+                            .stroke(Stroke::NONE)
+                            .corner_radius(theme::PILL)
+                            .min_size(vec2(0.0, h));
+                        let r = ui.add(button).on_hover_text(&tip);
+                        if r.clicked() && !active {
+                            self.layout.activate(i);
+                            crate::sounds::play(Cue::Navigate);
+                        }
+                        r.context_menu(|ui| {
+                            if ui
+                                .add_enabled(self.layout.can_reset(i), egui::Button::new(theme::with_icon(Icon::RotateCcw, tr!("Reset"))))
+                                .on_hover_text(tr!("Back to how this workspace was at first"))
+                                .clicked()
+                            {
+                                self.layout.reset_workspace(i);
+                            }
+                            if ui.button(theme::with_icon(Icon::Copy, tr!("Duplicate"))).clicked() {
+                                self.layout.activate(i);
+                                self.layout.duplicate_current();
+                            }
+                            if ui.add_enabled(self.layout.side_len(i) > 1, egui::Button::new(theme::with_icon(Icon::Trash2, tr!("Delete")))).clicked() {
+                                remove = Some(i);
+                            }
+                        });
+                    }
+                    let plus = egui::Button::new(RichText::new(theme::glyph(Icon::Plus).to_string()).color(pal.weak))
+                        .fill(Color32::TRANSPARENT)
+                        .stroke(Stroke::NONE)
+                        .corner_radius(theme::PILL)
+                        .min_size(vec2(h, h));
+                    if ui.add(plus).on_hover_text(tr!("New workspace (a copy of this one)")).clicked() {
+                        self.layout.duplicate_current();
+                    }
+                });
+            });
+        if let Some(i) = remove {
+            self.layout.remove_workspace(i);
+        }
     }
 
     /// What happened and what runs, at the bottom right over the areas: the
@@ -5034,7 +5135,7 @@ impl MassifApp {
         let mut seps = Vec::new();
         match ws.maximized.and_then(|id| ws.root.editor_of(id).map(|e| (id, e))) {
             Some((id, editor)) => areas.push((id, editor, rect)),
-            None => compute(&ws.root, rect, &mut Vec::new(), &mut areas, &mut seps),
+            None => compute(&ws.root, rect, gap(self.settings.compact), &mut Vec::new(), &mut areas, &mut seps),
         }
         // Floating panels: each in a window of the system's own where egui
         // can open more windows, else over the layout, kept where some of it
@@ -8072,20 +8173,33 @@ impl MassifApp {
 
         step("the editor: its bars and panels");
         let pal = Palette::of(ui);
-        let margin = if self.unified_titlebar { 9 } else { 6 };
+        // The bars lie on the window's own colour with no line under them:
+        // the panels' cards below are edge enough.
+        let compact = self.settings.compact;
+        let margin = match (self.unified_titlebar, compact) {
+            (true, false) => 9,
+            (false, false) => 6,
+            (true, true) => 6,
+            (false, true) => 4,
+        };
         let bar = egui::Panel::top("menu bar")
-            .frame(egui::Frame::new().fill(pal.app_bg).inner_margin(egui::Margin::symmetric(14, margin)))
+            .show_separator_line(false)
+            .frame(egui::Frame::new().fill(pal.app_bg).inner_margin(egui::Margin::symmetric(if compact { 10 } else { 14 }, margin)))
             .show(ui, |ui| {
                 ui.horizontal(|ui| self.top_bar(ui));
             });
         if self.unified_titlebar {
             frame.set_traffic_lights_position(&ctx, bar.response.rect.y_range(), 14.0);
         }
-        egui::Panel::top("workspaces")
-            .frame(egui::Frame::new().fill(pal.app_bg).inner_margin(egui::Margin { left: 12, right: 16, top: 0, bottom: 2 }))
-            .show(ui, |ui| self.workspace_tabs(ui));
+        if !compact {
+            egui::Panel::top("workspaces")
+                .show_separator_line(false)
+                .frame(egui::Frame::new().fill(pal.app_bg).inner_margin(egui::Margin { left: 12, right: 16, top: 0, bottom: 2 }))
+                .show(ui, |ui| self.workspace_tabs(ui));
+        }
+        let (side, top) = if compact { (4, 0) } else { (8, 4) };
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(pal.app_bg).inner_margin(egui::Margin { left: 8, right: 8, top: 4, bottom: 8 }))
+            .frame(egui::Frame::new().fill(pal.app_bg).inner_margin(egui::Margin { left: side, right: side, top, bottom: side }))
             .show(ui, |ui| {
                 self.dock(ui, frame);
             });
@@ -8268,9 +8382,18 @@ fn window_icon() -> std::sync::Arc<egui::IconData> {
 
 /// A command of the bar at the top: an icon in a square, all of them the
 /// same size, on one line, whatever draws them (a glyph or a tool's icon).
+/// The height of the top bar's buttons.
+const BAR_BUTTON_H: f32 = 26.0;
+
+/// How to maximise and move the areas, as the bar under the title says.
+fn maximise_hint() -> String {
+    let keys = crate::keymap::get().label(crate::keymap::Action::MaximizeArea).unwrap_or_default();
+    tr!("{keys}: maximise · drag a title: move", keys).to_owned()
+}
+
 fn bar_button(ui: &mut Ui, tip: &str, enabled: bool, selected: bool, paint: impl FnOnce(&egui::Painter, Rect, Color32)) -> egui::Response {
     let pal = Palette::of(ui);
-    let (rect, response) = ui.allocate_exact_size(vec2(28.0, 26.0), if enabled { Sense::click() } else { Sense::hover() });
+    let (rect, response) = ui.allocate_exact_size(vec2(28.0, BAR_BUTTON_H), if enabled { Sense::click() } else { Sense::hover() });
     if selected || (enabled && response.hovered()) {
         let fill = if selected { pal.accent_soft } else { theme::mix(pal.app_bg, pal.text, 0.08) };
         ui.painter().rect_filled(rect.shrink(1.0), theme::TILE_RADIUS, fill);
@@ -9006,7 +9129,7 @@ fn export_world(ui: &mut Ui, form: &mut ExportForm) {
 const LAYOUT_KEY: &str = "massif.layout.v6";
 
 /// Lay out the area tree.
-fn compute(node: &Node, rect: Rect, path: &mut Vec<bool>, areas: &mut Vec<(AreaId, EditorKind, Rect)>, seps: &mut Vec<Sep>) {
+fn compute(node: &Node, rect: Rect, gap: f32, path: &mut Vec<bool>, areas: &mut Vec<(AreaId, EditorKind, Rect)>, seps: &mut Vec<Sep>) {
     match node {
         Node::Area { id, editor } => areas.push((*id, *editor, rect)),
         Node::Split { dir, ratio, a, b } => {
@@ -9014,17 +9137,17 @@ fn compute(node: &Node, rect: Rect, path: &mut Vec<bool>, areas: &mut Vec<(AreaI
                 Dir::Row => {
                     let x = rect.left() + rect.width() * ratio;
                     (
-                        Rect::from_min_max(rect.min, pos2(x - GAP / 2.0, rect.max.y)),
-                        Rect::from_min_max(pos2(x + GAP / 2.0, rect.min.y), rect.max),
-                        Rect::from_min_max(pos2(x - GAP, rect.min.y), pos2(x + GAP, rect.max.y)),
+                        Rect::from_min_max(rect.min, pos2(x - gap / 2.0, rect.max.y)),
+                        Rect::from_min_max(pos2(x + gap / 2.0, rect.min.y), rect.max),
+                        Rect::from_min_max(pos2(x - gap, rect.min.y), pos2(x + gap, rect.max.y)),
                     )
                 }
                 Dir::Column => {
                     let y = rect.top() + rect.height() * ratio;
                     (
-                        Rect::from_min_max(rect.min, pos2(rect.max.x, y - GAP / 2.0)),
-                        Rect::from_min_max(pos2(rect.min.x, y + GAP / 2.0), rect.max),
-                        Rect::from_min_max(pos2(rect.min.x, y - GAP), pos2(rect.max.x, y + GAP)),
+                        Rect::from_min_max(rect.min, pos2(rect.max.x, y - gap / 2.0)),
+                        Rect::from_min_max(pos2(rect.min.x, y + gap / 2.0), rect.max),
+                        Rect::from_min_max(pos2(rect.min.x, y - gap), pos2(rect.max.x, y + gap)),
                     )
                 }
             };
@@ -9035,10 +9158,10 @@ fn compute(node: &Node, rect: Rect, path: &mut Vec<bool>, areas: &mut Vec<(AreaI
                 parent: rect,
             });
             path.push(false);
-            compute(a, ra, path, areas, seps);
+            compute(a, ra, gap, path, areas, seps);
             path.pop();
             path.push(true);
-            compute(b, rb, path, areas, seps);
+            compute(b, rb, gap, path, areas, seps);
             path.pop();
         }
     }
@@ -10360,6 +10483,70 @@ mod tests {
                 let width = image.width();
                 image::imageops::crop_imm(&image, 0, 0, width, (44.0 * ppp) as u32).to_image().save(dir.join(format!("title-bar-{}{name}-{ppp}x.png", if mac { "mac-" } else { "" }))).unwrap();
             }
+        }
+    }
+
+    /// Compact mode (Settings ▸ Appearance, off at first) puts the sides
+    /// and the workspaces on the title's row, with the map's title as a
+    /// menu on the right and no favourite tools; normal mode keeps two
+    /// rows. With MASSIF_SNAPSHOT_DIR, the top of the window in both modes,
+    /// wide and at the narrowest window, as on a Mac and elsewhere.
+    #[test]
+    fn compact_mode_puts_the_top_on_one_row() {
+        use egui_kittest::kittest::Queryable;
+        assert!(!Settings::default().compact);
+        assert!(serde_json::from_str::<Settings>(r#"{"compact": true}"#).unwrap().compact);
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let ppp = std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
+        let mut raises = Vec::new();
+        for width in [1600.0, 960.0] {
+            for compact in [false, true] {
+                for mac in [true, false] {
+                    let mut h = egui_kittest::Harness::builder()
+                        .with_size(vec2(width, 600.0))
+                        .with_pixels_per_point(ppp)
+                        .with_accessibility_check(false)
+                        .wgpu()
+                        .build_eframe(move |cc| {
+                            theme::install(&cc.egui_ctx);
+                            let world = generate(&GenParams { tiles_x: 4, tiles_z: 4, landform: Landform::Islands, ..GenParams::default() });
+                            let mut app = MassifApp::for_tests(world);
+                            app.settings.theme = ThemeChoice::Dark;
+                            app.settings.compact = compact;
+                            app.unified_titlebar = mac;
+                            app.menus_in_menu_bar = mac;
+                            app
+                        });
+                    h.run_steps(4);
+                    let open = h.get_by_label("Open (⌘O)").rect();
+                    let layout = h.get_by_label("Layout").rect();
+                    let world = h.get_by_label(&theme::with_icon(Icon::Map, "World")).rect();
+                    let hint = h.query_all_by_label_contains("maximise · drag a title").count();
+                    let raise = h.query_all_by_label(crate::i18n::tr_name(Tool::Raise.label())).count();
+                    let title = h.state().doc.title();
+                    let title_menu = h.query_all_by_label_contains(&title).count();
+                    if compact {
+                        assert!((layout.center().y - open.center().y).abs() < 1.5, "the workspaces on the title's row ({width}): {layout:?} {open:?}");
+                        assert!((world.center().y - open.center().y).abs() < 1.5, "the sides on the title's row ({width})");
+                        assert_eq!(hint, 0, "no hint in compact mode");
+                        assert!(title_menu >= 1, "the title as a menu ({width})");
+                    } else {
+                        assert!(layout.center().y > open.bottom(), "the workspaces on a row of their own");
+                        assert_eq!(hint, 1, "the hint in normal mode");
+                    }
+                    // The favourite tools: in the bar and the Tools panel,
+                    // or in the panel alone.
+                    raises.push((compact, raise));
+                    let Some(dir) = &dir else { continue };
+                    let image = h.render().unwrap();
+                    let name = format!("top-{}-{}{}-{ppp}x.png", if compact { "compact" } else { "normal" }, width as u32, if mac { "-mac" } else { "" });
+                    image::imageops::crop_imm(&image, 0, 0, image.width(), (110.0 * ppp) as u32).to_image().save(dir.join(name)).unwrap();
+                }
+            }
+        }
+        for &(compact, n) in &raises {
+            let normal = raises.iter().find(|r| !r.0).unwrap().1;
+            assert_eq!(n, if compact { normal - 1 } else { normal }, "Raise in the bar only in normal mode");
         }
     }
 
@@ -22019,7 +22206,7 @@ mod tests {
         let mut areas = Vec::new();
         let mut seps = Vec::new();
         let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(1600.0, 900.0));
-        compute(&layout.workspaces[0].root, rect, &mut Vec::new(), &mut areas, &mut seps);
+        compute(&layout.workspaces[0].root, rect, GAP, &mut Vec::new(), &mut areas, &mut seps);
         assert_eq!(areas.len(), 10);
         assert_eq!(seps.len(), 9);
         // Areas tile the rectangle without overlapping.
