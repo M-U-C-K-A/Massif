@@ -4063,5 +4063,8 @@
  "Add two keyframes on the Timeline, with the Render Viewport shown": "Adicione dois fotogramas-chave na linha do tempo, com o Render Viewport visível",
  "The animation could not be saved: {e}": "Não foi possível guardar a animação: {e}",
  "A folder for the animation's images": "Uma pasta para as imagens da animação",
- "Rendering the animation: frame {n} of {all}": "A renderizar a animação: fotograma {n} de {all}"
+ "Rendering the animation: frame {n} of {all}": "A renderizar a animação: fotograma {n} de {all}",
+ "Filmic": "Fílmico",
+ "Punchy": "Intenso",
+ "Tones": "Tons"
 }

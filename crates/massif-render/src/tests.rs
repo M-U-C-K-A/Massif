@@ -697,7 +697,7 @@ fn the_denoiser_settles_the_image_sooner() {
             if oidn::available() {
                 let mut s = r.read_samples().unwrap();
                 oidn::denoise(&mut s.color, Some(&s.albedo), Some(&s.normal), s.width as usize, s.height as usize).unwrap();
-                r.show_linear(&s.color, s.exposure);
+                r.show_linear(&s.color, s.exposure, s.look);
                 intel.push((n, error(&linear(&r.read_image().unwrap().2), &reference)));
                 save(&r, &format!("{n:04}-oidn"));
             }
@@ -885,7 +885,7 @@ fn a_wood_s_edge() {
                 if oidn::available() {
                     let mut s = r.read_samples().unwrap();
                     oidn::denoise(&mut s.color, Some(&s.albedo), Some(&s.normal), s.width as usize, s.height as usize).unwrap();
-                    image::save_buffer(dir.join(format!("forest-{view}-{n:03}-oidn{tag}.png")), &gpu::tone_map(&s.color, s.exposure), w, h, image::ColorType::Rgba8).unwrap();
+                    image::save_buffer(dir.join(format!("forest-{view}-{n:03}-oidn{tag}.png")), &gpu::tone_map(&s.color, s.exposure, s.look), w, h, image::ColorType::Rgba8).unwrap();
                 }
             }
         }

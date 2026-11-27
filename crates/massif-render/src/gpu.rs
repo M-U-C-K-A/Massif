@@ -196,20 +196,33 @@ pub struct Samples {
     pub height: u32,
     pub samples: u32,
     pub exposure: f32,
+    pub look: u32,
     pub color: Vec<f32>,
     pub albedo: Vec<f32>,
     pub normal: Vec<f32>,
 }
 
-/// Linear light to sRGB bytes, as `tone` in `params.wgsl` does it (ACES
-/// fitted, then the display's gamma), opaque.
-pub fn tone_map(linear: &[f32], exposure: f32) -> Vec<u8> {
+/// Linear light to sRGB bytes, as `tone` in `params.wgsl` does it by
+/// `look` (0: filmic, 1: ACES fitted), opaque.
+pub fn tone_map(linear: &[f32], exposure: f32, look: u32) -> Vec<u8> {
+    const FILMIC_C: f32 = 0.797;
     let mut out = Vec::with_capacity(linear.len() / 3 * 4);
     for p in linear.as_chunks::<3>().0 {
-        for &c in p {
-            let x = c * exposure;
-            let m = ((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14)).clamp(0.0, 1.0);
-            out.push((m.powf(1.0 / 2.2) * 255.0 + 0.5) as u8);
+        let x = p.map(|c| (c * exposure).max(0.0));
+        if look == 1 {
+            for c in x {
+                let m = ((c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14)).clamp(0.0, 1.0);
+                out.push((m.powf(1.0 / 2.2) * 255.0 + 0.5) as u8);
+            }
+        } else {
+            let l = 0.2126 * x[0] + 0.7152 * x[1] + 0.0722 * x[2];
+            for c in x {
+                let d = (l + (c - l) * 1.08).max(0.0);
+                let s = ((d.max(1e-10).log2() + 10.0) / 16.5).clamp(0.0, 1.0);
+                let (a, b) = (s.powf(2.2), (1.0 - s).powf(2.2));
+                let m = a / (a + FILMIC_C * b).max(1e-10);
+                out.push((m.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
+            }
         }
         out.push(255);
     }
@@ -307,8 +320,9 @@ pub struct Renderer {
     full: bool,
     /// Samples added up in the image so far.
     pub samples: u32,
-    /// The exposure of the last sample drawn.
+    /// The exposure and the look of the last sample drawn.
     exposure: f32,
+    look: u32,
     /// Counts the times the samples started over: an image denoised from
     /// those of another round is of another image.
     pub round: u64,
@@ -464,6 +478,7 @@ impl Renderer {
             samples: 0,
             denoise: false,
             exposure: 1.0,
+            look: 0,
             hold: false,
             round: 0,
             frame: 0,
@@ -1007,12 +1022,13 @@ impl Renderer {
             size: [w, h, self.frame.wrapping_mul(2654435761).wrapping_add(1), self.samples],
             grid: [e.width as i32, e.depth as i32, e.height(), e.sections as i32],
             info: [self.stride(), self.pyramid.levels.len() as u32, light.bounces, coarse as u32],
-            flags: [(self.denoising() || self.hold) as u32, light.grass_blades, light.grass_height.clamp(0.1, 1.0).to_bits(), 0],
+            flags: [(self.denoising() || self.hold) as u32, light.grass_blades, light.grass_height.clamp(0.1, 1.0).to_bits(), light.look],
             level_off,
             level_w,
         };
         self.queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
         self.exposure = light.exposure;
+        self.look = light.look;
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("massif render trace"), timestamp_writes: None });
             pass.set_pipeline(&self.pipeline);
@@ -1133,18 +1149,18 @@ impl Renderer {
         }
         drop(data);
         buffer.unmap();
-        Some(Samples { width: w, height: h, samples: self.samples, exposure: self.exposure, color, albedo, normal })
+        Some(Samples { width: w, height: h, samples: self.samples, exposure: self.exposure, look: self.look, color, albedo, normal })
     }
 
     /// Show `linear` (three floats a pixel, the image's size) in place of
     /// the image drawn, tone mapped as the shader does.
-    pub fn show_linear(&self, linear: &[f32], exposure: f32) {
+    pub fn show_linear(&self, linear: &[f32], exposure: f32, look: u32) {
         let Some(image) = self.image.as_ref() else { return };
         let [w, h] = image.size;
         if linear.len() != (w * h * 3) as usize {
             return;
         }
-        let rgba = tone_map(linear, exposure);
+        let rgba = tone_map(linear, exposure, look);
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo { texture: &image.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
             &rgba,

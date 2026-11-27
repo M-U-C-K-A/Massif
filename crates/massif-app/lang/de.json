@@ -4066,5 +4066,8 @@
  "Add two keyframes on the Timeline, with the Render Viewport shown": "Zwei Schlüsselbilder auf der Timeline setzen, mit sichtbarem Render Viewport",
  "The animation could not be saved: {e}": "Die Animation konnte nicht gespeichert werden: {e}",
  "A folder for the animation's images": "Ein Ordner für die Bilder der Animation",
- "Rendering the animation: frame {n} of {all}": "Animation wird gerendert: Bild {n} von {all}"
+ "Rendering the animation: frame {n} of {all}": "Animation wird gerendert: Bild {n} von {all}",
+ "Filmic": "Filmisch",
+ "Punchy": "Kräftig",
+ "Tones": "Tonwerte"
 }

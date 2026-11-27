@@ -4126,5 +4126,8 @@
  "Add two keyframes on the Timeline, with the Render Viewport shown": "Ajoutez deux images clés sur la Timeline, avec le Render Viewport affiché",
  "The animation could not be saved: {e}": "L'animation n'a pas pu être enregistrée : {e}",
  "A folder for the animation's images": "Un dossier pour les images de l'animation",
- "Rendering the animation: frame {n} of {all}": "Rendu de l'animation : image {n} sur {all}"
+ "Rendering the animation: frame {n} of {all}": "Rendu de l'animation : image {n} sur {all}",
+ "Filmic": "Filmique",
+ "Punchy": "Contrasté",
+ "Tones": "Tons"
 }

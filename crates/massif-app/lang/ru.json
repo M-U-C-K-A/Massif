@@ -4031,5 +4031,8 @@
  "Add two keyframes on the Timeline, with the Render Viewport shown": "Добавьте два ключевых кадра на таймлайне при открытом Render Viewport",
  "The animation could not be saved: {e}": "Не удалось сохранить анимацию: {e}",
  "A folder for the animation's images": "Папка для кадров анимации",
- "Rendering the animation: frame {n} of {all}": "Отрисовка анимации: кадр {n} из {all}"
+ "Rendering the animation: frame {n} of {all}": "Отрисовка анимации: кадр {n} из {all}",
+ "Filmic": "Кинематографичный",
+ "Punchy": "Контрастный",
+ "Tones": "Тона"
 }

@@ -115,6 +115,9 @@ pub struct Light {
     /// The detailed grass's blades a block, and their height (blocks).
     pub grass_blades: u32,
     pub grass_height: f32,
+    /// How light becomes the display's values: 0 filmic (as Blender's),
+    /// 1 ACES (more contrast and colour).
+    pub look: u32,
     pub exposure: f32,
 }
 
@@ -158,6 +161,7 @@ impl Default for Light {
             clamp: 10.0,
             grass_blades: 45,
             grass_height: 0.8,
+            look: 0,
             exposure: 1.0,
         }
     }
