@@ -1,3 +1,0 @@
-**Blades of grass on the Render side**
-
-Render Output has a Grass setting: the game's Blocks, or Blades, a field of thin blades of grass over every grass block in the place of the short and tall grass and the ferns, each its own height and lean, in tufts, darker at the foot and lighter and yellower toward the tip, in the grass's own colours, shading each other and taking the sun's shadows, the flowers left as they are. Density and Height set how many blades a block and how tall. Far off the field thins out to the grass blocks under it. Blades take some twice as long to draw at the grass's height.

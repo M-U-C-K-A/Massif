@@ -2,6 +2,122 @@ Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, 
 
 ## New in 1.2.3
 
+**Render side: Blender's denoiser, smooth edges, quiet woods**
+
+With Intel's Open Image Denoise (the denoiser of Blender's Cycles), the Render side denoises with it as the samples settle and denoises the images it saves: one sample through it is already nearer the finished image than four raw ones. The image is anti-aliased as Cycles filters its pixels, the textures are averaged where they are smaller than a pixel, and far leaves and glass add up to how solid they are, so that woods seen from afar settle smooth instead of flickering in a pattern of pixels.
+
+**Open Image Denoise comes with Massif**
+
+Massif's builds for macOS, Windows and Linux now carry Intel's Open Image Denoise 2.5.1, the denoiser Blender's Cycles uses, so the Render side denoises with it everywhere; its licence (Apache-2.0) and third-party notices are in the app's folder. Where it cannot load, the Render side keeps its own denoiser on the graphics card.
+
+**A calmer Render side: denoised while moving, lighter, looks that hold**
+
+While the view moves, the Render side draws at half the resolution and denoises every frame, so it never shows raw grain; on a Retina screen it draws a pixel a point, as Blender does by default, a quarter of the work, and it sends the graphics card one sample at a time and none while Massif is in the background, so the rest of the app no longer lags. A sky Look now sets everything it owns, the Night and the Blue hour exposed so they can be seen, and moves the camera path's keyframes to its hour instead of being undone by them; touching a setting afterwards shows Custom. Fog is set by how far one sees through it (40 to 4000 blocks), so it can no longer wash the whole image out white, and the Timeline's frames a second stay between 12 and 60.
+
+**The Render side denoises, and shows edits made elsewhere**
+
+The Render side's image no longer starts as black grain: Denoise, on at first in Render Output, smooths the noise of the first samples away while they add up, the textures and the edges of the blocks kept sharp, and fades as the image settles (one sample denoised is about as clean as four raw ones, seven as sixteen). Saving an image can denoise it too. A new Clamp indirect setting cuts down the rare bright specks of a bounce, so that the image settles sooner, and a sample gone wrong no longer leaves a black pixel until the view moves. Coming back to the Render side after the map was edited, or after it had to build its scene anew, the view shows the new image: it could stay frozen on the old one, whatever the camera did. A map grown on the World side is built again whole.
+
+**Color Management as in Blender**
+
+Render Output has Blender's Color Management: the View Transform (Standard, Khronos PBR Neutral, AgX by default, Filmic, Filmic Log, False Color, Raw), its Look (AgX's None, Punchy, Greyscale and contrasts from Very High to Very Low; Filmic's contrasts), the Exposure in stops and the Gamma. AgX and Filmic keep shadows soft and let bright colours whiten instead of burning to a hue; the stills, the videos and the denoised view all go through the same transform.
+
+**Render the Timeline as a video**
+
+Render Output has an Animation to save section: Render animation… draws the Timeline's camera path frame by frame, each frame denoised like a still, and saves it as an MP4 video (on macOS, through the system's own encoder) or as numbered PNG images, with the frames done, the time left and Cancel; PNG images asked again into the same folder go on from where they stopped. The Timeline also answers Blender's keys: Space plays, I or K keeps a keyframe, Alt+I removes it, the arrows step a frame or jump between keyframes, Shift with them goes to the start or the end, and Home frames the whole map.
+
+**Walk through the Render view**
+
+The Render Viewport walks as Blender's walk navigation does: hold the right button to look around from where the camera stands, W A S D to move where you look, Q and E to go down and up, Shift to go faster, and the wheel, while walking, to set the speed. The image stays denoised at reduced resolution while you move. Sliding the view moved to the middle button.
+
+**The Render view moves as Blender's**
+
+Dragging turns about the point under the pointer, Shift-drag slides it with the pointer, and the wheel comes closer to the point under the pointer, every speed by the distance to what is there, so that two blocks over the grass and two kilometres over the map are both easy to reach; double-click comes in close on a point, the numeric pad gives the front, side and top views, and W A S D go by their places on the keyboard. The Camera panel gives the eye's location in numbers, and Lock Camera to View with Align Camera to View keep the camera of stills, keyframes and the video apart from the view, as in Blender.
+
+**Keyed settings and Blender's sections on the Render side**
+
+The sun, the sky, the haze, the fog, the clouds, the hour, the exposure and the lens can be keyed over the Timeline as in Blender: click the diamond beside a setting, or press I over it, to keep its value at the playhead, Alt+I to take the key away; settings ease from key to key and the video draws them. The Render panels are arranged in Blender's sections (Sampling, Light Paths, Color Management, Grass, Output), each folded by a click on its title, with a Viewport samples setting where the view stops.
+
+**Mist in the valleys**
+
+The Render side's fog and mist now lie on the floor of the map's own valleys, measured from the scene, instead of a fixed height over the sea, so they look right on any map; Foggy morning is a thinner layer with clear air above, and a new Valley mist look lays a bright mist in the low ground at sunrise.
+
+**Blades of grass on the Render side**
+
+Render Output has a Grass setting: the game's Blocks, or Blades, a field of thin blades of grass over every grass block in the place of the short and tall grass and the ferns, each its own height and lean, in tufts, darker at the foot and lighter and yellower toward the tip, in the grass's own colours, shading each other and taking the sun's shadows, the flowers left as they are. Density and Height set how many blades a block and how tall. Far off the field thins out to the grass blocks under it. Blades take some twice as long to draw at the grass's height.
+
+**More realistic blades of grass**
+
+The Render side's Blades of grass look like a meadow: thinner and many more of them, each bent along a curve to a fine tip and rounded, darker and cooler at the foot and lighter and yellower toward the tip, a few dry ones among them, combed as by the wind and taller in patches, the sun shining through them from behind and the ground between them in the grass's shade rather than its pixels. Tall grass and large ferns become taller blades. The Grass setting now comes first in Render Output.
+
+**A minimap in the Render view**
+
+A map button at the top right of the Render view shows the whole map small in a corner, with the camera and what it sees and the Timeline's camera path, so you always know where you are; click on it to put the camera over that place, its height and direction kept, or drag to slide it. The choice is remembered.
+
+**OpenEXR height maps and renders**
+
+Massif reads and writes OpenEXR, the float image format of Gaea, World Machine, Houdini and Blender. A height map in EXR (half or 32-bit floats, its `Y` channel or the brightness of its colours) can make a new map, be painted with Edit ▸ Import mask… or feed the Terrain Generator's Heightmap and Image nodes, at full precision: the file's lowest and highest values are shown and black and white start at those heights, so heights in blocks come back where they were. File ▸ Export Height Map… and the Generator Viewer's Height map: Save… offer OpenEXR beside the 16-bit PNG, with each column's height in blocks. On the Render side, Save image… can write an OpenEXR of the light as traced, linear and before the view transform, brighter than white where the sun is, with depth, normals and albedo as layers of the same file for compositing.
+
+**Shaders in the 3D View**
+
+A Shaders button (the sun) in the 3D View's header gives the view the look of a Minecraft shader pack, without loading one: the sun casts shadows, the hills' over the whole map and the trees' and buildings' on the ground around them, blocks are shaded where others close in on them, the sunlight is warmer and the shade a little bluer, and the colours go through the Render side's AgX. It is off at first and stays as you leave it.
+
+**Several Dioramas at once**
+
+The Diorama can be open in several areas at once, as the 3D View can: each has its own place, zoom, turn and Surface or Caves, and the layout keeps what each shows, so you can watch the surface and the caves side by side.
+
+**Apply to map twice as fast, and the Diorama follows it**
+
+The Terrain Generator's Apply to map takes about half the time it did: a volcanic archipelago written over a map of 8192 × 8192 blocks went from 17.7 s to 7.5 s, of 4096 × 4096 from 6.4 s to 4.0 s, with the very same map as a result. The Archipelago node no longer works out the coast of islands too far away to matter, the Volcano node its relief away from the volcanoes, and the blocks the graph's colours pick are found in parallel. The Diorama, open while a graph is applied that makes the map another size, showed the old map's squares, some of them with the new map in them: it now draws the new map whole.
+
+**Measure the map, and a tidier Info panel**
+
+A Measure tool, in the Navigate row of the Tools panel, measures the map as a block is a metre. Drag a line, or click a path of points, and it tells the distance on the map and along the ground, the heights at its ends, the mean and steepest slopes in percent and degrees, with the profile of the land under it; point at the profile and the map marks the spot. Switch to Area and drag or click around a part of the map: its area in m² or km², its perimeter, its lowest, highest and mean heights, the blocks over and under its lowest ground, the sea level or a height you choose (what levelling it would take), the share under water, and the share of each terrain, biome and layer that covers it. It works in the 3D views too, Esc or a right-click clears it, and Keep on screen leaves it shown with the other tools; measures are never saved in the map. The Info panel is laid out anew in Position (now with the chunk and region file), Ground, Layers here and Measure, which shows the results of the measure.
+
+**Travel times and the Travel range tool**
+
+The Measure tool's label now says what its numbers are, "21.06 km · ↓54 blocks · slope 10 %", and tells how long the line takes to travel in Minecraft: point at the label, or look in the Info panel, for the time walking, sprinting, sprint-jumping, on a fast horse, by boat on water or ice, by minecart and with an elytra and rockets, in Minecraft days too once past one (a day is 20 minutes). A new Travel range tool, in the Navigate row, draws rings around the pointer on the map and on the land in the 3D views: how far players get in a time, each ring a time in minutes or Minecraft days and a way of going, set in Tool Settings (one and two days on foot at first). The rings are straight and flat, the farthest one gets; a click pins them, Esc lets them go.
+
+**A Spawn point tool, as WorldPainter's**
+
+The spawn point is now a point on the map rather than numbers in File ▸ World Information alone. The new **Spawn point** tool, in the Navigate group of the Tools panel, puts it on the ground where you click, on the 2D map or in a 3D view, as one step to undo; a pin marks it on the map and in the 3D views, and dragging the pin on the map moves it. With Pan or the Spawn point tool in hand, a right-click on the map offers **Set spawn here**. World Information still shows and sets its numbers.
+
+**Auto paint styles, and Auto biome keeps deserts**
+
+Auto paint has a Style at the top of its Tool Settings: Follow biome, as before, or Temperate forest, Jungle, Mountain, Desert, Badlands, Taiga, Snowy, Savanna, Coast and Swamp, which paint the land by its shape (shore, ground, hills, mountains, peaks, cliffs, under water) whatever its biomes, so that a desert can be painted as a jungle. Custom sets each part's terrain, Save as preset keeps it under a name of yours, Delete takes it out. Auto biome no longer turns a desert into plains: a column keeps the biome it has when its ground agrees with it (a desert on sand, as the Terrain Generator's climate paints it, badlands on red sand, a savanna, taiga or jungle on grass, snowy biomes on snow), and a map mostly of sand is a desert rather than plains. Its Tool Settings list what the preview's colours stand for: each biome the rules give, with the kinds of land that get it, and the hatching.
+
+**Sort terrains by dragging, and choose their map colour**
+
+In the Terrain panel, drag a terrain onto another to put it before or after it, as the Layers panel's layers: an accent line shows where it goes, it can land in another category that way, and each move is one step to undo. Right-click a terrain ▸ Map colour to choose the colour it is drawn in on the 2D map and in its swatches; Auto gives it back its own colour, from its blocks. Both are saved with the map, and neither changes the export.
+
+**Massif says why part of a stroke shows no change**
+
+When a brush stroke leaves part of the map looking as it was, a word at the foot of the window says how much of the stroke, and why: a ground cover of blocks lies over the terrain painted (as a WorldPainter map's custom ground covers of sand or gravel do, the terrain being painted under them), a level stands over the one painted, a layer is locked, the brush's filter leaves those columns, or the layer painted is hidden on the map. The Info panel says the same of the column under the cursor for the tool in hand.
+
+**Smoothing a coast no longer raises the water**
+
+Smoothing, lowering or flattening the land by the sea could leave patches of water above the sea level (at 65 by a sea at 63, with straight, blocky edges), most of all on maps from WorldPainter. Land lowered under the sea's level now holds the sea's water, never higher, and the water beside it fills it as before; lakes made with Flood keep their own level.
+
+**The Generator Graph takes Blender's keys, and the Volcano loses its line.** Over the graph, the node editor's keys of Blender work as there, Ctrl as ⌘ on a Mac: Shift A adds a node at the pointer, Tab opens the composite selected and leaves it, ⌘A, Alt A and ⌘I select all, none or the others, B draws a box from the next press, L and Shift L add what feeds the selection or what it feeds, G moves the selection with the pointer and Shift D duplicates and moves (a click puts down, Esc puts back), ⌘X removes the selected nodes and wires what they fed from what fed them, M bypasses (it was B), H folds, ⌘G and ⌘⇧G (or ⌘⌥G) make and undo a composite, ⌘J frames, F shows the whole graph and the numpad's dot the selected nodes. The nodes' menus name their keys, and the help lists them all. The Volcano node no longer draws a straight line west of each volcano, where its gullies did not meet as they went round; its gullies fall in other places than before.
+
+**A clearer Generator Viewer bar.** What you see and what is done to the map are apart now. The sliders beside 2D/3D and Clay/Colours open the View options, which never touch the map: relief, contour lines, mask opacity, sun height, background, and the resolution, now buttons from Auto to 8K, so that choosing one no longer closes the options. On the right, after a line, Live, Apply to map, and the arrow beside it with Keep the map's ground (formerly Apply over the map) and Height map Save…, each saying what it does to the map. Whether node thumbnails are in clay or in colours is a setting of the graph now, Node thumbnails, in Node Properties with no node selected.
+
+**Mixed covers stay one terrain, mixes show mixed in 3D, steep slopes smoothed**
+
+Making a WorldPainter map's covers of layers the ground's own (on import, or Edit ▸ Covers of Layers to Ground…) no longer splits a cover of several blocks into a terrain a block ("Mixed Upland Layer", "Mixed Upland Layer 2"… each of one block): it makes one terrain of the cover's blocks, mixed in its weights, over the terrain it lies on, and one more named "… on …" for each other terrain it covers; where the terrain's top already has all the cover's blocks it stays as it is. The 3D View draws the smoothed layers and slabs of a terrain of several blocks in the block each column has, as the export writes them: a mix such as WorldPainter's custom terrains no longer looks all of its first block with the others only along the steps. Smooth terrain fills the foot of steep slopes too, where the land beside is two blocks or more higher, with half a block of layers or a stair as at a step of one block (vertical slabs, where allowed, still stand against cliffs); gentle slopes are as before.
+
+**Names of your exports**
+
+Settings ▸ Export has a File names template for everything you export: worlds, schematics, height maps, render images and animations, and Share Image pictures. Build it from `{name}`, `{kind}`, `{date}`, `{time}`, `{timestamp}`, `{counter}`, `{size}` and `{version}`, or pick a ready one; the date can be ISO (2026-11-27), European or US and the time 24 h or 12 h, and a preview shows the name it makes. Characters Windows or macOS refuse are replaced, and the save dialog opens in the folder of your last export with a name that is free there, adding -2, -3 rather than offering to overwrite a file.
+
+**Compact mode**
+
+Settings ▸ Appearance ▸ Compact mode puts the top of the window on a single row, for small screens: New, Open, Save and Export, then the sides and the workspaces, then the map's title as a menu (World Information, Save Point, Versions, Save As) and Versions on the right. The favourite tools stay in the Tools panel and Undo and Redo in the Edit menu, the workspaces scroll sideways in a narrow window, and the panels sit closer together. In both modes the top bars lose the lines that doubled the edge under them.
+
+**Show in Explorer opens the right folder on Windows**
+
+After an export or a save, the message's button now opens the world's folder in Explorer with the world selected, where it left Explorer at This PC when the path came with forward slashes (as launchers such as CurseForge or Prism write them) or with Windows' long-path prefix. A path deleted since shows the nearest folder still there. The button says Show in Explorer on Windows and Show in folder on Linux, and Massif's brushes folder opens the same way.
+
 ## New in 1.2.2
 
 **Erosion, rebuilt: real valleys in a fraction of a second**
