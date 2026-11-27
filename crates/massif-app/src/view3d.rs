@@ -2493,6 +2493,195 @@ fn fs_trace(in: TraceOut) -> TraceFrag {
 }
 "#;
 
+/// The 3D View's Shaders, over the drawn frame: the sun's shadows (the
+/// traced ground's toward the sun over the whole map, what the screen shows
+/// for the meshes, trees included), the light the blocks around leave a
+/// point (screen-space), sunlight warmer and shade cooler, then the Render
+/// side's AgX, as a shader pack does.
+const POST_WGSL: &str = r#"
+struct Post {
+    inv_vp: mat4x4<f32>,
+    // Pixels across and down of the frame drawn; z: 1 when the traced
+    // ground casts shadows.
+    size: vec4<f32>,
+};
+@group(3) @binding(0) var<uniform> post: Post;
+@group(3) @binding(1) var scene: texture_2d<f32>;
+@group(3) @binding(2) var scene_depth: DEPTH_TYPE;
+
+const EXPOSURE: f32 = 1.2;
+
+fn depth_at(ip: vec2<i32>) -> f32 {
+    let q = clamp(ip, vec2<i32>(0), vec2<i32>(post.size.xy) - vec2<i32>(1));
+    return textureLoad(scene_depth, q, 0);
+}
+
+/// The point (from the frame's origin) pixel `ip` shows at depth `z`.
+fn world_at(ip: vec2<i32>, z: f32) -> vec3<f32> {
+    let ndc = vec2<f32>((f32(ip.x) + 0.5) / post.size.x * 2.0 - 1.0, 1.0 - (f32(ip.y) + 0.5) / post.size.y * 2.0);
+    let w = post.inv_vp * vec4<f32>(ndc, z, 1.0);
+    return w.xyz / w.w;
+}
+
+/// Where `p` falls on the screen, in pixels, and whether before the eyes.
+fn screen_of(p: vec3<f32>) -> vec3<f32> {
+    let c = g.view_proj * vec4<f32>(p, 1.0);
+    let n = c.xy / max(c.w, 1.0e-6);
+    return vec3<f32>((n.x * 0.5 + 0.5) * post.size.x, (0.5 - n.y * 0.5) * post.size.y, c.w);
+}
+
+fn ahead(p: vec3<f32>) -> f32 {
+    return dot(p - g.eye.xyz, g.cam_f.xyz);
+}
+
+/// Whether the traced ground hides the sun from `p` (0) or not (1).
+fn ground_shadow(p: vec3<f32>) -> f32 {
+    if (post.size.z < 0.5) {
+        return 1.0;
+    }
+    let stride = f32(max(terrain.size.w, 1));
+    var d = vec3<f32>(g.sun.x / stride, g.sun.y, g.sun.z / stride);
+    d = select(d, vec3<f32>(1.0e-7), abs(d) < vec3<f32>(1.0e-7));
+    let o = vec3<f32>((p.x - terrain.origin.x) / stride, p.y, (p.z - terrain.origin.y) / stride);
+    let lo = vec3<f32>(0.0, terrain.origin.z, 0.0);
+    let hi = vec3<f32>(f32(terrain.size.x), terrain.origin.w, f32(terrain.size.y));
+    let ta = (lo - o) / d;
+    let tb = (hi - o) / d;
+    let near = min(ta, tb);
+    let far = max(ta, tb);
+    let t0 = max(max(near.x, near.z), max(near.y, 0.0));
+    let t1 = min(min(far.x, far.z), far.y);
+    if (t1 <= t0) {
+        return 1.0;
+    }
+    var axis = 2;
+    if (t0 > 0.0) {
+        if (near.x >= near.z && near.x >= near.y) {
+            axis = 0;
+        } else if (near.z >= near.y) {
+            axis = 1;
+        }
+    }
+    return select(1.0, 0.0, trace(o, d, t0, t1, axis, 0.0).found);
+}
+
+/// Whether what the screen shows hides the sun from `p`, `dist` blocks
+/// ahead: a few steps toward the sun, each behind what is drawn there?
+fn contact_shadow(p: vec3<f32>, dist: f32, jitter: f32) -> f32 {
+    let reach = clamp(dist * 0.06, 12.0, 40.0);
+    let slack = 0.04 + dist * 0.003;
+    let thick = 1.5 + dist * 0.02;
+    for (var i = 0; i < 16; i++) {
+        let s = (f32(i) + jitter) / 16.0;
+        let q = p + g.sun.xyz * (reach * s * s + 0.1);
+        let sc = screen_of(q);
+        if (sc.z <= 0.0 || any(sc.xy < vec2<f32>(0.0)) || any(sc.xy >= post.size.xy)) {
+            break;
+        }
+        let qi = vec2<i32>(sc.xy);
+        let z = depth_at(qi);
+        if (z >= 1.0) {
+            continue;
+        }
+        let behind = ahead(q) - ahead(world_at(qi, z));
+        if (behind > slack && behind < thick) {
+            return 0.0;
+        }
+    }
+    return 1.0;
+}
+
+/// The share of the sky's light the blocks around let reach `p` (normal
+/// `n`), from what the screen shows: a few points of the half-ball over it.
+fn occlusion(p: vec3<f32>, n: vec3<f32>, dist: f32, jitter: f32) -> f32 {
+    let fade = 1.0 - smoothstep(96.0, 192.0, dist);
+    if (fade <= 0.0) {
+        return 1.0;
+    }
+    let r = 1.1 + dist * 0.004;
+    let a = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 0.0, 1.0), abs(n.x) > 0.5);
+    let t = normalize(cross(n, a));
+    let b = cross(n, t);
+    var occ = 0.0;
+    for (var k = 0; k < 8; k++) {
+        let f = (f32(k) + 0.5) / 8.0;
+        let ang = (f32(k) + jitter) * 2.399963;
+        let q = p + (t * cos(ang) + b * sin(ang)) * (r * sqrt(f)) + n * (r * (0.2 + 0.6 * (1.0 - f)));
+        let sc = screen_of(q);
+        if (sc.z <= 0.0 || any(sc.xy < vec2<f32>(0.0)) || any(sc.xy >= post.size.xy)) {
+            continue;
+        }
+        let qi = vec2<i32>(sc.xy);
+        let z = depth_at(qi);
+        if (z >= 1.0) {
+            continue;
+        }
+        let behind = ahead(q) - ahead(world_at(qi, z));
+        if (behind > 0.03 && behind < 2.5 * r) {
+            occ += 1.0 - smoothstep(r, 2.5 * r, behind);
+        }
+    }
+    return 1.0 - 0.75 * fade * occ / 8.0;
+}
+
+/// Linear light to what the image holds (linear, for its sRGB format):
+/// the Render's AgX, Punchy.
+fn grade(c: vec3<f32>) -> vec3<f32> {
+    return pow(agx(c * EXPOSURE, 2.3, 1.15), vec3<f32>(2.2));
+}
+
+@fragment
+fn fs_post(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let ip = vec2<i32>(pos.xy);
+    let c = textureLoad(scene, ip, 0).rgb;
+    let z = depth_at(ip);
+    if (z >= 1.0) {
+        return vec4<f32>(grade(c), 1.0);
+    }
+    let pc = world_at(ip, z);
+    let dc = ahead(pc);
+    // The normal, from the neighbours on the side nearer in depth (not
+    // across an edge).
+    let pr = world_at(ip + vec2<i32>(1, 0), depth_at(ip + vec2<i32>(1, 0)));
+    let pl = world_at(ip - vec2<i32>(1, 0), depth_at(ip - vec2<i32>(1, 0)));
+    let pd = world_at(ip + vec2<i32>(0, 1), depth_at(ip + vec2<i32>(0, 1)));
+    let pu = world_at(ip - vec2<i32>(0, 1), depth_at(ip - vec2<i32>(0, 1)));
+    let dx = select(pr - pc, pc - pl, abs(ahead(pl) - dc) < abs(ahead(pr) - dc));
+    let dy = select(pd - pc, pc - pu, abs(ahead(pu) - dc) < abs(ahead(pd) - dc));
+    var n = normalize(cross(dy, dx));
+    if (dot(n, g.eye.xyz - pc) < 0.0) {
+        n = -n;
+    }
+    let dist = distance(pc, g.eye.xyz);
+    let jitter = fract(52.9829189 * fract(dot(pos.xy, vec2<f32>(0.06711056, 0.00583715))));
+    let ndl = max(dot(n, g.sun.xyz), 0.0);
+    var vis = 0.0;
+    if (ndl > 0.0) {
+        // Off the surface a little: a block's top is its column's top.
+        let o = pc + n * (0.06 + dist * 0.002);
+        vis = ground_shadow(o + vec3<f32>(0.0, 0.5, 0.0)) * contact_shadow(o, dist, jitter);
+    }
+    let ao = occlusion(pc, n, dist, jitter);
+    // The light the frame was drawn in (see `shade_lit`), and the light
+    // with shadows: the sun warmer, the shade a little bluer.
+    let amb = g.fog.z * (0.72 + 0.28 * n.y);
+    let sun = g.fog.w * ndl;
+    let light = amb * ao * vec3<f32>(0.68, 0.76, 0.92) + sun * vis * vec3<f32>(1.2, 1.08, 0.92);
+    let lit = c * light / max(amb + sun, 1.0e-3);
+    // The haze far off keeps its colour.
+    let f = clamp((dist - g.fog.x) / max(g.fog.y - g.fog.x, 1.0), 0.0, 1.0);
+    return vec4<f32>(grade(mix(lit, c, f * f * g.mist.w)), 1.0);
+}
+"#;
+
+/// What the Shaders' pass reads besides the globals.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+struct PostUniform {
+    inv_vp: [[f32; 4]; 4],
+    size: [f32; 4],
+}
+
 /// Where a chunk's faces of one kind lie: a page of an arena, the first
 /// face and how many.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2567,6 +2756,9 @@ struct Target {
     /// The same image as plain bytes, for egui.
     shown: crate::view_image::Shown,
     depth: wgpu::TextureView,
+    /// The frame before the Shaders' pass, which draws it into the image.
+    scene: wgpu::TextureView,
+    post_group: wgpu::BindGroup,
 }
 
 /// The tracer's textures for a grid of pages, and what the CPU keeps to
@@ -2657,6 +2849,11 @@ pub struct Renderer3d {
     /// The next frames trace a ray a sample (when it was built): a still
     /// view. Moving, one a pixel is enough, and four times cheaper.
     pub fine: bool,
+    /// The next frames go through the Shaders' pass (the 3D View's header).
+    pub shaders: bool,
+    post_pipeline: wgpu::RenderPipeline,
+    post_layout: wgpu::BindGroupLayout,
+    post_uniform: wgpu::Buffer,
     globals: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     chunk_layout: wgpu::BindGroupLayout,
@@ -2966,6 +3163,60 @@ impl Renderer3d {
         let trace_fine_pipeline = fine_shaders.as_ref().map(|f| f.each_ref().map(|m| trace(m, wgpu::CompareFunction::Always)));
         let trace_near_pipeline = trace_shaders.each_ref().map(|m| trace(m, wgpu::CompareFunction::Less));
         let trace_fine_near_pipeline = fine_shaders.as_ref().map(|f| f.each_ref().map(|m| trace(m, wgpu::CompareFunction::Less)));
+        let post_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("massif 3d shaders"),
+            entries: &[
+                uniform(0, false, size_of::<PostUniform>() as u64),
+                texture(1, wgpu::TextureSampleType::Float { filterable: false }, wgpu::TextureViewDimension::D2),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: samples > 1,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let post_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("massif 3d shaders"),
+            size: size_of::<PostUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let post_pipeline = {
+            let depth_type = if samples > 1 { "texture_depth_multisampled_2d" } else { "texture_depth_2d" };
+            let body = format!("{TRACE_WGSL}{}{}", massif_render::color::TONE_WGSL, POST_WGSL.replace("DEPTH_TYPE", depth_type));
+            let module = shader("massif 3d shaders", &body, Look::Flat);
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("massif 3d shaders"),
+                bind_group_layouts: &[Some(&layout), Some(&trace_layout), Some(&look_layout), Some(&post_layout)],
+                immediate_size: 0,
+            });
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("massif 3d shaders"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some("vs_trace"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &module,
+                    entry_point: Some("fs_post"),
+                    compilation_options: Default::default(),
+                    targets: &target(wgpu::BlendState::REPLACE),
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
         let (chunk_tiles, chunk_group) = Self::make_chunk_tiles(device, &chunk_layout, &[]);
         let errors: Vec<String> = [pollster::block_on(validation.pop()), pollster::block_on(internal.pop())].into_iter().flatten().map(|e| e.to_string()).collect();
         let looks_failed = (!errors.is_empty()).then(|| errors.join("; "));
@@ -2985,6 +3236,10 @@ impl Renderer3d {
             trace_near_pipeline,
             trace_fine_near_pipeline,
             fine: false,
+            shaders: false,
+            post_pipeline,
+            post_layout,
+            post_uniform,
             globals,
             bind_group,
             chunk_layout,
@@ -3772,15 +4027,28 @@ impl Renderer3d {
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
             crate::view_image::view_formats(&self.device),
         );
-        let depth = texture("massif 3d depth", DEPTH_FORMAT, self.samples, wgpu::TextureUsages::RENDER_ATTACHMENT, &[]);
+        let depth = texture("massif 3d depth", DEPTH_FORMAT, self.samples, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING, &[]);
+        let scene = texture("massif 3d scene", COLOR_FORMAT, 1, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING, &[]);
         let view = |t: &wgpu::Texture| t.create_view(&wgpu::TextureViewDescriptor::default());
+        let (scene, depth_view) = (view(&scene), view(&depth));
+        let post_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("massif 3d shaders"),
+            layout: &self.post_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.post_uniform.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&scene) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&depth_view) },
+            ],
+        });
         self.target = Some(Target {
             size,
             msaa: msaa.as_ref().map(view),
             resolve_view: view(&resolve),
             shown: crate::view_image::Shown::of(&self.device, self.copier.as_ref(), &resolve),
             resolve,
-            depth: view(&depth),
+            depth: depth_view,
+            scene,
+            post_group,
         });
         true
     }
@@ -3854,6 +4122,17 @@ impl Renderer3d {
             self.queue.write_buffer(&self.near_terrain, 0, bytemuck::bytes_of(&uniform(n, [0; 4])));
         }
         let target = self.target.as_ref().expect("checked above");
+        // The Shaders: the frame drawn aside, then over the image by their
+        // pass (which needs the traced ground's grid, and the shaders made).
+        let post = self.shaders && self.looks_failed.is_none() && self.tracer.is_some();
+        let [w, h] = target.size;
+        let shown_region = [region[0].clamp(1, w), region[1].clamp(1, h)];
+        if post {
+            let inv_vp = Mat4::from_cols_array_2d(&globals.view_proj).inverse();
+            let u = PostUniform { inv_vp: inv_vp.to_cols_array_2d(), size: [shown_region[0] as f32, shown_region[1] as f32, 1.0, 0.0] };
+            self.queue.write_buffer(&self.post_uniform, 0, bytemuck::bytes_of(&u));
+        }
+        let drawn = if post { &target.scene } else { &target.resolve_view };
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("massif 3d") });
@@ -3863,9 +4142,9 @@ impl Renderer3d {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("massif 3d"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target.msaa.as_ref().unwrap_or(&target.resolve_view),
+                    view: target.msaa.as_ref().unwrap_or(drawn),
                     depth_slice: None,
-                    resolve_target: target.msaa.as_ref().map(|_| &target.resolve_view),
+                    resolve_target: target.msaa.as_ref().map(|_| drawn),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: lin(sky[0]),
@@ -3880,7 +4159,7 @@ impl Renderer3d {
                     view: &target.depth,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Discard,
+                        store: if post { wgpu::StoreOp::Store } else { wgpu::StoreOp::Discard },
                     }),
                     stencil_ops: None,
                 }),
@@ -3888,8 +4167,7 @@ impl Renderer3d {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            let [w, h] = target.size;
-            pass.set_viewport(0.0, 0.0, region[0].clamp(1, w) as f32, region[1].clamp(1, h) as f32, 0.0, 1.0);
+            pass.set_viewport(0.0, 0.0, shown_region[0] as f32, shown_region[1] as f32, 0.0, 1.0);
             pass.set_bind_group(0, &self.bind_group, &[]);
             pass.set_bind_group(2, &self.look_group, &[]);
             let look = if self.looks_failed.is_some() { Look::Flat as usize } else { Look::of(globals) as usize };
@@ -3923,6 +4201,28 @@ impl Renderer3d {
                     pass.draw(0..6, r.start..r.start + r.count);
                 }
             }
+        }
+        if let Some(tr) = self.tracer.as_ref().filter(|_| post) {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("massif 3d shaders"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target.resolve_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_viewport(0.0, 0.0, shown_region[0] as f32, shown_region[1] as f32, 0.0, 1.0);
+            pass.set_pipeline(&self.post_pipeline);
+            pass.set_bind_group(0, &self.bind_group, &[]);
+            pass.set_bind_group(1, &tr.group, &[]);
+            pass.set_bind_group(2, &self.look_group, &[]);
+            pass.set_bind_group(3, &target.post_group, &[]);
+            pass.draw(0..3, 0..1);
         }
         target.shown.update(self.copier.as_ref(), &mut encoder);
         self.queue.submit([encoder.finish()]);
@@ -4795,6 +5095,11 @@ pub struct View3d {
     pub objects: bool,
     /// The land tinted by how many objects its layers place.
     pub density: bool,
+    /// The look of a shader pack: the sun's shadows, the blocks' shade,
+    /// AgX (see [`POST_WGSL`]); kept between sessions once the header was
+    /// shown.
+    pub shaders: bool,
+    shaders_read: bool,
     /// The turn (yaw, pitch, radians a second) and the move (blocks a
     /// second) a drag let go while moving leaves the view, dying away; and
     /// when the drag last moved.
@@ -5007,6 +5312,8 @@ impl Default for View3d {
             xray: false,
             objects: true,
             density: false,
+            shaders: false,
+            shaders_read: false,
             spin: [0.0; 2],
             drift: [0.0; 2],
             dragged_at: 0.0,
@@ -5060,6 +5367,19 @@ impl View3d {
             .on_hover_text(tr!("Objects: the trees, bushes and rocks of the layers, shown or hidden"));
         ui.toggle_value(&mut self.density, theme::glyph(Icon::Grid3x3).to_string())
             .on_hover_text(tr!("Density: the land coloured by how many objects its layers will place, from few (blue) to many (red); the objects step aside meanwhile"));
+        let id = egui::Id::unique("3d view shaders");
+        if !self.shaders_read {
+            self.shaders = ui.ctx().data_mut(|d| d.get_persisted::<bool>(id)).unwrap_or(false);
+            self.shaders_read = true;
+        }
+        if ui
+            .toggle_value(&mut self.shaders, theme::glyph(Icon::SunMedium).to_string())
+            .on_hover_text(tr!("Shaders: the look of a shader pack, with the sun's shadows, shade in the corners and softer colours"))
+            .changed()
+        {
+            ui.ctx().data_mut(|d| d.insert_persisted(id, self.shaders));
+            self.needs_render = true;
+        }
         if ui
             .small_button(theme::glyph(Icon::Crosshair).to_string())
             .on_hover_text(tr!("Look at the middle of the map view"))
@@ -6947,6 +7267,7 @@ impl View3d {
                 }
             };
             renderer.fine = fine;
+            renderer.shaders = self.shaders;
             self.last_fine = fine;
             renderer.render(&globals, origin, &meshed, dim.min_y, substrate, region);
             crate::graphics::drew_3d();
@@ -8674,3 +8995,127 @@ mod aa;
 #[cfg(test)]
 #[path = "view3d_textures.rs"]
 mod textured;
+
+/// The 3D View's Shaders on a 4,096 × 4,096 map of hills under a forest:
+/// the same view drawn without and with them (the shadows of the trees and
+/// the hills darken the ground), saved in MASSIF_SNAPSHOT_DIR, and the
+/// frame's time at 2,560 × 1,440 with each, best of 12. Needs a GPU.
+#[cfg(test)]
+mod shaders_shots {
+    use super::*;
+    use massif_core::generate::{GenParams, Landform, generate};
+    use massif_core::history::History;
+    use massif_core::ops;
+    use massif_core::{Brush, BrushShape, Profile};
+
+    #[test]
+    fn shaders_cast_the_suns_shadows() {
+        use rayon::prelude::*;
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("no GPU adapter: skipping");
+            return;
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor { required_limits: adapter.limits(), ..Default::default() })).unwrap();
+        let tiles_side = if std::env::var_os("MASSIF_PERF").is_some() { 32 } else { 4 };
+        let mut w = generate(&GenParams { tiles_x: tiles_side, tiles_z: tiles_side, landform: Landform::Hills, seed: 7, ..GenParams::default() });
+        // A tree: a trunk five blocks high under a crown of leaves.
+        let palette = vec!["minecraft:air".to_owned(), "minecraft:oak_log[axis=y]".to_owned(), "minecraft:oak_leaves[distance=1,persistent=true,waterlogged=false]".to_owned()];
+        let (sx, sy, sz) = (5usize, 8usize, 5usize);
+        let mut blocks = vec![0u16; sx * sy * sz];
+        for y in 0..sy {
+            for z in 0..sz {
+                for x in 0..sx {
+                    let trunk = x == 2 && z == 2 && y < 6;
+                    let crown = y >= 4 && (x as i32 - 2).abs() + (z as i32 - 2).abs() <= if y == 7 { 1 } else { 3 };
+                    blocks[x + z * sx + y * sx * sz] = if trunk { 1 } else if crown { 2 } else { 0 };
+                }
+            }
+        }
+        let k = w.registry.objects.len() as u32;
+        w.registry.objects.push(massif_core::objects::ObjectDef::new("Oak", [sx as u16, sy as u16, sz as u16], palette, blocks));
+        let mut def = massif_core::objects::ObjectLayerDef::new("Trees", &[k], &w.registry);
+        def.spacing = 9;
+        def.density = 1.0;
+        def.soil_only = false;
+        let layer = w.registry.add_object_layer(def);
+        let (lo, hi) = w.dims[0].bounds().expect("tiles");
+        let (x0, z0, x1, z1) = (lo.x * TILE_SIZE, lo.z * TILE_SIZE, (hi.x + 1) * TILE_SIZE, (hi.z + 1) * TILE_SIZE);
+        let (cx, cz) = ((x0 + x1) / 2, (z0 + z1) / 2);
+        let brush = Brush { shape: BrushShape::Square, radius: (x1 - x0) as f32 * 0.5, profile: Profile::Constant, strength: 1.0, rotation: 0.0, mask: None, filter: None };
+        let mut h = History::default();
+        h.begin("forest", 0);
+        ops::paint_objects(&mut h.edit(&mut w, 0), &brush, cx as f32, cz as f32, layer, 1);
+        h.commit();
+        let dim = &w.dims[0];
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false, notes: None, caves: massif_core::compose::Caves::Openings, xray: false, objects: true, density: false };
+        let shape = GridShape::of(dim, PAGE_BUDGET).unwrap();
+        let mut renderer = Renderer3d::new(&device, &queue);
+        assert!(renderer.looks_failed.is_none(), "{:?}", renderer.looks_failed);
+        renderer.set_grid(shape.stride, shape.page0, shape.pages, &shape.present).unwrap();
+        let tiles: Vec<TilePos> = dim.ground().positions().collect();
+        let built: Vec<(TilePos, TileBuild)> = tiles.par_iter().map(|&t| (t, build_tile(dim, &w.registry, w.meta.sea_level as f32, w.meta.seed, t, style))).collect();
+        let mut pairs = Pairs::default();
+        for (t, b) in &built {
+            renderer.upload_columns(*t, &pairs.pack(b));
+            renderer.upload(*t, &b.faces);
+        }
+        renderer.flush();
+        renderer.set_palette(pairs.list());
+        let ground = |x: i32, z: i32| dim.ground().view(TilePos::new(x.div_euclid(TILE_SIZE), z.div_euclid(TILE_SIZE))).map_or(70.0, |v| v.top.get(local_index(x, z)));
+        let substrate = Substrate { stone: [128; 3], deepslate: [80; 3], whole: false };
+        let extent = (x1 - x0) as f32;
+        let sky = Sky::of(&crate::theme::Palette::LIGHT);
+        let draw = |renderer: &mut Renderer3d, camera: &Camera, size: [u32; 2]| {
+            let origin = (camera.target[0].floor() as i32, camera.target[2].floor() as i32);
+            let globals = camera.globals(origin, size[0] as f32 / size[1] as f32, extent, sky, size[1]);
+            let m = Mat4::from_cols_array_2d(&globals.view_proj);
+            let shown: Vec<TilePos> = tiles
+                .iter()
+                .copied()
+                .filter(|t| {
+                    let (x, z) = ((t.x * TILE_SIZE - origin.0) as f32, (t.z * TILE_SIZE - origin.1) as f32);
+                    in_view(&m, Vec3::new(x, dim.min_y as f32, z), Vec3::new(x + TILE_SIZE as f32, 320.0, z + TILE_SIZE as f32))
+                })
+                .collect();
+            renderer.render(&globals, origin, &shown, dim.min_y, substrate, size);
+            renderer.wait();
+        };
+        let camera = Camera { target: [cx as f64, ground(cx, cz) as f64, cz as f64], distance: 90.0, yaw: 2.2, pitch: 0.42 };
+        let size = [960u32, 600];
+        renderer.ensure_target(size);
+        let mut shots = Vec::new();
+        for on in [false, true] {
+            renderer.shaders = on;
+            draw(&mut renderer, &camera, size);
+            let (width, height, rgba) = renderer.read_image().unwrap();
+            if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR") {
+                image::save_buffer(std::path::Path::new(&dir).join(format!("view3d-shaders-{}.png", if on { "on" } else { "off" })), &rgba, width, height, image::ColorType::Rgba8).unwrap();
+            }
+            shots.push(rgba);
+        }
+        // Shadows: many more dark pixels on the ground with the Shaders.
+        let dark = |rgba: &[u8]| rgba.as_chunks::<4>().0.iter().filter(|p| (p[0] as u32 + p[1] as u32 + p[2] as u32) < 150).count() as f32 / (size[0] * size[1]) as f32;
+        let (off, on) = (dark(&shots[0]), dark(&shots[1]));
+        eprintln!("dark pixels: {:.1}% without, {:.1}% with the Shaders", off * 100.0, on * 100.0);
+        assert!(on > off + 0.05, "shadows: {off} → {on}");
+        if std::env::var_os("MASSIF_PERF").is_some() {
+            let full = [2560u32, 1440];
+            renderer.ensure_target(full);
+            for (name, distance, pitch) in [("near the ground", 90.0f32, 0.42f32), ("halfway", extent * 0.2, 0.35), ("whole map", extent * 0.85, 0.6)] {
+                for on in [false, true, false, true] {
+                    renderer.shaders = on;
+                    let mut best = f32::MAX;
+                    let mut camera = Camera { distance, pitch, ..camera };
+                    for _ in 0..12 {
+                        camera.yaw += 0.01;
+                        let started = Instant::now();
+                        draw(&mut renderer, &camera, full);
+                        best = best.min(started.elapsed().as_secs_f32() * 1000.0);
+                    }
+                    eprintln!("{name}, Shaders {}: best {best:.1} ms", if on { "on" } else { "off" });
+                }
+            }
+        }
+    }
+}

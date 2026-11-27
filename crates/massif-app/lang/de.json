@@ -3676,6 +3676,7 @@
  "{name} selected: drag it to move it, its corners to resize it": "{name} ausgewählt: ziehen zum Verschieben, an den Ecken zum Ändern der Größe",
  "Objects: the trees, bushes and rocks of the layers, shown or hidden": "Objekte: die Bäume, Büsche und Felsen der Ebenen, ein- oder ausgeblendet",
  "Density: the land coloured by how many objects its layers will place, from few (blue) to many (red); the objects step aside meanwhile": "Dichte: das Land gefärbt danach, wie viele Objekte seine Ebenen setzen werden, von wenigen (blau) bis vielen (rot); die Objekte treten so lange zurück",
+ "Shaders: the look of a shader pack, with the sun's shadows, shade in the corners and softer colours": "Shader: das Aussehen eines Shaderpacks, mit den Schatten der Sonne, Schatten in den Ecken und weicheren Farben",
  "Objects per 100 blocks²": "Objekte je 100 Blöcke²",
  "Generator": "Generator",
  "Imported {display_name} in {secs:.1} s: {summary}. See File ▸ Import Report…": "{display_name} in {secs:.1} s importiert: {summary}. Siehe Datei ▸ Importbericht…",

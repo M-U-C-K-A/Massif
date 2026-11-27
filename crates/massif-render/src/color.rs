@@ -29,6 +29,10 @@ pub fn looks(view: u32) -> &'static [&'static str] {
     }
 }
 
+/// The tone mapping's curves in WGSL (`agx`, `s_curve`, `srgb_encode`…),
+/// for other shaders to end the same way: the 3D View's Shaders.
+pub const TONE_WGSL: &str = include_str!("tone.wgsl");
+
 /// How an image's light becomes the display's values.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Tone {

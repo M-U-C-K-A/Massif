@@ -18,7 +18,7 @@ pub const IMAGE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// Levels of detail of a texture layer: 16, 8, 4, 2 and 1 pixels across.
 pub(crate) const MIPS: u32 = 5;
 /// The frame's parameters and the tone mapping, shared by the shaders.
-const PARAMS: &str = include_str!("params.wgsl");
+const PARAMS: &str = concat!(include_str!("params.wgsl"), "\n", include_str!("tone.wgsl"));
 /// Levels the pyramid of heights may have (16: 2^15 chunks across).
 const LEVELS: usize = 16;
 
