@@ -246,6 +246,34 @@ impl Orbit {
         }
     }
 
+    /// The eye and the ray through the point `at` of `view`.
+    fn ray(&self, fov: f32, view: Rect, at: egui::Pos2) -> ([f64; 3], [f64; 3]) {
+        let camera = self.camera(fov);
+        let b = camera.basis();
+        let tan = (camera.fov_y * 0.5).tan();
+        let ndc = [((at.x - view.left()) / view.width()) * 2.0 - 1.0, ((at.y - view.top()) / view.height()) * 2.0 - 1.0];
+        let d = (b.forward + b.right * (ndc[0] * tan * view.width() / view.height()) - b.up * (ndc[1] * tan)).normalize();
+        (camera.eye, [d.x as f64, d.y as f64, d.z as f64])
+    }
+
+    /// Slid level so that `held`, a point of the land, is under `at`:
+    /// the land dragged as a map is, the point held staying under the
+    /// pointer. Nothing toward the horizon, where the ground under the
+    /// pointer would run off.
+    fn grab(&mut self, held: [f64; 3], fov: f32, view: Rect, at: egui::Pos2) {
+        let (eye, dir) = self.ray(fov, view, at);
+        if dir[1].abs() < 1e-3 {
+            return;
+        }
+        let t = (held[1] - eye[1]) / dir[1];
+        let far = 20.0 * ((held[0] - eye[0]).hypot(held[2] - eye[2]).hypot(held[1] - eye[1])) + 1000.0;
+        if t <= 0.0 || t > far {
+            return;
+        }
+        self.target[0] += held[0] - (eye[0] + dir[0] * t);
+        self.target[2] += held[2] - (eye[2] + dir[2] * t);
+    }
+
     /// Turning about `target` from `eye`.
     fn between(eye: [f64; 3], target: [f64; 3]) -> Orbit {
         let d = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]];
@@ -943,16 +971,17 @@ impl RenderSide {
         }
         scene.renderer.sync_materials(&scene.materials);
 
-        // The camera, as Blender's: drag (or the middle button, or Alt with
-        // the left) turns about the point under the pointer where the drag
-        // began; Shift with them slides, the point held following the
-        // pointer; the wheel and a pinch come closer to the point under
+        // The camera: a drag grabs the land, the point under the pointer
+        // where it began staying under it, as a map dragged; the middle
+        // button, or Alt with the left, turns about that point, as
+        // Blender's; Shift with them slides across the view, the point
+        // held following the pointer; the wheel and a pinch come closer to the point under
         // the pointer; the right button held looks around from where the
         // camera stands (the wheel then setting the walking speed), and
         // W A S D walk, E or Space up, Q or C down, as flying in the game
         // (by their places on the keyboard: Z Q S D, A E on an AZERTY
         // one; Space plays instead while a Timeline is shown), Shift
-        // faster, Alt slower. A left drag turns the view whatever else is
+        // faster, Alt slower. A drag moves the camera whatever else is
         // held. Every speed
         // goes by the distance to what is under the pointer or ahead, so
         // that two blocks over the grass and two kilometres over the map
@@ -968,13 +997,8 @@ impl RenderSide {
         // The surface under a point of the view: the ray there, the point
         // and how far.
         let under = |orbit: &Orbit, at: egui::Pos2| -> ([f64; 3], [f64; 3], Option<f64>) {
-            let camera = orbit.camera(fov);
-            let b = camera.basis();
-            let tan = (camera.fov_y * 0.5).tan();
-            let ndc = [((at.x - view.left()) / view.width()) * 2.0 - 1.0, ((at.y - view.top()) / view.height()) * 2.0 - 1.0];
-            let d = (b.forward + b.right * (ndc[0] * tan * view.width() / view.height()) - b.up * (ndc[1] * tan)).normalize();
-            let dir = [d.x as f64, d.y as f64, d.z as f64];
-            (camera.eye, dir, renderer.pick(camera.eye, dir, 60000.0))
+            let (eye, dir) = orbit.ray(fov, view, at);
+            (eye, dir, renderer.pick(eye, dir, 60000.0))
         };
         let point_at = |eye: [f64; 3], dir: [f64; 3], t: f64| [eye[0] + dir[0] * t, eye[1] + dir[1] * t, eye[2] + dir[2] * t];
         // Track the keys by their places (the walk keys are where W A S D
@@ -1000,7 +1024,8 @@ impl RenderSide {
         // Space goes up unless a Timeline is shown, where it plays.
         let timeline_shown = self.timeline_pass + 2 >= ui.ctx().cumulative_pass_nr();
         let (mods, pointer, scroll, pinch, dt) = ui.input(|i| (i.modifiers, i.pointer.hover_pos(), i.smooth_scroll_delta.y + i.smooth_scroll_delta.x, i.zoom_delta(), i.stable_dt.min(0.1) as f64));
-        let orbiting = response.dragged_by(PointerButton::Primary) || response.dragged_by(PointerButton::Middle);
+        let middle = response.dragged_by(PointerButton::Middle);
+        let orbiting = response.dragged_by(PointerButton::Primary) || middle;
         if response.drag_started_by(PointerButton::Primary) || response.drag_started_by(PointerButton::Middle) {
             // The pivot (or the point held, to slide): what is under the
             // pointer as the drag starts, else the point looked at.
@@ -1016,10 +1041,13 @@ impl RenderSide {
             let d = response.drag_delta();
             let (pivot, depth) = self.grab.unwrap_or((orbit.target, orbit.distance));
             if mods.shift {
-                // The point held follows the pointer.
+                // The point held follows the pointer, across the view.
                 orbit.pan(d.x as f64, d.y as f64, depth * (2.0 * (fov.to_radians() * 0.5).tan() as f64) / view.height().max(1.0) as f64);
-            } else {
+            } else if middle || mods.alt {
                 orbit.orbit_about(pivot, d.x * 0.006, -d.y * 0.006);
+            } else if let Some(at) = pointer {
+                // The land held follows the pointer, as a map dragged.
+                orbit.grab(pivot, fov, view, at);
             }
         }
         if response.drag_stopped() {
@@ -1658,7 +1686,7 @@ impl RenderSide {
             }
         }
         ui.add_space(4.0);
-        ui.label(RichText::new(tr!("Drag: turn about the point there · Shift-drag: slide · wheel: toward the pointer · right-drag: look around (wheel: walking speed) · W A S D: walk, E or Space up, Q or C down (Shift faster, Alt slower; Space plays while a Timeline is shown) · double-click or .: in close there · Shift-click: focus there · Numpad 1 3 7: views")).size(11.0).color(pal.weak));
+        ui.label(RichText::new(tr!("Drag: grab the land · Alt-drag or middle-drag: turn about the point there · Shift-drag: slide · wheel: toward the pointer · right-drag: look around (wheel: walking speed) · W A S D: walk, E or Space up, Q or C down (Shift faster, Alt slower; Space plays while a Timeline is shown) · double-click or .: in close there · Shift-click: focus there · Numpad 1 3 7: views")).size(11.0).color(pal.weak));
         if keys.hovered {
             self.key_hover = ui.ctx().cumulative_pass_nr();
         }
@@ -2480,6 +2508,28 @@ mod nav_tests {
 
     /// Walking goes a share of the distance ahead a second: slow over the
     /// grass, fast over the map; Shift and Alt as in Blender.
+    #[test]
+    fn the_land_held_stays_under_the_pointer() {
+        let mut orbit = Orbit { target: [100.0, 64.0, 100.0], yaw: 0.7, pitch: -0.6, distance: 300.0 };
+        let view = Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(800.0, 600.0));
+        let (from, to) = (egui::pos2(300.0, 400.0), egui::pos2(520.0, 330.0));
+        let (eye, dir) = orbit.ray(50.0, view, from);
+        let t = (64.0 - eye[1]) / dir[1];
+        let held = [eye[0] + dir[0] * t, 64.0, eye[2] + dir[2] * t];
+        let was = orbit;
+        orbit.grab(held, 50.0, view, to);
+        assert_eq!((orbit.yaw, orbit.pitch, orbit.distance, orbit.target[1]), (was.yaw, was.pitch, was.distance, was.target[1]), "level, the view's way kept");
+        let (eye, dir) = orbit.ray(50.0, view, to);
+        let t = (64.0 - eye[1]) / dir[1];
+        let under = [eye[0] + dir[0] * t, eye[2] + dir[2] * t];
+        assert!((under[0] - held[0]).abs() < 1e-6 && (under[1] - held[2]).abs() < 1e-6, "{under:?} against {held:?}");
+        // Above the horizon: nothing.
+        orbit.pitch = -0.1;
+        let was = orbit;
+        orbit.grab(held, 50.0, view, egui::pos2(400.0, 25.0));
+        assert_eq!(orbit, was);
+    }
+
     #[test]
     fn walking_speed_follows_the_distance() {
         assert!(walk_speed(2.0, 1.0, false, false) < 2.0);

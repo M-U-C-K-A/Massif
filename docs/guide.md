@@ -3205,15 +3205,17 @@ area draws the viewport at a time; a second one says where it is.
   stays however the camera turns; on a larger map, when the camera goes
   far, the part around it is built in the background while the land
   already there stays shown, and takes its place once whole.
-- The view moves as Blender's: **drag** (or the middle button) turns about
-  the point under the pointer where the drag began, **Shift-drag** slides,
-  the point held following the pointer, the **wheel** (or a pinch) comes
+- A **drag** grabs the land: the camera moves over it, level, the point
+  under the pointer where the drag began staying under it, as a map
+  dragged. The **middle button**, or **Alt** with the left, turns about
+  that point, as Blender's; **Shift-drag** slides across the view, the
+  point held following the pointer, the **wheel** (or a pinch) comes
   closer to the point under the pointer, a share of the way each step, so
   that two blocks over the grass and two kilometres over the map are both
   in hand. **Double-click** (or **.**) comes in close on the point there;
   on the sky, the whole map. **Numpad 1, 3, 7** look from the front, the
   right, above (with **Ctrl**, the other side); **Shift-click** focuses the
-  lens there. The left drag turns the view whatever else is on: while
+  lens there. The left drag moves the camera whatever else is on: while
   walking, with the camera unlocked, after a double-click or looking
   around. Moving the camera by hand stops a camera path playing.
 - The **map** button at the view's top right shows a minimap of the whole

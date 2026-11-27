@@ -11648,14 +11648,15 @@ mod tests {
         assert_eq!(h.state().render_side.pose_now().unwrap().eye, before.eye, "only over the view");
     }
 
-    /// A left drag over the Render view turns it about the point under the
-    /// pointer whatever else is on: while walking, with the camera apart
-    /// from the view, after a double-click in close, after looking around
-    /// with the right button, seen from above; Shift with it slides
-    /// instead, and the wheel comes closer to the pointer even while a walk
-    /// key is held.
+    /// A left drag over the Render view grabs the land, as a map dragged,
+    /// whatever else is on: while walking, with the camera apart from the
+    /// view, after a double-click in close, after looking around with the
+    /// right button, seen from above; the middle button or Alt with the
+    /// left turns about the point under the pointer, Shift slides across
+    /// the view, and the wheel comes closer to the pointer even while a
+    /// walk key is held.
     #[test]
-    fn a_left_drag_always_turns_the_render_view() {
+    fn a_left_drag_always_grabs_the_render_view() {
         use crate::layout::Side;
         use egui::{Key, PointerButton, Vec2};
         let mut h = harness(ThemeChoice::Light);
@@ -11686,11 +11687,13 @@ mod tests {
             h.run_steps(2);
         };
         let turns = |h: &mut egui_kittest::Harness<'static, MassifApp>, what: &str| {
-            let (yaw, _, _, eye) = h.state().render_side.view_now().unwrap();
-            drag(h, PointerButton::Primary, vec2(120.0, 0.0), Modifiers::NONE);
-            let (yaw2, _, _, eye2) = h.state().render_side.view_now().unwrap();
-            assert!((yaw2 - yaw).abs() > 0.3, "{what}: a left drag turned the view ({yaw} to {yaw2})");
-            assert!((0..3).any(|k| (eye2[k] - eye[k]).abs() > 0.5), "{what}: the eye went round the point held");
+            let (yaw, pitch, target, _) = h.state().render_side.view_now().unwrap();
+            drag(h, PointerButton::Primary, vec2(120.0, -40.0), Modifiers::NONE);
+            let (yaw2, pitch2, target2, _) = h.state().render_side.view_now().unwrap();
+            assert!((yaw2 - yaw).abs() < 1e-5 && (pitch2 - pitch).abs() < 1e-5, "{what}: a left drag kept the view's way");
+            // (W walks down the way the view looks, too.)
+            assert!(what == "walking" || (target2[1] - target[1]).abs() < 1e-6, "{what}: level");
+            assert!((target2[0] - target[0]).hypot(target2[2] - target[2]) > 0.5, "{what}: a left drag moved the camera over the land ({target:?} to {target2:?})");
         };
         turns(&mut h, "at first");
         // Walking: W held through the drag.
@@ -11725,6 +11728,15 @@ mod tests {
         h.key_press(Key::Num7);
         h.run_steps(3);
         turns(&mut h, "from above");
+        // The middle button, and Alt with the left: turning about the point
+        // under the pointer.
+        for (button, mods) in [(PointerButton::Middle, Modifiers::NONE), (PointerButton::Primary, Modifiers::ALT)] {
+            let (yaw, _, _, eye) = h.state().render_side.view_now().unwrap();
+            drag(&mut h, button, vec2(120.0, 0.0), mods);
+            let (yaw2, _, _, eye2) = h.state().render_side.view_now().unwrap();
+            assert!((yaw2 - yaw).abs() > 0.3, "{button:?} {mods:?} turned the view ({yaw} to {yaw2})");
+            assert!((0..3).any(|k| (eye2[k] - eye[k]).abs() > 0.5), "the eye went round the point held");
+        }
         // Shift: slides, the view's direction kept.
         let (yaw, pitch, target, _) = h.state().render_side.view_now().unwrap();
         drag(&mut h, PointerButton::Primary, vec2(80.0, 40.0), Modifiers::SHIFT);
@@ -11790,7 +11802,7 @@ mod tests {
         assert_eq!(hold(&mut h, Key::Space), 0.0, "Space did not move the camera with a Timeline shown");
         assert!(hold(&mut h, Key::E) > 0.5, "E still goes up");
         // A camera path playing: Space plays it, a left drag stops it and
-        // turns the view.
+        // moves the camera.
         {
             let app = h.state_mut();
             let pose = app.render_side.pose_now().unwrap();
@@ -11804,7 +11816,7 @@ mod tests {
         h.key_press(Key::Space);
         h.run_steps(3);
         assert!(h.state().render_side.playing(), "Space played, a Timeline shown");
-        let yaw = h.state().render_side.view_now().unwrap().0;
+        let target = h.state().render_side.view_now().unwrap().2;
         h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
         h.step();
         for k in 1..=8 {
@@ -11814,8 +11826,8 @@ mod tests {
         h.event(egui::Event::PointerButton { pos: from + vec2(120.0, 0.0), button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
         h.run_steps(3);
         assert!(!h.state().render_side.playing(), "the drag stopped it");
-        let yaw2 = h.state().render_side.view_now().unwrap().0;
-        assert!((yaw2 - yaw).abs() > 0.3, "and turned the view: {yaw} to {yaw2}");
+        let target2 = h.state().render_side.view_now().unwrap().2;
+        assert!((target2[0] - target[0]).hypot(target2[2] - target[2]) > 0.5, "and moved the camera: {target:?} to {target2:?}");
     }
 
     /// Settings keyed on the Timeline follow the playhead: the clouds'
