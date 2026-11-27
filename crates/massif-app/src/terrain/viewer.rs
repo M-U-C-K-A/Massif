@@ -16,7 +16,7 @@ use massif_terrain::registry::{ParamKind, PortKind};
 const BAR_H: f32 = 36.0;
 /// The width the viewer's bar keeps on its right for Apply, Live and the
 /// options.
-const RIGHT_W: f32 = 236.0;
+const RIGHT_W: f32 = 250.0;
 
 /// Where the picture goes in the viewer's card.
 pub fn picture_rect(card: Rect) -> Rect {
@@ -297,6 +297,8 @@ fn controls(p: &mut TerrainPanel, ui: &mut Ui) {
     if let Some(k) = widgets::button_group(ui, "terrain viewer surface", &[t!("Clay"), t!("Colours")], &[!colour, colour]) {
         p.look.surface = if k == 0 { Surface::Clay } else { Surface::Colour };
     }
+    ui.add_space(2.0);
+    view_options(p, ui);
     ui.add_space(8.0);
     // What is viewed, in the room the commands on the right leave (none
     // when the viewer is too narrow: the node stays selected in the graph).
@@ -327,10 +329,17 @@ fn controls(p: &mut TerrainPanel, ui: &mut Ui) {
                 let current = options.iter().find(|o| o.0 == shown.port).map_or(String::new(), |o| o.1.clone());
                 let title = shape.map_or(shown.node.clone(), |s| super::canvas::node_title(p, &shown.node, &s));
                 ui.label(egui::RichText::new(t!("Viewing")).size(12.0).color(pal.weak));
-                ui.add(egui::Label::new(egui::RichText::new(&title).size(12.0)).truncate());
+                // The title gives way to the output's list and the X after it.
+                let combo_w = if options.len() > 1 { ui.painter().layout_no_wrap(current.clone(), egui::FontId::proportional(13.0), pal.text).size().x + 40.0 } else { 0.0 };
+                let after = combo_w + if p.viewed.is_some() { 28.0 } else { 0.0 };
+                let title_w = (ui.available_width() - after - ui.spacing().item_spacing.x * 2.0).max(0.0);
+                ui.scope(|ui| {
+                    ui.set_max_width(title_w);
+                    ui.add(egui::Label::new(egui::RichText::new(&title).size(12.0)).truncate());
+                });
                 if options.len() > 1 {
                     let mut port = shown.port.clone();
-                    widgets::combo("terrain viewer output").selected_text(current).show_ui(ui, |ui| {
+                    widgets::combo("terrain viewer output").width(combo_w - 16.0).selected_text(current).show_ui(ui, |ui| {
                         for (k, label) in &options {
                             ui.selectable_value(&mut port, k.clone(), label);
                         }
@@ -348,12 +357,16 @@ fn controls(p: &mut TerrainPanel, ui: &mut Ui) {
             }
         });
     }
+    // What is done to the map, apart on the right after a line: the
+    // viewer's own settings never touch it.
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let r = ui.add(egui::Button::new(egui::RichText::new(theme::glyph(Icon::ChevronDown).to_string()).size(13.0).color(pal.text)).frame(false).min_size(vec2(20.0, 24.0))).on_hover_text(t!("More ways to write the terrain"));
+        egui::Popup::menu(&r).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| map_options(p, ui));
         if ui.add(theme::primary_button(ui, t!("Apply to map"))).on_hover_text(t!("Write the graph's result into the map, in one step you can undo")).clicked() {
             p.events.push(Event::Apply);
             p.apply_asked = true;
         }
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         let mut live = p.live_on;
         if widgets::switch(ui, &mut live).on_hover_text(t!("Show the graph's result on the World map as it is edited, without writing it")).changed() {
             p.live_on = live;
@@ -366,75 +379,104 @@ fn controls(p: &mut TerrainPanel, ui: &mut Ui) {
             }
         }
         ui.label(egui::RichText::new(t!("Live")).size(12.0));
-        ui.add_space(8.0);
-        let r = ui.add(egui::Button::new(egui::RichText::new(theme::glyph(Icon::SlidersHorizontal).to_string()).size(13.0)).frame(false));
-        egui::Popup::menu(&r).show(|ui| {
-            ui.set_min_width(220.0);
-            widgets::well(ui, |ui| {
-                widgets::row(ui, t!("Relief"), |ui| {
-                    let mut v = p.look.relief as f64;
-                    if ui.add(widgets::Field::new(&mut v, 0.25..=4.0).suffix("×").width(110.0)).changed() {
-                        p.look.relief = v as f32;
-                    }
-                });
-                widgets::row(ui, t!("Contour lines"), |ui| {
-                    widgets::switch(ui, &mut p.look.contours);
-                });
-                widgets::row(ui, t!("Mask opacity"), |ui| {
-                    let mut v = p.look.overlay as f64 * 100.0;
-                    if ui.add(widgets::Field::new(&mut v, 0.0..=100.0).suffix(" %").max_decimals(0).width(110.0)).changed() {
-                        p.look.overlay = (v / 100.0) as f32;
-                    }
-                });
-                widgets::row(ui, t!("Sun height"), |ui| {
-                    let mut v = p.look.sun[1] as f64;
-                    if ui.add(widgets::Field::new(&mut v, 4.0..=85.0).suffix("°").max_decimals(0).width(110.0)).changed() {
-                        p.look.sun[1] = v as f32;
-                    }
-                });
-                widgets::row(ui, t!("Background"), |ui| {
-                    if let Some(k) = widgets::button_group(ui, "terrain viewer background", &[t!("Dark"), t!("Sky")], &[!p.look.sky, p.look.sky]) {
-                        p.look.sky = k == 1;
-                    }
-                });
-                widgets::row(ui, t!("Resolution"), |ui| {
-                    let label = |r: u32| if r == 0 { t!("Auto").to_owned() } else { r.to_string() };
-                    widgets::combo("terrain viewer resolution").width(110.0).selected_text(label(p.look.resolution)).show_ui(ui, |ui| {
-                        for r in RESOLUTIONS {
-                            ui.selectable_value(&mut p.look.resolution, r, label(r));
-                        }
-                    });
-                });
-                if p.look.resolution >= 4096 {
-                    ui.add_space(2.0);
-                    let mb = ((p.look.resolution as u64).pow(2) * 4 * 5) >> 20;
-                    ui.add(egui::Label::new(egui::RichText::new(t!("{n} samples a side: about {mb} MB and several seconds a picture", n = p.look.resolution, mb = mb)).size(11.0).color(Palette::of(ui).weak)).wrap());
-                    ui.add_space(4.0);
+        ui.add_space(6.0);
+        let (line, _) = ui.allocate_exact_size(vec2(1.0, 18.0), Sense::hover());
+        ui.painter().vline(line.center().x, line.y_range(), Stroke::new(1.0, pal.border));
+    });
+}
+
+/// What the viewer shows, and how: never the map.
+fn view_options(p: &mut TerrainPanel, ui: &mut Ui) {
+    let r = ui.add(egui::Button::new(egui::RichText::new(theme::glyph(Icon::SlidersHorizontal).to_string()).size(13.0)).frame(false).min_size(vec2(24.0, 24.0))).on_hover_text(t!("View options"));
+    egui::Popup::menu(&r).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        ui.set_min_width(280.0);
+        ui.set_max_width(320.0);
+        let pal = Palette::of(ui);
+        ui.label(egui::RichText::new(t!("View")).size(12.5).strong());
+        ui.label(egui::RichText::new(t!("How the viewer shows the terrain. The map is left as it is.")).size(11.0).color(pal.weak));
+        ui.add_space(6.0);
+        widgets::well(ui, |ui| {
+            widgets::row(ui, t!("Relief"), |ui| {
+                let mut v = p.look.relief as f64;
+                if ui.add(widgets::Field::new(&mut v, 0.25..=4.0).suffix("×").width(110.0)).changed() {
+                    p.look.relief = v as f32;
                 }
-                widgets::row(ui, t!("Thumbnails"), |ui| {
-                    let colour = p.thumb_surface == Surface::Colour;
-                    if let Some(k) = widgets::button_group(ui, "terrain thumbs surface", &[t!("Clay"), t!("Colours")], &[!colour, colour]) {
-                        p.thumb_surface = if k == 0 { Surface::Clay } else { Surface::Colour };
-                    }
-                });
             });
-            ui.add_space(8.0);
-            widgets::well(ui, |ui| {
-                widgets::row(ui, t!("Apply over the map"), |ui| {
-                    widgets::switch(ui, &mut p.apply_over).on_hover_text(t!("On: what the graph digs and raises goes into levels of their own, which you can hide or delete, and the map's ground stays as it was. Off: the graph replaces the ground."));
-                });
-                widgets::row(ui, t!("Height map"), |ui| {
-                    let busy = p.heightmap.is_some();
-                    let label = if busy { t!("Saving…") } else { t!("Save…") };
-                    if ui.add_enabled(!busy, egui::Button::new(label)).on_hover_text(t!("Save the terrain at a block a sample as a 16-bit PNG height map, without writing it into the map")).clicked()
-                        && let Some(path) = rfd::FileDialog::new().set_file_name(t!("terrain height map.png")).add_filter(t!("PNG image"), &["png"]).save_file()
-                    {
-                        p.save_heightmap(path);
-                        ui.close();
-                    }
-                });
+            widgets::row(ui, t!("Contour lines"), |ui| {
+                widgets::switch(ui, &mut p.look.contours);
             });
+            widgets::row(ui, t!("Mask opacity"), |ui| {
+                let mut v = p.look.overlay as f64 * 100.0;
+                if ui.add(widgets::Field::new(&mut v, 0.0..=100.0).suffix(" %").max_decimals(0).width(110.0)).changed() {
+                    p.look.overlay = (v / 100.0) as f32;
+                }
+            });
+            widgets::row(ui, t!("Sun height"), |ui| {
+                let mut v = p.look.sun[1] as f64;
+                if ui.add(widgets::Field::new(&mut v, 4.0..=85.0).suffix("°").max_decimals(0).width(110.0)).changed() {
+                    p.look.sun[1] = v as f32;
+                }
+            });
+            widgets::row(ui, t!("Background"), |ui| {
+                if let Some(k) = widgets::button_group(ui, "terrain viewer background", &[t!("Dark"), t!("Sky")], &[!p.look.sky, p.look.sky]) {
+                    p.look.sky = k == 1;
+                }
+            });
+            // A segmented control, not a list: a list opened from this
+            // popover closed it.
+            widgets::row(ui, t!("Resolution"), |ui| {
+                let labels: Vec<String> = RESOLUTIONS.iter().map(|&r| if r == 0 { t!("Auto").to_owned() } else { format!("{}K", r / 1024) }).collect();
+                let names: Vec<&str> = labels.iter().map(String::as_str).collect();
+                let on: Vec<bool> = RESOLUTIONS.iter().map(|&r| r == p.look.resolution).collect();
+                if let Some(k) = widgets::button_group(ui, "terrain viewer resolution", &names, &on) {
+                    p.look.resolution = RESOLUTIONS[k];
+                }
+            });
+            if p.look.resolution >= 4096 {
+                ui.add_space(2.0);
+                let mb = ((p.look.resolution as u64).pow(2) * 4 * 5) >> 20;
+                ui.add(egui::Label::new(egui::RichText::new(t!("{n} samples a side: about {mb} MB and several seconds a picture", n = p.look.resolution, mb = mb)).size(11.0).color(pal.weak)).wrap());
+                ui.add_space(4.0);
+            }
         });
+    });
+}
+
+/// The other ways to write the terrain: what Apply does to the map's
+/// ground, and a height map saved instead.
+fn map_options(p: &mut TerrainPanel, ui: &mut Ui) {
+    ui.set_min_width(300.0);
+    ui.set_max_width(320.0);
+    let pal = Palette::of(ui);
+    ui.label(egui::RichText::new(t!("Map")).size(12.5).strong());
+    ui.label(egui::RichText::new(t!("What Apply to map writes, and where.")).size(11.0).color(pal.weak));
+    ui.add_space(6.0);
+    widgets::well(ui, |ui| {
+        widgets::row(ui, t!("Keep the map's ground"), |ui| {
+            widgets::switch(ui, &mut p.apply_over);
+        });
+        let said = if p.apply_over {
+            t!("On: what the graph digs and raises goes into levels of their own, which you can hide or delete; the map's ground stays as it was.")
+        } else {
+            t!("Off: the graph replaces the map's ground.")
+        };
+        ui.add(egui::Label::new(egui::RichText::new(said).size(11.0).color(pal.weak)).wrap());
+        ui.add_space(4.0);
+    });
+    ui.add_space(8.0);
+    widgets::well(ui, |ui| {
+        widgets::row(ui, t!("Height map"), |ui| {
+            let busy = p.heightmap.is_some();
+            let label = if busy { t!("Saving…") } else { t!("Save…") };
+            if ui.add_enabled(!busy, egui::Button::new(label)).clicked()
+                && let Some(path) = rfd::FileDialog::new().set_file_name(t!("terrain height map.png")).add_filter(t!("PNG image"), &["png"]).save_file()
+            {
+                p.save_heightmap(path);
+                ui.close();
+            }
+        });
+        ui.add(egui::Label::new(egui::RichText::new(t!("A 16-bit PNG of the terrain, a block a sample. The map is left as it is.")).size(11.0).color(pal.weak)).wrap());
+        ui.add_space(4.0);
     });
 }
 

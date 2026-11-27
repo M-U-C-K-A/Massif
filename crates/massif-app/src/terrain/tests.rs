@@ -1275,7 +1275,8 @@ fn the_viewer_options_render() {
     let glyphs = [("view", crate::theme::glyph(crate::theme::Icon::SlidersHorizontal).to_string()), ("map", crate::theme::glyph(crate::theme::Icon::ChevronDown).to_string())];
     for (which, glyph) in glyphs {
         for (theme, tag) in [(egui::Theme::Dark, "dark"), (egui::Theme::Light, "light")] {
-            let panel = super::TerrainPanel::with_graph(engine.clone(), example("m2-archipelago"));
+            let mut panel = super::TerrainPanel::with_graph(engine.clone(), example("m4-alpine-colors"));
+            panel.look.three_d = false;
             let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(760.0, 520.0)).with_pixels_per_point(2.0).with_accessibility_check(false).wgpu().build_ui_state(
                 move |ui, p: &mut super::TerrainPanel| {
                     if ui.ctx().cumulative_pass_nr() == 0 {
@@ -1299,4 +1300,34 @@ fn the_viewer_options_render() {
             h.render().unwrap().save(dir.join(format!("viewer-options-{which}-{tag}.png"))).unwrap();
         }
     }
+}
+
+/// The viewer's options stay open while Resolution is picked in them (a
+/// list opened there closed them), and the map's commands are apart.
+#[test]
+fn the_viewer_options_stay_open_while_resolution_is_picked() {
+    use egui_kittest::kittest::Queryable;
+    let panel = super::TerrainPanel::with_graph(Arc::new(Engine::new(Default::default())), mountain_graph());
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 520.0)).with_accessibility_check(false).build_ui_state(
+        |ui, p: &mut super::TerrainPanel| {
+            if ui.ctx().cumulative_pass_nr() == 0 {
+                crate::theme::install(ui.ctx());
+            }
+            super::viewer::ui(p, ui);
+        },
+        panel,
+    );
+    h.run_steps(3);
+    h.get_by_label(&crate::theme::glyph(crate::theme::Icon::SlidersHorizontal).to_string()).click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Relief").is_some(), "the view options open");
+    assert!(h.query_by_label("Keep the map's ground").is_none(), "the map's commands are not among them");
+    h.get_by_label("2K").click();
+    h.run_steps(3);
+    assert_eq!(h.state().look.resolution, 2048);
+    assert!(h.query_by_label("Relief").is_some(), "still open");
+    h.get_by_label("8K").click();
+    h.run_steps(3);
+    assert_eq!(h.state().look.resolution, 8192);
+    assert!(h.query_by_label("Mask opacity").is_some(), "still open");
 }

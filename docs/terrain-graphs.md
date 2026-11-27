@@ -389,21 +389,25 @@ A picture comes coarse first, then sharp.
 - 3D: drag to turn around the terrain, scroll to come closer; turning
   keeps the camera's distance, only the wheel changes it.
 - **Shift + drag** turns the sun, in both.
-- The sliders menu at the top right: how much the relief is exaggerated,
-  contour lines, the mask's opacity, the sun's height, the 3D view's
-  **Background** (plain **Dark**, as in Gaea, by default, or the **Sky**),
-  the **Resolution** (Auto: as many samples as the picture needs, at most
-  1024 a side; or 1024, 2048, 4096 or 8192, the last two heavy in memory
-  and slow, as the menu says), and whether thumbnails are in clay or in
-  colours.
+- **View** options, the sliders beside 2D/3D and Clay/Colours: they
+  change only what the viewer shows, never the map. How much the relief is
+  exaggerated, contour lines, the mask's opacity, the sun's height, the 3D
+  view's **Background** (plain **Dark**, as in Gaea, by default, or the
+  **Sky**), the **Resolution** (Auto: as many samples as the picture
+  needs, at most 1024 a side; or 1K, 2K, 4K or 8K, the last two heavy in
+  memory and slow, as the options say).
+- Whether the nodes' thumbnails are in clay or in colours is the graph's
+  setting **Node thumbnails**, in Node Properties with no node selected.
 - The selected node's points or line (a range's spine, peaks) show over the
   2D picture: drag them, double-click to add one, right-click to remove
   one.
-- **Live** shows the graph's result on the World map as it is edited,
+- What is done to the map stands apart, on the right after a line:
+  **Live** shows the graph's result on the World map as it is edited,
   without writing it; **Apply to map** writes it, in one step that can be
-  undone (see [Apply](#live-and-apply)).
+  undone (see [Apply](#live-and-apply)); the arrow beside it holds the
+  other ways to write the terrain.
 
-The viewer opens in **3D**, under the sky. A map made from a template, or a sample of the home screen, is seen as its template is best seen: its sun, clouds, haze and sea. With the Map Output viewed, the 3D view shows the map's whole result: its relief and colours, the water of its rivers and lakes (the Water input), and its layers of rock over the ground (floating islands, overhangs), as the map will have them. The settings menu (the sliders at the top right) also holds **Apply over the map**, which writes what the graph digs and raises into levels of their own, the map's ground staying as it was (they can be hidden or deleted in the Levels panel), and **Height map: Save…**, which saves the terrain at a block a sample as a 16-bit PNG height map, black the world's lowest Y and white its highest, without writing it into the map.
+The viewer opens in **3D**, under the sky. A map made from a template, or a sample of the home screen, is seen as its template is best seen: its sun, clouds, haze and sea. With the Map Output viewed, the 3D view shows the map's whole result: its relief and colours, the water of its rivers and lakes (the Water input), and its layers of rock over the ground (floating islands, overhangs), as the map will have them. The arrow beside **Apply to map** holds **Keep the map's ground**, which writes what the graph digs and raises into levels of their own, the map's ground staying as it was (they can be hidden or deleted in the Levels panel), and **Height map: Save…**, which saves the terrain at a block a sample as a 16-bit PNG height map, black the world's lowest Y and white its highest, without writing it into the map.
 
 In **3D**, the viewer draws the generator's output under a sky with soft light, clouds, the sea at the world's sea level and the sides of the terrain, with a camera you turn, move and zoom freely. Its bar at the foot opens the render settings (sun, clouds, haze, exposure), turns the clouds and the sea on and off, frames the relief and saves the view as an image. The **Dark** background shows a plain dark backdrop in place of the sky.
 

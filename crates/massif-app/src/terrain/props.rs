@@ -144,6 +144,14 @@ fn graph_ui(p: &mut TerrainPanel, ui: &mut Ui) {
             changed |= ui.add(widgets::Field::new(&mut sim, 256.0..=8192.0).suffix(" px").logarithmic(true).max_decimals(0).width((ui.available_width() * 0.58).min(160.0))).changed();
         });
         hover_help(p, ui, top, "Samples a side erosion and water run at in previews: finer is sharper and slower. Builds run at the map's own resolution.");
+        let top = ui.cursor().top();
+        widgets::row(ui, t!("Node thumbnails"), |ui| {
+            let colour = p.thumb_surface == super::shade::Surface::Colour;
+            if let Some(k) = widgets::button_group(ui, "terrain thumbs surface", &[t!("Clay"), t!("Colours")], &[!colour, colour]) {
+                p.thumb_surface = if k == 0 { super::shade::Surface::Clay } else { super::shade::Surface::Colour };
+            }
+        });
+        hover_help(p, ui, top, "How the nodes' thumbnails in the graph are drawn: in clay, or in the colours the graph gives the ground.");
     });
     if changed {
         let size = (size.round() as u32).clamp(512, 32768);

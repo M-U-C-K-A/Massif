@@ -2481,8 +2481,8 @@ Massif brings in what you already have:
   map (stretched over the terrain, black and white set to any height), a
   WorldPainter `.world` or a `.massif` (fitted to the terrain, or read at
   its own place). Its Height, Water and Colour outputs work like the Map
-  node's, and the file is read again when it changes. The Generator
-  Viewer's settings menu saves what a graph makes as a 16-bit PNG height
+  node's, and the file is read again when it changes. The arrow beside
+  the Generator Viewer's **Apply to map** saves what a graph makes as a 16-bit PNG height
   map (**Height map: Save…**), a block a sample, without writing it into
   the map.
 
