@@ -15215,11 +15215,21 @@ mod tests {
             form.area.blocks_per_metre = 0.02;
             form.area
         };
+        // What other tests asked for and could not have (offline) is
+        // forgotten, and the tiles are put back while it waits: the store
+        // keeps so many, the latest had first.
+        store.forget_queue();
         crate::real_terrain::tests::seed_store(&store, &area);
         let started = std::time::Instant::now();
+        let mut k = 0u32;
         while !matches!(&h.state().dialog, Some(Dialog::Real(form)) if form.has_picture()) {
             // Drawn on a thread of its own: slow while the whole suite runs.
             assert!(started.elapsed().as_secs() < 240, "no preview");
+            k += 1;
+            if k.is_multiple_of(100) {
+                store.forget_queue();
+                crate::real_terrain::tests::seed_store(&store, &area);
+            }
             h.step();
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
