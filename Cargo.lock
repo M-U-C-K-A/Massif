@@ -2302,6 +2302,7 @@ dependencies = [
  "glam",
  "image",
  "libc",
+ "libloading",
  "log",
  "massif-anvil",
  "massif-assets",

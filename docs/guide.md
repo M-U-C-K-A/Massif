@@ -3148,8 +3148,18 @@ area draws the viewport at a time; a second one says where it is.
   the blocks sharp. The samples themselves are kept as they are: the
   filter only draws the image shown from them, and the more samples, the
   less it smooths, until past some 128 samples a pixel it leaves them be.
-  Measured on a hilly map late in the day, against 1024 samples: 1 sample
-  denoised is as near as 4 raw ones, 7 as near as 16, 40 as near as 64.
+  Where Intel's **Open Image Denoise** is installed (the denoiser Blender's
+  Cycles uses; on a Mac with Blender, Massif finds Blender's copy), it
+  takes over as the samples settle: after 1, 4, 16, 64, 256 and 1024
+  samples and on the last, without holding up the view, and it denoises
+  the image saved. Measured on a hilly map late in the day, against 1024
+  samples: 1 sample through it is nearer the end than 4 raw ones (an
+  error of 0.026 against 0.043); it takes some 0.2 s at 1920 × 1080.
+- The image is anti-aliased as Cycles filters a pixel, the textures are
+  averaged where they are smaller than a pixel (the game's crisp pixels
+  kept up close), and leaves and glass far off add up to how much of them
+  is solid, so that woods seen from afar settle smooth instead of
+  flickering in a pattern of pixels.
 - **Grass**: as the game's **Blocks**, or as **Blades** of grass: over
   every grass block (not snowy), in the place of the short and tall grass
   and the ferns, a field of thin blades made up as the image is drawn,
