@@ -88,6 +88,8 @@ pub enum Tool {
     /// Distances, slopes, areas and volumes, measured on the map (see
     /// `measure`).
     Measure,
+    /// Rings of how far players get in a time (see `travel`).
+    TravelRange,
     /// Where the player appears in the world, as WorldPainter's Spawn
     /// tool: a click sets it, the marker dragged moves it.
     Spawn,
@@ -116,7 +118,7 @@ impl Tool {
         (WATER_GROUP, Icon::Droplet, &[Tool::Water, Tool::Flood, Tool::River]),
         (tn!("Underground"), Icon::Pickaxe, &[Tool::Layer, Tool::Caves, Tool::CaveBiome]),
         (tn!("Levels"), Icon::Layers, &[Tool::StampSlab, Tool::EraseSlab]),
-        (tn!("Navigate"), Icon::Compass, &[Tool::Pan, Tool::Eyedropper, Tool::Measure, Tool::Spawn]),
+        (tn!("Navigate"), Icon::Compass, &[Tool::Pan, Tool::Eyedropper, Tool::Measure, Tool::TravelRange, Tool::Spawn]),
     ];
 
     /// Tools new in this version: the Tools panel marks them until they
@@ -163,6 +165,7 @@ impl Tool {
             Tool::SelectLasso => tr!("Lasso selection"),
             Tool::SelectBrush => tr!("Selection brush"),
             Tool::Measure => tr!("Measure"),
+            Tool::TravelRange => tr!("Travel range"),
             Tool::Spawn => tr!("Spawn point"),
             Tool::Pan => tr!("Pan"),
         }
@@ -208,6 +211,7 @@ impl Tool {
             Tool::SelectLasso => Icon::Lasso,
             Tool::SelectBrush => Icon::Highlighter,
             Tool::Measure => Icon::RulerDimensionLine,
+            Tool::TravelRange => Icon::Radar,
             Tool::Spawn => Icon::MapPinHouse,
             Tool::Pan => Icon::Hand,
         }
@@ -295,6 +299,7 @@ impl Tool {
             Tool::SelectEllipse => tr!("Drag an ellipse: the other tools then act only inside it. A right-click or Esc clears it."),
             Tool::SelectLasso => tr!("Draw around an area: the other tools then act only inside it. A right-click or Esc clears it."),
             Tool::SelectBrush => tr!("Paint the selection with the brush. Right button: take it out. Esc clears it."),
+            Tool::TravelRange => tr!("Rings around the pointer: how far players get in a time, walking, on a horse, with an elytra…"),
             Tool::Measure => tr!("Measure distances, heights and slopes along a line, or the area, volume and cover of a part of the map."),
             Tool::Spawn => tr!("Click where players appear in the world: the spawn point goes there, on the ground. Drag it to move it."),
             Tool::Pan => tr!("Move the map (also: middle button, Space)."),
@@ -302,7 +307,7 @@ impl Tool {
     }
 
     pub const fn uses_brush(self) -> bool {
-        !matches!(self, Tool::Eyedropper | Tool::Measure | Tool::Spawn | Tool::Flood | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::Structure | Tool::Building | Tool::Village)
+        !matches!(self, Tool::Eyedropper | Tool::Measure | Tool::TravelRange | Tool::Spawn | Tool::Flood | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::Structure | Tool::Building | Tool::Village)
     }
 
     /// The tools that draw the selection.
@@ -312,7 +317,7 @@ impl Tool {
 
     /// Tools that apply once per click rather than continuously.
     pub const fn is_click(self) -> bool {
-        matches!(self, Tool::Eyedropper | Tool::Measure | Tool::Spawn | Tool::Flood | Tool::Structure | Tool::Building | Tool::Village)
+        matches!(self, Tool::Eyedropper | Tool::Measure | Tool::TravelRange | Tool::Spawn | Tool::Flood | Tool::Structure | Tool::Building | Tool::Village)
     }
 
     pub const fn needs_slab_level(self) -> bool {
@@ -344,7 +349,7 @@ impl Tool {
             // passes): Smooth3d, from its shortcut, melts sculpted matter.
             Tool::Smooth3d => Use3d::Smooth,
             Tool::PaintTerrain => Use3d::Paint,
-            Tool::Eyedropper | Tool::Measure | Tool::Spawn | Tool::Flood | Tool::Structure | Tool::Village => Use3d::Click,
+            Tool::Eyedropper | Tool::Measure | Tool::TravelRange | Tool::Spawn | Tool::Flood | Tool::Structure | Tool::Village => Use3d::Click,
             Tool::Building => Use3d::MapOnly,
             Tool::Pan | Tool::Road | Tool::River | Tool::Annotate | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush => Use3d::MapOnly,
             Tool::Smooth
@@ -703,6 +708,8 @@ pub struct ToolState {
     /// The measure on the map: never saved.
     #[serde(skip)]
     pub measure: crate::measure::Measure,
+    /// The Travel range tool's rings, and its pinned centre (never saved).
+    pub travel: crate::travel::Travel,
     /// "Select by": what, and its limits.
     pub select_by: crate::select::SelectBy,
     /// The Structure tool: what it places and how.
@@ -1334,6 +1341,7 @@ impl Default for ToolState {
             measure_base: Default::default(),
             measure_level: 62,
             measure: Default::default(),
+            travel: Default::default(),
             select_by: Default::default(),
             structure: Default::default(),
             village: Default::default(),
@@ -1996,7 +2004,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
                     massif_core::voxel::sculpt(&mut edit, brush, [x, y, z], strength, mode);
                 }
             }
-            Tool::Eyedropper | Tool::Measure | Tool::Spawn | Tool::Flood | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush | Tool::Structure | Tool::Building | Tool::Village => {}
+            Tool::Eyedropper | Tool::Measure | Tool::TravelRange | Tool::Spawn | Tool::Flood | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush | Tool::Structure | Tool::Building | Tool::Village => {}
         }
     }
     // A combined layer's pockets, painted from another level: the same
@@ -2859,6 +2867,11 @@ pub fn click(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, inverse:
         }
         // A point of the measure (in the 3D views; the map has its own
         // drags), at the column's centre. The right button clears it.
+        // The rings' centre, pinned (in the 3D views; the map pins its own).
+        Tool::TravelRange => {
+            tools.travel.pin = if inverse { None } else { Some((x as f32 + 0.5, z as f32 + 0.5)) };
+            None
+        }
         Tool::Measure => {
             if inverse {
                 tools.measure.clear();

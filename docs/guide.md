@@ -353,6 +353,7 @@ The **Tools** panel holds every tool of the World side, a row for each theme. Ho
 | **Navigate** | **Pan** | Move the map (also: middle button, Space). |
 | | **Eyedropper** (⌥Y) | Pick what is under the cursor to paint with it. See [The eyedropper](#the-eyedropper). |
 | | **Measure** | Measure a line's length, heights and slopes, or an area's size, volume and cover. See [Measure](#measure). |
+| | **Travel range** | Rings around the pointer: how far players get in a time. See [Travel range](#travel-range). |
 | | **Spawn point** | Set where players appear in the world. See [The spawn point](#the-spawn-point). |
 
 The tools new in this version are marked in the panel until you first try them. In the **3D Sculpt** panel the same tools work in 3D, with three of its own: **Sculpt**, **Dig** and **Smooth** (see [3D Sculpt](#3d-sculpt)).
@@ -767,13 +768,17 @@ being a metre as in the game. Choose **Line** or **Area** in Tool Settings.
 - **Line**: drag across the map, or click from point to point and
   double-click (or press Enter) to end; the pointer is the next point
   meanwhile, and Backspace takes back the last one. A label on the line
-  says its length, its height difference and its mean slope. The Info panel
+  says its length, its height from start to end (↑ up, ↓ down, in blocks)
+  and its mean slope, for example "21.06 km · ↓54 blocks · slope 10 %";
+  point at the label for how long the line takes to travel. The Info panel
   gives its **Distance** on the map, its length **Along the ground** (up
   and down the slopes), its **Height** at each end, the blocks climbed and
   come down along a path of points, its **Mean slope** and its **Steepest**
   (over 4 blocks), as a grade and in degrees, and the **profile** of the
   land under it, the water shown over the ground: point at the profile and
-  the map marks the spot.
+  the map marks the spot. Under it, its **Travel time, in a straight
+  line**, each way of going in the game (see below), with the Minecraft
+  days it takes once past one (a day is 20 minutes).
 - **Area**: drag around a part of the map (a lasso), or click its corners
   and click the first one again (or press Enter) to close it. The Info
   panel gives its **Area** (in m², km² past a million), its **Perimeter**,
@@ -790,6 +795,32 @@ double-click or Enter ends it. A measure is never saved with the map. It
 shows while the tool is in hand; **Keep on screen** leaves it on the map and
 in the Info panel with the other tools. **Esc**, a right-click or **Clear**
 clears it.
+
+### Travel range
+
+The **Travel range** tool (in the Navigate group) draws rings around the
+pointer on the map, and on the land in the 3D views: how far players get
+in a time, to lay out a map for them (how far apart villages, a base and
+its resources can be). Each ring is labelled with its time, its way of
+going and its radius. Distances are straight and flat, as the crow flies:
+slopes, water and trees are not counted, so a ring is the farthest one gets.
+Click to pin the rings there; Esc, a right-click or **Unpin** lets them go.
+
+Tool Settings lists the rings (two at first: one and two Minecraft days on
+foot), each a time in **minutes** or **MC days** (a Minecraft day is 20
+minutes) and a way of going; **Add a ring** adds one, up to eight. The
+speeds, from the Minecraft Wiki (Java Edition), in blocks a second:
+
+| Way of going | Speed |
+|---|---|
+| Walking | 4.317 |
+| Sprinting | 5.612 |
+| Sprint-jumping | 7.127 |
+| Fast horse | 9.5 (horses go 4.8 to 14.2) |
+| Boat on water | 8 |
+| Boat on ice | 40 (packed ice) |
+| Minecart | 8 (powered rails) |
+| Elytra with rockets | 33.5 (level flight) |
 
 ### The spawn point
 

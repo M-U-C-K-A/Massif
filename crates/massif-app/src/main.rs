@@ -90,6 +90,7 @@ mod building_tool;
 mod terrain_view;
 mod theme;
 mod tools;
+mod travel;
 mod tour;
 mod tree_sizes;
 mod true_color;

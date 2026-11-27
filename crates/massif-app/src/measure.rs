@@ -697,30 +697,68 @@ fn rise(d: i32) -> String {
     if d > 0 { format!("+{d}") } else { d.to_string() }
 }
 
-/// What the label on the map says.
-fn label(r: &Report) -> String {
+/// A height difference in words: "↑12 blocks", "↓1 block", "level".
+pub fn climb(d: i32) -> String {
+    match d {
+        0 => tr!("level").to_owned(),
+        d => trn!("{arrow}{n} block", "{arrow}{n} blocks", n = d.unsigned_abs(), arrow = if d > 0 { "↑" } else { "↓" }),
+    }
+}
+
+/// What the label on the map says, each value named: "21.06 km · ↓54
+/// blocks · slope 10 %".
+pub fn label(r: &Report) -> String {
     match &r.area {
-        Some(a) => format!("{} · {}", surface(a.columns), length(a.perimeter)),
+        Some(a) => tr!("{area} · perimeter {perimeter}", area = surface(a.columns), perimeter = length(a.perimeter)),
         None => {
             let l = &r.line;
-            let mut text = length(l.horizontal);
-            if let (Some(a), Some(b)) = (l.from, l.to) {
-                text = format!("{text} · {} · {:.0} %", rise(b - a), l.mean_slope * 100.0);
+            match (l.from, l.to) {
+                (Some(a), Some(b)) => tr!("{distance} · {climb} · slope {slope} %", distance = length(l.horizontal), climb = climb(b - a), slope = format!("{:.0}", l.mean_slope * 100.0)),
+                _ => length(l.horizontal),
             }
-            text
         }
+    }
+}
+
+/// How long a line takes each way of going, in a well's rows.
+fn travel_rows(ui: &mut Ui, blocks: f64) {
+    for m in crate::travel::Mode::ALL {
+        crate::widgets::row(ui, m.name(), |ui| {
+            ui.label(egui::RichText::new(crate::travel::time_to(m, blocks)).monospace());
+        });
     }
 }
 
 // --------------------------------------------------------------- drawing --
 
 /// A label in a pill, its left middle at `at`.
-fn pill(painter: &egui::Painter, pal: &Palette, at: Pos2, text: String) {
+fn pill(painter: &egui::Painter, pal: &Palette, at: Pos2, text: String) -> Rect {
     let galley = painter.layout_no_wrap(text, FontId::proportional(11.5), pal.text);
     let r = Rect::from_min_size(at - vec2(0.0, galley.size().y / 2.0 + 3.0), galley.size() + vec2(14.0, 6.0));
     let r = r.translate(vec2((painter.clip_rect().right() - 4.0 - r.right()).min(0.0), 0.0));
     painter.rect(r, theme::PILL, pal.panel.gamma_multiply(0.94), Stroke::new(1.0, pal.border), StrokeKind::Inside);
     painter.galley(r.min + vec2(7.0, 3.0), galley, pal.text);
+    r
+}
+
+/// The label's tooltip on a line: what each value is, and how long the
+/// line takes to travel.
+fn label_tip(ui: &Ui, rect: Rect, r: &Report) {
+    if r.area.is_some() {
+        return;
+    }
+    // Read from the pointer: over the map, the map's own hover holds it.
+    if !ui.ctx().pointer_hover_pos().is_some_and(|p| rect.contains(p) && ui.clip_rect().contains(p)) {
+        return;
+    }
+    let blocks = r.line.horizontal;
+    egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), egui::Id::unique("measure label"), rect).show(|ui| {
+        ui.set_min_width(260.0);
+        ui.label(egui::RichText::new(tr!("Distance on the map, height from start to end, mean slope")).size(11.5).color(Palette::of(ui).weak));
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(tr!("Travel time, in a straight line")).strong());
+        crate::widgets::well(ui, |ui| travel_rows(ui, blocks));
+    });
 }
 
 /// The point along `path` (closed when `closed`) at `along` blocks.
@@ -805,7 +843,8 @@ pub fn draw_map(ui: &Ui, painter: &egui::Painter, to_screen: &dyn Fn(f64, f64) -
     } else {
         *pts.last().unwrap() + vec2(12.0, -14.0)
     };
-    pill(painter, &pal, at, label(&r));
+    let rect = pill(painter, &pal, at, label(&r));
+    label_tip(ui, rect, &r);
 }
 
 /// Whether the polygon is convex (its fan shading then right).
@@ -878,7 +917,8 @@ pub fn draw_3d(ui: &Ui, painter: &egui::Painter, to_screen: &dyn Fn([f32; 3]) ->
         && let Some(&(x, z)) = m.path().last()
         && let Some(p) = height(x, z).and_then(|y| to_screen([x, y, z]))
     {
-        pill(painter, &pal, p + vec2(12.0, -14.0), label(&r));
+        let rect = pill(painter, &pal, p + vec2(12.0, -14.0), label(&r));
+        label_tip(ui, rect, &r);
     }
 }
 
@@ -1002,6 +1042,14 @@ pub fn results(ui: &mut Ui, r: &Report, drawing: bool) {
             if l.profile.len() > 1 {
                 ui.add_space(6.0);
                 profile(ui, l);
+            }
+            // How long it takes, straight and flat (the profile above says
+            // how flat).
+            if l.horizontal > 0.0 {
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new(tr!("Travel time, in a straight line")).size(11.5).color(pal.weak));
+                ui.add_space(2.0);
+                well(ui, |ui| travel_rows(ui, l.horizontal));
             }
             if drawing {
                 crate::panels::hint(ui, tr!("Being drawn: the pointer is its last point."));
@@ -1141,6 +1189,17 @@ mod tests {
 
     fn close(a: f64, b: f64, eps: f64) -> bool {
         (a - b).abs() <= eps
+    }
+
+    /// The label names each value: the distance, the height from start to
+    /// end (an arrow, in blocks) and the mean slope.
+    #[test]
+    fn the_label_says_what_each_value_is() {
+        let l = LineReport { horizontal: 21_060.0, from: Some(118), to: Some(64), mean_slope: 0.1, ..LineReport::default() };
+        assert_eq!(label(&Report { line: l.clone(), area: None }), "21.06 km · ↓54 blocks · slope 10 %");
+        let up = LineReport { horizontal: 40.0, from: Some(64), to: Some(65), mean_slope: 0.02, ..l };
+        assert_eq!(label(&Report { line: up, area: None }), "40.0 m · ↑1 block · slope 2 %");
+        assert_eq!(climb(0), "level");
     }
 
     /// On flat ground the distance along the ground is the distance on the

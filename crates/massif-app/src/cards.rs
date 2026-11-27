@@ -392,6 +392,12 @@ pub fn tool_card(tool: Tool) -> Card<'static> {
             Some(tr!("The results are in the Info panel. Keep on screen leaves the measure with the other tools.")),
             Some(Demo::Measure),
         ),
+        Tool::TravelRange => card(
+            tr!("Shows how far players get in a time: rings around the pointer, each a time and a way of going (walking, a horse, a boat, an elytra…), in a straight line over flat ground."),
+            vec![(tr!("Click"), tr!("Pin the rings here")), (tr!("Right-click"), tr!("Unpin them (Esc)"))],
+            Some(tr!("Tool Settings sets the rings: a time in minutes or Minecraft days (20 minutes each) and a way of going.")),
+            Some(Demo::TravelRange),
+        ),
         Tool::Spawn => card(
             tr!("Sets where players appear in the world, as WorldPainter's Spawn tool: on the ground of the column clicked, over the water if there is some."),
             vec![(tr!("Click"), tr!("Set the spawn point here")), (tr!("Drag the marker"), tr!("Move it")), (tr!("Right-click"), tr!("Set spawn here, from the menu"))],
@@ -446,6 +452,7 @@ pub enum Demo {
     Select,
     Pan,
     Measure,
+    TravelRange,
     Spawn,
     Structure,
     Building,
@@ -1097,6 +1104,21 @@ impl Demo {
                 }
                 s.markers = vec![(x0, y0), (x1, y1)];
                 Some((x1, y1, 2.0, progress < 0.9))
+            }
+            Demo::TravelRange => {
+                // Two rings round the cursor going over the hills; a
+                // click, and they stay.
+                s.add_hills(8.0);
+                let go = smooth_step(0.05, 0.6, progress);
+                let c = (36.0 + 52.0 * go, 36.0 - 6.0 * go);
+                for r in [11.0, 22.0] {
+                    for k in 0..120 {
+                        let a = k as f64 / 120.0 * std::f64::consts::TAU;
+                        Scene::near(c.0 + r * a.cos(), c.1 + r * a.sin(), 0.7, |i, _| s.tint[i] = Some([250, 120, 40]));
+                    }
+                }
+                s.markers = vec![c];
+                Some((c.0, c.1, 2.0, (0.6..0.7).contains(&progress)))
             }
             Demo::Spawn => {
                 // The pin where the spawn was, the cursor going to the

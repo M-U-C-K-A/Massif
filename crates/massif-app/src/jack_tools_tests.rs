@@ -876,3 +876,52 @@ fn the_measure_tool_measures_lines_and_areas() {
         assert!(h.state().tools.measure.is_empty(), "Esc clears it");
     }
 }
+
+// ------------------------------------------------------- the Travel range --
+
+/// The Measure label names its values and tells the travel times (in its
+/// tooltip and in the Info panel); the Travel range tool draws its rings
+/// round the pointer, a click pins them, Esc lets them go (rendered at 1×
+/// and 2×).
+#[test]
+fn travel_times_and_the_travel_range_tool() {
+    use egui_kittest::kittest::Queryable;
+    for ppp in densities() {
+        // A line measured: its label, its travel times.
+        let mut h = app(ppp, Tool::Measure);
+        look(&mut h, 700.0, 600.0, 0.5);
+        h.state_mut().tools.measure.points = vec![(300.5, 350.5), (900.5, 700.5)];
+        h.state_mut().tools.measure.done = true;
+        h.run_steps(3);
+        assert!(h.query_by_label("Fast horse").is_some(), "the travel times in the Info panel");
+        assert!(h.query_by_label("Elytra with rockets").is_some());
+        let end = map(&h).screen_of(900.5, 700.5);
+        h.event(egui::Event::PointerMoved(end + egui::vec2(90.0, -14.0)));
+        h.run_steps(3);
+        h.event(egui::Event::PointerMoved(end + egui::vec2(92.0, -14.0)));
+        h.run_steps(30);
+        save(&mut h, "measure-travel-label", ppp);
+        // The rings, round the pointer.
+        h.state_mut().tools.select(Tool::TravelRange);
+        h.state_mut().tools.travel.rings.insert(0, crate::travel::Ring { amount: 5.0, unit: crate::travel::Unit::Minutes, mode: crate::travel::Mode::Walk });
+        h.state_mut().tools.travel.rings.push(crate::travel::Ring { amount: 3.0, unit: crate::travel::Unit::Minutes, mode: crate::travel::Mode::Elytra });
+        look(&mut h, 1000.0, 1000.0, 0.03);
+        let p = map(&h).screen_of(1000.5, 1000.5);
+        h.event(egui::Event::PointerMoved(p));
+        h.run_steps(4);
+        assert!(h.state().tools.travel.pin.is_none());
+        save(&mut h, "travel-range", ppp);
+        // A click pins them; they stay as the pointer goes; Esc unpins.
+        press(&mut h, p, true, Modifiers::NONE);
+        press(&mut h, p, false, Modifiers::NONE);
+        h.run_steps(3);
+        let pin = h.state().tools.travel.pin.expect("pinned");
+        assert!((pin.0 - 1000.5).abs() < 40.0 && (pin.1 - 1000.5).abs() < 40.0, "{pin:?}");
+        h.event(egui::Event::PointerMoved(p + egui::vec2(120.0, 60.0)));
+        h.run_steps(3);
+        assert_eq!(h.state().tools.travel.pin, Some(pin), "the pin stays");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(h.state().tools.travel.pin.is_none(), "Esc lets it go");
+    }
+}

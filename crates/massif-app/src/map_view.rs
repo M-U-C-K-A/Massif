@@ -1611,6 +1611,10 @@ impl MapView {
                     }
                     _ => {}
                 }
+            } else if tools.tool == Tool::TravelRange {
+                // A click pins the rings' centre, the right button lets
+                // them go.
+                tools.travel.pin = (!secondary).then_some((x as f32 + 0.5, z as f32 + 0.5));
             } else if tools.tool == Tool::Measure {
                 // A point of the measure; dragged from a new start, a line
                 // or a lasso in one go. The right button clears it.
@@ -2124,6 +2128,16 @@ impl MapView {
         }
         // The measure, over the map.
         crate::measure::draw_map(ui, &painter, &|x, z| self.to_screen(canvas, x, z), doc, tools);
+        // The travel rings, round the pointer or their pin; Esc unpins them.
+        if tools.tool == Tool::TravelRange {
+            if tools.travel.pin.is_some() && crate::keymap::peek(ui.ctx(), crate::keymap::Action::Cancel) {
+                tools.travel.pin = None;
+            }
+            let hovered = world_pointer.filter(|_| response.hovered()).map(|(x, z)| (x as f32, z as f32));
+            if let Some(c) = crate::travel::centre(&tools.travel, hovered) {
+                crate::travel::draw_map(ui, &painter, &|x, z| self.to_screen(canvas, x, z), c, &tools.travel);
+            }
+        }
         // The spawn point, where it is or where it is held.
         if doc.dimension().kind == massif_core::world::DimensionKind::Overworld {
             let [sx, _, sz] = doc.world.meta.spawn;

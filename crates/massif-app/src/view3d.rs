@@ -7406,6 +7406,17 @@ impl View3d {
                 (v.w > 0.1).then(|| pos2(rect.center().x + v.x / v.w * rect.width() * 0.5, rect.center().y - v.y / v.w * rect.height() * 0.5))
             };
             crate::measure::draw_3d(ui, &painter, &to_screen, doc, tools);
+            // The travel rings on the ground, round the pointer or their pin
+            // (a click pins them, see `tools::click`; Esc lets them go).
+            if sculpting && tools.tool == Tool::TravelRange {
+                if response.hovered() && tools.travel.pin.is_some() && crate::keymap::peek(ui.ctx(), crate::keymap::Action::Cancel) {
+                    tools.travel.pin = None;
+                }
+                let hovered = self.frame.filter(|_| response.hovered()).map(|f| (f.center[0].floor() + 0.5, f.center[2].floor() + 0.5));
+                if let Some(c) = crate::travel::centre(&tools.travel, hovered) {
+                    crate::travel::draw_3d(ui, &painter, &to_screen, doc, c, &tools.travel);
+                }
+            }
             // The spawn point: a pin standing on the block players appear on.
             if doc.dimension().kind == massif_core::world::DimensionKind::Overworld {
                 let [sx, sy, sz] = doc.world.meta.spawn;

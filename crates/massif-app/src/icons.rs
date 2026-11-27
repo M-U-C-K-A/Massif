@@ -119,6 +119,7 @@ fn art(tool: Tool) -> Art {
         Tool::Dig => Art::Glyph(Icon::Shovel),
         Tool::Eyedropper => Art::Glyph(Icon::Pipette),
         Tool::Measure => Art::Glyph(Icon::RulerDimensionLine),
+        Tool::TravelRange => Art::Glyph(Icon::Radar),
         Tool::Spawn => Art::Glyph(Icon::MapPinHouse),
         Tool::Pan => Art::Glyph(Icon::Hand),
         Tool::SelectRect => Art::Glyph(Icon::SquareDashed),
@@ -442,7 +443,7 @@ mod tests {
     use super::*;
 
     /// Every tool, in the order of the Tools panel.
-    pub(super) const ALL: [Tool; 40] = [
+    pub(super) const ALL: [Tool; 41] = [
         Tool::Raise,
         Tool::Smooth,
         Tool::Flatten,
@@ -481,6 +482,7 @@ mod tests {
         Tool::SelectBrush,
         Tool::Eyedropper,
         Tool::Measure,
+        Tool::TravelRange,
         Tool::Spawn,
         Tool::Pan,
     ];
