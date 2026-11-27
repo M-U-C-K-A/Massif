@@ -163,6 +163,17 @@ pub struct TerrainPanel {
     pub library_query: String,
     pub library_open: BTreeSet<&'static str>,
     pub marquee: Option<egui::Pos2>,
+    /// The box started with B: it follows the pointer until a click.
+    pub box_by_key: bool,
+    /// The selection moved with the pointer (G, Shift+D) until a click.
+    pub grab: Option<super::canvas::Grab>,
+    /// A click that ended a grab or started a box: its release selects
+    /// nothing.
+    pub swallow_click: bool,
+    /// Tab pressed over the canvas this frame, taken before egui's focus.
+    pub tab_key: bool,
+    /// A text field had the keys at the last frame.
+    pub was_typing: bool,
     /// The setting under the pointer, whose help the panel's foot shows.
     pub hovered_help: Option<&'static str>,
     pub show_advanced: bool,
@@ -298,6 +309,11 @@ impl TerrainPanel {
             library_query: String::new(),
             library_open: BTreeSet::from(["Composites", "Shapes"]),
             marquee: None,
+            box_by_key: false,
+            grab: None,
+            swallow_click: false,
+            tab_key: false,
+            was_typing: false,
             hovered_help: None,
             show_advanced: false,
             renaming_frame: None,

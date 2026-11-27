@@ -716,3 +716,76 @@ fn fresh(stem: &str, taken: &BTreeSet<String>) -> String {
         k += 1;
     }
 }
+
+impl TerrainPanel {
+    /// Removes nodes and wires what they fed from what fed them, as
+    /// Blender's Delete with Reconnect does: each wire leaving them is
+    /// taken back through them, by the first input of theirs that has a
+    /// wire, to a node that stays, when what it carries fits.
+    pub fn remove_reconnecting(&mut self, ids: &[String]) {
+        let gone: BTreeSet<&str> = ids.iter().map(String::as_str).filter(|id| self.graph.nodes.contains_key(*id)).collect();
+        // The node and output a removed node passes on: its first input
+        // wired, through other removed nodes.
+        let through = |start: &str| -> Option<(String, u8)> {
+            let mut at = start.to_owned();
+            for _ in 0..=gone.len() {
+                let shape = self.shape(&at)?;
+                let (node, port) = shape.inputs.iter().find_map(|i| self.source_of(&at, &i.name))?;
+                if !gone.contains(node.as_str()) {
+                    return Some((node, port));
+                }
+                at = node;
+            }
+            None
+        };
+        let mut links = Vec::new();
+        for (to, n) in &self.graph.nodes {
+            if gone.contains(to.as_str()) {
+                continue;
+            }
+            for (input, src) in &n.inputs {
+                let s = Source::parse(src);
+                if !gone.contains(s.node) {
+                    continue;
+                }
+                let Some((node, port)) = through(s.node) else { continue };
+                let fits = match (self.out_kind(&node, port), self.shape(to).and_then(|sh| sh.input_kind(input))) {
+                    (Some(a), Some(b)) => a.conversion(b).is_some(),
+                    _ => false,
+                };
+                if fits {
+                    links.push((node, port, to.clone(), input.clone()));
+                }
+            }
+        }
+        let ids: Vec<String> = gone.iter().map(|s| (*s).to_owned()).collect();
+        self.remove_nodes(&ids);
+        for (node, port, to, input) in links {
+            self.connect(&node, port, &to, &input);
+        }
+    }
+
+    /// Adds to the selection the nodes feeding it (`upstream`), or those it
+    /// feeds, one wire away: Blender's L and Shift+L.
+    pub fn select_linked(&mut self, upstream: bool) {
+        let chosen: BTreeSet<String> = self.selected.iter().cloned().collect();
+        let mut more = Vec::new();
+        for (to, n) in &self.graph.nodes {
+            for src in n.inputs.values() {
+                let from = Source::parse(src).node.to_owned();
+                let (have, add) = if upstream { (to, &from) } else { (&from, to) };
+                if chosen.contains(have) && !chosen.contains(add) && self.graph.nodes.contains_key(add) && !more.contains(add) {
+                    more.push(add.clone());
+                }
+            }
+        }
+        self.selected.extend(more);
+    }
+
+    /// Selects the nodes not selected, and leaves those that were.
+    pub fn invert_selection(&mut self) {
+        let was: BTreeSet<String> = self.selected.drain(..).collect();
+        self.selected = self.graph.nodes.keys().filter(|id| !was.contains(*id)).cloned().collect();
+        self.selected_frame = None;
+    }
+}

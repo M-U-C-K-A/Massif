@@ -357,12 +357,32 @@ Its panels are editors as on the other sides (the **Render** section of an area'
 
 # Terrain graphs
 ## Nodes
-The **Terrain** side builds land from nodes, as in Gaea: generators (mountains, dunes, noise…), filters (erosion, rivers, lakes, terraces…), masks and outputs. Press `Tab` to add a node: type part of its name (in any language, or its letters in order), choose with ↑ ↓ and add it with Enter; the nodes added last come first. Drag from an output to an input to link them. `V` views the selected node in the viewport, `V` again goes back to the graph's output.
+The **Terrain** side builds land from nodes, as in Gaea: generators (mountains, dunes, noise…), filters (erosion, rivers, lakes, terraces…), masks and outputs. Press `Shift A` (or `Tab` outside a composite) to add a node: type part of its name (in any language, or its letters in order), choose with ↑ ↓ and add it with Enter; the nodes added last come first. Drag from an output to an input to link them. `V` views the selected node in the viewport, `V` again goes back to the graph's output.
+
+### Keys of the Generator Graph
+The graph answers Blender's node editor's keys while the pointer is over it and no text field is typed in (`Ctrl` works as `⌘` on a Mac):
+
+| Key | Over the graph |
+|---|---|
+| `Shift A`, right-click | Add a node at the pointer |
+| `Tab` | Open the composite selected, or leave the one open |
+| `⌘A` · `Alt A` (`⌘⇧A`) · `⌘I` | Select all · deselect · invert |
+| `B` | Box select from the next press |
+| `L` · `Shift L` | Add what feeds the selection · what it feeds |
+| `G` · `Shift D` | Move the selection with the pointer · duplicate and move (a click puts down, `Esc` puts back) |
+| `⌘C` `⌘V` · `⌘D` | Copy, paste · duplicate beside |
+| `X`, `Delete` · `⌘X` | Remove · remove and reconnect |
+| `M` | Bypass (Blender's mute) |
+| `H` | Fold or unfold |
+| `⌘G` · `⌘⇧G` (`⌘⌥G`) | Make a composite · ungroup |
+| `⌘J` | Frame the selected nodes |
+| `F`, `Home` · `.` | Show the whole graph · the selected nodes |
+| `⌘Z` `⌘⇧Z` | Undo, redo |
 
 ## The Terrain Generator (experimental)
 The Terrain side opens on the **Generator** workspace: the terrain generator of Massif 1.2, four panels marked **Experimental**: the **Node Library** on the left, the **Generator Viewer** over the **Generator Graph**, and **Node Properties** on the right (the selected node's settings, or the graph's), each moved, swapped, tabbed, floated or closed as any panel, and working together wherever they are; the samples and templates of the home screen open there too, their graph and its preview shown, and the World side only when you go to it (Apply, or the side switch). It is Massif's only generator: a map made with the classic graph of earlier versions opens with that graph converted, node by node; when the map has a graph of its own too, that one keeps driving the map and the converted nodes wait below it, unwired, in a frame titled **From the classic graph**. Its graph ends in one **Map Output** with an input for each thing the map takes (Height, Water, Albedo, Terrain, Biome, climate, layers of rock, masks), each optional. **Live** shows the graph on the World side's map as it is edited, without writing it; **Apply** writes it, undoably.
 
-In the graph a mouse wheel or a pinch zooms around the pointer, two fingers on a trackpad move, **⌘+**/**⌘−** zoom and **F** or a double-click on the ground shows it all; the minimap at the bottom left moves the view. In 3D the viewer draws the terrain with its sky, soft light, sea and clouds: drag to turn it, right-drag to move, **Shift**+drag to turn the sun; the bar at its foot opens the render settings, shows clouds or the sea, frames the relief and saves an image. Its menu sets a plain dark background or the sky, and the resolution (up to 8192, slow and heavy). Select nodes and press **⌘G** to make a **composite** of them: one node holding them, which a double-click opens (a breadcrumb at the top, or **Esc**, leads back). Inside, its inputs and outputs are columns at the edges, and the **⤴** beside a setting exposes it on the composite. Massif's own composites (**Alpine Range**, **Cave System**, **Village Generator**) open read only: **Edit a copy** makes the world's own. **Frames** (⌘J) gather nodes under a title, colour and note, nest, fold and move with what they hold. **B** bypasses a node; ⌘C and ⌘V copy nodes, between worlds too. A wire an input cannot take says why, and which node to put between them. **Apply** writes everything the Map Output carries in one step you can undo: the ground window by window, the caves, cave biomes and volumes, and the villages with their roads (those the graph laid before are replaced, those placed by hand stay); Cancel leaves the map as it was.
+In the graph a mouse wheel or a pinch zooms around the pointer, two fingers on a trackpad move, **⌘+**/**⌘−** zoom and **F** or a double-click on the ground shows it all; the minimap at the bottom left moves the view. In 3D the viewer draws the terrain with its sky, soft light, sea and clouds: drag to turn it, right-drag to move, **Shift**+drag to turn the sun; the bar at its foot opens the render settings, shows clouds or the sea, frames the relief and saves an image. Its menu sets a plain dark background or the sky, and the resolution (up to 8192, slow and heavy). Select nodes and press **⌘G** to make a **composite** of them: one node holding them, which a double-click opens (a breadcrumb at the top, or **Esc**, leads back). Inside, its inputs and outputs are columns at the edges, and the **⤴** beside a setting exposes it on the composite. Massif's own composites (**Alpine Range**, **Cave System**, **Village Generator**) open read only: **Edit a copy** makes the world's own. **Frames** (⌘J) gather nodes under a title, colour and note, nest, fold and move with what they hold. **M** bypasses a node (the graph takes Blender's keys, see Keys of the Generator Graph); ⌘C and ⌘V copy nodes, between worlds too. A wire an input cannot take says why, and which node to put between them. **Apply** writes everything the Map Output carries in one step you can undo: the ground window by window, the caves, cave biomes and volumes, and the villages with their roads (those the graph laid before are replaced, those placed by hand stay); Cancel leaves the map as it was.
 
 **Mountain**, **Transform** and **Combine** build a landscape from light pieces, as in Gaea. Mountain makes one mountain in the middle of the terrain from six settings: Scale, Height, Style (Basic, Eroded, Old, Alpine, Strata), Bulk, Reduce details and Seed. Transform moves, turns, scales, stretches and deforms a relief at full detail. Combine takes any number of inputs: connect In 1 and an empty In 2 appears, each input after the first with a Mask of its own, combined in order by one mode (Blend, Add, Subtract, Max, Min, Multiply, Average, Difference, Screen, Overlay, Power).
 
@@ -466,7 +486,7 @@ Massif's own keys, as they are out of the box. **Settings ▸ Keyboard** changes
 | `W` `A` `S` `D`, `Space`, `Shift`, `Ctrl` | Walk, jump (twice: fly), sneak (flying: down), sprint, with **Player** in 3D Sculpt |
 | `G` | Ghost on and off: fly through the ground, with **Player** in 3D Sculpt |
 | `Ctrl Space` | Maximise the area under the pointer |
-| `Tab` | Add a node (terrain graph) |
+| `Shift A` | Add a node (terrain graph; see Keys of the Generator Graph) |
 | `V` | View the selected node (terrain graph) |
 | `⌘+` `⌘−` `⌘0` | Larger, smaller interface; back to its size |
 | `F1` | This help |

@@ -378,6 +378,15 @@ pub fn converter(from: PortKind, to: PortKind) -> Option<&'static NodeSpec> {
 }
 
 /// What the user did on the canvas this frame, applied once it is drawn.
+/// The selection following the pointer, as Blender's G: where the pointer
+/// was last, and how far the nodes have moved (graph units), to put them
+/// back when Escape or a right-click cancels.
+#[derive(Debug, Clone, Copy)]
+pub struct Grab {
+    pub last: Option<Pos2>,
+    pub moved: Vec2,
+}
+
 enum Act {
     Select(String, bool),
     Move(Vec2),
@@ -411,6 +420,8 @@ enum Act {
     EditCopy(String),
     Duplicate,
     Remove,
+    RemoveReconnecting,
+    EndEdit,
     Copy,
     Arrange,
     Align(bool),
@@ -419,6 +430,7 @@ enum Act {
 }
 
 pub fn ui(p: &mut TerrainPanel, ui: &mut Ui) {
+    take_tab(p, ui);
     let pal = Palette::of(ui);
     let full = ui.max_rect();
     let now = ui.input(|i| i.time);
@@ -495,6 +507,10 @@ pub fn ui(p: &mut TerrainPanel, ui: &mut Ui) {
     let by_id: HashMap<&str, &Placed> = placed.iter().map(|n| (n.id.as_str(), n)).collect();
     let mut acts: Vec<Act> = Vec::new();
     let modifiers = ui.input(|i| i.modifiers);
+    let (any_down, any_released) = ui.input(|i| (i.pointer.any_down(), i.pointer.any_released()));
+    if p.swallow_click && !any_down && !any_released {
+        p.swallow_click = false;
+    }
 
     frames_ui(p, ui, &painter, canvas, origin, &pal, &mut acts);
 
@@ -669,8 +685,29 @@ pub fn ui(p: &mut TerrainPanel, ui: &mut Ui) {
         draw_node(p, ui, &painter, n, &pal, &status, eye.as_deref(), active.as_deref(), drop_target.as_ref(), refused_at.as_ref().map(|r| (r.0.as_str(), r.1.as_str())), &mut acts);
     }
 
+    // While the selection follows the pointer, or a box is drawn from B,
+    // the nodes' own clicks and drags wait, and so do the keys.
+    let busy = p.grab.is_some() || p.box_by_key || p.swallow_click;
+    if p.grab.is_some() || p.box_by_key || p.swallow_click || p.marquee.is_some() {
+        acts.retain(|a| !matches!(a, Act::Select(..) | Act::Move(_) | Act::Dropped | Act::StartWire(..) | Act::Detach(..) | Act::View(_) | Act::Open(_)));
+    }
+    grab_ui(p, ui, pointer, &mut acts);
+    // B: the next press anywhere starts a box.
+    if p.box_by_key {
+        ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+        let (primary, secondary, esc) = ui.input(|i| (i.pointer.primary_pressed(), i.pointer.secondary_pressed(), i.key_pressed(Key::Escape)));
+        if secondary || esc {
+            p.box_by_key = false;
+            p.swallow_click = secondary;
+        } else if primary && let Some(q) = ui.input(|i| i.pointer.press_origin()).filter(|q| canvas.contains(*q)) {
+            p.box_by_key = false;
+            p.swallow_click = true;
+            p.marquee = Some(q);
+        }
+    }
+
     // A box to select nodes with, dragged on the ground.
-    if background.drag_started_by(egui::PointerButton::Primary) && p.wiring.is_none() && hot_wire.is_none() && !ui.input(|i| i.key_down(Key::Space)) {
+    if background.drag_started_by(egui::PointerButton::Primary) && p.marquee.is_none() && p.grab.is_none() && !p.swallow_click && p.wiring.is_none() && hot_wire.is_none() && !ui.input(|i| i.key_down(Key::Space)) {
         p.marquee = ui.input(|i| i.pointer.press_origin());
         if !(modifiers.shift || modifiers.command) {
             p.selected.clear();
@@ -685,15 +722,17 @@ pub fn ui(p: &mut TerrainPanel, ui: &mut Ui) {
             p.marquee = None;
         }
     }
-    if background.double_clicked() && hot_wire.is_none() && !ui.input(|i| i.modifiers.any()) {
+    let held = p.swallow_click || p.grab.is_some() || p.box_by_key;
+    if background.double_clicked() && !held && hot_wire.is_none() && !ui.input(|i| i.modifiers.any()) {
         frame_all(p, canvas);
     }
-    if background.clicked() && hot_wire.is_none() {
+    if background.clicked() && !held && hot_wire.is_none() {
         p.selected.clear();
         p.selected_frame = None;
         p.search = None;
     }
     if background.secondary_clicked()
+        && !held
         && hot_wire.is_none()
         && !read_only
         && let Some(q) = background.interact_pointer_pos()
@@ -702,15 +741,17 @@ pub fn ui(p: &mut TerrainPanel, ui: &mut Ui) {
     }
 
     if p.graph.nodes.is_empty() {
-        let text = if p.outer.is_empty() { t!("Right-click or press Tab to add a node, or pick a quick start in the library.") } else { t!("An empty composite: add nodes, and wire them from its inputs to its outputs.") };
+        let text = if p.outer.is_empty() { t!("Right-click or press Shift+A to add a node, or pick a quick start in the library.") } else { t!("An empty composite: add nodes, and wire them from its inputs to its outputs.") };
         painter.text(canvas.center(), Align2::CENTER_CENTER, text, FontId::proportional(13.0), pal.weak);
     }
 
     // Keys, while the pointer is over the canvas and nothing is typed in.
     let typing = ui.ctx().memory(|m| m.focused().is_some());
-    if hovered && !typing && p.search.is_none() {
+    p.was_typing = typing;
+    if hovered && !typing && p.search.is_none() && !busy && p.marquee.is_none() {
         keys(p, ui, pointer, canvas, &mut acts);
     }
+    p.tab_key = false;
 
     apply(p, ui, acts, origin, now);
     no_output_ui(p, ui, canvas, &pal);
@@ -721,45 +762,122 @@ pub fn ui(p: &mut TerrainPanel, ui: &mut Ui) {
     search_ui(p, ui, canvas, &pal);
 }
 
-/// The keys of the canvas.
+/// Tab over the canvas, no text typed in: the canvas's (opening and
+/// leaving composites), not egui's, which would focus the first widget
+/// drawn this frame.
+fn take_tab(p: &mut TerrainPanel, ui: &mut Ui) {
+    let over = ui.input(|i| i.pointer.hover_pos()).is_some_and(|q| p.canvas_rect.contains(q));
+    if !over || p.was_typing || p.search.is_some() {
+        return;
+    }
+    let tab = ui.input_mut(|i| take(i, false, false, false, Key::Tab));
+    if tab {
+        ui.memory_mut(|m| {
+            m.move_focus(egui::FocusDirection::None);
+            if let Some(f) = m.focused() {
+                m.surrender_focus(f);
+            }
+        });
+        p.tab_key = true;
+    }
+}
+
+/// The selection following the pointer (G, Shift+D): a click puts it down,
+/// Escape or a right-click puts it back.
+fn grab_ui(p: &mut TerrainPanel, ui: &Ui, pointer: Option<Pos2>, acts: &mut Vec<Act>) {
+    let Some(mut grab) = p.grab else { return };
+    ui.ctx().set_cursor_icon(CursorIcon::Move);
+    let (primary, secondary) = ui.input(|i| (i.pointer.primary_pressed(), i.pointer.secondary_pressed()));
+    let (enter, esc) = ui.input_mut(|i| (take(i, false, false, false, Key::Enter), take(i, false, false, false, Key::Escape)));
+    if let (Some(q), Some(last)) = (pointer, grab.last) {
+        let d = (q - last) / p.view.zoom;
+        if d != Vec2::ZERO {
+            acts.push(Act::Move(d));
+            grab.moved += d;
+        }
+    }
+    grab.last = pointer.or(grab.last);
+    if secondary || esc {
+        acts.push(Act::Move(-grab.moved));
+        acts.push(Act::EndEdit);
+        p.grab = None;
+        p.swallow_click = secondary;
+    } else if primary || enter {
+        acts.push(Act::Dropped);
+        p.grab = None;
+        p.swallow_click = primary;
+    } else {
+        p.grab = Some(grab);
+    }
+}
+
+/// Takes the press of `key` with exactly these modifiers, ⌘ or Ctrl
+/// alike (Blender's keys use Ctrl on a Mac too).
+fn take(i: &mut egui::InputState, cmd: bool, shift: bool, alt: bool, key: Key) -> bool {
+    let mut hit = false;
+    i.events.retain(|e| {
+        if !hit
+            && let egui::Event::Key { key: k, pressed: true, modifiers: m, .. } = e
+            && *k == key
+            && (m.command || m.ctrl) == cmd
+            && m.shift == shift
+            && m.alt == alt
+        {
+            hit = true;
+            return false;
+        }
+        true
+    });
+    hit
+}
+
+/// The keys of the canvas, as Blender's node editor has them (see
+/// `help.md`, "Keys of the Generator Graph").
 fn keys(p: &mut TerrainPanel, ui: &mut Ui, pointer: Option<Pos2>, canvas: Rect, acts: &mut Vec<Act>) {
-    let (del, dup, all, undo, redo, tab, fit, view, fold, frame, group, ungroup, bypass, esc) = ui.input_mut(|i| {
-        (
-            i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace) || i.key_pressed(Key::X) && !i.modifiers.command,
-            i.consume_key(egui::Modifiers::COMMAND, Key::D),
-            i.consume_key(egui::Modifiers::COMMAND, Key::A),
-            i.consume_key(egui::Modifiers::COMMAND, Key::Z),
-            i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::Z) || i.consume_key(egui::Modifiers::COMMAND, Key::Y),
-            i.key_pressed(Key::Tab) || (i.modifiers.shift && i.key_pressed(Key::A)),
-            i.key_pressed(Key::F) || i.key_pressed(Key::Home),
-            i.key_pressed(Key::V) && !i.modifiers.command,
-            i.key_pressed(Key::H),
-            i.consume_key(egui::Modifiers::COMMAND, Key::J),
-            i.consume_key(egui::Modifiers::COMMAND, Key::G),
-            i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::G),
-            i.key_pressed(Key::B) && !i.modifiers.command,
-            i.key_pressed(Key::Escape),
-        )
+    let read_only = p.read_only();
+    let mut k = ui.input_mut(|i| Keys {
+        del: take(i, false, false, false, Key::Delete) || take(i, false, false, false, Key::Backspace) || take(i, false, false, false, Key::X),
+        reconnect: take(i, true, false, false, Key::X),
+        dup: take(i, true, false, false, Key::D),
+        dup_grab: take(i, false, true, false, Key::D),
+        grab: take(i, false, false, false, Key::G),
+        all: take(i, true, false, false, Key::A),
+        none: take(i, false, false, true, Key::A) || take(i, true, true, false, Key::A),
+        invert: take(i, true, false, false, Key::I),
+        linked_up: take(i, false, false, false, Key::L),
+        linked_down: take(i, false, true, false, Key::L),
+        boxed: take(i, false, false, false, Key::B),
+        undo: take(i, true, false, false, Key::Z),
+        redo: take(i, true, true, false, Key::Z) || take(i, true, false, false, Key::Y),
+        add: take(i, false, true, false, Key::A),
+        tab: false,
+        fit: take(i, false, false, false, Key::F) || take(i, false, false, false, Key::Home),
+        fit_selected: take(i, false, false, false, Key::Period),
+        view: take(i, false, false, false, Key::V),
+        fold: take(i, false, false, false, Key::H),
+        mute: take(i, false, false, false, Key::M),
+        frame: take(i, true, false, false, Key::J),
+        group: take(i, true, false, false, Key::G),
+        ungroup: take(i, true, true, false, Key::G) || take(i, true, false, true, Key::G),
+        esc: i.key_pressed(Key::Escape),
+        zin: take(i, true, false, false, Key::Plus) || take(i, true, false, false, Key::Equals) || take(i, true, true, false, Key::Equals),
+        zout: take(i, true, false, false, Key::Minus),
+        zreset: take(i, true, false, false, Key::Num0),
     });
+    k.tab = std::mem::take(&mut p.tab_key);
     // ⌘+ and ⌘− zoom around the view's middle, ⌘0 back to full size.
-    let (zin, zout, zreset) = ui.input_mut(|i| {
-        (
-            i.consume_key(egui::Modifiers::COMMAND, Key::Plus) || i.consume_key(egui::Modifiers::COMMAND, Key::Equals) || i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::Equals),
-            i.consume_key(egui::Modifiers::COMMAND, Key::Minus),
-            i.consume_key(egui::Modifiers::COMMAND, Key::Num0),
-        )
-    });
-    if zin {
+    if k.zin {
         zoom_at(p, canvas.min, canvas.center(), 1.25);
     }
-    if zout {
+    if k.zout {
         zoom_at(p, canvas.min, canvas.center(), 0.8);
     }
-    if zreset {
+    if k.zreset {
         let z = p.view.zoom;
         zoom_at(p, canvas.min, canvas.center(), 1.0 / z);
     }
-    // ⌘C, ⌘X, ⌘V come as the clipboard's events.
+    // ⌘C, ⌘X, ⌘V come as the clipboard's events. ⌘X removes the selection
+    // wiring what it fed from what fed it, as Blender's Ctrl+X.
     let (copy, cut, paste) = ui.input(|i| {
         let mut out = (false, false, None);
         for e in &i.events {
@@ -772,7 +890,7 @@ fn keys(p: &mut TerrainPanel, ui: &mut Ui, pointer: Option<Pos2>, canvas: Rect, 
         }
         out
     });
-    if del {
+    if k.del {
         acts.push(Act::Remove);
         // A frame selected (no node): the frame goes, its nodes stay.
         if p.selected.is_empty()
@@ -781,58 +899,93 @@ fn keys(p: &mut TerrainPanel, ui: &mut Ui, pointer: Option<Pos2>, canvas: Rect, 
             acts.push(Act::RemoveFrame(f));
         }
     }
-    if dup {
+    if (k.reconnect || cut) && !k.del {
+        acts.push(Act::RemoveReconnecting);
+    }
+    if k.dup {
         acts.push(Act::Duplicate);
     }
-    if all {
+    if (k.dup_grab || k.grab) && !read_only && !p.selected.is_empty() {
+        if k.dup_grab {
+            acts.push(Act::Duplicate);
+        }
+        p.grab = Some(Grab { last: pointer, moved: Vec2::ZERO });
+    }
+    if k.all {
         p.selected = p.graph.nodes.keys().cloned().collect();
     }
+    if k.none {
+        p.selected.clear();
+        p.selected_frame = None;
+    }
+    if k.invert {
+        p.invert_selection();
+    }
+    if k.linked_up || k.linked_down {
+        p.select_linked(k.linked_up);
+    }
+    if k.boxed {
+        p.box_by_key = true;
+    }
     if p.own_undo_keys {
-        if redo {
+        if k.redo {
             p.redo();
-        } else if undo {
+        } else if k.undo {
             p.undo();
         }
     }
-    if tab && let Some(q) = pointer {
+    if k.add && let Some(q) = pointer {
         acts.push(Act::OpenSearch(q, None, None));
     }
-    if fit {
+    // Tab opens the composite selected, or leaves the one open, as
+    // Blender's Tab does with a group; at the top with no composite
+    // selected, it adds a node as before.
+    if k.tab {
+        let composite = p.selected.last().filter(|id| p.shape(id).is_some_and(|s| s.composite().is_some())).cloned();
+        if let Some(id) = composite {
+            acts.push(Act::Open(id));
+        } else if !p.outer.is_empty() {
+            p.close();
+        } else if let Some(q) = pointer {
+            acts.push(Act::OpenSearch(q, None, None));
+        }
+    }
+    if k.fit {
         frame_all(p, canvas);
     }
-    if view && let Some(id) = p.selected.last().cloned() {
+    if k.fit_selected {
+        frame_selected(p, canvas);
+    }
+    if k.view && let Some(id) = p.selected.last().cloned() {
         acts.push(Act::View(id));
     }
-    if fold {
+    if k.fold {
         for id in p.selected.clone() {
             acts.push(Act::ToggleCollapse(id));
         }
     }
-    if frame {
+    if k.frame {
         acts.push(Act::Frame);
     }
-    if ungroup {
+    if k.ungroup {
         if let Some(id) = p.selected.last().cloned() {
             acts.push(Act::Ungroup(id));
         }
-    } else if group && !p.selected.is_empty() {
+    } else if k.group && !p.selected.is_empty() {
         acts.push(Act::Group);
     }
-    if bypass {
+    if k.mute {
         acts.push(Act::ToggleBypass);
     }
-    if esc && p.wiring.is_none() {
+    if k.esc && p.wiring.is_none() {
         if !p.selected.is_empty() {
             p.selected.clear();
         } else {
             p.close();
         }
     }
-    if copy || cut {
+    if copy {
         acts.push(Act::Copy);
-    }
-    if cut {
-        acts.push(Act::Remove);
     }
     if let Some(text) = paste {
         let at = pointer.map(|q| to_graph(p, canvas.min, q));
@@ -840,6 +993,37 @@ fn keys(p: &mut TerrainPanel, ui: &mut Ui, pointer: Option<Pos2>, canvas: Rect, 
             p.say(t!("The clipboard holds no nodes."), 0.0);
         }
     }
+}
+
+/// The keys pressed over the canvas this frame.
+struct Keys {
+    del: bool,
+    reconnect: bool,
+    dup: bool,
+    dup_grab: bool,
+    grab: bool,
+    all: bool,
+    none: bool,
+    invert: bool,
+    linked_up: bool,
+    linked_down: bool,
+    boxed: bool,
+    undo: bool,
+    redo: bool,
+    add: bool,
+    tab: bool,
+    fit: bool,
+    fit_selected: bool,
+    view: bool,
+    fold: bool,
+    mute: bool,
+    frame: bool,
+    group: bool,
+    ungroup: bool,
+    esc: bool,
+    zin: bool,
+    zout: bool,
+    zreset: bool,
 }
 
 /// A graph with no Map Output writes nothing into the map: said at the
@@ -864,8 +1048,8 @@ fn no_output_ui(p: &mut TerrainPanel, ui: &mut Ui, canvas: Rect, pal: &Palette) 
 /// Adds a Map Output right of the graph, its Height fed by the last node
 /// that makes heights (the rightmost).
 pub fn add_map_output(p: &mut TerrainPanel) -> String {
-    let (_, hi) = bounds(p);
-    let (lo, _) = bounds(p);
+    let (_, hi) = bounds(p, None);
+    let (lo, _) = bounds(p, None);
     let feed = p
         .graph
         .nodes
@@ -1450,12 +1634,12 @@ fn node_menu(p: &TerrainPanel, handle: &egui::Response, n: &Placed, is_output: b
     let read_only = p.read_only();
     let many = p.selected.len() > 1 && p.selected.contains(&n.id);
     handle.context_menu(|ui| {
-        if ui.button(t!("View")).clicked() {
+        if ui.button(t!("View (V)")).clicked() {
             acts.push(Act::View(n.id.clone()));
             ui.close();
         }
         if let Some((_, _, editable)) = n.shape.composite() {
-            if ui.button(t!("Open")).clicked() {
+            if ui.button(t!("Open (Tab)")).clicked() {
                 acts.push(Act::Open(n.id.clone()));
                 ui.close();
             }
@@ -1468,7 +1652,7 @@ fn node_menu(p: &TerrainPanel, handle: &egui::Response, n: &Placed, is_output: b
                 ui.close();
             }
         }
-        if ui.button(if p.collapsed(&n.id) { t!("Expand") } else { t!("Collapse") }).clicked() {
+        if ui.button(if p.collapsed(&n.id) { t!("Expand (H)") } else { t!("Collapse (H)") }).clicked() {
             acts.push(Act::ToggleCollapse(n.id.clone()));
             ui.close();
         }
@@ -1480,7 +1664,7 @@ fn node_menu(p: &TerrainPanel, handle: &egui::Response, n: &Placed, is_output: b
             ui.close();
         }
         ui.separator();
-        if !is_output && ui.button(if bypassed { t!("Stop bypassing (B)") } else { t!("Bypass (B)") }).clicked() {
+        if !is_output && ui.button(if bypassed { t!("Stop bypassing (M)") } else { t!("Bypass (M)") }).clicked() {
             let ids = if many { p.selected.clone() } else { vec![n.id.clone()] };
             acts.push(Act::Bypass(ids, !bypassed));
             ui.close();
@@ -1538,11 +1722,18 @@ fn node_menu(p: &TerrainPanel, handle: &egui::Response, n: &Placed, is_output: b
             });
         }
         ui.separator();
-        if ui.button(t!("Remove")).clicked() {
+        if ui.button(t!("Remove (X)")).clicked() {
             if !many {
                 acts.push(Act::Select(n.id.clone(), false));
             }
             acts.push(Act::Remove);
+            ui.close();
+        }
+        if ui.button(t!("Remove and reconnect (⌘X)")).on_hover_text(t!("Wires what the nodes fed from what fed them.")).clicked() {
+            if !many {
+                acts.push(Act::Select(n.id.clone(), false));
+            }
+            acts.push(Act::RemoveReconnecting);
             ui.close();
         }
     });
@@ -1760,6 +1951,11 @@ fn apply(p: &mut TerrainPanel, ui: &Ui, acts: Vec<Act>, origin: Pos2, now: f64) 
                 let ids = p.selected.clone();
                 p.remove_nodes(&ids);
             }
+            Act::EndEdit => p.end_edit(),
+            Act::RemoveReconnecting => {
+                let ids = p.selected.clone();
+                p.remove_reconnecting(&ids);
+            }
             Act::Copy => {
                 if let Some(text) = p.copy_text() {
                     ui.ctx().copy_text(text);
@@ -1810,22 +2006,22 @@ fn header_commands(p: &mut TerrainPanel, ui: &mut Ui) {
     if icon_button(ui, Icon::RotateCcw, t!("Undo"), p.can_undo()) {
         p.undo();
     }
-    if icon_button(ui, Icon::Plus, t!("Add a node (Tab)"), editable) {
+    if icon_button(ui, Icon::Plus, t!("Add a node (⇧A)"), editable) {
         let at = ui.max_rect().left_bottom() + vec2(60.0, 60.0);
         p.search = Some(Search { at: [40.0 - p.view.offset.x, 40.0 - p.view.offset.y], screen: at, ..Default::default() });
     }
 }
 
-fn bounds(p: &TerrainPanel) -> ([f32; 2], [f32; 2]) {
+fn bounds(p: &TerrainPanel, only: Option<&[String]>) -> ([f32; 2], [f32; 2]) {
     let mut lo = [f32::MAX; 2];
     let mut hi = [f32::MIN; 2];
-    for id in p.ids() {
+    for id in p.ids().into_iter().filter(|id| only.is_none_or(|o| o.contains(id))) {
         let pos = p.pos(&id);
         let s = node_size(p, &id);
         lo = [lo[0].min(pos[0]), lo[1].min(pos[1])];
         hi = [hi[0].max(pos[0] + s.x), hi[1].max(pos[1] + s.y)];
     }
-    for id in p.graph.frames.keys() {
+    for id in p.graph.frames.keys().filter(|_| only.is_none()) {
         let r = p.frame_rect(id);
         lo = [lo[0].min(r[0]), lo[1].min(r[1])];
         hi = [hi[0].max(r[0] + r[2]), hi[1].max(r[1] + r[3])];
@@ -1838,20 +2034,27 @@ fn bounds(p: &TerrainPanel) -> ([f32; 2], [f32; 2]) {
 
 /// Zooms and moves the view so that every node shows in `canvas`.
 pub fn fit_view(p: &mut TerrainPanel, canvas: Rect) {
-    fit(p, canvas, 0.6);
+    fit(p, canvas, 0.6, None);
 }
 
 /// Shows the whole graph, however small (F, a double-click on the ground,
 /// the frame button).
 pub fn frame_all(p: &mut TerrainPanel, canvas: Rect) {
-    fit(p, canvas, ZOOM_MIN);
+    fit(p, canvas, ZOOM_MIN, None);
 }
 
-fn fit(p: &mut TerrainPanel, canvas: Rect, least: f32) {
+/// Shows the selected nodes, as Blender's View Selected (Numpad .); all
+/// of them when none is.
+pub fn frame_selected(p: &mut TerrainPanel, canvas: Rect) {
+    let chosen = p.selected.clone();
+    fit(p, canvas, ZOOM_MIN, Some(&chosen).filter(|c| !c.is_empty()).map(|c| c.as_slice()));
+}
+
+fn fit(p: &mut TerrainPanel, canvas: Rect, least: f32, only: Option<&[String]>) {
     if p.graph.nodes.is_empty() && p.outer.is_empty() {
         return;
     }
-    let (lo, hi) = bounds(p);
+    let (lo, hi) = bounds(p, only);
     let (w, h) = (hi[0] - lo[0] + 60.0, hi[1] - lo[1] + 60.0);
     // At most `least` small: opening a graph keeps the nodes' words
     // readable (its end, where its Map Output is, shows, and the minimap the
@@ -1878,7 +2081,7 @@ pub fn minimap_rect(p: &TerrainPanel, canvas: Rect) -> Option<Rect> {
     if p.graph.nodes.len() < 2 || canvas.width() < 420.0 || canvas.height() < 220.0 {
         return None;
     }
-    let (lo, hi) = bounds(p);
+    let (lo, hi) = bounds(p, None);
     let a = pos2(lo[0], lo[1]) * p.view.zoom + p.view.offset;
     let b = pos2(hi[0], hi[1]) * p.view.zoom + p.view.offset;
     if a.x >= 0.0 && a.y >= 0.0 && b.x <= canvas.width() && b.y <= canvas.height() {
@@ -1896,7 +2099,7 @@ fn minimap(p: &mut TerrainPanel, ui: &mut Ui, canvas: Rect, pal: &Palette) {
     let Some(rect) = minimap_rect(p, canvas) else { return };
     let painter = ui.painter_at(rect.expand(1.0));
     painter.rect(rect, theme::TILE_RADIUS, theme::mix(pal.panel, pal.app_bg, 0.5).gamma_multiply(0.96), Stroke::new(1.0, pal.border), StrokeKind::Inside);
-    let (lo, hi) = bounds(p);
+    let (lo, hi) = bounds(p, None);
     // The view's rectangle, in graph units: the canvas seen through the
     // view, from the canvas's own corner.
     let v0 = [-p.view.offset.x / p.view.zoom, -p.view.offset.y / p.view.zoom];

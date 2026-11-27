@@ -1117,3 +1117,186 @@ fn apply_over_the_map_keeps_its_ground() {
     assert!(doc.undo().is_some());
     assert_eq!(doc.dimension().levels.len(), levels);
 }
+
+/// The canvas alone, in a harness, the pointer over it, for its keys.
+fn canvas_harness(graph: Graph) -> egui_kittest::Harness<'static, super::TerrainPanel> {
+    let mut panel = super::TerrainPanel::with_graph(Arc::new(Engine::new(Default::default())), graph);
+    panel.own_undo_keys = true;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_accessibility_check(false).build_ui_state(
+        |ui, p: &mut super::TerrainPanel| {
+            if ui.ctx().cumulative_pass_nr() == 0 {
+                crate::theme::install(ui.ctx());
+            }
+            super::canvas::ui(p, ui);
+        },
+        panel,
+    );
+    h.hover_at(egui::pos2(600.0, 400.0));
+    h.run_steps(2);
+    h
+}
+
+fn press(h: &mut egui_kittest::Harness<'static, super::TerrainPanel>, mods: egui::Modifiers, key: egui::Key) {
+    h.hover_at(egui::pos2(600.0, 400.0));
+    h.key_press_modifiers(mods, key);
+    h.run_steps(2);
+}
+
+fn chosen(h: &egui_kittest::Harness<'static, super::TerrainPanel>) -> Vec<String> {
+    let mut s = h.state().selected.clone();
+    s.sort();
+    s
+}
+
+/// Blender's keys select: ⌘A all, Alt+A none, ⌘I the others, L what feeds
+/// the selection and Shift+L what it feeds.
+#[test]
+fn the_graph_selects_as_blender_does() {
+    use egui::{Key, Modifiers};
+    let mut h = canvas_harness(mountain_graph());
+    press(&mut h, Modifiers::COMMAND, Key::A);
+    assert_eq!(chosen(&h), ["m", "out", "worn"]);
+    press(&mut h, Modifiers::ALT, Key::A);
+    assert!(chosen(&h).is_empty());
+    h.state_mut().selected = vec!["worn".into()];
+    press(&mut h, Modifiers::COMMAND, Key::I);
+    assert_eq!(chosen(&h), ["m", "out"]);
+    h.state_mut().selected = vec!["worn".into()];
+    press(&mut h, Modifiers::NONE, Key::L);
+    assert_eq!(chosen(&h), ["m", "worn"], "L: what feeds it");
+    h.state_mut().selected = vec!["worn".into()];
+    press(&mut h, Modifiers::SHIFT, Key::L);
+    assert_eq!(chosen(&h), ["out", "worn"], "Shift+L: what it feeds");
+    // ⌘⇧A is Deselect too; Shift+A alone opens the search.
+    press(&mut h, Modifiers::COMMAND | Modifiers::SHIFT, Key::A);
+    assert!(chosen(&h).is_empty() && h.state().search.is_none());
+    press(&mut h, Modifiers::SHIFT, Key::A);
+    assert!(h.state().search.is_some());
+}
+
+/// M bypasses, ⌘X removes and wires across, X removes, ⌘Z brings back.
+#[test]
+fn the_graph_edits_as_blender_does() {
+    use egui::{Key, Modifiers};
+    let mut h = canvas_harness(mountain_graph());
+    h.state_mut().selected = vec!["worn".into()];
+    press(&mut h, Modifiers::NONE, Key::M);
+    assert!(h.state().graph.nodes["worn"].bypass);
+    press(&mut h, Modifiers::NONE, Key::M);
+    assert!(!h.state().graph.nodes["worn"].bypass);
+    press(&mut h, Modifiers::COMMAND, Key::X);
+    assert!(!h.state().graph.nodes.contains_key("worn"));
+    assert_eq!(h.state().graph.nodes["out"].inputs.get("height").map(String::as_str), Some("m"), "what it fed, wired from what fed it");
+    press(&mut h, Modifiers::COMMAND, Key::Z);
+    assert!(h.state().graph.nodes.contains_key("worn") && h.state().graph.nodes["out"].inputs["height"] == "worn", "one step");
+    h.state_mut().selected = vec!["worn".into()];
+    press(&mut h, Modifiers::NONE, Key::X);
+    assert!(!h.state().graph.nodes.contains_key("worn") && !h.state().graph.nodes["out"].inputs.contains_key("height"));
+}
+
+/// G and Shift+D move the selection with the pointer until a click;
+/// Escape puts it back.
+#[test]
+fn the_graph_grabs_as_blender_does() {
+    use egui::{Key, Modifiers, pos2};
+    let mut h = canvas_harness(mountain_graph());
+    let before = h.state().pos("worn");
+    h.state_mut().selected = vec!["worn".into()];
+    press(&mut h, Modifiers::NONE, Key::G);
+    assert!(h.state().grab.is_some());
+    h.hover_at(pos2(700.0, 450.0));
+    h.run_steps(2);
+    let zoom = h.state().view.zoom;
+    let moved = h.state().pos("worn");
+    assert!((moved[0] - before[0] - 100.0 / zoom).abs() < 0.5 && (moved[1] - before[1] - 50.0 / zoom).abs() < 0.5, "{before:?} → {moved:?}");
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().grab.is_none());
+    assert_eq!(h.state().pos("worn"), before, "Escape puts it back");
+
+    // Shift+D: a copy follows the pointer, a click puts it down, and both
+    // are one step.
+    let count = h.state().graph.nodes.len();
+    press(&mut h, Modifiers::SHIFT, Key::D);
+    assert_eq!(h.state().graph.nodes.len(), count + 1);
+    let copy = h.state().selected.clone();
+    assert!(copy.len() == 1 && copy[0] != "worn");
+    let start = h.state().pos(&copy[0]);
+    h.hover_at(pos2(800.0, 400.0));
+    h.run_steps(2);
+    h.event(egui::Event::PointerButton { pos: pos2(800.0, 400.0), button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: pos2(800.0, 400.0), button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+    assert!(h.state().grab.is_none());
+    assert_eq!(h.state().selected, copy, "the click that puts it down keeps it selected");
+    assert!(h.state().pos(&copy[0])[0] > start[0] + 100.0, "it moved with the pointer");
+    assert_eq!(h.state().pos("worn"), before, "the original stays");
+    press(&mut h, Modifiers::COMMAND, Key::Z);
+    assert_eq!(h.state().graph.nodes.len(), count, "one step undoes the copy and its move");
+}
+
+/// Tab opens the composite selected and leaves it; B starts a box at the
+/// next press.
+#[test]
+fn the_graph_opens_composites_and_boxes_as_blender_does() {
+    use egui::{Key, Modifiers, pos2};
+    let mut h = canvas_harness(mountain_graph());
+    h.state_mut().selected = vec!["m".into()];
+    press(&mut h, Modifiers::NONE, Key::Tab);
+    assert_eq!(h.state().outer.len(), 1, "inside the mountain");
+    h.state_mut().selected.clear();
+    press(&mut h, Modifiers::NONE, Key::Tab);
+    assert!(h.state().outer.is_empty() && h.state().selected == ["m"], "out again, the composite selected");
+
+    // B, then a box over the whole canvas: everything.
+    h.state_mut().selected.clear();
+    press(&mut h, Modifiers::NONE, Key::B);
+    assert!(h.state().box_by_key);
+    let (a, b) = (pos2(30.0, 70.0), pos2(1170.0, 770.0));
+    h.hover_at(a);
+    h.event(egui::Event::PointerButton { pos: a, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.hover_at(b);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: b, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+    assert!(!h.state().box_by_key && h.state().marquee.is_none());
+    assert_eq!(chosen(&h), ["m", "out", "worn"]);
+}
+
+/// The viewer's bar with its options open, and with the map's commands
+/// open: `viewer-options-*.png`.
+#[test]
+fn the_viewer_options_render() {
+    let Some(dir) = snapshot_dir() else { return };
+    let Some(gpu) = Gpu::headless() else { return };
+    let engine = Arc::new(Engine::with_gpu(gpu, Default::default()));
+    let glyphs = [("view", crate::theme::glyph(crate::theme::Icon::SlidersHorizontal).to_string()), ("map", crate::theme::glyph(crate::theme::Icon::ChevronDown).to_string())];
+    for (which, glyph) in glyphs {
+        for (theme, tag) in [(egui::Theme::Dark, "dark"), (egui::Theme::Light, "light")] {
+            let panel = super::TerrainPanel::with_graph(engine.clone(), example("m2-archipelago"));
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(760.0, 520.0)).with_pixels_per_point(2.0).with_accessibility_check(false).wgpu().build_ui_state(
+                move |ui, p: &mut super::TerrainPanel| {
+                    if ui.ctx().cumulative_pass_nr() == 0 {
+                        crate::theme::install(ui.ctx());
+                    }
+                    ui.ctx().set_theme(theme);
+                    egui::Frame::new().fill(crate::theme::Palette::of(ui).panel).show(ui, |ui| super::viewer::ui(p, ui));
+                },
+                panel,
+            );
+            h.run_steps(3);
+            let t0 = std::time::Instant::now();
+            while !(h.state().previews_idle() && h.state().viewer.as_ref().is_some_and(|v| v.1.sharp)) && t0.elapsed().as_secs() < 60 {
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            use egui_kittest::kittest::Queryable;
+            let Some(button) = h.query_by_label(&glyph) else { continue };
+            button.click();
+            h.run_steps(3);
+            h.render().unwrap().save(dir.join(format!("viewer-options-{which}-{tag}.png"))).unwrap();
+        }
+    }
+}

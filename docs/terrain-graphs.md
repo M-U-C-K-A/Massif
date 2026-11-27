@@ -187,7 +187,7 @@ builds a graph into a world.
 
 ## The generator graph
 
-- **Add a node**: right-click the graph, press **Tab** (or Shift A), or use
+- **Add a node**: right-click the graph, press **Shift A** (or Tab outside a composite), or use
   the **+** at the graph's top right, and type a few letters of its name:
   the start of a word (`therm` finds Thermal erosion), or its letters in
   order (`mtnrange` finds Mountain range). Arrows choose, Enter adds. A
@@ -201,14 +201,17 @@ builds a graph into a world.
   With none viewed, the viewer shows the active Map Output.
 - **Name** a node: its settings' **Name** gives it a name to show. Its id,
   by which wires and scripts name it, never changes.
-- **Bypass** a node (**B**, or its menu): it is left out, and what it feeds
+- **Bypass** a node (**M**, as Blender's mute, or its menu): it is left out, and what it feeds
   takes its first input instead. It shows dimmed, struck through, its
   thumbnail that of what passes through.
 - **Fold** a node to its title with the chevron at its left, or **H**.
-- **Copy and paste** nodes (⌘C, ⌘X, ⌘V): they go through the clipboard as
+- **Copy and paste** nodes (⌘C, ⌘V): they go through the clipboard as
   JSON, with the wires among them, their frames and the composites they are
   made of, so that they paste into another world too. **⌘D** duplicates
-  beside them.
+  beside them; **Shift D** duplicates and moves the copies with the pointer.
+- **Remove and reconnect** (⌘X, as Blender's Ctrl X, or a node's menu):
+  the selected nodes go, and what they fed is wired from what fed them, by
+  their first wired input, when what it carries fits.
 - **Arrange**: the grid button lays the selected nodes (or all) out in
   columns, from their sources to their output; a node's menu also aligns
   the selected nodes' left edges or tops, and spaces them evenly.
@@ -447,20 +450,34 @@ A graph can be written as text, and text made into a graph: the **script** butto
 
 ## Generator keys
 
+The keys are Blender's node editor's: Ctrl works as ⌘ on a Mac. They act
+while the pointer is over the graph and no text field is typed in (the
+Script pane's included).
+
 | Key | Over the graph |
 |---|---|
-| Tab, Shift A, right-click | add a node |
-| V | view the node |
+| Shift A, right-click | add a node at the pointer |
+| Tab | open the composite selected, or leave the one open (at the top, with none selected: add a node) |
 | double-click | open a composite, view another node |
-| Esc | leave the composite open |
-| B | bypass the selected nodes, or stop |
-| H | fold or unfold the selected nodes |
-| ⌘G, ⌘⇧G | make a composite, ungroup |
-| ⌘J | frame the selected nodes |
-| ⌘C, ⌘X, ⌘V | copy, cut, paste |
-| ⌘D | duplicate the selected nodes |
+| Esc | deselect; nothing selected, leave the composite open |
+| V | view the node |
 | ⌘A | select every node |
-| Delete, Backspace, X | remove the selected nodes (a frame selected: the frame, its nodes staying) |
+| Alt A, ⌘⇧A, Esc | deselect |
+| ⌘I | invert the selection |
+| B | box select: drag a box from the next press, over nodes too |
+| L, Shift L | add the nodes feeding the selection, or those it feeds |
+| G | move the selection with the pointer: a click puts it down, Esc or a right-click puts it back |
+| Shift D | duplicate and move the copies with the pointer |
+| ⌘D | duplicate beside them |
+| ⌘C, ⌘V | copy, paste at the pointer |
+| X, Delete, Backspace | remove the selected nodes (a frame selected: the frame, its nodes staying) |
+| ⌘X | remove and reconnect |
+| M | bypass the selected nodes, or stop (Blender's mute) |
+| H | fold or unfold the selected nodes |
+| ⌘G | make a composite of the selected nodes |
+| ⌘⇧G, ⌘⌥G | ungroup the composite |
+| ⌘J | frame the selected nodes |
 | F, Home, double-click the ground | show the whole graph |
+| . (numpad .) | show the selected nodes |
 | wheel, pinch, ⌘+ ⌘− ⌘0 | zoom (⌘0: full size) |
 | ⌘Z, ⌘⇧Z | undo, redo |
