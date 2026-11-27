@@ -3160,17 +3160,21 @@ area draws the viewport at a time; a second one says where it is.
   kept up close), and leaves and glass far off add up to how much of them
   is solid, so that woods seen from afar settle smooth instead of
   flickering in a pattern of pixels.
-- **Grass**: as the game's **Blocks**, or as **Blades** of grass: over
-  every grass block (not snowy), in the place of the short and tall grass
-  and the ferns, a field of thin blades made up as the image is drawn,
-  each its own height and lean, in tufts, darker at their foot and lighter
-  and yellower to the tip, in the grass block's colours, shading each other
-  and taking the sun's shadows. The flowers stay as they are. **Density**:
-  blades a block (24 at first); **Height** (0.8 of a block at first). Far
-  off, where a blade is smaller than a pixel, the field thins out to the
-  grass blocks under it. Blades cost time: a sample at the grass's height
-  took some twice as long as with the game's grass. Changing between
-  Blocks and Blades builds the scene again.
+- **Grass** (first in Render Output): as the game's **Blocks**, or as
+  **Blades** of grass: over every grass block (not snowy), in the place of
+  the short grass and the ferns, a meadow of thin blades made up as the
+  image is drawn. The field is combed, as by the wind, the way a broad
+  noise of the place says, and grows higher or lower in patches; the tall
+  grass and large ferns become taller blades. Each blade bends along a
+  curve to a fine tip, rounded across, darker and cooler at its foot and
+  lighter and yellower to the tip, each a little its own shade, a few dry
+  ones among them; the sun shines through them from behind, and the ground
+  between them takes the grass's shade, not its pixels. The flowers stay
+  as they are. **Density**: blades a block (45 at first); **Height** (0.8
+  of a block at first). Far off, fewer and wider blades cover as much.
+  Blades cost time: a sample at the grass's height took some four times as
+  long as with the game's grass on this Mac. Changing between Blocks and
+  Blades builds the scene again.
 - **Image to save**: a **Size** (the view's, HD, 4K or 8K), the
   **Samples a pixel** (more: cleaner and slower) and **Denoise** (for an
   image of few samples: past some 128 it changes nothing), then **Save image…**

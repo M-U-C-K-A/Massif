@@ -162,47 +162,48 @@ fn covers(a: f32, cell: vec3<i32>) -> bool {
 }
 
 // Blades of grass in `cell`, made up from its place (the same each
-// sample): so many, as high (P.flags.y, P.flags.z), in tufts of three from
-// one root, each leaning its own way, a ribbon of three triangles
-// narrowing to its tip. The first one the ray meets between t0 and t1,
-// into `h`.
-fn blades_hit(cell: vec3<i32>, ro: vec3<f32>, rd: vec3<f32>, t0: f32, t1: f32, h: ptr<function, Hit>) -> bool {
+// sample): so many, as high (P.flags.y, P.flags.z; `tall`: the game's tall
+// grass), in tufts of three from one root. The field is combed: the blades
+// lean the way a broad noise of the place says, give or take, and grow
+// higher or lower in patches. Each blade is a ribbon bent along a curve,
+// in three segments narrowing to a fine tip (five triangles), its normal
+// rounded across it. The first one the ray meets between t0 and t1, into
+// `h` (its normal, how far up it, and its hash in `quad`).
+fn blades_hit(cell: vec3<i32>, ro: vec3<f32>, rd: vec3<f32>, t0: f32, t1: f32, tall_grass: bool, detail: f32, h: ptr<function, Hit>) -> bool {
     let o = ro - vec3<f32>(cell);
-    let height = bitcast<f32>(P.flags.z);
+    let height = bitcast<f32>(P.flags.z) * select(1.0, 1.25, tall_grass);
     // Over the blades all along: nothing to meet.
-    if (min(o.y + rd.y * t0, o.y + rd.y * t1) > height) {
+    if (min(o.y + rd.y * t0, o.y + rd.y * t1) > min(height * 1.3, 0.99)) {
         return false;
     }
+    let world = vec3<f32>(cell);
+    let comb = value_noise(vec3<f32>(world.x * 0.045, 3.7, world.z * 0.045)) * 12.566;
+    let patchy = 0.6 + 0.8 * value_noise(vec3<f32>(world.x * 0.13, 9.1, world.z * 0.13));
     let seed = pcg(u32(cell.x) * 73856093u ^ u32(cell.y) * 19349663u ^ u32(cell.z) * 83492791u);
     let inv = 1.0 / select(rd, select(vec3<f32>(-1e-12), vec3<f32>(1e-12), rd >= vec3<f32>(0.0)), abs(rd) < vec3<f32>(1e-12));
     var best = t1;
     var found = false;
-    let tufts = (P.flags.y + 2u) / 3u;
+    // Fewer blades (`detail` of them), as much wider: the field covers
+    // as much, at a share of the cost.
+    let tufts = max(u32(ceil(f32((P.flags.y + 2u) / 3u) * detail)), 1u);
+    let wide = 1.0 / max(detail, 0.1);
     for (var c = 0u; c < tufts; c++) {
         let hc = pcg(seed + c * 0x9e3779b9u);
-        let root = vec2<f32>(unit(hc), unit(hc >> 16u)) * 0.8 + 0.1;
-        // The box the tuft's blades lean within: most rays pass by.
-        let lo = vec3<f32>(max(root.x - 0.36, 0.0), 0.0, max(root.y - 0.36, 0.0));
-        let hi = vec3<f32>(min(root.x + 0.36, 1.0), height, min(root.y + 0.36, 1.0));
-        let ta = (lo - o) * inv;
-        let tb = (hi - o) * inv;
-        let near = max(max(min(ta.x, tb.x), min(ta.y, tb.y)), min(ta.z, tb.z));
-        let far = min(min(max(ta.x, tb.x), max(ta.y, tb.y)), max(ta.z, tb.z));
-        if (far < max(near, t0) || near > best) {
-            continue;
-        }
+        let root = vec2<f32>(unit(hc), unit(hc >> 16u)) * 0.84 + 0.08;
         for (var k = 0u; k < 3u; k++) {
             let h1 = pcg(hc + k * 0x85ebca6bu);
             let h2 = pcg(h1);
-            let base = root + (vec2<f32>(unit(h1), unit(h1 >> 16u)) - 0.5) * 0.12;
-            let tall = height * (0.55 + 0.45 * unit(h2));
-            let lean_a = unit(h2 >> 16u) * 6.2831853;
-            let lean = (0.08 + 0.27 * unit(h1 ^ h2)) * tall;
+            let base = root + (vec2<f32>(unit(h1), unit(h1 >> 16u)) - 0.5) * 0.1;
+            let tall = min(height * patchy * (0.5 + 0.6 * unit(h2)), 0.98);
+            // Combed, give or take; bent the more the taller.
+            let lean_a = comb + (unit(h2 >> 16u) - 0.5) * 1.6;
+            let bend = (0.25 + 0.45 * unit(h1 ^ h2)) * tall;
             let dir = vec2<f32>(cos(lean_a), sin(lean_a));
-            let tip_xz = clamp(base + dir * lean, vec2<f32>(0.01), vec2<f32>(0.99));
-            // The blade's own box.
-            let blo = vec3<f32>(min(base, tip_xz).x - 0.05, 0.0, min(base, tip_xz).y - 0.05);
-            let bhi = vec3<f32>(max(base, tip_xz).x + 0.05, tall, max(base, tip_xz).y + 0.05);
+            let tip_xz = clamp(base + dir * bend, vec2<f32>(0.01), vec2<f32>(0.99));
+            let w0 = (0.022 + 0.016 * unit(h2 >> 8u)) * wide;
+            // The blade's box first: most rays pass by.
+            let blo = vec3<f32>(min(base, tip_xz).x - w0, 0.0, min(base, tip_xz).y - w0);
+            let bhi = vec3<f32>(max(base, tip_xz).x + w0, tall, max(base, tip_xz).y + w0);
             let ba = (blo - o) * inv;
             let bb = (bhi - o) * inv;
             let bnear = max(max(min(ba.x, bb.x), min(ba.y, bb.y)), min(ba.z, bb.z));
@@ -210,33 +211,56 @@ fn blades_hit(cell: vec3<i32>, ro: vec3<f32>, rd: vec3<f32>, t0: f32, t1: f32, h
             if (bfar < max(bnear, t0) || bnear > best) {
                 continue;
             }
-            let mid_xz = base + dir * (lean * 0.3);
-            // Its flat side across its lean, a little turned.
-            let face = lean_a + 1.5707963 + (unit(h2 >> 8u) - 0.5) * 0.8;
+            // Flat across its lean, a little turned.
+            let face = lean_a + 1.5707963 + (unit(h1 >> 8u) - 0.5) * 0.7;
             let side = vec3<f32>(cos(face), 0.0, sin(face));
-            let s0 = side * 0.05;
-            let s1 = side * 0.032;
-            let p0 = vec3<f32>(base.x, 0.0, base.y);
-            let p1 = vec3<f32>(mid_xz.x, tall * 0.55, mid_xz.y);
-            let p2 = vec3<f32>(tip_xz.x, tall, tip_xz.y);
-            var t = triangle(o, rd, p0 - s0, p0 + s0, p1 + s1, t0, best);
-            var e = cross(s0 * 2.0, p1 + s1 - p0 + s0);
-            let tq = triangle(o, rd, p0 - s0, p1 + s1, p1 - s1, t0, best);
-            if (tq > 0.0) {
-                t = tq;
-                e = cross(p1 + s1 - p0 + s0, s1 * -2.0);
+            let d = tip_xz - base;
+            // Along the curve: the lean grows as the square of the way up,
+            // the tip a little lower for it.
+            var cs: array<vec3<f32>, 4>;
+            var ws = array<f32, 4>(w0, w0 * 0.8, w0 * 0.5, 0.0);
+            for (var j = 0; j < 4; j++) {
+                let sj = f32(j) / 3.0;
+                let xz = base + d * (sj * sj);
+                cs[j] = vec3<f32>(xz.x, tall * sj * (1.0 - 0.18 * sj * bend / max(tall, 1e-3)), xz.y);
             }
-            let tt = triangle(o, rd, p1 - s1, p1 + s1, p2, t0, best);
-            if (tt > 0.0) {
-                t = tt;
-                e = cross(s1 * 2.0, p2 - p1 + s1);
+            var hit_t = -1.0;
+            var seg = 0;
+            for (var j = 0; j < 3; j++) {
+                let a0 = cs[j] - side * ws[j];
+                let a1 = cs[j] + side * ws[j];
+                let b0 = cs[j + 1] - side * ws[j + 1];
+                let b1 = cs[j + 1] + side * ws[j + 1];
+                var tt = triangle(o, rd, a0, a1, b1, t0, best);
+                if (j < 2) {
+                    let t2 = triangle(o, rd, a0, b1, b0, t0, best);
+                    if (t2 > 0.0 && (tt < 0.0 || t2 < tt)) {
+                        tt = t2;
+                    }
+                }
+                if (tt > 0.0 && (hit_t < 0.0 || tt < hit_t)) {
+                    hit_t = tt;
+                    seg = j;
+                }
             }
-            if (t > 0.0) {
-                best = t;
+            if (hit_t > 0.0) {
+                best = hit_t;
                 found = true;
-                (*h).normal = normalize(e);
-                (*h).up = clamp((o.y + rd.y * t) / tall, 0.0, 1.0);
-                (*h).quad = c * 3u + k;
+                let x = o + rd * hit_t;
+                let c0 = cs[seg];
+                let c1 = cs[seg + 1];
+                let along = clamp((x.y - c0.y) / max(c1.y - c0.y, 1e-4), 0.0, 1.0);
+                let centre = mix(c0, c1, along);
+                let width = max(mix(ws[seg], ws[seg + 1], along), 1e-4);
+                let u = clamp(dot(x - centre, side) / width, -1.0, 1.0);
+                // The face's normal toward the eyes, rounded across.
+                var nf = normalize(cross(side, c1 - c0));
+                if (dot(nf, rd) > 0.0) {
+                    nf = -nf;
+                }
+                (*h).normal = normalize(nf * sqrt(1.0 - u * u * 0.6) + side * (u * 0.75));
+                (*h).up = clamp(x.y / tall, 0.0, 1.0);
+                (*h).quad = h1;
             }
         }
     }
@@ -526,7 +550,12 @@ fn trace(ro: vec3<f32>, rd: vec3<f32>, tmax: f32, mode: u32) -> Hit {
             let keep = clamp((0.25 - pixel) / 0.15, 0.0, 1.0);
             if (P.flags.y > 0u && SHARP && LOD_U < keep) {
                 let exit = (select(vec3<f32>(v), vec3<f32>(v + 1), rd > vec3<f32>(0.0)) - ro) * inv;
-                if (blades_hit(v, ro, rd, t, min(min(exit.x, exit.y), exit.z) + 1e-4, &h)) {
+                let tall_grass = ((materials[mat * 3u].y >> 19u) & 3u) == 1u;
+                // All the blades up close; past where a blade is some
+                // 0.02 of a block a pixel, fewer and wider (a quarter at
+                // most), half as many for a shadow.
+                let detail = clamp(0.02 / max(pixel, 1e-6), 0.25, 1.0) * select(1.0, 0.5, mode == SHADOW);
+                if (blades_hit(v, ro, rd, t, min(min(exit.x, exit.y), exit.z) + 1e-4, tall_grass, detail, &h)) {
                     h.found = true;
                     h.mat = mat;
                     h.axis = -2;
@@ -1245,23 +1274,26 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
         var tangent = vec3<f32>(1.0, 0.0, 0.0);
         var bitangent = vec3<f32>(0.0, 0.0, 1.0);
         var blade = 1.0;
-        if (hit.axis == -2) {
-            // A blade of grass: seen from either side, a little rounded
-            // toward the sky; the grass block's texture under it, darker
-            // at its foot, lighter and yellower to its tip.
+        let is_blade = hit.axis == -2;
+        if (is_blade) {
+            // A blade of grass, rounded across, toward the eyes: the grass
+            // block's colour (its texture averaged, the biome's tint),
+            // darker and cooler at its foot where the others shade it,
+            // lighter and yellower to its tip; each blade a little its own
+            // shade, a few dry ones among them.
             n = hit.normal;
-            if (dot(n, rd) > 0.0) {
-                n = -n;
-            }
-            n = normalize(n + vec3<f32>(0.0, 0.35, 0.0));
             if (dot(n, rd) > -0.05) {
                 n = normalize(n - rd * (dot(n, rd) + 0.05));
             }
             uvl = vec3<f32>(fract(p.xz), f32(m.x & 0xffffu));
-            tint = unpack_rgb(m.z);
-            let shade = 0.82 + 0.36 * unit(pcg(hit.quad * 2654435761u ^ u32(hit.cell.x * 7 + hit.cell.z * 13)));
-            blade = shade * mix(0.42, 1.08, hit.up);
-            tint = mix(tint, tint * vec3<f32>(1.3, 1.18, 0.55), hit.up * hit.up * 0.55);
+            let up = hit.up;
+            var col = unpack_rgb(m.z) * mix(vec3<f32>(0.5, 0.56, 0.52), vec3<f32>(1.35, 1.28, 0.78), up);
+            col *= 0.82 + 0.36 * unit(pcg(hit.quad));
+            col.r *= 0.9 + 0.2 * unit(pcg(hit.quad + 1u));
+            if (unit(pcg(hit.quad ^ 0x5bd1e995u)) < 0.07) {
+                col = mix(col, vec3<f32>(0.62, 0.52, 0.26) * (0.6 + 0.5 * up), 0.8);
+            }
+            tint = col;
         } else if (hit.axis >= 0) {
             n[hit.axis] = -sign(rd[hit.axis]);
             uvl = face_uv(m, p, hit.axis, rd);
@@ -1314,7 +1346,14 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
         }
         // Coarser textures the smaller a block is on screen.
         let lod = texture_lod(hit.t, abs(dot(n, rd)));
-        let tex = textureSampleLevel(atlas, atlas_sampler, uvl.xy, i32(uvl.z), lod);
+        // The ground under blades of grass: the grass's colour in their
+        // shade, its texture averaged (between thin blades, its pixels
+        // would show as a pattern).
+        let under = hit.axis == 1 && rd.y < 0.0 && look.z == 1u;
+        let tex = textureSampleLevel(atlas, atlas_sampler, uvl.xy, i32(uvl.z), select(lod, 4.0, is_blade || under));
+        if (under) {
+            tint *= vec3<f32>(0.5, 0.56, 0.52);
+        }
         var surf: Surface;
         surf.albedo = min(tex.rgb * tint * blade, vec3<f32>(1.0));
         var metal = bitcast<f32>(look.y);
@@ -1395,6 +1434,15 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
                     light *= water_through(shadow.water) * (1.0 - fresnel(max(P.sun.y, 0.05), 1.0 / 1.33));
                 }
                 sum += capped(throughput * brdf(surf, ns, v, l, light), bounce);
+            }
+        } else if (is_blade && P.sun.y > -0.05) {
+            // The sun behind a blade: through it, its green glow (a thin
+            // leaf lets some half of the light through, tinted by itself).
+            let back = p - n * max(EPS, max(abs(p.x), max(abs(p.y), abs(p.z))) * 3e-7);
+            let shadow = trace(back, l, 1e30, SHADOW);
+            if (!shadow.found) {
+                let light = SUN_LIGHT * sun_through_media(back.y);
+                sum += capped(throughput * surf.albedo * surf.albedo * light * (0.5 * abs(dot(n, l)) / PI), bounce);
             }
         }
         if (bounce == P.info.z) {

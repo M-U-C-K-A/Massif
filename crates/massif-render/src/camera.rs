@@ -156,7 +156,7 @@ impl Default for Light {
             focus: 100.0,
             bounces: 2,
             clamp: 10.0,
-            grass_blades: 24,
+            grass_blades: 45,
             grass_height: 0.8,
             exposure: 1.0,
         }

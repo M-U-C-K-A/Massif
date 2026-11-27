@@ -81,7 +81,7 @@ impl Class {
 /// * 7: the box around its faces, in pixels: x0, y0, z0, x1, y1, z1, 5
 ///   bits each from the lowest
 /// * 8, 9: its roughness and how metallic it is, 0 to 1, as float bits
-/// * 10, 11: unused
+/// * 10: a grass block under blades of grass (1); 11: unused
 pub type GpuMaterial = [u32; 12];
 
 /// A face of a shaped block as the shader reads it: sixteen words, the
@@ -114,16 +114,18 @@ struct Material {
     /// How rough its surface is (1: no shine at all) and how metallic.
     roughness: f32,
     metal: f32,
+    /// A grass block under blades of grass (see [`Materials::grow_blades`]).
+    under: bool,
 }
 
 impl Material {
     fn gpu(&self) -> GpuMaterial {
         let flags = self.class as u32 | (self.axis as u32) << 3 | ((self.light > 0) as u32) << 5;
         let rgb = |c: [u8; 3]| c[0] as u32 | (c[1] as u32) << 8 | (c[2] as u32) << 16;
-        [self.top as u32 | (self.side as u32) << 16, self.bottom as u32 | flags << 16, rgb(self.top_tint), rgb(self.side_tint), rgb(self.glow) | (self.light as u32) << 24, self.first_quad, self.quads as u32, self.bounds, self.roughness.to_bits(), self.metal.to_bits(), 0, 0]
+        [self.top as u32 | (self.side as u32) << 16, self.bottom as u32 | flags << 16, rgb(self.top_tint), rgb(self.side_tint), rgb(self.glow) | (self.light as u32) << 24, self.first_quad, self.quads as u32, self.bounds, self.roughness.to_bits(), self.metal.to_bits(), self.under as u32, 0]
     }
 
-    const AIR: Material = Material { top: 0, side: 0, bottom: 0, class: Class::Air, axis: 0, light: 0, glow: [0; 3], top_tint: [255; 3], side_tint: [255; 3], first_quad: 0, quads: 0, bounds: 0, roughness: 0.9, metal: 0.0 };
+    const AIR: Material = Material { top: 0, side: 0, bottom: 0, class: Class::Air, axis: 0, light: 0, glow: [0; 3], top_tint: [255; 3], side_tint: [255; 3], first_quad: 0, quads: 0, bounds: 0, roughness: 0.9, metal: 0.0, under: false };
 
     /// A light without a block to draw yet (a torch, a lantern: their
     /// models come with milestone 3).
@@ -154,6 +156,12 @@ struct Inner {
 struct Blades {
     on: bool,
     of: HashMap<u16, u16>,
+    /// The taller blades in the place of tall grass and large ferns.
+    tall: HashMap<u16, u16>,
+    /// The grass block under blades: its top drawn as the grass's shade
+    /// between them, not its pixels.
+    under: HashMap<u16, u16>,
+    tall_lower: std::collections::HashSet<u16>,
     /// Short grass and ferns, and the lower halves of the tall ones; their
     /// upper halves.
     lower: std::collections::HashSet<u16>,
@@ -246,25 +254,48 @@ impl Materials {
                     return;
                 }
                 let g = inner.list[id as usize];
-                let blades = Material { class: Class::Blades, top: g.top, side: g.top, bottom: g.top, top_tint: g.top_tint, side_tint: g.top_tint, roughness: 0.6, ..Material::AIR };
-                let k = match inner.list.iter().position(|m| *m == blades) {
+                let under = Material { under: true, ..g };
+                let u = match inner.list.iter().position(|m| *m == under) {
                     Some(k) => k as u16,
                     None => {
-                        inner.list.push(blades);
+                        inner.list.push(under);
                         inner.revision += 1;
-                        self.classes.write().unwrap().push(Class::Blades);
-                        self.lights.write().unwrap().push(0);
+                        self.classes.write().unwrap().push(under.class);
+                        self.lights.write().unwrap().push(under.light);
                         (inner.list.len() - 1) as u16
                     }
                 };
-                b.of.insert(id, k);
+                b.under.insert(id, u);
+                // Axis 1: the tall grass's taller blades.
+                for axis in [0u8, 1] {
+                    let blades = Material { class: Class::Blades, axis, top: g.top, side: g.top, bottom: g.top, top_tint: g.top_tint, side_tint: g.top_tint, roughness: 0.45, ..Material::AIR };
+                    let k = match inner.list.iter().position(|m| *m == blades) {
+                        Some(k) => k as u16,
+                        None => {
+                            inner.list.push(blades);
+                            inner.revision += 1;
+                            self.classes.write().unwrap().push(Class::Blades);
+                            self.lights.write().unwrap().push(0);
+                            (inner.list.len() - 1) as u16
+                        }
+                    };
+                    if axis == 0 { b.of.insert(id, k) } else { b.tall.insert(id, k) };
+                }
             }
+            // (Plants drawn as air, without the game's models, are no
+            // plants to tell apart.)
+            _ if id == AIR => {}
             "short_grass" | "grass" | "fern" => {
                 self.blades.write().unwrap().lower.insert(id);
             }
             "tall_grass" | "large_fern" => {
                 let mut b = self.blades.write().unwrap();
-                if prop("half") == Some("upper") { b.upper.insert(id) } else { b.lower.insert(id) };
+                if prop("half") == Some("upper") {
+                    b.upper.insert(id);
+                } else {
+                    b.lower.insert(id);
+                    b.tall_lower.insert(id);
+                }
             }
             _ => {}
         }
@@ -311,10 +342,14 @@ impl Materials {
             if above != AIR && !b.lower.contains(&above) {
                 continue;
             }
-            set(&mut chunk.sections[k1], i1, b.of[&grass]);
+            // Tall grass: taller blades, and in its upper half the tops of
+            // more.
+            let tall = b.tall_lower.contains(&above);
+            set(&mut chunk.sections[k], i, b.under[&grass]);
+            set(&mut chunk.sections[k1], i1, if tall { b.tall[&grass] } else { b.of[&grass] });
             let (k2, i2) = if i1 / 256 == 15 { (k1 + 1, i1 % 256) } else { (k1, i1 + 256) };
             if k2 < n && b.upper.contains(&at(&chunk.sections, k2, i2)) {
-                set(&mut chunk.sections[k2], i2, AIR);
+                set(&mut chunk.sections[k2], i2, if tall { b.of[&grass] } else { AIR });
             }
         }
     }

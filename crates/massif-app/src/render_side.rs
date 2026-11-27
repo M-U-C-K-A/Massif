@@ -909,6 +909,23 @@ impl RenderSide {
     pub fn output_ui(&mut self, ui: &mut Ui, doc: &Document) {
         let pal = Palette::of(ui);
         ui.spacing_mut().item_spacing.y = 6.0;
+        title(ui, tr!("Grass"));
+        well(ui, |ui| {
+            row(ui, tr!("Grass"), |ui| {
+                let labels = [tr!("Blocks"), tr!("Blades")];
+                if let Some(k) = crate::widgets::button_group(ui, "render grass", &labels, &[!self.blades, self.blades]) {
+                    self.blades = k == 1;
+                }
+            });
+            if self.blades {
+                row(ui, tr!("Density"), |ui| {
+                    ui.add(Field::new(&mut self.light.grass_blades, 3..=60)).on_hover_text(tr!("Blades of grass a block: more, a fuller field and a slower image"));
+                });
+                row(ui, tr!("Height"), |ui| {
+                    ui.add(Field::new(&mut self.light.grass_height, 0.2..=1.0).max_decimals(2).suffix(" blocks"));
+                });
+            }
+        });
         let light = &mut self.light;
         title(ui, tr!("Image"));
         well(ui, |ui| {
@@ -928,23 +945,6 @@ impl RenderSide {
             row(ui, tr!("Exposure"), |ui| {
                 ui.add(Field::new(&mut light.exposure, 0.1..=16.0).logarithmic(true).max_decimals(2));
             });
-        });
-        title(ui, tr!("Grass"));
-        well(ui, |ui| {
-            row(ui, tr!("Grass"), |ui| {
-                let labels = [tr!("Blocks"), tr!("Blades")];
-                if let Some(k) = crate::widgets::button_group(ui, "render grass", &labels, &[!self.blades, self.blades]) {
-                    self.blades = k == 1;
-                }
-            });
-            if self.blades {
-                row(ui, tr!("Density"), |ui| {
-                    ui.add(Field::new(&mut self.light.grass_blades, 3..=60)).on_hover_text(tr!("Blades of grass a block: more, a fuller field and a slower image"));
-                });
-                row(ui, tr!("Height"), |ui| {
-                    ui.add(Field::new(&mut self.light.grass_height, 0.2..=1.0).max_decimals(2).suffix(" blocks"));
-                });
-            }
         });
         title(ui, tr!("Image to save"));
         let mut start = false;
