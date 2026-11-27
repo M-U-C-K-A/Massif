@@ -2449,7 +2449,6 @@
  "{name}  ·  installed": "{name}  ·  installé",
  "{name} and {value} more": "{name} et {value} de plus",
  "{name} copy": "{name} copie",
- "{name} height map.png": "{name} carte des hauteurs.png",
  "{name} works on the map: here the left button turns the view, the right one moves it": "{name} s'utilise sur la carte : ici le bouton gauche tourne la vue, le droit la déplace",
  "{name} · y {min} to {max}, most at {peak} · {veins} veins a chunk · {size} blocks a vein": "{name} · y {min} à {max}, surtout à {peak} · {veins} filons par chunk · {size} blocs par filon",
  "{name} · {point} (read-only)": "{name} · {point} (lecture seule)",
@@ -3494,7 +3493,6 @@
  "Starts with": "Commence par",
  "Sunset": "Coucher du soleil",
  "Survival safe": "Survie sûre",
- "The world rules you saved under a name in the export dialog (Rules ▸ Save as preset), offered there beside Creative / Frozen, Survival safe and Vanilla.": "Les règles du monde que vous avez enregistrées sous un nom dans la fenêtre d'export (Règles ▸ Enregistrer comme préréglage), proposées là à côté de Créatif / Figé, Survie sûre et Vanilla.",
  "Thunder": "Orage",
  "Time and weather": "Heure et météo",
  "Wandering trader": "Marchand ambulant",
@@ -4162,5 +4160,15 @@
  "Saved an EXR height map of {pw} × {pd}, heights in blocks from Y {lo} to {hi}{value}": "Carte des hauteurs EXR de {pw} × {pd} enregistrée, hauteurs en blocs de Y {lo} à {hi}{value}",
  ", values {low} to {high}": ", valeurs de {low} à {high}",
  " · the file's values {low} to {high}": " · valeurs du fichier de {low} à {high}",
- "OpenEXR, linear light with depth, normal and albedo": "OpenEXR, lumière linéaire avec profondeur, normales et albédo"
+ "OpenEXR, linear light with depth, normal and albedo": "OpenEXR, lumière linéaire avec profondeur, normales et albédo",
+ "The names exports are offered under, and the world rules you saved under a name in the export dialog (Rules ▸ Save as preset), offered there beside Creative / Frozen, Survival safe and Vanilla.": "Les noms proposés aux exports, et les règles du monde enregistrées sous un nom dans la fenêtre d'export (Règles ▸ Enregistrer comme préréglage), proposées là à côté de Créatif / Figé, Survie sûre et Vanilla.",
+ "Schematic": "Schématique",
+ "Object": "Objet",
+ "Date": "Date",
+ "File names": "Noms de fichier",
+ "Ready ones": "Modèles prêts",
+ "24 h": "24 h",
+ "12 h": "12 h",
+ "A render would be named {preview}": "Un rendu s'appellerait {preview}",
+ "Tokens: {tokens}. Characters no system takes become a dash, and a name already in the folder gets -2, -3 after it.": "Jetons : {tokens}. Les caractères qu'un système refuse deviennent un tiret, et un nom déjà pris dans le dossier reçoit -2, -3 à sa suite."
 }

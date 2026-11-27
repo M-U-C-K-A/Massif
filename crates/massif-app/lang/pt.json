@@ -2446,7 +2446,6 @@
  "{name}  ·  installed": "{name}  ·  instalada",
  "{name} and {value} more": "{name} e mais {value}",
  "{name} copy": "{name} cópia",
- "{name} height map.png": "{name} mapa de altura.png",
  "{name} works on the map: here the left button turns the view, the right one moves it": "{name} funciona no mapa: aqui o botão esquerdo gira a vista e o direito a move",
  "{name} · y {min} to {max}, most at {peak} · {veins} veins a chunk · {size} blocks a vein": "{name} · y {min} a {max}, principalmente em {peak} · {veins} veios por chunk · {size} blocos por veio",
  "{name} · {point} (read-only)": "{name} · {point} (só leitura)",
@@ -3426,7 +3425,6 @@
  "Starts with": "Começa com",
  "Sunset": "Pôr do sol",
  "Survival safe": "Sobrevivência segura",
- "The world rules you saved under a name in the export dialog (Rules ▸ Save as preset), offered there beside Creative / Frozen, Survival safe and Vanilla.": "As regras do mundo que você salvou com um nome na janela de exportação (Regras ▸ Salvar como predefinição), oferecidas ali ao lado de Criativo / Congelado, Sobrevivência segura e Vanilla.",
  "Thunder": "Trovoada",
  "Time": "Hora",
  "Time and weather": "Hora e clima",
@@ -4101,5 +4099,15 @@
  "Saved an EXR height map of {pw} × {pd}, heights in blocks from Y {lo} to {hi}{value}": "Mapa de alturas EXR de {pw} × {pd} salvo, alturas em blocos de Y {lo} a {hi}{value}",
  ", values {low} to {high}": ", valores de {low} a {high}",
  " · the file's values {low} to {high}": " · valores do arquivo de {low} a {high}",
- "OpenEXR, linear light with depth, normal and albedo": "OpenEXR, luz linear com profundidade, normais e albedo"
+ "OpenEXR, linear light with depth, normal and albedo": "OpenEXR, luz linear com profundidade, normais e albedo",
+ "The names exports are offered under, and the world rules you saved under a name in the export dialog (Rules ▸ Save as preset), offered there beside Creative / Frozen, Survival safe and Vanilla.": "Os nomes propostos às exportações, e as regras do mundo que você salvou com um nome no diálogo de exportação (Regras ▸ Salvar como predefinição), oferecidas lá ao lado de Criativo / Congelado, Sobrevivência segura e Vanilla.",
+ "Schematic": "Esquemático",
+ "Object": "Objeto",
+ "Date": "Data",
+ "File names": "Nomes de arquivo",
+ "Ready ones": "Modelos prontos",
+ "24 h": "24 h",
+ "12 h": "12 h",
+ "A render would be named {preview}": "Uma renderização se chamaria {preview}",
+ "Tokens: {tokens}. Characters no system takes become a dash, and a name already in the folder gets -2, -3 after it.": "Marcadores: {tokens}. Os caracteres que algum sistema não aceita viram um traço, e um nome que já está na pasta recebe -2, -3 depois."
 }

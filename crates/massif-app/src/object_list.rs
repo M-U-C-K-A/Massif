@@ -266,7 +266,7 @@ pub fn export_schematics(defs: &[&ObjectDef]) -> Option<String> {
     let names = file_names(defs);
     let paths: Vec<std::path::PathBuf> = match defs {
         [] => return None,
-        [_] => vec![rfd::FileDialog::new().set_title(tr!("Save the object as a schematic")).set_file_name(&names[0]).add_filter("Sponge schematic", &["schem"]).save_file()?],
+        [d] => vec![crate::file_names::dialog(crate::file_names::Export { name: if d.name.trim().is_empty() { tr!("Object") } else { d.name.trim() }, kind: tr!("Schematic"), size: None }, "schem").set_title(tr!("Save the object as a schematic")).add_filter("Sponge schematic", &["schem"]).save_file().map(crate::file_names::saved)?],
         _ => {
             let dir = rfd::FileDialog::new().set_title(tr!("A folder to write the objects in")).pick_folder()?;
             names.iter().map(|n| dir.join(n)).collect()

@@ -158,6 +158,8 @@ struct Settings {
     overlays: crate::map_view::Overlays,
     /// What the import of a WorldPainter world does, as last chosen.
     wp_import: WpImportOptions,
+    /// The names exports are offered under (Settings ▸ Export).
+    file_names: crate::file_names::Naming,
 }
 
 /// The options of a WorldPainter world's import, asked before it is read.
@@ -250,6 +252,7 @@ impl Default for Settings {
             keys: crate::keymap::Saved::default(),
             overlays: Default::default(),
             wp_import: WpImportOptions::default(),
+            file_names: Default::default(),
         }
     }
 }
@@ -836,6 +839,7 @@ impl MassifApp {
             .unwrap_or_default();
         tools.settle();
         crate::i18n::set_language(settings.language);
+        crate::file_names::set(&settings.file_names);
         theme::set_accent(&cc.egui_ctx, settings.accent);
         crate::loader::set_pattern(&cc.egui_ctx, settings.loader);
         crate::icons::set_style(&cc.egui_ctx, settings.tool_icons);
@@ -1117,12 +1121,13 @@ impl MassifApp {
             self.say(ctx, tr!("The map is empty"), true, None);
             return;
         }
-        let Some(path) = rfd::FileDialog::new()
+        let size = self.doc.dimension().bounds().map(|(lo, hi)| [((hi.x - lo.x + 1) * TILE_SIZE) as u32, ((hi.z - lo.z + 1) * TILE_SIZE) as u32]);
+        let Some(path) = crate::file_names::dialog(crate::file_names::Export { name: &self.doc.world.meta.name, kind: tr!("Height map"), size }, "png")
             .set_title(tr!("Save the height map"))
             .add_filter(tr!("16-bit PNG"), &["png"])
             .add_filter(tr!("OpenEXR, heights in blocks"), &["exr"])
-            .set_file_name(tr!("{name} height map.png", name = self.doc.world.meta.name))
             .save_file()
+            .map(crate::file_names::saved)
         else {
             return;
         };
@@ -2038,8 +2043,12 @@ impl MassifApp {
         Self::prefs_header(
             ui,
             tr!("Export"),
-            tr!("The world rules you saved under a name in the export dialog (Rules ▸ Save as preset), offered there beside Creative / Frozen, Survival safe and Vanilla."),
+            tr!("The names exports are offered under, and the world rules you saved under a name in the export dialog (Rules ▸ Save as preset), offered there beside Creative / Frozen, Survival safe and Vanilla."),
         );
+        self.prefs_file_names(ui);
+        ui.add_space(14.0);
+        ui.label(RichText::new(tr!("World rules")).size(13.0).medium());
+        ui.add_space(6.0);
         if self.settings.rule_presets.is_empty() {
             ui.label(RichText::new(tr!("No presets of your own yet.")).size(12.0).color(pal.weak));
             return;
@@ -2061,6 +2070,52 @@ impl MassifApp {
         if let Some(k) = remove {
             self.settings.rule_presets.remove(k);
         }
+    }
+
+    /// The names exports are offered under: a template of tokens, ready
+    /// ones, the date's and the time's formats, and the name it makes now.
+    fn prefs_file_names(&mut self, ui: &mut Ui) {
+        use crate::file_names::{Clock, DateFormat, Export, Moment, PRESETS, TOKENS};
+        let pal = Palette::of(ui);
+        // The counter and the folder as the exports left them.
+        let now = crate::file_names::current();
+        let n = &mut self.settings.file_names;
+        let before = n.clone();
+        crate::widgets::well(ui, |ui| {
+            crate::widgets::row(ui, tr!("File names"), |ui| {
+                ui.add_sized(vec2(210.0, ui.spacing().interact_size.y), egui::TextEdit::singleline(&mut n.template));
+            });
+            crate::widgets::row(ui, tr!("Ready ones"), |ui| {
+                egui::ComboBox::from_id_salt("file name presets").selected_text(tr!("Choose…")).width(210.0).show_ui(ui, |ui| {
+                    for p in PRESETS {
+                        if ui.selectable_label(n.template == p, p).clicked() {
+                            n.template = p.to_owned();
+                        }
+                    }
+                });
+            });
+            crate::widgets::row(ui, tr!("Date"), |ui| {
+                let labels = ["2026-11-27", "27-11-2026", "11-27-2026"];
+                let on = [n.date == DateFormat::Iso, n.date == DateFormat::European, n.date == DateFormat::Us];
+                if let Some(i) = crate::widgets::button_group(ui, "file name date", &labels, &on) {
+                    n.date = [DateFormat::Iso, DateFormat::European, DateFormat::Us][i];
+                }
+            });
+            crate::widgets::row(ui, tr!("Time"), |ui| {
+                let labels = [tr!("24 h"), tr!("12 h")];
+                if let Some(i) = crate::widgets::button_group(ui, "file name clock", &labels, &[n.clock == Clock::H24, n.clock == Clock::H12]) {
+                    n.clock = [Clock::H24, Clock::H12][i];
+                }
+            });
+        });
+        if *n != before {
+            crate::file_names::configure(n);
+        }
+        ui.add_space(4.0);
+        let name = self.doc.world.meta.name.clone();
+        let preview = n.format(&Export { name: &name, kind: tr!("Render"), size: Some([1920, 1080]) }, Moment::now(), now.counter + 1);
+        ui.label(RichText::new(tr!("A render would be named {preview}", preview = format!("{preview}.png"))).size(12.0).color(pal.text));
+        ui.add(egui::Label::new(RichText::new(tr!("Tokens: {tokens}. Characters no system takes become a dash, and a name already in the folder gets -2, -3 after it.", tokens = TOKENS.join(" "))).size(11.5).color(pal.weak)).wrap());
     }
 
     fn prefs_updates(&mut self, ui: &mut Ui) {
@@ -3748,7 +3803,8 @@ impl MassifApp {
             .and_then(|m| m.path.parent().filter(|d| d.file_name().is_some_and(|n| n == "mods")).and_then(|d| d.parent()).map(|d| d.join("saves")))
             .filter(|d| d.is_dir())
             .unwrap_or(parent);
-        let unique = massif_anvil::unique_dir(&parent, &self.doc.world.meta.name);
+        let stem = crate::file_names::stem(crate::file_names::Export { name: &self.doc.world.meta.name, kind: tr!("World"), size: self.doc.dimension().bounds().map(|(lo, hi)| [((hi.x - lo.x + 1) * TILE_SIZE) as u32, ((hi.z - lo.z + 1) * TILE_SIZE) as u32]) });
+        let unique = massif_anvil::unique_dir(&parent, &stem);
         let name = unique.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| self.doc.world.meta.name.clone());
         // The rules this map was last exported with.
         let remembered = self.doc.world.meta.export_rules;
@@ -6777,9 +6833,10 @@ impl MassifApp {
                     Choice::Save(bytes, ext) => {
                         let rect = self.doc.selection().and_then(|s| s.column_bounds());
                         let (x, z) = rect.map_or((0, 0), |r| (r.x0, r.z0));
-                        let name = massif_core::mask::file_safe(&format!("{} {x} {z}", self.doc.world.meta.name));
+                        let name = format!("{} {x} {z}", self.doc.world.meta.name);
                         let filter = if ext == "litematic" { "Litematica" } else { "Sponge schematic" };
-                        if let Some(path) = rfd::FileDialog::new().set_title(tr!("Save the selection as a schematic")).set_file_name(format!("{name}.{ext}")).add_filter(filter, &[ext]).save_file() {
+                        let size = rect.map(|r| [(r.x1 - r.x0) as u32, (r.z1 - r.z0) as u32]);
+                        if let Some(path) = crate::file_names::dialog(crate::file_names::Export { name: &name, kind: tr!("Schematic"), size }, ext).set_title(tr!("Save the selection as a schematic")).add_filter(filter, &[ext]).save_file().map(crate::file_names::saved) {
                             let path = if path.extension().is_some_and(|e| e == ext) { path } else { path.with_extension(ext) };
                             match massif_core::atomic::write(&path, &bytes, true) {
                                 Ok(()) => {
@@ -6828,8 +6885,9 @@ impl MassifApp {
                         }
                     }
                     Choice::ExportMap(rect, border) => {
-                        let name = massif_core::mask::file_safe(&format!("{} region {} {}", self.doc.world.meta.name, rect.x0, rect.z0));
-                        if let Some(path) = rfd::FileDialog::new().set_title(tr!("Save the region as a map")).set_file_name(format!("{name}.massif")).add_filter("Massif", &["massif"]).save_file() {
+                        let name = format!("{} {} {}", self.doc.world.meta.name, rect.x0, rect.z0);
+                        let size = Some([(rect.x1 - rect.x0) as u32, (rect.z1 - rect.z0) as u32]);
+                        if let Some(path) = crate::file_names::dialog(crate::file_names::Export { name: &name, kind: tr!("Region"), size }, "massif").set_title(tr!("Save the region as a map")).add_filter("Massif", &["massif"]).save_file().map(crate::file_names::saved) {
                             keep = false;
                             if self.doc.world.meta.map_id.is_none() {
                                 self.doc.world.map_id();
@@ -8167,6 +8225,7 @@ impl eframe::App for MassifApp {
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        self.settings.file_names = crate::file_names::current();
         eframe::set_value(storage, LAYOUT_KEY, &self.layout);
         eframe::set_value(storage, "massif.settings", &self.settings);
         eframe::set_value(storage, "massif.tools", &self.tools);

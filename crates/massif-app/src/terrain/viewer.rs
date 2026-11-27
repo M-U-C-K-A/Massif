@@ -241,8 +241,8 @@ const IMAGE_SIZE: [u32; 2] = [1920, 1080];
 
 /// Renders the 3D view at full quality and saves it where the user says.
 fn save_image(p: &mut TerrainPanel) {
-    let name = format!("{}.png", if p.script.title.is_empty() { "Terrain" } else { &p.script.title });
-    let Some(path) = rfd::FileDialog::new().set_file_name(name).add_filter(t!("PNG image"), &["png"]).save_file() else {
+    let name = if p.script.title.is_empty() { t!("Terrain") } else { &p.script.title };
+    let Some(path) = crate::file_names::dialog(crate::file_names::Export { name, kind: t!("Image"), size: Some(IMAGE_SIZE) }, "png").add_filter(t!("PNG image"), &["png"]).save_file().map(crate::file_names::saved) else {
         return;
     };
     let Some((w, h, rgba)) = p.view3d.render_image(IMAGE_SIZE) else {
@@ -469,7 +469,7 @@ fn map_options(p: &mut TerrainPanel, ui: &mut Ui) {
             let busy = p.heightmap.is_some();
             let label = if busy { t!("Saving…") } else { t!("Save…") };
             if ui.add_enabled(!busy, egui::Button::new(label)).clicked()
-                && let Some(path) = rfd::FileDialog::new().set_file_name(t!("terrain height map.png")).add_filter(t!("16-bit PNG"), &["png"]).add_filter(t!("OpenEXR, heights in blocks"), &["exr"]).save_file()
+                && let Some(path) = crate::file_names::dialog(crate::file_names::Export { name: if p.script.title.is_empty() { t!("Terrain") } else { &p.script.title }, kind: t!("Height map"), size: Some([p.space.size.min(4096); 2]) }, "png").add_filter(t!("16-bit PNG"), &["png"]).add_filter(t!("OpenEXR, heights in blocks"), &["exr"]).save_file().map(crate::file_names::saved)
             {
                 p.save_heightmap(path);
                 ui.close();

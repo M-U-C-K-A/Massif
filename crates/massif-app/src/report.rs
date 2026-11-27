@@ -502,34 +502,35 @@ pub fn last_error(dir: &Path) -> Option<String> {
 /// A suggested name for the zip, at the user's local time:
 /// `Massif report 2026-11-16 14.05.zip`.
 pub fn file_name() -> String {
-    let (y, m, d, h, mi) = local_now();
+    let (y, m, d, h, mi, _) = local_now();
     format!("Massif report {y:04}-{m:02}-{d:02} {h:02}.{mi:02}.zip")
 }
 
-/// The year, month, day, hour and minute of now, as the user's clock says.
+/// The year, month, day, hour, minute and second of now, as the user's
+/// clock says.
 #[cfg(windows)]
-fn local_now() -> (i64, u32, u32, u32, u32) {
+pub fn local_now() -> (i64, u32, u32, u32, u32, u32) {
     let mut t: windows_sys::Win32::Foundation::SYSTEMTIME = unsafe { std::mem::zeroed() };
     unsafe { windows_sys::Win32::System::SystemInformation::GetLocalTime(&mut t) };
-    (t.wYear as i64, t.wMonth as u32, t.wDay as u32, t.wHour as u32, t.wMinute as u32)
+    (t.wYear as i64, t.wMonth as u32, t.wDay as u32, t.wHour as u32, t.wMinute as u32, t.wSecond as u32)
 }
 
-/// The year, month, day, hour and minute of now, as the user's clock says
-/// (UTC where it cannot be read).
+/// The year, month, day, hour, minute and second of now, as the user's
+/// clock says (UTC where it cannot be read).
 #[cfg(not(windows))]
-fn local_now() -> (i64, u32, u32, u32, u32) {
+pub fn local_now() -> (i64, u32, u32, u32, u32, u32) {
     #[cfg(unix)]
     {
         let t = unsafe { libc::time(std::ptr::null_mut()) };
         let mut tm: libc::tm = unsafe { std::mem::zeroed() };
         if !unsafe { libc::localtime_r(&t, &mut tm) }.is_null() {
-            return (tm.tm_year as i64 + 1900, tm.tm_mon as u32 + 1, tm.tm_mday as u32, tm.tm_hour as u32, tm.tm_min as u32);
+            return (tm.tm_year as i64 + 1900, tm.tm_mon as u32 + 1, tm.tm_mday as u32, tm.tm_hour as u32, tm.tm_min as u32, tm.tm_sec as u32);
         }
     }
     let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()) as i64;
     let (y, m, d) = civil(secs.div_euclid(86400));
     let t = secs.rem_euclid(86400);
-    (y, m, d, (t / 3600) as u32, (t % 3600 / 60) as u32)
+    (y, m, d, (t / 3600) as u32, (t % 3600 / 60) as u32, (t % 60) as u32)
 }
 
 /// Days since 1970 as a date (Howard Hinnant's `civil_from_days`).

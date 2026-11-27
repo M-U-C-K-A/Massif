@@ -2445,7 +2445,6 @@
  "{name}  ·  installed": "{name}  ·  установлен",
  "{name} and {value} more": "{name} и ещё {value}",
  "{name} copy": "{name} копия",
- "{name} height map.png": "{name} карта высот.png",
  "{name} works on the map: here the left button turns the view, the right one moves it": "{name} работает на карте: здесь левая кнопка поворачивает вид, правая сдвигает его",
  "{name} · y {min} to {max}, most at {peak} · {veins} veins a chunk · {size} blocks a vein": "{name} · y от {min} до {max}, больше всего на {peak} · жил на чанк: {veins} · блоков в жиле: {size}",
  "{name} · {point} (read-only)": "{name} · {point} (только чтение)",
@@ -3593,7 +3592,6 @@
  "Starts with": "Начинается с",
  "Sunset": "Закат",
  "Survival safe": "Безопасное выживание",
- "The world rules you saved under a name in the export dialog (Rules ▸ Save as preset), offered there beside Creative / Frozen, Survival safe and Vanilla.": "Правила мира, сохранённые вами под именем в окне экспорта (Правила ▸ Сохранить как набор), предлагаются там рядом с наборами «Творчество / Заморозка», «Безопасное выживание» и «Ванилла».",
  "Thunder": "Гроза",
  "Time and weather": "Время и погода",
  "Wandering trader": "Странствующий торговец",
@@ -4068,5 +4066,15 @@
  "Saved an EXR height map of {pw} × {pd}, heights in blocks from Y {lo} to {hi}{value}": "Карта высот EXR {pw} × {pd} сохранена, высоты в блоках от Y {lo} до {hi}{value}",
  ", values {low} to {high}": ", значения от {low} до {high}",
  " · the file's values {low} to {high}": " · значения файла от {low} до {high}",
- "OpenEXR, linear light with depth, normal and albedo": "OpenEXR, линейный свет с глубиной, нормалями и альбедо"
+ "OpenEXR, linear light with depth, normal and albedo": "OpenEXR, линейный свет с глубиной, нормалями и альбедо",
+ "The names exports are offered under, and the world rules you saved under a name in the export dialog (Rules ▸ Save as preset), offered there beside Creative / Frozen, Survival safe and Vanilla.": "Имена, под которыми предлагаются экспорты, и правила мира, сохранённые под именем в окне экспорта (Правила ▸ Сохранить как пресет), предлагаемые там рядом с Творческим / Замороженным, Безопасным выживанием и Vanilla.",
+ "Schematic": "Схематика",
+ "Object": "Объект",
+ "Date": "Дата",
+ "File names": "Имена файлов",
+ "Ready ones": "Готовые",
+ "24 h": "24 ч",
+ "12 h": "12 ч",
+ "A render would be named {preview}": "Рендер будет назван {preview}",
+ "Tokens: {tokens}. Characters no system takes become a dash, and a name already in the folder gets -2, -3 after it.": "Метки: {tokens}. Символы, которые не принимает какая-либо система, становятся дефисом, а к имени, уже занятому в папке, добавляется -2, -3."
 }

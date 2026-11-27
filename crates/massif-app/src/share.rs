@@ -1013,8 +1013,9 @@ impl ShareForm {
                 self.said = Some(tr!("Copied: paste it into Discord, Reddit or anywhere").to_owned());
             }
             if ui.add_enabled(can, egui::Button::new(theme::with_icon(Icon::ImageDown, tr!("Save PNG…")))).clicked() {
-                let name = format!("{} {}.png", self.source.info.name, Kind::ALL[self.picked].label().to_lowercase());
-                if let Some(path) = rfd::FileDialog::new().set_title(tr!("Save the picture")).add_filter("PNG", &["png"]).set_file_name(name).save_file() {
+                let size = self.picture().map(|img| [img.width(), img.height()]);
+                let export = crate::file_names::Export { name: &self.source.info.name, kind: Kind::ALL[self.picked].label(), size };
+                if let Some(path) = crate::file_names::dialog(export, "png").set_title(tr!("Save the picture")).add_filter("PNG", &["png"]).save_file().map(crate::file_names::saved) {
                     self.said = Some(match self.save(&path) {
                         Ok(()) => tr!("Saved {name}", name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()),
                         Err(e) => e,

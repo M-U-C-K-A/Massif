@@ -269,7 +269,6 @@
   "Saving…": "Speichern…",
   "Save…": "Speichern…",
   "Save the terrain at a block a sample as a 16-bit PNG height map, without writing it into the map": "Das Gelände mit einem Wert pro Block als 16-Bit-PNG-Höhenkarte speichern, ohne es in die Karte zu schreiben",
-  "terrain height map.png": "Höhenkarte des Geländes.png",
   "The graph's Map Output takes no Height: nothing to save": "Die Map Output des Graphen erhält keine Höhe: nichts zu speichern",
   "The height map could not be saved: {e}": "Die Höhenkarte konnte nicht gespeichert werden: {e}",
   "Saved the terrain as a height map of {n} × {n} in {s} s: black is Y {lo}, white Y {hi}": "Gelände als Höhenkarte von {n} × {n} in {s} s gespeichert: Schwarz ist Y {lo}, Weiß Y {hi}",

@@ -1,0 +1,3 @@
+**Names of your exports**
+
+Settings ▸ Export has a File names template for everything you export: worlds, schematics, height maps, render images and animations, and Share Image pictures. Build it from `{name}`, `{kind}`, `{date}`, `{time}`, `{timestamp}`, `{counter}`, `{size}` and `{version}`, or pick a ready one; the date can be ISO (2026-11-27), European or US and the time 24 h or 12 h, and a preview shows the name it makes. Characters Windows or macOS refuse are replaced, and the save dialog opens in the folder of your last export with a name that is free there, adding -2, -3 rather than offering to overwrite a file.

@@ -1722,7 +1722,7 @@ impl RenderSide {
             let size = STILL_SIZES[self.still_size.min(STILL_SIZES.len() - 1)].1.unwrap_or(self.view_px);
             if !scene.renderer.fits(size[0], size[1]) {
                 self.saved = Some(Err(tr!("This size is larger than the graphics card can draw").to_owned()));
-            } else if let Some(path) = rfd::FileDialog::new().set_file_name(format!("{}.png", doc.title())).add_filter(tr!("PNG image"), &["png"]).add_filter(tr!("OpenEXR, linear light with depth, normal and albedo"), &["exr"]).save_file() {
+            } else if let Some(path) = crate::file_names::dialog(crate::file_names::Export { name: &doc.title(), kind: tr!("Render"), size: Some(size) }, "png").add_filter(tr!("PNG image"), &["png"]).add_filter(tr!("OpenEXR, linear light with depth, normal and albedo"), &["exr"]).save_file().map(crate::file_names::saved) {
                 self.saved = None;
                 self.still = Some(Still { path, size, samples: self.still_samples, camera: orbit.camera(self.fov), light: self.light, denoise: self.still_denoise, row: 0, started: Instant::now() });
                 scene.renderer.restart();
@@ -1834,7 +1834,10 @@ impl RenderSide {
     fn start_movie(&mut self, doc: &Document, anim: Animation) {
         let stem = doc.title();
         let target = match self.movie_format {
-            MovieFormat::Mp4 => rfd::FileDialog::new().set_file_name(format!("{stem}.mp4")).add_filter(tr!("MP4 video"), &["mp4"]).save_file(),
+            MovieFormat::Mp4 => {
+                let size = STILL_SIZES[self.still_size.min(STILL_SIZES.len() - 1)].1.unwrap_or(self.view_px);
+                crate::file_names::dialog(crate::file_names::Export { name: &stem, kind: tr!("Animation"), size: Some(size) }, "mp4").add_filter(tr!("MP4 video"), &["mp4"]).save_file().map(crate::file_names::saved)
+            }
             MovieFormat::Png => rfd::FileDialog::new().set_title(tr!("A folder for the animation's images")).pick_folder(),
         };
         if let Some(target) = target {

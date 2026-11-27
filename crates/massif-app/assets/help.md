@@ -48,6 +48,7 @@ Each column gets the height of its ground, its top block as terrain (a terrain o
 - Picking **Paint biome** shows the map's biomes, **Paint terrain** its terrains; the view comes back when you change tools (**Settings ▸ Appearance ▸ Switch the map's view with the tool**).
 
 ## Autosave
+- **Settings ▸ Export ▸ File names** sets the name every export is offered under (worlds, schematics, height maps, renders, animations, Share Image pictures): a template of `{name}`, `{kind}`, `{date}`, `{time}`, `{timestamp}`, `{counter}`, `{size}` and `{version}`, with ready ones, the date ISO, European or US and the time at 24 h or 12 h, and a preview. Characters a system refuses become a dash, and the dialog opens in the last export's folder with a name free there (`-2`, `-3` after it otherwise).
 - While the map has changes not saved, Massif keeps a copy of it every few minutes (**Settings ▸ Autosave**: on or off, every 1 to 15 minutes), in a folder of its own, never over your file. It is written in the background: the map stays smooth, even a huge one.
 - Should Massif close without saving (a crash, a forced quit, a power cut), the next start offers **Restore unsaved changes?**: the map's name and when its copy was taken. **Restore** opens it with changes to save; **Discard** deletes the copy; **Later** keeps it for the next start.
 - Should Massif run into an error while you work, it writes a copy of the map at once and says so: **Save As…** keeps the map under a name of your own, **Carry On** goes back to work, **Quit** keeps the copy for the next start.

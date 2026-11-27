@@ -3576,6 +3576,19 @@ their own:
   (not while their tiles are still being built), a quiet note suggests the
   preset one step lower, with a button that applies it; its × stops the
   suggestion for good.
+- **Export**: **File names**, the name every export is offered under
+  (worlds, schematics, height maps, render images and animations, Share
+  Image pictures): a template of tokens — `{name}` (the map's), `{kind}`
+  (World, Render, Height map…), `{date}`, `{time}`, `{timestamp}`,
+  `{counter}` (the exports made so far, `007`), `{size}` (`1920x1080`, in
+  pixels or blocks) and `{version}` (Massif's) — typed or picked among
+  **Ready ones**, `{name} {kind}` at first. **Date** is written ISO
+  (2026-11-27, the default), European (27-11-2026) or US (11-27-2026);
+  **Time** at 24 h (14.05) or 12 h (2.05 PM). Below, the name a render
+  would get now. Characters Windows or macOS refuse become a dash, and the
+  save dialog opens in the folder of the last export with a name free
+  there (`-2`, `-3` after it otherwise). Under it, the world rules saved
+  as presets, to rename or remove.
 - **Developer**: developer mode adds a **Developer** panel to every area's
   menu, as the brushes or the layers: frames a second and the time each
   takes (and how much of it is Massif's own work), the memory the system

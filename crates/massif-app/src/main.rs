@@ -3,6 +3,7 @@
 
 #[macro_use]
 mod i18n;
+mod file_names;
 mod inspect;
 mod access;
 mod analysis;

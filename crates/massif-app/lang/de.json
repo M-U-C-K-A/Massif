@@ -2449,7 +2449,6 @@
  "{name}  ·  installed": "{name}  ·  installiert",
  "{name} and {value} more": "{name} und {value} weitere",
  "{name} copy": "{name} Kopie",
- "{name} height map.png": "{name} Höhenkarte.png",
  "{name} works on the map: here the left button turns the view, the right one moves it": "{name} wirkt auf der Karte: hier dreht die linke Taste die Ansicht, die rechte verschiebt sie",
  "{name} · y {min} to {max}, most at {peak} · {veins} veins a chunk · {size} blocks a vein": "{name} · y {min} bis {max}, meist bei {peak} · {veins} Adern pro Chunk · {size} Blöcke pro Ader",
  "{name} · {point} (read-only)": "{name} · {point} (schreibgeschützt)",
@@ -3429,7 +3428,6 @@
  "Starts with": "Beginnt mit",
  "Sunset": "Sonnenuntergang",
  "Survival safe": "Sicheres Überleben",
- "The world rules you saved under a name in the export dialog (Rules ▸ Save as preset), offered there beside Creative / Frozen, Survival safe and Vanilla.": "Die Weltregeln, die Sie im Exportdialog unter einem Namen gespeichert haben (Regeln ▸ Als Vorlage speichern), dort neben Kreativ / Eingefroren, Sicheres Überleben und Vanilla angeboten.",
  "Thunder": "Gewitter",
  "Time": "Uhrzeit",
  "Time and weather": "Zeit und Wetter",
@@ -4104,5 +4102,15 @@
  "Saved an EXR height map of {pw} × {pd}, heights in blocks from Y {lo} to {hi}{value}": "EXR-Höhenkarte von {pw} × {pd} gesichert, Höhen in Blöcken von Y {lo} bis {hi}{value}",
  ", values {low} to {high}": ", Werte von {low} bis {high}",
  " · the file's values {low} to {high}": " · Werte der Datei von {low} bis {high}",
- "OpenEXR, linear light with depth, normal and albedo": "OpenEXR, lineares Licht mit Tiefe, Normalen und Albedo"
+ "OpenEXR, linear light with depth, normal and albedo": "OpenEXR, lineares Licht mit Tiefe, Normalen und Albedo",
+ "The names exports are offered under, and the world rules you saved under a name in the export dialog (Rules ▸ Save as preset), offered there beside Creative / Frozen, Survival safe and Vanilla.": "Die Namen, unter denen Exporte vorgeschlagen werden, und die Weltregeln, die du im Exportdialog unter einem Namen gesichert hast (Regeln ▸ Als Vorlage sichern), dort neben Kreativ / Eingefroren, Sicheres Überleben und Vanilla angeboten.",
+ "Schematic": "Schematic",
+ "Object": "Objekt",
+ "Date": "Datum",
+ "File names": "Dateinamen",
+ "Ready ones": "Vorlagen",
+ "24 h": "24 h",
+ "12 h": "12 h",
+ "A render would be named {preview}": "Ein Render hieße {preview}",
+ "Tokens: {tokens}. Characters no system takes become a dash, and a name already in the folder gets -2, -3 after it.": "Platzhalter: {tokens}. Zeichen, die ein System nicht annimmt, werden zu einem Bindestrich, und ein Name, der im Ordner schon vergeben ist, bekommt -2, -3 angehängt."
 }
