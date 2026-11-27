@@ -46,8 +46,11 @@ fetch() {
 notices() {
   local from=$1 to=$2
   mkdir -p "$to"
-  cp "$from/LICENSE.txt" "$to/OpenImageDenoise-LICENSE.txt"
-  for f in "$from"/third-party-programs*.txt; do
+  # The notices sit at the archive's root or in its doc/ folder (Linux, Windows).
+  local docs=$from
+  [ -e "$docs/LICENSE.txt" ] || docs=$from/doc
+  cp "$docs/LICENSE.txt" "$to/OpenImageDenoise-LICENSE.txt"
+  for f in "$docs"/third-party-programs*.txt; do
     [ -e "$f" ] && cp "$f" "$to/OpenImageDenoise-$(basename "$f")"
   done
 }
