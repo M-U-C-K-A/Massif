@@ -11,7 +11,7 @@ use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, HMODULE, HWND, STILL_A
 use windows_sys::Win32::System::Diagnostics::Debug::{EXCEPTION_POINTERS, LPTOP_LEVEL_EXCEPTION_FILTER, SetUnhandledExceptionFilter};
 use windows_sys::Win32::System::LibraryLoader::{GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, GetModuleFileNameW, GetModuleHandleExW};
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetCurrentThread, GetCurrentThreadId, GetCurrentThreadStackLimits, GetExitCodeProcess, OpenProcess, OpenThread, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW, ResumeThread, SetThreadPriority, SuspendThread, THREAD_GET_CONTEXT, THREAD_PRIORITY_BELOW_NORMAL, THREAD_QUERY_INFORMATION, THREAD_SUSPEND_RESUME, TerminateProcess};
-use windows_sys::Win32::UI::WindowsAndMessaging::{IsWindowVisible, SW_SHOW, ShowWindow};
+use windows_sys::Win32::UI::WindowsAndMessaging::{IsWindowVisible, MB_ICONERROR, MB_OK, MB_SETFOREGROUND, MessageBoxW, SW_SHOW, ShowWindow};
 
 /// The filter of unhandled exceptions there was before Massif's.
 static PREVIOUS: AtomicUsize = AtomicUsize::new(0);
@@ -30,6 +30,15 @@ pub fn show_now(hwnd: isize) -> bool {
     true
 }
 
+/// A message box of the system, waited on: MessageBoxW itself, which needs
+/// nothing more than Windows (a crash may leave no COM or event loop).
+pub fn message_box(text: &str) {
+    let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let (text, title) = (wide(text), wide("Massif"));
+    // Safety: two strings ending in 0, alive for the call; no owner window.
+    unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR | MB_SETFOREGROUND) };
+}
+
 /// Write down an exception no one handles (an access violation in a
 /// driver, a stack overflow) before Windows ends the process.
 pub fn catch_crashes() {
@@ -38,7 +47,12 @@ pub fn catch_crashes() {
         if let Some(record) = unsafe { info.as_ref() }.and_then(|i| unsafe { i.ExceptionRecord.as_ref() }) {
             let code = record.ExceptionCode as u32;
             let at = record.ExceptionAddress;
-            super::write_now(&format!("crash: exception {code:#010x}{} at {at:?}{}", what(code), module_of(at as usize).map(|m| format!(" in {m}")).unwrap_or_default()));
+            let crash = format!("exception {code:#010x}{} at {at:?}{}", what(code), module_of(at as usize).map(|m| format!(" in {m}")).unwrap_or_default());
+            super::write_now(&format!("crash: {crash}"));
+            // A stack overflow leaves no stack to show a message box on.
+            if code != 0xC000_00FD {
+                super::crashed_before_window(&crash);
+            }
         }
         let previous = PREVIOUS.load(Ordering::Relaxed);
         if previous != 0 {

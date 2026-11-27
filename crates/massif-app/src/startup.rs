@@ -472,6 +472,17 @@ pub fn failed(error: &dyn std::fmt::Display) {
     tell(&tr!("Massif could not start:\n\n{error}\n\nIt needs a graphics card that {graphics} can use: updating its driver often helps.{where_logged}", where_logged = where_logged(), error, graphics));
 }
 
+/// A crash before the first frame was shown: the window never appeared, so
+/// it is said in a message box of the system, with where the log is. Once.
+#[cfg(windows)]
+fn crashed_before_window(crash: &str) {
+    static TOLD: AtomicBool = AtomicBool::new(false);
+    if SHOWN.load(Ordering::SeqCst) || TOLD.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    windows::message_box(&tr!("Massif stopped on a crash before its window appeared:\n\n{crash}\n\nUpdating the graphics card's driver often helps.{where_logged}", crash, where_logged = where_logged()));
+}
+
 /// A message box of the system, waited on.
 pub fn tell(text: &str) {
     flush();

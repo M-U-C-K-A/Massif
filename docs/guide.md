@@ -3912,6 +3912,13 @@ again, **Help ▸ Report a Problem…** puts both in one file to send, with the
 computer and the graphics card (see above); otherwise send the two logs:
 the last line says where Massif stopped.
 
+A start that fails before the window appears says so in a message box,
+with where the log is: no graphics card that DirectX 12, Vulkan or OpenGL
+can use, or a crash (in a graphics driver, say). On Windows, Massif needs
+nothing installed beside it, not even the Visual C++ Redistributable: if
+it shows nothing at all and writes no `startup.log`, Windows did not let
+it run (an antivirus, or a zip not fully extracted).
+
 - The first frames are followed step by step until one is on the screen:
   the interface laid out, part by part (the home screen's ridges, its side
   bar, the new map's settings), its shapes and textures sent to the graphics card,

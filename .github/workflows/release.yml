@@ -139,6 +139,12 @@ jobs:
           # Open Image Denoise, the Render side's denoiser (Apache-2.0).
           bash tools/oidn.sh windows dist/Massif
           if ($LASTEXITCODE -ne 0) { exit 1 }
+          # A fresh Windows has no Visual C++ Redistributable: Massif's own
+          # files link the C runtime statically (.cargo/config.toml), and the
+          # runtime DLLs Open Image Denoise needs are shipped beside it.
+          # Fails if any file still needs one that is not in the folder.
+          ./tools/windows-imports.ps1 dist/Massif -Deploy
+          if ($LASTEXITCODE -ne 0) { exit 1 }
           New-Item -ItemType Directory -Force -Path out | Out-Null
           Compress-Archive -Path dist/Massif -DestinationPath "out/Massif-$env:VERSION-windows-x86_64.zip"
 

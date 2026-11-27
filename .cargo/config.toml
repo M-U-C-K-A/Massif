@@ -1,0 +1,8 @@
+# Windows: the C runtime linked into every binary (/MT), massif.exe,
+# massif-cli.exe and MassifThumbnails.dll, and into the C and C++ that build
+# scripts compile (the cc crate follows crt-static): they need no Visual C++
+# Redistributable, which a fresh Windows does not have (VCRUNTIME140.dll).
+# The Universal CRT is linked statically too. The release workflow checks
+# the DLLs every shipped file imports (tools/windows-imports.ps1).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
