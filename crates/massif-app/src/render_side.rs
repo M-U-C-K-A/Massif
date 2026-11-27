@@ -337,7 +337,7 @@ impl Default for RenderSide {
 }
 
 /// An image denoised on the processor: its light (linear) and exposure.
-type Denoised = Result<(Vec<f32>, f32, u32), String>;
+type Denoised = Result<(Vec<f32>, massif_render::color::Tone), String>;
 
 /// The samples a pixel at which the view is denoised by Open Image
 /// Denoise (and at the last, where it stops).
@@ -810,10 +810,10 @@ impl RenderSide {
                     let name = still.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                     let image = match samples {
                         Some(mut s) => match massif_render::oidn::denoise(&mut s.color, Some(&s.albedo), Some(&s.normal), s.width as usize, s.height as usize) {
-                            Ok(()) => Some((s.width, s.height, massif_render::gpu::tone_map(&s.color, s.exposure, s.look))),
+                            Ok(()) => Some((s.width, s.height, s.tone.map(&s.color))),
                             Err(e) => {
                                 log::warn!("denoising the image: {e}");
-                                Some((s.width, s.height, massif_render::gpu::tone_map(&s.color, s.exposure, s.look)))
+                                Some((s.width, s.height, s.tone.map(&s.color)))
                             }
                         },
                         None => image,
@@ -890,7 +890,7 @@ impl RenderSide {
             {
                 let (tx, rx) = std::sync::mpsc::channel();
                 std::thread::spawn(move || {
-                    let result = massif_render::oidn::denoise(&mut s.color, Some(&s.albedo), Some(&s.normal), s.width as usize, s.height as usize).map(|()| (s.color, s.exposure, s.look));
+                    let result = massif_render::oidn::denoise(&mut s.color, Some(&s.albedo), Some(&s.normal), s.width as usize, s.height as usize).map(|()| (s.color, s.tone));
                     let _ = tx.send(result);
                 });
                 self.intel = Some((self.round, rx));
@@ -900,8 +900,8 @@ impl RenderSide {
                 match rx.try_recv() {
                     Ok(result) => {
                         match result {
-                            Ok((linear, exposure, look)) if *round == self.round && self.denoise => {
-                                scene.renderer.show_linear(&linear, exposure, look);
+                            Ok((linear, tone)) if *round == self.round && self.denoise => {
+                                scene.renderer.show_linear(&linear, tone);
                                 scene.renderer.hold = true;
                                 self.intel_shown = true;
                             }
@@ -1205,14 +1205,43 @@ impl RenderSide {
             row(ui, tr!("Denoise"), |ui| {
                 crate::widgets::switch(ui, &mut self.denoise).on_hover_text(tr!("Smooth the grain of the first samples away while they add up, the textures kept sharp"));
             });
-            row(ui, tr!("Exposure"), |ui| {
-                ui.add(Field::new(&mut light.exposure, 0.1..=16.0).logarithmic(true).max_decimals(2));
+        });
+        // Colour management, as Blender's: the display, the view transform
+        // and its look, the exposure in stops, the gamma.
+        title(ui, tr!("Color Management"));
+        well(ui, |ui| {
+            use massif_render::color;
+            row(ui, tr!("Display Device"), |ui| {
+                ui.label("sRGB");
             });
-            row(ui, tr!("Tones"), |ui| {
-                let labels = [tr!("Filmic"), tr!("Punchy")];
-                if let Some(k) = crate::widgets::button_group(ui, "render look", &labels, &[light.look == 0, light.look == 1]) {
-                    light.look = k as u32;
+            row(ui, tr!("View Transform"), |ui| {
+                crate::widgets::combo("render view transform").selected_text(color::VIEWS[(light.view as usize).min(color::VIEWS.len() - 1)]).show_ui(ui, |ui| {
+                    for (k, name) in color::VIEWS.iter().enumerate() {
+                        if ui.selectable_label(light.view == k as u32, *name).clicked() && light.view != k as u32 {
+                            light.view = k as u32;
+                            light.look = 0;
+                        }
+                    }
+                });
+            });
+            let looks = color::looks(light.view);
+            row(ui, tr!("Look"), |ui| {
+                ui.add_enabled_ui(looks.len() > 1, |ui| {
+                    crate::widgets::combo("render view look").selected_text(looks.get(light.look as usize).copied().unwrap_or("None")).show_ui(ui, |ui| {
+                        for (k, name) in looks.iter().enumerate() {
+                            ui.selectable_value(&mut light.look, k as u32, *name);
+                        }
+                    });
+                });
+            });
+            row(ui, tr!("Exposure"), |ui| {
+                let mut stops = light.exposure.max(1e-4).log2();
+                if ui.add(Field::new(&mut stops, -10.0..=10.0).max_decimals(2)).changed() {
+                    light.exposure = 2f32.powf(stops);
                 }
+            });
+            row(ui, tr!("Gamma"), |ui| {
+                ui.add(Field::new(&mut light.gamma, 0.1..=5.0).max_decimals(2));
             });
         });
         title(ui, tr!("Image to save"));
@@ -1441,7 +1470,7 @@ impl RenderSide {
                             if let Err(e) = massif_render::oidn::denoise(&mut s.color, Some(&s.albedo), Some(&s.normal), s.width as usize, s.height as usize) {
                                 log::warn!("denoising a frame: {e}");
                             }
-                            (s.width, s.height, massif_render::gpu::tone_map(&s.color, s.exposure, s.look))
+                            (s.width, s.height, s.tone.map(&s.color))
                         }
                     };
                     if failed.is_none()

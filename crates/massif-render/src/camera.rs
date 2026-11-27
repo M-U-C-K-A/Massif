@@ -115,9 +115,11 @@ pub struct Light {
     /// The detailed grass's blades a block, and their height (blocks).
     pub grass_blades: u32,
     pub grass_height: f32,
-    /// How light becomes the display's values: 0 filmic (as Blender's),
-    /// 1 ACES (more contrast and colour).
+    /// Colour management, as Blender's: the view transform, its look (see
+    /// [`crate::color`]) and the display's gamma.
+    pub view: u32,
     pub look: u32,
+    pub gamma: f32,
     pub exposure: f32,
 }
 
@@ -161,7 +163,9 @@ impl Default for Light {
             clamp: 10.0,
             grass_blades: 45,
             grass_height: 0.8,
+            view: crate::color::AGX,
             look: 0,
+            gamma: 1.0,
             exposure: 1.0,
         }
     }
@@ -178,6 +182,11 @@ impl Light {
     /// What lights the scene from the sky: the sun, or once it is 6° under
     /// the horizon (past the blue hour), the moon facing it (full), bluish and some 300
     /// times dimmer. Its direction, illuminance and tint.
+    /// How its light becomes the display's values.
+    pub fn tone(&self) -> crate::color::Tone {
+        crate::color::Tone { exposure: self.exposure, view: self.view, look: self.look, gamma: self.gamma }
+    }
+
     pub fn source(&self) -> (Vec3, f32, [f32; 3]) {
         let sun = self.sun_direction();
         if self.sun_elevation > -6f32.to_radians() {

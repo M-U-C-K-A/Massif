@@ -43,6 +43,7 @@ struct Params {
     grid: [i32; 4],
     info: [u32; 4],
     flags: [u32; 4],
+    tone: [f32; 4],
     level_off: [u32; LEVELS],
     level_w: [u32; LEVELS],
 }
@@ -195,38 +196,10 @@ pub struct Samples {
     pub width: u32,
     pub height: u32,
     pub samples: u32,
-    pub exposure: f32,
-    pub look: u32,
+    pub tone: crate::color::Tone,
     pub color: Vec<f32>,
     pub albedo: Vec<f32>,
     pub normal: Vec<f32>,
-}
-
-/// Linear light to sRGB bytes, as `tone` in `params.wgsl` does it by
-/// `look` (0: filmic, 1: ACES fitted), opaque.
-pub fn tone_map(linear: &[f32], exposure: f32, look: u32) -> Vec<u8> {
-    const FILMIC_C: f32 = 0.797;
-    let mut out = Vec::with_capacity(linear.len() / 3 * 4);
-    for p in linear.as_chunks::<3>().0 {
-        let x = p.map(|c| (c * exposure).max(0.0));
-        if look == 1 {
-            for c in x {
-                let m = ((c * (2.51 * c + 0.03)) / (c * (2.43 * c + 0.59) + 0.14)).clamp(0.0, 1.0);
-                out.push((m.powf(1.0 / 2.2) * 255.0 + 0.5) as u8);
-            }
-        } else {
-            let l = 0.2126 * x[0] + 0.7152 * x[1] + 0.0722 * x[2];
-            for c in x {
-                let d = (l + (c - l) * 1.08).max(0.0);
-                let s = ((d.max(1e-10).log2() + 10.0) / 16.5).clamp(0.0, 1.0);
-                let (a, b) = (s.powf(2.2), (1.0 - s).powf(2.2));
-                let m = a / (a + FILMIC_C * b).max(1e-10);
-                out.push((m.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
-            }
-        }
-        out.push(255);
-    }
-    out
 }
 
 /// A half float's value.
@@ -324,9 +297,8 @@ pub struct Renderer {
     coarse: bool,
     /// Work sent through [`Self::submit`] the graphics card has not done.
     in_flight: std::sync::Arc<std::sync::atomic::AtomicU32>,
-    /// The exposure and the look of the last sample drawn.
-    exposure: f32,
-    look: u32,
+    /// How the last sample drawn was toned.
+    tone: crate::color::Tone,
     /// Counts the times the samples started over: an image denoised from
     /// those of another round is of another image.
     pub round: u64,
@@ -481,8 +453,7 @@ impl Renderer {
             full: false,
             samples: 0,
             denoise: false,
-            exposure: 1.0,
-            look: 0,
+            tone: Default::default(),
             coarse: false,
             in_flight: Default::default(),
             hold: false,
@@ -1049,13 +1020,13 @@ impl Renderer {
             size: [w, h, self.frame.wrapping_mul(2654435761).wrapping_add(1), self.samples],
             grid: [e.width as i32, e.depth as i32, e.height(), e.sections as i32],
             info: [self.stride(), self.pyramid.levels.len() as u32, light.bounces, coarse as u32],
-            flags: [(self.denoising() || self.hold) as u32, light.grass_blades, light.grass_height.clamp(0.1, 1.0).to_bits(), light.look],
+            flags: [(self.denoising() || self.hold) as u32, light.grass_blades, light.grass_height.clamp(0.1, 1.0).to_bits(), light.view],
+            tone: light.tone().params(),
             level_off,
             level_w,
         };
         self.queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
-        self.exposure = light.exposure;
-        self.look = light.look;
+        self.tone = light.tone();
         self.coarse = coarse;
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("massif render trace"), timestamp_writes: None });
@@ -1180,18 +1151,18 @@ impl Renderer {
         }
         drop(data);
         buffer.unmap();
-        Some(Samples { width: w, height: h, samples: self.samples, exposure: self.exposure, look: self.look, color, albedo, normal })
+        Some(Samples { width: w, height: h, samples: self.samples, tone: self.tone, color, albedo, normal })
     }
 
     /// Show `linear` (three floats a pixel, the image's size) in place of
     /// the image drawn, tone mapped as the shader does.
-    pub fn show_linear(&self, linear: &[f32], exposure: f32, look: u32) {
+    pub fn show_linear(&self, linear: &[f32], tone: crate::color::Tone) {
         let Some(image) = self.image.as_ref() else { return };
         let [w, h] = image.size;
         if linear.len() != (w * h * 3) as usize {
             return;
         }
-        let rgba = tone_map(linear, exposure, look);
+        let rgba = tone.map(linear);
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo { texture: &image.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
             &rgba,

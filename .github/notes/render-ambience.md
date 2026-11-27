@@ -1,3 +1,3 @@
-**A filmic look for the Render side**
+**Color Management as in Blender**
 
-The Render side's images take light to the screen as Blender's Filmic does, at first: softer shadows, natural greens, and highlights that whiten instead of burning to a hue. Render Output's new Tones setting goes back to the punchier look of before.
+Render Output has Blender's Color Management: the View Transform (Standard, Khronos PBR Neutral, AgX by default, Filmic, Filmic Log, False Color, Raw), its Look (AgX's None, Punchy, Greyscale and contrasts from Very High to Very Low; Filmic's contrasts), the Exposure in stops and the Gamma. AgX and Filmic keep shadows soft and let bright colours whiten instead of burning to a hue; the stills, the videos and the denoised view all go through the same transform.

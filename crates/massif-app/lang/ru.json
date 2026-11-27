@@ -4034,8 +4034,8 @@
  "The animation could not be saved: {e}": "Не удалось сохранить анимацию: {e}",
  "A folder for the animation's images": "Папка для кадров анимации",
  "Rendering the animation: frame {n} of {all}": "Отрисовка анимации: кадр {n} из {all}",
- "Filmic": "Кинематографичный",
- "Punchy": "Контрастный",
- "Tones": "Тона",
- "Visibility": "Видимость"
+ "Visibility": "Видимость",
+ "Color Management": "Управление цветом",
+ "Display Device": "Устройство отображения",
+ "View Transform": "Преобразование вида"
 }

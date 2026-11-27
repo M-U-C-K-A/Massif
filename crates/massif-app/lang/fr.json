@@ -4129,8 +4129,8 @@
  "The animation could not be saved: {e}": "L'animation n'a pas pu être enregistrée : {e}",
  "A folder for the animation's images": "Un dossier pour les images de l'animation",
  "Rendering the animation: frame {n} of {all}": "Rendu de l'animation : image {n} sur {all}",
- "Filmic": "Filmique",
- "Punchy": "Contrasté",
- "Tones": "Tons",
- "Visibility": "Visibilité"
+ "Visibility": "Visibilité",
+ "Color Management": "Gestion des couleurs",
+ "Display Device": "Périphérique d'affichage",
+ "View Transform": "Transformation de vue"
 }

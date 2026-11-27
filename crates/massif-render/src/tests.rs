@@ -706,7 +706,7 @@ fn the_denoiser_settles_the_image_sooner() {
             if oidn::available() {
                 let mut s = r.read_samples().unwrap();
                 oidn::denoise(&mut s.color, Some(&s.albedo), Some(&s.normal), s.width as usize, s.height as usize).unwrap();
-                r.show_linear(&s.color, s.exposure, s.look);
+                r.show_linear(&s.color, s.tone);
                 intel.push((n, error(&linear(&r.read_image().unwrap().2), &reference)));
                 save(&r, &format!("{n:04}-oidn"));
             }
@@ -894,9 +894,54 @@ fn a_wood_s_edge() {
                 if oidn::available() {
                     let mut s = r.read_samples().unwrap();
                     oidn::denoise(&mut s.color, Some(&s.albedo), Some(&s.normal), s.width as usize, s.height as usize).unwrap();
-                    image::save_buffer(dir.join(format!("forest-{view}-{n:03}-oidn{tag}.png")), &gpu::tone_map(&s.color, s.exposure, s.look), w, h, image::ColorType::Rgba8).unwrap();
+                    image::save_buffer(dir.join(format!("forest-{view}-{n:03}-oidn{tag}.png")), &s.tone.map(&s.color), w, h, image::ColorType::Rgba8).unwrap();
                 }
             }
         }
+    }
+}
+
+/// The same image in each of Colour Management's views (and AgX's Punchy
+/// and High Contrast looks), from one set of samples denoised where Open
+/// Image Denoise is (MASSIF_SNAPSHOT_DIR: color-<view>.png).
+#[test]
+fn the_views_of_color_management() {
+    let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else { return };
+    let Some((device, queue)) = device() else { return };
+    let cat = massif_assets::load_newest().and_then(Result::ok).map(Arc::new);
+    let world = diorama::sample::village();
+    let sea = world.meta.sea_level as f64;
+    let target = map_source::target_for(cat.as_ref().map(|c| c.version.as_str()));
+    let extent = Extent::of_map(&world, 0, &target).unwrap();
+    let (vx, vz) = diorama::sample::VILLAGE;
+    let materials = Arc::new(Materials::new(cat.clone(), device.limits().max_texture_array_layers as usize));
+    let tiles = map_source::tiles_by_distance(&world, 0, vx as f64, vz as f64);
+    let mut builder = MapBuilder::start(world, 0, target, materials.clone(), tiles);
+    let built = builder.wait_all();
+    let mut r = Renderer::new(&device, &queue, extent);
+    r.sea_level = sea;
+    r.sync_materials(&materials);
+    for b in built {
+        assert!(r.put(b.chunks));
+    }
+    let mut light = Light { haze: 1.5, ..Light::default() };
+    light.set_time(17.8, 172.0, 45.0, 0.0);
+    r.resize(960, 540);
+    let ground = r.surface(vx as f64, vz as f64).unwrap_or(sea);
+    let camera = Camera::orbit([vx as f64 + 10.0, ground, vz as f64], 2.4, -0.3, 90.0, 50f32.to_radians());
+    while r.samples < 128 {
+        let cmd = r.render(&camera, &light, false).unwrap();
+        queue.submit([cmd]);
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    }
+    let mut s = r.read_samples().unwrap();
+    if oidn::available() {
+        oidn::denoise(&mut s.color, Some(&s.albedo), Some(&s.normal), s.width as usize, s.height as usize).unwrap();
+    }
+    let mut tones: Vec<(String, color::Tone)> = (0..color::VIEWS.len() as u32).map(|view| (color::VIEWS[view as usize].replace(' ', "-"), color::Tone { view, ..color::Tone::default() })).collect();
+    tones.push(("AgX-Punchy".into(), color::Tone { look: 1, ..color::Tone::default() }));
+    tones.push(("AgX-High-Contrast".into(), color::Tone { look: 4, ..color::Tone::default() }));
+    for (name, tone) in tones {
+        image::save_buffer(dir.join(format!("color-{name}.png")), &tone.map(&s.color), s.width, s.height, image::ColorType::Rgba8).unwrap();
     }
 }

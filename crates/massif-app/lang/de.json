@@ -4069,9 +4069,9 @@
  "The animation could not be saved: {e}": "Die Animation konnte nicht gespeichert werden: {e}",
  "A folder for the animation's images": "Ein Ordner für die Bilder der Animation",
  "Rendering the animation: frame {n} of {all}": "Animation wird gerendert: Bild {n} von {all}",
- "Filmic": "Filmisch",
- "Punchy": "Kräftig",
- "Tones": "Tonwerte",
  "Visibility": "Sichtweite",
- "Drag: turn · right-drag: look around · W A S D, Q E: walk (Shift: faster, wheel: speed) · middle-drag: slide · wheel: closer · shift-click: focus there · double-click: the whole map": "Ziehen: drehen · Rechts ziehen: umsehen · W A S D, Q E: gehen (Umschalt: schneller, Mausrad: Tempo) · Mitte ziehen: schieben · Mausrad: näher · Umschalt-Klick: hier scharfstellen · Doppelklick: ganze Karte"
+ "Drag: turn · right-drag: look around · W A S D, Q E: walk (Shift: faster, wheel: speed) · middle-drag: slide · wheel: closer · shift-click: focus there · double-click: the whole map": "Ziehen: drehen · Rechts ziehen: umsehen · W A S D, Q E: gehen (Umschalt: schneller, Mausrad: Tempo) · Mitte ziehen: schieben · Mausrad: näher · Umschalt-Klick: hier scharfstellen · Doppelklick: ganze Karte",
+ "Color Management": "Farbmanagement",
+ "Display Device": "Anzeigegerät",
+ "View Transform": "Ansichtstransformation"
 }

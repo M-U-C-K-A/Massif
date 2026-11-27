@@ -3158,10 +3158,18 @@ area draws the viewport at a time; a second one says where it is.
   **Bounces**, **Clamp indirect** (the most light a bounce brings, 10 at
   first: rare bright paths cut down, so that the image settles sooner with
   fewer bright specks, for a little less light; 0 for no limit),
-  **Denoise**, the **Exposure** and the **Tones**: **Filmic** (at first,
-  as Blender's Filmic and AgX: each colour along an S curve over 16.5
-  stops of light, soft shadows, highlights that whiten instead of burning
-  to a hue) or **Punchy** (ACES: more contrast and colour).
+  and **Denoise**.
+- **Color Management**, as Blender's: the **Display Device** (sRGB), the
+  **View Transform** (Standard, Khronos PBR Neutral, **AgX** at first,
+  Filmic, Filmic Log, False Color, Raw), its **Look** (AgX: None, Punchy,
+  Greyscale and seven contrasts from Very High to Very Low; Filmic: its
+  contrasts), the **Exposure** in stops and the display's **Gamma**. AgX
+  and Filmic take each colour along an S curve over 16.5 stops of light,
+  so that shadows stay soft and bright colours run to white instead of
+  burning to a hue; Khronos PBR Neutral keeps colours as they are and
+  compresses only the brightest; False Color shows the exposure in bands
+  (grey is mid grey, green a stop under, yellow two over, red the
+  brightest). Written from the transforms' public descriptions.
 - **Denoise** (on at first) smooths the grain of the first samples away
   while they add up, as Cycles' viewport denoising does: an edge-avoiding
   filter guided by what each pixel's rays first meet (its colour, which
