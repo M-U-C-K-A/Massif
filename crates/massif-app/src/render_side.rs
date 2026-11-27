@@ -289,6 +289,8 @@ pub struct RenderSide {
     /// draws it a pass, the others say where it is.
     drawn: Option<(u64, u64)>,
     playback: Playback,
+    /// How fast W A S D walk, blocks a second (the wheel, while walking).
+    walk_speed: f64,
 }
 
 impl Default for RenderSide {
@@ -329,6 +331,7 @@ impl Default for RenderSide {
             view_px: [0; 2],
             drawn: None,
             playback: Playback::default(),
+            walk_speed: 24.0,
         }
     }
 }
@@ -646,17 +649,60 @@ impl RenderSide {
             orbit.yaw += d.x * 0.006;
             orbit.pitch = (orbit.pitch - d.y * 0.006).clamp(-1.55, 1.2);
         }
-        if response.dragged_by(PointerButton::Secondary) || response.dragged_by(PointerButton::Middle) {
+        if response.dragged_by(PointerButton::Middle) {
             let d = response.drag_delta();
             let k = orbit.distance * 0.0016;
             let (s, c) = (orbit.yaw.sin() as f64, orbit.yaw.cos() as f64);
             orbit.target[0] -= (c * d.x as f64 - s * d.y as f64) * k;
             orbit.target[2] -= (s * d.x as f64 + c * d.y as f64) * k;
         }
-        if response.hovered() && self.still.is_none() {
-            let scroll = ui.input(|i| i.smooth_scroll_delta.y + i.smooth_scroll_delta.x);
-            if scroll != 0.0 {
+        // Walking, as Blender's walk navigation: the right button held, the
+        // mouse looks around from where the camera stands; W A S D move,
+        // Q and E go down and up, Shift faster; the wheel, while walking,
+        // sets the speed. Only with the pointer over the view and no field
+        // typed in.
+        let looking = response.dragged_by(PointerButton::Secondary);
+        if looking {
+            let d = response.drag_delta();
+            let eye = orbit.camera(self.fov).eye;
+            orbit.yaw += d.x * 0.004;
+            orbit.pitch = (orbit.pitch - d.y * 0.004).clamp(-1.55, 1.2);
+            let moved = orbit.camera(self.fov).eye;
+            for k in 0..3 {
+                orbit.target[k] += eye[k] - moved[k];
+            }
+        }
+        if (response.hovered() || looking) && self.still.is_none() && !ui.ctx().egui_wants_keyboard_input() {
+            use egui::Key;
+            let (dt, keys, faster, scroll) = ui.input(|i| {
+                let k = |key: Key| i.key_down(key) as i32 as f64;
+                let mods = i.modifiers.command || i.modifiers.ctrl || i.modifiers.alt;
+                let keys = if mods { [0.0; 3] } else { [k(Key::W) - k(Key::S), k(Key::D) - k(Key::A), k(Key::E) - k(Key::Q)] };
+                (i.stable_dt.min(0.1) as f64, keys, i.modifiers.shift, i.smooth_scroll_delta.y + i.smooth_scroll_delta.x)
+            });
+            let walking = keys != [0.0; 3];
+            if walking || looking {
+                if scroll != 0.0 {
+                    self.walk_speed = (self.walk_speed * (scroll as f64 * 0.004).exp()).clamp(1.0, 2000.0);
+                }
+            } else if scroll != 0.0 {
                 orbit.distance = (orbit.distance * (-scroll as f64 * 0.003).exp()).clamp(3.0, span * 3.0 + 2000.0);
+            }
+            if walking {
+                // Along the way the camera looks, flat or not: as Blender
+                // walks, forward goes where the eyes look.
+                let b = orbit.camera(self.fov).basis();
+                let speed = self.walk_speed * if faster { 4.0 } else { 1.0 } * dt;
+                let (f, r) = (b.forward, b.right);
+                let step = [
+                    (f.x as f64 * keys[0] + r.x as f64 * keys[1]) * speed,
+                    (f.y as f64 * keys[0] + r.y as f64 * keys[1] + keys[2]) * speed,
+                    (f.z as f64 * keys[0] + r.z as f64 * keys[1]) * speed,
+                ];
+                for (t, d) in orbit.target.iter_mut().zip(step) {
+                    *t += d;
+                }
+                ui.ctx().request_repaint();
             }
         }
         if response.double_clicked() || std::mem::take(&mut self.playback.frame_all) {
@@ -1119,7 +1165,7 @@ impl RenderSide {
             }
         }
         ui.add_space(4.0);
-        ui.label(RichText::new(tr!("Drag: turn · right-drag: slide · wheel: closer · shift-click: focus there · double-click: the whole map")).size(11.0).color(pal.weak));
+        ui.label(RichText::new(tr!("Drag: turn · right-drag: look around · W A S D, Q E: walk (Shift: faster, wheel: speed) · middle-drag: slide · wheel: closer · shift-click: focus there · double-click: the whole map")).size(11.0).color(pal.weak));
     }
 
     /// Render Output: how the image is exposed, and saving it.

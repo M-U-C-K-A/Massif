@@ -11233,6 +11233,55 @@ mod tests {
         assert!((key - (15.0 + 23.0 - 12.5)).rem_euclid(24.0) < 1e-3, "the key's hour moved with the looks: {key}");
     }
 
+    /// The Render Viewport walks: W held with the pointer over it carries
+    /// the camera forward where it looks, E up; nothing with the pointer
+    /// elsewhere.
+    #[test]
+    fn the_render_view_walks_with_w_a_s_d() {
+        use crate::layout::Side;
+        use egui::Key;
+        let mut h = harness(ThemeChoice::Light);
+        h.run_steps(3);
+        h.state_mut().layout.show_side(Side::Render);
+        h.run_steps(3);
+        let started = std::time::Instant::now();
+        while h.state().render_side.building() && started.elapsed().as_secs() < 120 {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let areas: Vec<(crate::layout::AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+        let view = areas.iter().find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::RenderView)).map(|(_, r)| *r).unwrap();
+        let before = h.state().render_side.pose_now().unwrap();
+        h.input_mut().events.push(egui::Event::PointerMoved(view.center()));
+        h.run_steps(2);
+        h.key_down(Key::W);
+        h.run_steps(20);
+        h.key_up(Key::W);
+        h.run_steps(2);
+        let after = h.state().render_side.pose_now().unwrap();
+        let moved: Vec<f64> = (0..3).map(|k| after.eye[k] - before.eye[k]).collect();
+        let look: Vec<f64> = (0..3).map(|k| before.target[k] - before.eye[k]).collect();
+        let along = moved.iter().zip(&look).map(|(m, l)| m * l).sum::<f64>();
+        assert!(along > 0.0 && moved.iter().map(|m| m * m).sum::<f64>() > 0.01, "W walked forward: {moved:?}");
+        // E: up.
+        let before = after;
+        h.key_down(Key::E);
+        h.run_steps(10);
+        h.key_up(Key::E);
+        h.run_steps(2);
+        let after = h.state().render_side.pose_now().unwrap();
+        assert!(after.eye[1] > before.eye[1], "E went up");
+        // The pointer away from the view: W does nothing there.
+        h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(view.right() + 40.0, view.center().y)));
+        h.run_steps(2);
+        let before = h.state().render_side.pose_now().unwrap();
+        h.key_down(Key::W);
+        h.run_steps(10);
+        h.key_up(Key::W);
+        h.run_steps(2);
+        assert_eq!(h.state().render_side.pose_now().unwrap().eye, before.eye, "only over the view");
+    }
+
     /// Let the Render side's image settle, with less motion (it stops at
     /// 64 samples a pixel), so that a snapshot does not wait on the graphics
     /// card path-tracing frame after frame (at 2x, it would time out).

@@ -2960,7 +2960,7 @@
  "Building the scene: {done} of {all} tiles": "Сборка сцены: {done} из {all} плиток",
  "Clear noon": "Ясный полдень",
  "Day": "День",
- "Drag: turn · right-drag: slide · wheel: closer · shift-click: focus there · double-click: the whole map": "Тянуть: вращать · правой кнопкой: сдвигать · колесо: ближе · Shift-клик: фокус туда · двойной клик: вся карта",
+ "Drag: turn · right-drag: look around · W A S D, Q E: walk (Shift: faster, wheel: speed) · middle-drag: slide · wheel: closer · shift-click: focus there · double-click: the whole map": "Перетаскивание: вращение · правой кнопкой: осмотреться · W A S D, Q E: идти (Shift: быстрее, колесо: скорость) · средней кнопкой: сдвиг · колесо: ближе · Shift-клик: фокус здесь · двойной клик: вся карта",
  "Drawing the image: {percent} %": "Рисование изображения: {percent} %",
  "Fair weather": "Ясная погода",
  "Focus": "Фокус",

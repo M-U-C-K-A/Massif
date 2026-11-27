@@ -342,7 +342,7 @@ The **Render** side draws the open map path-traced: sunlight and skylight bounci
 
 Its panels are editors as on the other sides (the **Render** section of an area's chooser): **Render Viewport**, **Sun and Sky**, **Camera**, **Render Output**, **Timeline**; workspaces **Still** and **Animation**.
 
-- Drag to turn, right-drag to slide, the wheel to come closer, double-click for the whole map, Shift-click to focus there.
+- Drag to turn, the wheel to come closer, double-click for the whole map, Shift-click to focus there. Walk as in Blender: hold the right button to look around, **W A S D** to move, **Q E** down and up, **Shift** faster, the wheel (while walking) for the speed; middle-drag slides.
 - **Sun and sky**: a **Look** (Clear noon, Fair weather, Golden hour, Blue hour, Foggy morning, Night), the **Time**, **Day** and **Latitude** put the sun, **North** turns the map. A moon at night.
 - A **Look** sets everything of the sky it owns (hour, sun, sky, air, haze, fog, clouds, exposure); touching a setting after makes it **Custom**, and the camera path's keyframes take the look's hour. While the view moves it is drawn at half the resolution and denoised every frame; on a Retina screen the view draws a pixel a point, as Blender's automatic pixel size.
 - **Atmosphere**: **Air**, **Haze**, a **Fog** (by its **Visibility**, 40 to 4000 blocks) filling low ground first, **Shafts of light**, a **Sea around the map**. **Clouds**: cover, height, thickness, density, size, wind; they shade the land.

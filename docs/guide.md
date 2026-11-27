@@ -3118,9 +3118,14 @@ camera and the output beside it; **Animation** the viewport over the
 timeline. Areas split, swap, float and change as on the other sides. One
 area draws the viewport at a time; a second one says where it is.
 
-- **Drag** to turn about the point looked at, **right-drag** (or middle)
-  to slide over the land, the **wheel** to come closer, **double-click**
-  for the whole map again, **Shift-click** to focus the lens there.
+- **Drag** to turn about the point looked at, **middle-drag** to slide
+  over the land, the **wheel** to come closer, **double-click** for the
+  whole map again, **Shift-click** to focus the lens there.
+- Walk as with Blender's walk navigation: hold the **right button** to look
+  around from where the camera stands, **W A S D** to move where you look,
+  **Q** and **E** to go down and up, **Shift** to go four times faster,
+  the **wheel** while walking to set the speed (24 blocks a second at
+  first). The view stays denoised at half its resolution while it moves.
 - **Sun and sky**: a **Look** to start from (Clear noon, Fair weather,
   Golden hour, Blue hour, Foggy morning, Night), then the **Time**, the
   **Day** of the year and the **Latitude** put the sun; **North** turns the

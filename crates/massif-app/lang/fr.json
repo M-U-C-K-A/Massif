@@ -2898,7 +2898,7 @@
  "Building the scene: {done} of {all} tiles": "Construction de la scène : {done} tuiles sur {all}",
  "Clear noon": "Midi clair",
  "Day": "Jour",
- "Drag: turn · right-drag: slide · wheel: closer · shift-click: focus there · double-click: the whole map": "Glisser : tourner · clic droit glissé : se déplacer · molette : s'approcher · Maj-clic : mise au point · double-clic : toute la carte",
+ "Drag: turn · right-drag: look around · W A S D, Q E: walk (Shift: faster, wheel: speed) · middle-drag: slide · wheel: closer · shift-click: focus there · double-click: the whole map": "Glisser : tourner · clic droit glissé : regarder autour · W A S D, Q E : marcher (Maj : plus vite, molette : vitesse) · clic du milieu glissé : glisser · molette : approcher · Maj-clic : mise au point ici · double-clic : toute la carte",
  "Drawing the image: {percent} %": "Calcul de l'image : {percent} %",
  "Fair weather": "Beau temps",
  "Focus": "Mise au point",
