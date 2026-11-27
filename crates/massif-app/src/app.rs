@@ -5683,8 +5683,8 @@ impl MassifApp {
                 self.render_side.viewport_ui(&mut cui, id, frame, &mut self.doc, catalogue);
             }
             EditorKind::RenderSky => scrolled(&mut cui, &mut |ui| self.render_side.sky_ui(ui, &mut self.doc)),
-            EditorKind::RenderCamera => scrolled(&mut cui, &mut |ui| self.render_side.camera_ui(ui, &self.doc)),
-            EditorKind::RenderOutput => scrolled(&mut cui, &mut |ui| self.render_side.output_ui(ui, &self.doc)),
+            EditorKind::RenderCamera => scrolled(&mut cui, &mut |ui| self.render_side.camera_ui(ui, &mut self.doc)),
+            EditorKind::RenderOutput => scrolled(&mut cui, &mut |ui| self.render_side.output_ui(ui, &mut self.doc)),
             EditorKind::Timeline => {
                 egui::Frame::new().inner_margin(egui::Margin::symmetric(theme::PAD as i8 - 1, 8)).show(&mut cui, |ui| self.render_side.timeline_ui(ui, &mut self.doc));
             }
@@ -11280,6 +11280,44 @@ mod tests {
         h.key_up(Key::W);
         h.run_steps(2);
         assert_eq!(h.state().render_side.pose_now().unwrap().eye, before.eye, "only over the view");
+    }
+
+    /// Settings keyed on the Timeline follow the playhead: the clouds'
+    /// cover keyed at 0 s and 2 s is halfway at 1 s, eased, and held after;
+    /// the hour keyed too sets the sun (MASSIF_SNAPSHOT_DIR: the Render
+    /// side's panels with their diamonds).
+    #[test]
+    fn keyed_settings_follow_the_playhead() {
+        use crate::layout::Side;
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(ThemeChoice::Light);
+        h.run_steps(3);
+        h.state_mut().layout.show_side(Side::Render);
+        h.run_steps(2);
+        h.get_by_label("Animation").click();
+        h.run_steps(3);
+        {
+            let anim = h.state_mut().doc.world.meta.animation.get_or_insert_default();
+            anim.key_value("cloud_cover", 0.0, 0.1);
+            anim.key_value("cloud_cover", 2.0, 0.8);
+            anim.key_value("hour", 0.0, 9.0);
+            anim.key_value("hour", 2.0, 17.0);
+        }
+        h.state_mut().render_side.scrub(1.0);
+        h.run_steps(3);
+        let (light, time) = h.state().render_side.sky();
+        assert!((light.cloud_cover - 0.45).abs() < 1e-3, "halfway: {}", light.cloud_cover);
+        assert!((time.hour - 13.0).abs() < 1e-3, "{}", time.hour);
+        let noon_sun = light.sun_elevation;
+        h.state_mut().render_side.scrub(5.0);
+        h.run_steps(3);
+        let (light, time) = h.state().render_side.sky();
+        assert!((light.cloud_cover - 0.8).abs() < 1e-6 && (time.hour - 17.0).abs() < 1e-6, "held after the last key");
+        assert!(light.sun_elevation < noon_sun, "the sun follows the keyed hour");
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            settle_render(&mut h);
+            h.render().unwrap().save(dir.join("render-keyed-settings.png")).unwrap();
+        }
     }
 
     /// Let the Render side's image settle, with less motion (it stops at

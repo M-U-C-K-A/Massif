@@ -1048,7 +1048,6 @@
  "Hue, saturation, brightness and contrast": "Farbton, Sättigung, Helligkeit und Kontrast",
  "Humidity": "Feuchte",
  "IN THIS MAP": "IN DIESER KARTE",
- "Image": "Bild",
  "Images": "Bilder",
  "Import .schem, .schematic, .bp, .litematic or .nbt files in its settings.": "Importiere .schem-, .schematic-, .bp-, .litematic- oder .nbt-Dateien in seinen Einstellungen.",
  "Import Pack…": "Paket importieren…",
@@ -4052,7 +4051,6 @@
  "Blades": "Halme",
  "Blades of grass a block: more, a fuller field and a slower image": "Grashalme je Block: mehr ergibt eine dichtere Wiese und ein langsameres Bild",
  "Play (Space)": "Abspielen (Leertaste)",
- "Animation to save": "Zu speichernde Animation",
  "Format": "Format",
  "MP4 video": "MP4-Video",
  "PNG images": "PNG-Bilder",
@@ -4078,5 +4076,12 @@
  "Align Camera to View": "Kamera an Ansicht ausrichten",
  "View through Camera": "Durch die Kamera sehen",
  "Put the camera where the view is (Ctrl+Alt+Numpad 0)": "Die Kamera dorthin setzen, wo die Ansicht ist (Strg+Alt+Ziffernblock 0)",
- "Put the view where the camera is (Numpad 0)": "Die Ansicht dorthin setzen, wo die Kamera ist (Ziffernblock 0)"
+ "Put the view where the camera is (Numpad 0)": "Die Ansicht dorthin setzen, wo die Kamera ist (Ziffernblock 0)",
+ "Keyframe this setting at the playhead (I over the setting; Alt+I removes the key)": "Diese Einstellung am Abspielkopf als Schlüsselbild setzen (I darüber; Alt+I entfernt es)",
+ "Sampling": "Sampling",
+ "Viewport samples": "Samples der Ansicht",
+ "The view stops adding samples there": "Die Ansicht hört dort auf, Samples hinzuzufügen",
+ "Light Paths": "Lichtpfade",
+ "Output: image": "Ausgabe: Bild",
+ "Output: animation": "Ausgabe: Animation"
 }

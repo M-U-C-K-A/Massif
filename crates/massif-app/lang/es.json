@@ -1047,7 +1047,6 @@
  "Hue, saturation, brightness and contrast": "Tono, saturación, brillo y contraste",
  "Humidity": "Humedad",
  "IN THIS MAP": "EN ESTE MAPA",
- "Image": "Imagen",
  "Images": "Imágenes",
  "Import .schem, .schematic, .bp, .litematic or .nbt files in its settings.": "Importa archivos .schem, .schematic, .bp, .litematic o .nbt en sus ajustes.",
  "Import Pack…": "Importar pack…",
@@ -4049,7 +4048,6 @@
  "Blades": "Briznas",
  "Blades of grass a block: more, a fuller field and a slower image": "Briznas de hierba por bloque: más, un prado más tupido y una imagen más lenta",
  "Play (Space)": "Reproducir (Espacio)",
- "Animation to save": "Animación para guardar",
  "Format": "Formato",
  "MP4 video": "Vídeo MP4",
  "PNG images": "Imágenes PNG",
@@ -4075,5 +4073,12 @@
  "Align Camera to View": "Alinear cámara a la vista",
  "View through Camera": "Ver a través de la cámara",
  "Put the camera where the view is (Ctrl+Alt+Numpad 0)": "Poner la cámara donde está la vista (Ctrl+Alt+teclado numérico 0)",
- "Put the view where the camera is (Numpad 0)": "Poner la vista donde está la cámara (teclado numérico 0)"
+ "Put the view where the camera is (Numpad 0)": "Poner la vista donde está la cámara (teclado numérico 0)",
+ "Keyframe this setting at the playhead (I over the setting; Alt+I removes the key)": "Poner un fotograma clave de este ajuste en el cabezal (I encima; Alt+I lo quita)",
+ "Sampling": "Muestreo",
+ "Viewport samples": "Muestras de la vista",
+ "The view stops adding samples there": "La vista deja de sumar muestras ahí",
+ "Light Paths": "Rutas de luz",
+ "Output: image": "Salida: imagen",
+ "Output: animation": "Salida: animación"
 }

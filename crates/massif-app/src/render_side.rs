@@ -12,7 +12,7 @@
 
 use crate::doc::Document;
 use crate::theme::{self, Icon, Palette};
-use crate::widgets::{Field, row, well};
+use crate::widgets::{Field, row};
 use egui::{Align2, Color32, FontId, PointerButton, Rect, RichText, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use massif_core::animation::{Animation, Pose};
 use massif_core::coords::TilePos;
@@ -87,6 +87,8 @@ impl Movie {
         let pose = self.anim.sample(t)?;
         let mut light = self.light;
         light.set_time(pose.hour, self.time.day, self.time.latitude, self.time.north);
+        let mut time = Time { hour: pose.hour, ..self.time };
+        apply_tracks(&self.anim, t, &mut light, &mut time);
         light.time = t;
         let camera = Orbit::between(pose.eye, pose.target).camera(pose.fov.clamp(10.0, 100.0));
         Some(Still { path: PathBuf::new(), size: self.size, samples: self.samples, camera, light, denoise: self.denoise, row: 0, started: Instant::now() })
@@ -109,7 +111,7 @@ enum MovieFormat {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Time {
     /// Local solar time, hours.
-    hour: f32,
+    pub(crate) hour: f32,
     /// Day of the year.
     day: f32,
     /// Degrees, north positive.
@@ -346,6 +348,10 @@ pub struct RenderSide {
     /// walking); the keys held, by their places; the point a drag turns
     /// about (or slides) and how far it is; `.` pressed: in close there.
     walk_factor: f64,
+    /// The pass a setting's diamond was last under the pointer in (I keys
+    /// the setting then, not the camera); the samples the view adds up to.
+    key_hover: u64,
+    most_samples: u32,
     /// The render camera, as Blender's camera object, apart from the view
     /// while it is not locked to it: what stills, keyframes and the video
     /// are taken from.
@@ -395,6 +401,8 @@ impl Default for RenderSide {
             drawn: None,
             playback: Playback::default(),
             walk_factor: 1.0,
+            key_hover: 0,
+            most_samples: MOST_SAMPLES,
             lock_camera: true,
             camera: None,
             held: HashSet::new(),
@@ -411,10 +419,128 @@ type Denoised = Result<(Vec<f32>, massif_render::color::Tone), String>;
 /// Denoise (and at the last, where it stops).
 const INTEL_AT: [u32; 6] = [1, 4, 16, 64, 256, 1024];
 
-/// A muted title over a well.
+/// A section's title over its well, as Blender's panels: a click folds the
+/// well away (and back), kept per section.
 fn title(ui: &mut Ui, text: &str) {
     let pal = Palette::of(ui);
-    ui.label(RichText::new(text).size(12.0).color(pal.weak));
+    let id = ui.scope_id().with(("render fold", text));
+    let open = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(true);
+    let arrow = if open { "▾" } else { "▸" };
+    let response = ui.add(egui::Label::new(RichText::new(format!("{arrow} {text}")).size(12.0).color(pal.weak)).sense(Sense::click()));
+    if response.clicked() {
+        ui.data_mut(|d| d.insert_temp(id, !open));
+    }
+    ui.data_mut(|d| d.insert_temp(egui::Id::unique("render fold next"), !open));
+}
+
+/// The well under a title, unless the title folded it away.
+fn well<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    let folded = ui.data_mut(|d| d.remove_temp::<bool>(egui::Id::unique("render fold next"))).unwrap_or(false);
+    (!folded).then(|| crate::widgets::well(ui, add))
+}
+
+/// A keyframe asked of a setting.
+enum KeyEdit {
+    Set(&'static str, f32),
+    Unset(&'static str),
+}
+
+/// The keyframe diamonds of the settings an animation can change, as
+/// Blender's: hollow when the setting is not keyed, outlined in the accent
+/// when it is animated, filled when it has a key at the playhead. A click,
+/// or I with the pointer over the setting, keys it there; a click on a key
+/// or Alt+I takes it away.
+struct Keyer {
+    anim: Animation,
+    at: f32,
+    edits: Vec<KeyEdit>,
+    hovered: bool,
+}
+
+impl Keyer {
+    fn new(doc: &Document, at: f32) -> Self {
+        Keyer { anim: doc.world.meta.animation.clone().unwrap_or_default(), at, edits: Vec::new(), hovered: false }
+    }
+
+    fn diamond(&mut self, ui: &mut Ui, name: &'static str, value: f32, field: &egui::Response) {
+        let pal = Palette::of(ui);
+        let here = self.anim.has_value_key(name, self.at);
+        let animated = self.anim.tracks.contains_key(name);
+        let (rect, response) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::click());
+        let c = rect.center();
+        let r = 4.5;
+        let shape = vec![c + vec2(0.0, -r), c + vec2(r, 0.0), c + vec2(0.0, r), c + vec2(-r, 0.0)];
+        let (fill, line) = if here { (pal.accent, pal.accent) } else if animated { (Color32::TRANSPARENT, pal.accent) } else { (Color32::TRANSPARENT, pal.weak) };
+        ui.painter().add(egui::Shape::convex_polygon(shape, fill, Stroke::new(1.2, line)));
+        let response = response.on_hover_text(tr!("Keyframe this setting at the playhead (I over the setting; Alt+I removes the key)"));
+        if response.clicked() {
+            self.edits.push(if here { KeyEdit::Unset(name) } else { KeyEdit::Set(name, value) });
+        }
+        if (response.hovered() || field.hovered()) && !ui.ctx().egui_wants_keyboard_input() {
+            self.hovered = true;
+            ui.input_mut(|i| {
+                if i.consume_key(egui::Modifiers::ALT, egui::Key::I) {
+                    self.edits.push(KeyEdit::Unset(name));
+                } else if i.consume_key(egui::Modifiers::NONE, egui::Key::I) {
+                    self.edits.push(KeyEdit::Set(name, value));
+                }
+            });
+        }
+    }
+
+    /// The keys asked, into the map's animation.
+    fn apply(self, doc: &mut Document) {
+        if self.edits.is_empty() {
+            return;
+        }
+        let anim = doc.world.meta.animation.get_or_insert_default();
+        for e in self.edits {
+            match e {
+                KeyEdit::Set(name, v) => anim.key_value(name, self.at, v),
+                KeyEdit::Unset(name) => {
+                    anim.unkey_value(name, self.at);
+                }
+            }
+        }
+        doc.mark_changed();
+    }
+}
+
+/// The setting an animation track of `name` changes.
+fn animated<'a>(light: &'a mut Light, time: &'a mut Time, name: &str) -> Option<&'a mut f32> {
+    Some(match name {
+        "hour" => &mut time.hour,
+        "sun" => &mut light.sun_strength,
+        "sky" => &mut light.sky_strength,
+        "air" => &mut light.air,
+        "haze" => &mut light.haze,
+        "fog" => &mut light.fog,
+        "fog_height" => &mut light.fog_height,
+        "cloud_cover" => &mut light.cloud_cover,
+        "cloud_height" => &mut light.cloud_height,
+        "cloud_density" => &mut light.cloud_density,
+        "cloud_size" => &mut light.cloud_size,
+        "wind" => &mut light.wind[0],
+        "exposure" => &mut light.exposure,
+        "aperture" => &mut light.aperture,
+        "focus" => &mut light.focus,
+        _ => return None,
+    })
+}
+
+/// Put the keyed settings of `anim` at `t` on `light` and `time`.
+fn apply_tracks(anim: &Animation, t: f32, light: &mut Light, time: &mut Time) {
+    let hour = time.hour;
+    for name in anim.tracks.keys() {
+        if let Some(v) = anim.value(name, t)
+            && let Some(p) = animated(light, time, name)
+        {
+            *p = v;
+        }
+    }
+    if time.hour != hour {
+        light.set_time(time.hour, time.day, time.latitude, time.north);
+    }
 }
 
 impl RenderSide {
@@ -922,7 +1048,7 @@ impl RenderSide {
             }
             self.texture_size = scene.renderer.size().unwrap_or(wanted);
         }
-        let most = if theme::reduce_motion(ui.ctx()) { 64 } else { MOST_SAMPLES };
+        let most = if theme::reduce_motion(ui.ctx()) { 64.min(self.most_samples) } else { self.most_samples };
         if let Some(still) = &mut self.still {
             // A band of rows a frame, every row a sample before the next.
             let [w, h] = still.size;
@@ -1155,6 +1281,7 @@ impl RenderSide {
     pub fn sky_ui(&mut self, ui: &mut Ui, doc: &mut Document) {
         ui.spacing_mut().item_spacing.y = 6.0;
         let sea = doc.world.meta.sea_level as f32;
+        let mut keys = Keyer::new(doc, self.playback.playhead);
         let (light, time) = (&mut self.light, &mut self.time);
         let mut picked = None;
         title(ui, tr!("Sun and sky"));
@@ -1172,7 +1299,8 @@ impl RenderSide {
                 });
             });
             row(ui, tr!("Time"), |ui| {
-                ui.add(Field::new(&mut time.hour, 0.0..=24.0).suffix(" h").max_decimals(2));
+                let r = ui.add(Field::new(&mut time.hour, 0.0..=24.0).suffix(" h").max_decimals(2));
+                keys.diamond(ui, "hour", time.hour, &r);
             });
             row(ui, tr!("Day"), |ui| {
                 ui.add(Field::new(&mut time.day, 1.0..=365.0).max_decimals(0));
@@ -1184,10 +1312,12 @@ impl RenderSide {
                 ui.add(Field::new(&mut time.north, 0.0..=360.0).suffix("°").max_decimals(0));
             });
             row(ui, tr!("Sun"), |ui| {
-                ui.add(Field::new(&mut light.sun_strength, 0.0..=20.0).max_decimals(1));
+                let r = ui.add(Field::new(&mut light.sun_strength, 0.0..=20.0).max_decimals(1));
+                keys.diamond(ui, "sun", light.sun_strength, &r);
             });
             row(ui, tr!("Sky"), |ui| {
-                ui.add(Field::new(&mut light.sky_strength, 0.0..=4.0).max_decimals(2));
+                let r = ui.add(Field::new(&mut light.sky_strength, 0.0..=4.0).max_decimals(2));
+                keys.diamond(ui, "sky", light.sky_strength, &r);
             });
         });
         if *time != before {
@@ -1196,10 +1326,12 @@ impl RenderSide {
         title(ui, tr!("Atmosphere"));
         well(ui, |ui| {
             row(ui, tr!("Air"), |ui| {
-                ui.add(Field::new(&mut light.air, 0.0..=4.0).max_decimals(2));
+                let r = ui.add(Field::new(&mut light.air, 0.0..=4.0).max_decimals(2));
+                keys.diamond(ui, "air", light.air, &r);
             });
             row(ui, tr!("Haze"), |ui| {
-                ui.add(Field::new(&mut light.haze, 0.0..=8.0).max_decimals(1));
+                let r = ui.add(Field::new(&mut light.haze, 0.0..=8.0).max_decimals(1));
+                keys.diamond(ui, "haze", light.haze, &r);
             });
             // Fog by how far one sees through it at its base (where it
             // takes 98 % of the light: an extinction of 3.9 over that
@@ -1213,12 +1345,15 @@ impl RenderSide {
             if fog {
                 row(ui, tr!("Visibility"), |ui| {
                     let mut seen = (3.912 / light.fog.max(1e-6)).clamp(40.0, 4000.0);
-                    if ui.add(Field::new(&mut seen, 40.0..=4000.0).logarithmic(true).suffix(" blocks").max_decimals(0)).changed() {
+                    let r = ui.add(Field::new(&mut seen, 40.0..=4000.0).logarithmic(true).suffix(" blocks").max_decimals(0));
+                    if r.changed() {
                         light.fog = 3.912 / seen;
                     }
+                    keys.diamond(ui, "fog", light.fog, &r);
                 });
                 row(ui, tr!("Fog height"), |ui| {
-                    ui.add(Field::new(&mut light.fog_height, sea - 64.0..=sea + 256.0).max_decimals(0));
+                    let r = ui.add(Field::new(&mut light.fog_height, sea - 64.0..=sea + 256.0).max_decimals(0));
+                    keys.diamond(ui, "fog_height", light.fog_height, &r);
                 });
                 row(ui, tr!("Fog fade"), |ui| {
                     ui.add(Field::new(&mut light.fog_falloff, 2.0..=200.0).suffix(" blocks").max_decimals(0));
@@ -1234,25 +1369,34 @@ impl RenderSide {
         title(ui, tr!("Clouds"));
         well(ui, |ui| {
             row(ui, tr!("Cover"), |ui| {
-                ui.add(Field::new(&mut light.cloud_cover, 0.0..=1.0).max_decimals(2));
+                let r = ui.add(Field::new(&mut light.cloud_cover, 0.0..=1.0).max_decimals(2));
+                keys.diamond(ui, "cloud_cover", light.cloud_cover, &r);
             });
             row(ui, tr!("Height"), |ui| {
-                ui.add(Field::new(&mut light.cloud_height, sea..=sea + 4000.0).max_decimals(0));
+                let r = ui.add(Field::new(&mut light.cloud_height, sea..=sea + 4000.0).max_decimals(0));
+                keys.diamond(ui, "cloud_height", light.cloud_height, &r);
             });
             row(ui, tr!("Thickness"), |ui| {
                 ui.add(Field::new(&mut light.cloud_thickness, 50.0..=2000.0).max_decimals(0));
             });
             row(ui, tr!("Density"), |ui| {
-                ui.add(Field::new(&mut light.cloud_density, 0.002..=0.1).logarithmic(true).max_decimals(3));
+                let r = ui.add(Field::new(&mut light.cloud_density, 0.002..=0.1).logarithmic(true).max_decimals(3));
+                keys.diamond(ui, "cloud_density", light.cloud_density, &r);
             });
             row(ui, tr!("Size"), |ui| {
-                ui.add(Field::new(&mut light.cloud_size, 200.0..=6000.0).logarithmic(true).max_decimals(0));
+                let r = ui.add(Field::new(&mut light.cloud_size, 200.0..=6000.0).logarithmic(true).max_decimals(0));
+                keys.diamond(ui, "cloud_size", light.cloud_size, &r);
             });
             row(ui, tr!("Wind"), |ui| {
-                ui.add(Field::new(&mut light.wind[0], 0.0..=20000.0).max_decimals(0));
+                let r = ui.add(Field::new(&mut light.wind[0], 0.0..=20000.0).max_decimals(0));
+                keys.diamond(ui, "wind", light.wind[0], &r);
             });
         });
         self.after_sky(picked, light_was, time_was, doc);
+        if keys.hovered {
+            self.key_hover = ui.ctx().cumulative_pass_nr();
+        }
+        keys.apply(doc);
     }
 
     /// After the Sun and Sky panel: the look `picked` put on, or a setting
@@ -1281,9 +1425,10 @@ impl RenderSide {
     }
 
     /// Camera: its lens, where it stands and looks.
-    pub fn camera_ui(&mut self, ui: &mut Ui, doc: &Document) {
+    pub fn camera_ui(&mut self, ui: &mut Ui, doc: &mut Document) {
         let pal = Palette::of(ui);
         ui.spacing_mut().item_spacing.y = 6.0;
+        let mut keys = Keyer::new(doc, self.playback.playhead);
         title(ui, tr!("Lens"));
         let light = &mut self.light;
         well(ui, |ui| {
@@ -1291,10 +1436,12 @@ impl RenderSide {
                 ui.add(Field::new(&mut self.fov, 10.0..=100.0).suffix("°").max_decimals(0));
             });
             row(ui, tr!("Aperture"), |ui| {
-                ui.add(Field::new(&mut light.aperture, 0.0..=4.0).suffix(" blocks").max_decimals(2));
+                let r = ui.add(Field::new(&mut light.aperture, 0.0..=4.0).suffix(" blocks").max_decimals(2));
+                keys.diamond(ui, "aperture", light.aperture, &r);
             });
             row(ui, tr!("Focus"), |ui| {
-                ui.add(Field::new(&mut light.focus, 1.0..=5000.0).logarithmic(true).suffix(" blocks").max_decimals(0));
+                let r = ui.add(Field::new(&mut light.focus, 1.0..=5000.0).logarithmic(true).suffix(" blocks").max_decimals(0));
+                keys.diamond(ui, "focus", light.focus, &r);
             });
         });
         title(ui, tr!("Position"));
@@ -1369,12 +1516,17 @@ impl RenderSide {
         }
         ui.add_space(4.0);
         ui.label(RichText::new(tr!("Drag: turn about the point there · Shift-drag: slide · wheel: toward the pointer · right-drag: look around · W A S D, Q E: walk (Shift faster, Alt slower, wheel: speed) · double-click or .: in close there · Shift-click: focus there · Numpad 1 3 7: views")).size(11.0).color(pal.weak));
+        if keys.hovered {
+            self.key_hover = ui.ctx().cumulative_pass_nr();
+        }
+        keys.apply(doc);
     }
 
     /// Render Output: how the image is exposed, and saving it.
-    pub fn output_ui(&mut self, ui: &mut Ui, doc: &Document) {
+    pub fn output_ui(&mut self, ui: &mut Ui, doc: &mut Document) {
         let pal = Palette::of(ui);
         ui.spacing_mut().item_spacing.y = 6.0;
+        let mut keys = Keyer::new(doc, self.playback.playhead);
         title(ui, tr!("Grass"));
         well(ui, |ui| {
             row(ui, tr!("Grass"), |ui| {
@@ -1393,20 +1545,27 @@ impl RenderSide {
             }
         });
         let light = &mut self.light;
-        title(ui, tr!("Image"));
+        // Blender's sections: Sampling, Light Paths, Color Management.
+        title(ui, tr!("Sampling"));
         well(ui, |ui| {
-            row(ui, tr!("Glow"), |ui| {
-                ui.add(Field::new(&mut light.emission, 0.0..=8.0).max_decimals(2));
+            row(ui, tr!("Viewport samples"), |ui| {
+                ui.add(Field::new(&mut self.most_samples, 16..=16384).logarithmic(true)).on_hover_text(tr!("The view stops adding samples there"));
             });
-            row(ui, tr!("Bounces"), |ui| {
-                ui.add(Field::new(&mut light.bounces, 0..=6));
+            row(ui, tr!("Denoise"), |ui| {
+                crate::widgets::switch(ui, &mut self.denoise).on_hover_text(tr!("Smooth the grain of the first samples away while they add up, the textures kept sharp"));
             });
             row(ui, tr!("Clamp indirect"), |ui| {
                 ui.add(Field::new(&mut light.clamp, 0.0..=100.0).logarithmic(true).max_decimals(1))
                     .on_hover_text(tr!("The most light a bounce brings: lower settles sooner, with fewer bright specks and a little less light; 0 for no limit"));
             });
-            row(ui, tr!("Denoise"), |ui| {
-                crate::widgets::switch(ui, &mut self.denoise).on_hover_text(tr!("Smooth the grain of the first samples away while they add up, the textures kept sharp"));
+        });
+        title(ui, tr!("Light Paths"));
+        well(ui, |ui| {
+            row(ui, tr!("Bounces"), |ui| {
+                ui.add(Field::new(&mut light.bounces, 0..=6));
+            });
+            row(ui, tr!("Glow"), |ui| {
+                ui.add(Field::new(&mut light.emission, 0.0..=8.0).max_decimals(2));
             });
         });
         // Colour management, as Blender's: the display, the view transform
@@ -1439,15 +1598,17 @@ impl RenderSide {
             });
             row(ui, tr!("Exposure"), |ui| {
                 let mut stops = light.exposure.max(1e-4).log2();
-                if ui.add(Field::new(&mut stops, -10.0..=10.0).max_decimals(2)).changed() {
+                let r = ui.add(Field::new(&mut stops, -10.0..=10.0).max_decimals(2));
+                if r.changed() {
                     light.exposure = 2f32.powf(stops);
                 }
+                keys.diamond(ui, "exposure", light.exposure, &r);
             });
             row(ui, tr!("Gamma"), |ui| {
                 ui.add(Field::new(&mut light.gamma, 0.1..=5.0).max_decimals(2));
             });
         });
-        title(ui, tr!("Image to save"));
+        title(ui, tr!("Output: image"));
         let mut start = false;
         well(ui, |ui| {
             row(ui, tr!("Size"), |ui| {
@@ -1511,13 +1672,17 @@ impl RenderSide {
                 scene.renderer.restart();
             }
         }
+        if keys.hovered {
+            self.key_hover = ui.ctx().cumulative_pass_nr();
+        }
+        keys.apply(doc);
         self.movie_ui(ui, doc);
         let Some(scene) = &self.scene else { return };
         title(ui, tr!("Scene"));
         let memory = scene.renderer.memory();
         let mb = |b: u64| format!("{:.0} MB", b as f64 / (1 << 20) as f64);
         let samples = scene.renderer.samples;
-        let most = if theme::reduce_motion(ui.ctx()) { 64 } else { MOST_SAMPLES };
+        let most = if theme::reduce_motion(ui.ctx()) { 64.min(self.most_samples) } else { self.most_samples };
         well(ui, |ui| {
             row(ui, tr!("Tiles"), |ui| {
                 ui.label(format!("{} / {}", scene.built.len(), scene.tiles));
@@ -1546,7 +1711,7 @@ impl RenderSide {
     fn movie_ui(&mut self, ui: &mut Ui, doc: &Document) {
         let pal = Palette::of(ui);
         let anim = doc.world.meta.animation.clone().unwrap_or_default();
-        title(ui, tr!("Animation to save"));
+        title(ui, tr!("Output: animation"));
         well(ui, |ui| {
             row(ui, tr!("Format"), |ui| {
                 let labels = [tr!("MP4 video"), tr!("PNG images")];
@@ -1725,6 +1890,7 @@ impl RenderSide {
         // I (or K) keeps the camera at the playhead, Alt+I removes the key
         // there, ← → a frame, ↑ ↓ the previous or next key, Shift+← → the
         // start or the end, Home the whole map.
+        let key_hover = self.key_hover + 2 >= ui.ctx().cumulative_pass_nr();
         if !ui.ctx().egui_wants_keyboard_input() {
             use egui::{Key, Modifiers};
             let frame = 1.0 / anim.fps.max(1) as f32;
@@ -1733,8 +1899,11 @@ impl RenderSide {
                 if i.consume_key(Modifiers::NONE, Key::Space) && !reduce && anim.keys.len() > 1 {
                     pb.playing = !pb.playing;
                 }
-                // (Alt+I first: a key without Alt matches it too.)
-                if i.consume_key(Modifiers::ALT, Key::I) {
+                // (Alt+I first: a key without Alt matches it too. Over a
+                // setting, I keys the setting instead: its diamond answers.)
+                if key_hover {
+                    // (The setting's diamond keys it.)
+                } else if i.consume_key(Modifiers::ALT, Key::I) {
                     if let Some(k) = anim.key_at(pb.playhead) {
                         anim.remove(k);
                         pb.selected = None;
@@ -1920,6 +2089,12 @@ impl RenderSide {
         if response.hovered() && pointer.is_some_and(|p| near_key(&anim, p).is_some()) {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
         }
+        // The settings' keys, small, under the camera's.
+        for t in anim.value_key_times() {
+            let c = pos2(x_of(t), (lane + rect.bottom()) / 2.0 + 2.0);
+            let r = 3.5;
+            painter.add(egui::Shape::convex_polygon(vec![c + vec2(0.0, -r), c + vec2(r, 0.0), c + vec2(0.0, r), c + vec2(-r, 0.0)], pal.weak, Stroke::NONE));
+        }
         let x = x_of(pb.playhead);
         painter.vline(x, rect.top()..=rect.bottom(), Stroke::new(2.0, pal.accent));
         painter.add(egui::Shape::convex_polygon(vec![pos2(x - 5.0, rect.top()), pos2(x + 5.0, rect.top()), pos2(x, rect.top() + 7.0)], pal.accent, Stroke::NONE));
@@ -1928,10 +2103,16 @@ impl RenderSide {
         }
 
         // The view follows the playhead, once moved.
-        let follow = (pb.applied != Some(pb.playhead)).then(|| anim.sample(pb.playhead)).flatten();
+        let moved = pb.applied != Some(pb.playhead);
+        let follow = moved.then(|| anim.sample(pb.playhead)).flatten();
+        let at = pb.playhead;
         pb.applied = Some(pb.playhead);
         if let Some(pose) = follow {
             self.put(&pose);
+            ui.ctx().request_repaint();
+        }
+        if moved && !anim.tracks.is_empty() {
+            apply_tracks(&anim, at, &mut self.light, &mut self.time);
             ui.ctx().request_repaint();
         }
         if anim != before {

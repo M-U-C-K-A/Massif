@@ -10,6 +10,7 @@
 //! at `n / fps` seconds: rendering a sequence of images is that loop.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// The pose of the camera and the sun at a time.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -40,11 +41,17 @@ pub struct Animation {
     /// Seconds.
     pub duration: f32,
     pub fps: u32,
+    /// Keyframes of settings, as Blender keys any property: by the
+    /// setting's name, `[time, value]` in the order of their times. Between
+    /// two keys a value eases from one to the other; before the first and
+    /// after the last it holds.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tracks: BTreeMap<String, Vec<[f32; 2]>>,
 }
 
 impl Default for Animation {
     fn default() -> Self {
-        Self { keys: Vec::new(), duration: 10.0, fps: 30 }
+        Self { keys: Vec::new(), duration: 10.0, fps: 30, tracks: BTreeMap::new() }
     }
 }
 
@@ -54,7 +61,66 @@ pub const MIN_GAP: f32 = 1.0 / 120.0;
 
 impl Animation {
     pub fn is_empty(&self) -> bool {
-        self.keys.is_empty()
+        self.keys.is_empty() && self.tracks.is_empty()
+    }
+
+    /// Key setting `name` at `time` to `value` (the key there already, if
+    /// any, takes it). The animation grows to hold it.
+    pub fn key_value(&mut self, name: &str, time: f32, value: f32) {
+        let time = time.max(0.0);
+        let tolerance = (0.5 / self.fps.max(1) as f32).max(MIN_GAP);
+        let track = self.tracks.entry(name.to_owned()).or_default();
+        match track.iter().position(|k| (k[0] - time).abs() <= tolerance) {
+            Some(k) => track[k][1] = value,
+            None => {
+                let at = track.partition_point(|k| k[0] < time);
+                track.insert(at, [time, value]);
+            }
+        }
+        self.duration = self.duration.max(time);
+    }
+
+    /// Take setting `name`'s key at `time` away; whether there was one.
+    pub fn unkey_value(&mut self, name: &str, time: f32) -> bool {
+        let tolerance = (0.5 / self.fps.max(1) as f32).max(MIN_GAP);
+        let Some(track) = self.tracks.get_mut(name) else { return false };
+        let Some(k) = track.iter().position(|k| (k[0] - time).abs() <= tolerance) else { return false };
+        track.remove(k);
+        if track.is_empty() {
+            self.tracks.remove(name);
+        }
+        true
+    }
+
+    /// Whether setting `name` has a key at `time`.
+    pub fn has_value_key(&self, name: &str, time: f32) -> bool {
+        let tolerance = (0.5 / self.fps.max(1) as f32).max(MIN_GAP);
+        self.tracks.get(name).is_some_and(|t| t.iter().any(|k| (k[0] - time).abs() <= tolerance))
+    }
+
+    /// Setting `name`'s value at `time`, if it is keyed: eased between its
+    /// keys, held before the first and after the last.
+    pub fn value(&self, name: &str, time: f32) -> Option<f32> {
+        let track = self.tracks.get(name)?;
+        let (first, last) = (track.first()?, track.last()?);
+        if time <= first[0] {
+            return Some(first[1]);
+        }
+        if time >= last[0] {
+            return Some(last[1]);
+        }
+        let i = track.partition_point(|k| k[0] <= time).clamp(1, track.len() - 1) - 1;
+        let (a, b) = (track[i], track[i + 1]);
+        let t = smooth(((time - a[0]) / (b[0] - a[0]).max(1e-6)).clamp(0.0, 1.0));
+        Some(a[1] + (b[1] - a[1]) * t)
+    }
+
+    /// The times of every setting's keys, each once, in order.
+    pub fn value_key_times(&self) -> Vec<f32> {
+        let mut times: Vec<f32> = self.tracks.values().flatten().map(|k| k[0]).collect();
+        times.sort_by(f32::total_cmp);
+        times.dedup_by(|a, b| (*a - *b).abs() < MIN_GAP);
+        times
     }
 
     /// How many frames it is drawn in.
@@ -249,5 +315,30 @@ mod tests {
         // Saved with the map and read back.
         let json = serde_json::to_string(&a).unwrap();
         assert_eq!(serde_json::from_str::<Animation>(&json).unwrap(), a);
+    }
+
+    /// A setting keyed at two times eases between them and holds outside;
+    /// a key again at the same time replaces it; the setting saves with the
+    /// map and an animation without them reads as before.
+    #[test]
+    fn settings_are_keyed_and_eased() {
+        let mut a = Animation::default();
+        a.key_value("cloud_cover", 2.0, 0.2);
+        a.key_value("cloud_cover", 6.0, 0.8);
+        assert_eq!(a.value("cloud_cover", 0.0), Some(0.2));
+        assert_eq!(a.value("cloud_cover", 9.0), Some(0.8));
+        assert!((a.value("cloud_cover", 4.0).unwrap() - 0.5).abs() < 1e-6, "halfway, eased");
+        assert!(a.value("cloud_cover", 2.5).unwrap() < 0.2 + 0.6 * 0.125, "eases in");
+        a.key_value("cloud_cover", 2.0 + MIN_GAP * 0.5, 0.3);
+        assert_eq!(a.tracks["cloud_cover"].len(), 2, "the key there takes the new value");
+        assert!(a.has_value_key("cloud_cover", 2.0) && !a.has_value_key("cloud_cover", 3.0));
+        assert_eq!(a.value("haze", 1.0), None);
+        a.key_value("haze", 6.0, 2.0);
+        assert_eq!(a.value_key_times(), vec![2.0, 6.0]);
+        assert!(a.unkey_value("haze", 6.0) && !a.tracks.contains_key("haze"));
+        let json = serde_json::to_string(&a).unwrap();
+        assert_eq!(serde_json::from_str::<Animation>(&json).unwrap(), a);
+        let old: Animation = serde_json::from_str(r#"{"keys":[],"duration":10.0,"fps":30}"#).unwrap();
+        assert!(old.tracks.is_empty());
     }
 }

@@ -3237,6 +3237,21 @@ area draws the viewport at a time; a second one says where it is.
   the buttons beside go to the start, the previous or next keyframe, the
   end. **Length** and **Frames a second** say how the animation will be
   drawn. The keyframes are saved with the map.
+- Settings are keyed as in Blender: a small diamond beside the sun, the
+  sky, the air, the haze, the fog, the clouds (cover, height, density,
+  size, wind), the hour, the exposure, the lens's aperture and focus; a
+  click on it, or **I** with the pointer over the setting, keeps its value
+  at the playhead (the diamond fills), a click on a filled one or
+  **Alt+I** takes the key away; an outlined diamond says the setting is
+  animated. Between its keys a setting eases from one value to the next,
+  before the first and after the last it holds; moving the playhead puts
+  the values there, and the video draws them. Their keys show on the
+  Timeline as small diamonds under the camera's.
+- The Render panels are in Blender's sections, each folded away by a
+  click on its title: **Sampling** (the **Viewport samples** the view
+  stops at, **Denoise**, **Clamp indirect**), **Light Paths** (bounces,
+  glow), **Color Management**, **Grass**, **Output: image** and **Output:
+  animation**.
 - The Timeline answers Blender's keys (not while a field is being typed
   in): **Space** plays and pauses, **I** (or **K**) keeps a keyframe at
   the playhead, **Alt+I** removes the one there, **←** and **→** go a
