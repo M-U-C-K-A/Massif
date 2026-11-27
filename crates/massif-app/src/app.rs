@@ -14812,7 +14812,7 @@ mod tests {
                     break;
                 }
                 // Drawn on a thread of its own: slow while the whole suite runs.
-                assert!(started.elapsed().as_secs() < 90, "no preview");
+                assert!(started.elapsed().as_secs() < 240, "no preview");
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
             h.run_steps(3);
@@ -15141,7 +15141,7 @@ mod tests {
         let started = std::time::Instant::now();
         while !matches!(&h.state().dialog, Some(Dialog::Real(form)) if form.has_picture()) {
             // Drawn on a thread of its own: slow while the whole suite runs.
-            assert!(started.elapsed().as_secs() < 90, "no preview");
+            assert!(started.elapsed().as_secs() < 240, "no preview");
             h.step();
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
