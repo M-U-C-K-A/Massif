@@ -1,11 +1,14 @@
-//! Settings ▸ Keyboard: every shortcut of the keymap (`keymap`), in columns
-//! by area. A shortcut clicked listens for new keys; keys another action
+//! Settings ▸ Keyboard: every shortcut of the keymap (`keymap`), in groups
+//! that fold (the areas, the tools as the Tools panel groups them), laid
+//! in as many columns as fit. Keys two actions share where both listen are
+//! marked. A shortcut clicked listens for new keys; keys another action
 //! has where both listen ask first (Replace or Cancel). A preset to start
 //! from, a search, a reset of one action or of all, and keymap files out
 //! and in.
 
 use crate::keymap::{self, Action, Area, Chord, Kind, Mods, Preset, Saved};
-use crate::theme::{self, Icon, Palette, RichTextExt};
+use crate::theme::{self, Icon, Palette};
+use crate::tools::Tool;
 use egui::{Color32, CursorIcon, FontId, Id, Rect, RichText, Sense, Stroke, StrokeKind, Ui, vec2};
 
 /// Where the page is: what it listens for, what it asks.
@@ -21,6 +24,10 @@ struct State {
     clash: Option<Clash>,
     /// What the last import or recording said.
     note: Option<String>,
+    /// The groups folded, by key.
+    closed: std::collections::HashSet<String>,
+    /// Only the actions that have keys.
+    bound_only: bool,
 }
 
 #[derive(Clone)]
@@ -31,8 +38,11 @@ struct Clash {
     others: Vec<Action>,
 }
 
-/// The width of a column.
+/// The width of a column, at most and at least.
 const COLUMN: f32 = 290.0;
+const NARROWEST: f32 = 240.0;
+/// A group's name over its well.
+const HEADER_H: f32 = 24.0;
 const GAP: f32 = 18.0;
 /// The width the page takes: three columns.
 pub const WIDTH: f32 = 3.0 * COLUMN + 2.0 * GAP;
@@ -78,7 +88,9 @@ pub fn page(ui: &mut Ui, saved: &mut Saved) {
             state.note = Some(tr!("The {preset} keys, with your changes over them.", preset = Preset::ALL[k].name()));
         }
         ui.add_space(10.0);
-        crate::widgets::search(ui, &mut state.query, tr!("Search"), 220.0);
+        crate::widgets::search(ui, &mut state.query, tr!("Search"), 200.0);
+        ui.add_space(6.0);
+        crate::widgets::checkbox(ui, &mut state.bound_only, tr!("With keys only"));
         if one_line {
             buttons(ui, saved, &mut state);
         }
@@ -115,35 +127,66 @@ pub fn page(ui: &mut Ui, saved: &mut Saved) {
 
     let query = state.query.trim().to_lowercase();
     let map = saved.keymap();
-    let shown = |a: &Action| query.is_empty() || a.name().to_lowercase().contains(&query) || map.keys(*a).iter().any(|c| c.label().to_lowercase().contains(&query) || c.id().to_lowercase().contains(&query));
-    let all = Action::all();
-    let mut columns: Vec<(Area, Vec<Action>)> = Area::ALL.iter().map(|area| (*area, all.iter().filter(|a| a.area() == *area && shown(a)).copied().collect())).filter(|(_, list): &(Area, Vec<Action>)| !list.is_empty()).collect();
-    if columns.is_empty() {
+    let found = |a: &Action| query.is_empty() || a.name().to_lowercase().contains(&query) || map.keys(*a).iter().any(|c| c.label().to_lowercase().contains(&query) || c.id().to_lowercase().contains(&query));
+    // Each group with the actions shown: those the search finds (all of a
+    // group whose name it finds), with keys only if asked.
+    let shown: Vec<(Group, Vec<Action>)> = groups()
+        .into_iter()
+        .map(|g| {
+            let whole = !query.is_empty() && g.name.to_lowercase().contains(&query);
+            let list = g.actions.iter().copied().filter(|a| (whole || found(a)) && (!state.bound_only || !map.keys(*a).is_empty())).collect();
+            (g, list)
+        })
+        .filter(|(_, list): &(Group, Vec<Action>)| !list.is_empty())
+        .collect();
+    if shown.is_empty() {
         ui.add_space(30.0);
-        ui.vertical_centered(|ui| ui.label(RichText::new(tr!("No shortcut for \u{201c}{query}\u{201d}.", query = state.query.trim())).color(pal.weak)));
+        let text = if query.is_empty() { tr!("No action has keys.").to_owned() } else { tr!("No shortcut for \u{201c}{query}\u{201d}.", query = state.query.trim()) };
+        ui.vertical_centered(|ui| ui.label(RichText::new(text).color(pal.weak)));
     }
-    // Three columns a row: General, Tools, Brushes; Map, 3D view, Player.
-    let column = ((ui.available_width() - 2.0 * GAP) / 3.0).min(COLUMN);
-    while !columns.is_empty() {
-        let rest = columns.split_off(columns.len().min(3));
-        ui.horizontal_top(|ui| {
-            ui.spacing_mut().item_spacing.x = GAP;
-            for (area, actions) in &columns {
-                ui.vertical(|ui| {
-                    ui.set_width(column);
-                    ui.label(RichText::new(area.name()).size(12.0).medium().color(pal.weak));
-                    ui.add_space(4.0);
-                    crate::widgets::well(ui, |ui| {
-                        for (n, action) in actions.iter().enumerate() {
-                            action_row(ui, n == 0, *action, saved, &map, &mut state);
-                        }
-                    });
-                });
-            }
-        });
-        ui.add_space(14.0);
-        columns = rest;
+    // As many columns as fit, the groups each in the shortest so far: the
+    // columns end about level. A search opens every group.
+    let width = ui.available_width();
+    let n = (((width + GAP) / (NARROWEST + GAP)).floor() as usize).clamp(1, 3);
+    let column = ((width - (n - 1) as f32 * GAP) / n as f32).min(COLUMN);
+    let open: Vec<bool> = shown.iter().map(|(g, _)| !query.is_empty() || !state.closed.contains(g.key)).collect();
+    let mut heights = vec![0.0f32; n];
+    let mut columns: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (k, (_, list)) in shown.iter().enumerate() {
+        let c = (0..n).min_by(|a, b| heights[*a].total_cmp(&heights[*b])).unwrap_or(0);
+        heights[c] += HEADER_H + 10.0 + if open[k] { list.len() as f32 * ROW_H } else { 0.0 };
+        columns[c].push(k);
     }
+    let mut toggled = None;
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = GAP;
+        for list in &columns {
+            ui.vertical(|ui| {
+                ui.set_width(column);
+                for &k in list {
+                    let (g, actions) = &shown[k];
+                    if group_header(ui, g, actions, open[k], &map) {
+                        toggled = Some(g.key);
+                    }
+                    if open[k] {
+                        crate::widgets::well(ui, |ui| {
+                            for (n, action) in actions.iter().enumerate() {
+                                action_row(ui, n == 0, *action, saved, &map, &mut state);
+                            }
+                        });
+                    }
+                    ui.add_space(10.0);
+                }
+            });
+        }
+    });
+    if let Some(key) = toggled
+        && query.is_empty()
+        && !state.closed.remove(key)
+    {
+        state.closed.insert(key.to_owned());
+    }
+    ui.add_space(6.0);
 
     // The mouse keeps its own.
     let mouse = if keymap::MAC {
@@ -155,6 +198,64 @@ pub fn page(ui: &mut Ui, saved: &mut Saved) {
     ui.add_space(4.0);
     ui.add(egui::Label::new(RichText::new(tr!("Shortcuts wait while a text field is typed in, but those with ⌘ (Ctrl) that typing has no use for, as Save.")).size(11.5).color(pal.weak)).wrap());
     ui.data_mut(|d| d.insert_temp(id(), state));
+}
+
+/// A group of the page: the actions of an area, or of a group of the
+/// Tools panel.
+struct Group {
+    /// What it is folded by.
+    key: &'static str,
+    name: String,
+    actions: Vec<Action>,
+}
+
+/// The page's groups, in order: the tools as the Tools panel groups them
+/// (short groups, the keys most often changed), 3D Sculpt's, then General,
+/// Map, Brushes, the 3D view, the Player.
+fn groups() -> Vec<Group> {
+    let all = Action::all();
+    let of = |key: &'static str, area: Area| Group { key, name: area.name().to_owned(), actions: all.iter().copied().filter(|a| a.area() == area).collect() };
+    let mut list = Vec::new();
+    let mut grouped = Vec::new();
+    for (name, _, tools) in Tool::GROUPS {
+        grouped.extend(tools.iter().copied());
+        list.push(Group { key: name, name: crate::i18n::tr_name(name).to_owned(), actions: tools.iter().map(|t| Action::Tool(*t)).collect() });
+    }
+    let rest: Vec<Action> = keymap::tools().into_iter().filter(|t| !grouped.contains(t)).map(Action::Tool).collect();
+    if !rest.is_empty() {
+        list.push(Group { key: "3d sculpt", name: tr!("3D Sculpt").to_owned(), actions: rest });
+    }
+    list.extend([of("general", Area::General), of("map", Area::Map), of("brushes", Area::Brushes)]);
+    list.push(of("3d view", Area::View3d));
+    list.push(of("player", Area::Player));
+    list
+}
+
+/// A group's name, which folds it when clicked, with how many of its
+/// actions have keys and a sign where two share keys. Whether clicked.
+fn group_header(ui: &mut Ui, group: &Group, actions: &[Action], open: bool, map: &keymap::Keymap) -> bool {
+    let pal = Palette::of(ui);
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), HEADER_H), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, open, &group.name));
+    let ink = if response.hovered() { pal.text } else { pal.weak };
+    let chevron = theme::glyph(if open { Icon::ChevronDown } else { Icon::ChevronRight });
+    let painter = ui.painter();
+    painter.text(rect.left_center(), egui::Align2::LEFT_CENTER, chevron.to_string(), FontId::proportional(11.0), ink);
+    let name = painter.layout_no_wrap(group.name.clone(), FontId::proportional(12.0), ink);
+    let name_w = name.size().x;
+    painter.galley(egui::pos2(rect.left() + 16.0, rect.center().y - name.size().y / 2.0), name, ink);
+    let bound = group.actions.iter().filter(|a| !map.keys(**a).is_empty()).count();
+    let mut right = rect.right();
+    let count = painter.text(egui::pos2(right, rect.center().y), egui::Align2::RIGHT_CENTER, format!("{bound}/{}", group.actions.len()), FontId::proportional(11.0), pal.weak);
+    right = count.left() - 6.0;
+    if actions.iter().any(|a| map.keys(*a).iter().any(|c| !map.clashes(*a, c).is_empty())) && right > rect.left() + 16.0 + name_w + 12.0 {
+        painter.text(egui::pos2(right, rect.center().y), egui::Align2::RIGHT_CENTER, theme::glyph(Icon::TriangleAlert).to_string(), FontId::proportional(11.0), pal.danger);
+    }
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+    ui.add_space(2.0);
+    response.clicked()
 }
 
 /// A line over the columns: a sign, a text, its buttons on the right.
@@ -189,7 +290,7 @@ fn action_row(ui: &mut Ui, first: bool, action: Action, saved: &mut Saved, map: 
     if keys.len() < 2 {
         let slot = keys.len();
         let text = if listening(slot) { tr!("Press keys…").to_owned() } else { theme::glyph(Icon::Plus).to_string() };
-        let r = pill(&mut child, &text, listening(slot), true);
+        let r = pill(&mut child, &text, listening(slot), true, false);
         if r.clicked() {
             start(state, action, slot);
         }
@@ -199,10 +300,17 @@ fn action_row(ui: &mut Ui, first: bool, action: Action, saved: &mut Saved, map: 
     }
     for (slot, chord) in keys.iter().enumerate().rev() {
         let text = if listening(slot) { tr!("Press keys…").to_owned() } else { chord.label() };
-        let r = pill(&mut child, &text, listening(slot), false);
+        let others = map.clashes(action, chord);
+        let r = pill(&mut child, &text, listening(slot), false, !others.is_empty());
         if r.clicked() {
             start(state, action, slot);
         }
+        let r = if others.is_empty() {
+            r
+        } else {
+            let names: Vec<String> = others.iter().map(|a| a.name()).collect();
+            r.on_hover_text(tr!("Also {actions}: one of them does nothing.", actions = names.join(", ")))
+        };
         r.context_menu(|ui| {
             if ui.button(theme::with_icon(Icon::X, tr!("Remove"))).clicked() {
                 let mut keys = keys.clone();
@@ -224,11 +332,12 @@ fn action_row(ui: &mut Ui, first: bool, action: Action, saved: &mut Saved, map: 
     name_ui.add(egui::Label::new(RichText::new(action.name()).size(12.5).color(if keys.is_empty() { pal.weak } else { pal.text })).truncate());
 }
 
-/// A key as a pill; `listening` in the accent, `add` faint.
-fn pill(ui: &mut Ui, text: &str, listening: bool, add: bool) -> egui::Response {
+/// A key as a pill; `listening` in the accent, `add` faint, `clash` (keys
+/// another action has) in red.
+fn pill(ui: &mut Ui, text: &str, listening: bool, add: bool, clash: bool) -> egui::Response {
     let pal = Palette::of(ui);
     let font = FontId::proportional(11.5);
-    let ink = if listening { pal.accent } else if add { pal.weak } else { pal.text };
+    let ink = if listening { pal.accent } else if clash { pal.danger } else if add { pal.weak } else { pal.text };
     let galley = ui.painter().layout_no_wrap(text.to_owned(), font, ink);
     let size = vec2(galley.size().x + 14.0, 20.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
@@ -242,7 +351,7 @@ fn pill(ui: &mut Ui, text: &str, listening: bool, add: bool) -> egui::Response {
     } else {
         pal.panel
     };
-    let stroke = if listening { pal.accent } else { pal.border };
+    let stroke = if listening { pal.accent } else if clash { pal.danger } else { pal.border };
     ui.painter().rect(rect, theme::PILL, fill, Stroke::new(1.0, stroke), StrokeKind::Inside);
     ui.painter().galley_with_override_text_color(rect.center() - galley.size() / 2.0, galley, ink);
     if response.hovered() {

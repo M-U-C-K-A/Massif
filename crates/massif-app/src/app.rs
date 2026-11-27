@@ -20965,6 +20965,48 @@ mod tests {
         }
     }
 
+    /// Settings ▸ Keyboard in groups that fold, the tools as the Tools panel
+    /// groups them: a group's name folds it, With keys only hides the
+    /// actions with none, keys two actions share are marked, and a narrow
+    /// window takes fewer columns (MASSIF_SNAPSHOT_DIR: wide, folded, keys
+    /// only, narrow).
+    #[test]
+    fn keyboard_page_in_groups() {
+        use crate::keymap::{Action, Chord, Mods};
+        use egui_kittest::kittest::Queryable;
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let save = |h: &mut egui_kittest::Harness<'static, MassifApp>, name: &str| {
+            if let Some(dir) = &dir {
+                h.render().unwrap().save(dir.join(format!("settings-keyboard-{name}.png"))).unwrap();
+            }
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(3);
+        // Two actions on ⌥F where both listen: marked.
+        h.state_mut().settings.keys.set(Action::Tool(Tool::Objects), &[Chord::with(Mods::ALT, Key::F)]);
+        h.state_mut().dialog = Some(Dialog::Preferences(PrefsSection::Keyboard));
+        h.run_steps(4);
+        save(&mut h, "groups");
+        for group in ["General", "Map", "Brushes", "Sculpt terrain", "Paint", "Select", "Decor", "Water", "Underground", "Levels", "Navigate", "3D Sculpt", "3D view", "Player"] {
+            assert!(h.query_all_by_label(group).next().is_some(), "the group {group}");
+        }
+        let gradients = |h: &egui_kittest::Harness<'static, MassifApp>| h.query_all_by_label("Gradient brush").count();
+        let open = gradients(&h);
+        assert!(open > 0, "the Paint group open");
+        h.query_all_by_label("Paint").last().expect("Paint").click();
+        h.run_steps(3);
+        assert_eq!(gradients(&h), open - 1, "the Paint group folded");
+        save(&mut h, "folded");
+        let roughen = h.query_all_by_label("Roughen").count();
+        h.get_by_label("With keys only").click();
+        h.run_steps(3);
+        assert_eq!(h.query_all_by_label("Roughen").count(), roughen - 1, "Roughen has no keys: hidden");
+        save(&mut h, "keys-only");
+        h.set_size(vec2(900.0, 900.0));
+        h.run_steps(4);
+        save(&mut h, "narrow");
+    }
+
     /// Settings ▸ Accessibility: high contrast and reduced motion as the
     /// settings say (the tests never follow the Mac running them), the size
     /// of the interface too, and ⌘+ kept; with motion reduced, the map goes

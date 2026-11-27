@@ -4144,5 +4144,8 @@
  "Grass inland, wide sandy shores and sand under the water": "Трава вглубь суши, широкие песчаные берега и песок под водой",
  "Mud low and by the water, grass higher": "Грязь внизу и у воды, трава выше",
  "Move a terrain": "Перемещение местности",
- "Back to its own colour, from its blocks": "Вернуть собственный цвет, по его блокам"
+ "Back to its own colour, from its blocks": "Вернуть собственный цвет, по его блокам",
+ "With keys only": "Только с клавишами",
+ "No action has keys.": "Ни у одного действия нет клавиш.",
+ "Also {actions}: one of them does nothing.": "Также {actions}: одно из них ничего не делает."
 }

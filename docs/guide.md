@@ -3676,7 +3676,7 @@ their own:
 Massif follows WorldPainter's defaults. These are the keys out of the box;
 **Settings ▸ Keyboard** changes any of them.
 
-![Settings ▸ Keyboard: the shortcuts in columns, and the search](images/settings-keyboard.png)
+![Settings ▸ Keyboard: the shortcuts in groups that fold, and the search](images/settings-keyboard.png)
 
 ### Your own shortcuts
 
@@ -3688,8 +3688,17 @@ To change **Save**, click its **⌘S** shortcut (**Ctrl+S** on Windows and Linux
 
 Select **WorldPainter** under **Start from** to use its bindings: on macOS, the Massif preset lists **⇧⌘Z** first for **General ▸ Redo**, the WorldPainter preset **⌘Y**.
 
-Settings ▸ Keyboard lists every shortcut in columns — General, Tools,
-Brushes, Map, 3D view, Player — with a search over names and keys.
+Settings ▸ Keyboard lists every shortcut in groups — the tools as the
+Tools panel groups them (Sculpt terrain, Paint, Select, Decor, Water,
+Underground, Levels, Navigate), 3D Sculpt, then General, Map, Brushes,
+3D view, Player — laid in as many columns as the window has room for.
+
+- Click a group's name to fold it. **Search** finds an action by its name,
+  its keys or its group's name, and opens every group while it searches;
+  **With keys only** hides the actions that have no keys. Each group's name
+  says how many of its actions have keys.
+- Keys two actions share where both are listened to are in red, and the
+  group's name has a ⚠: the pointer over the keys names the other action.
 
 - Click a shortcut, then press the new keys. An action can have two; the
   `+` beside its keys adds one, a right-click removes one. For what is held

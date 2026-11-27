@@ -222,8 +222,6 @@ pub enum Area {
 }
 
 impl Area {
-    pub const ALL: [Area; 6] = [Area::General, Area::Tools, Area::Brushes, Area::Map, Area::View3d, Area::Player];
-
     pub fn name(self) -> &'static str {
         match self {
             Area::General => tr!("General"),

@@ -4172,5 +4172,8 @@
  "Grass inland, wide sandy shores and sand under the water": "Relva no interior, largas margens de areia e areia debaixo de água",
  "Mud low and by the water, grass higher": "Lama em baixo e junto à água, relva mais acima",
  "Move a terrain": "Mover um terreno",
- "Back to its own colour, from its blocks": "Voltar à sua própria cor, a dos seus blocos"
+ "Back to its own colour, from its blocks": "Voltar à sua própria cor, a dos seus blocos",
+ "With keys only": "Só com teclas",
+ "No action has keys.": "Nenhuma ação tem teclas.",
+ "Also {actions}: one of them does nothing.": "Também {actions}: uma delas não faz nada."
 }
