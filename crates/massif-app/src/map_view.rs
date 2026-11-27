@@ -308,6 +308,10 @@ pub struct MapView {
     /// Where the button went down for the measure, on the screen: how far
     /// the pointer goes from it tells a drag from a click.
     measure_from: Option<Pos2>,
+    /// The spawn point held with its tool: where it goes when let go.
+    spawn_drag: Option<(i32, i32)>,
+    /// Where the map's right-click menu was opened, in blocks.
+    menu_at: Option<(i32, i32)>,
     /// The mark of the 3D view is held: the 3D view follows the pointer.
     view3d_grab: bool,
     /// The terrain generator's Live preview, drawn over the map without
@@ -373,6 +377,8 @@ impl Default for MapView {
             ping: None,
             select: Default::default(),
             measure_from: None,
+            spawn_drag: None,
+            menu_at: None,
             view3d_grab: false,
             live: Vec::new(),
             live_note: None,
@@ -1619,6 +1625,13 @@ impl MapView {
                     tools.measure.press((x as f32, z as f32), kind, near);
                     self.measure_from = Some(p);
                 }
+            } else if tools.tool == Tool::Spawn {
+                // Held, the spawn point follows the pointer; let go, it
+                // moves there (a click: where clicked). The right button
+                // opens the map's menu.
+                if !secondary {
+                    self.spawn_drag = Some((bx, bz));
+                }
             } else if tools.tool.is_select() {
                 let op = crate::select::combine_of(modifiers, secondary, tools.select_mode);
                 self.select.begin(tools.tool, (x, z), op, secondary, &tools.brush);
@@ -1807,6 +1820,55 @@ impl MapView {
                 }
             } else if let Some((hold, _)) = self.water.take() {
                 *feedback = tools::release_water(doc, hold).or(feedback.take());
+            }
+        }
+
+        // The spawn point held: it follows the pointer; let go, it moves
+        // there, as one step to undo.
+        if let Some(at) = self.spawn_drag {
+            if down[0] && tools.tool == Tool::Spawn {
+                if let Some((x, z)) = world_pointer {
+                    self.spawn_drag = Some((x.floor() as i32, z.floor() as i32));
+                }
+                ui.ctx().request_repaint();
+            } else {
+                self.spawn_drag = None;
+                if tools.tool == Tool::Spawn {
+                    *feedback = tools::set_spawn(doc, at.0, at.1).or(feedback.take());
+                }
+            }
+        }
+        if tools.tool == Tool::Spawn && self.spawn_drag.is_none() && response.hovered() && doc.dimension().kind == massif_core::world::DimensionKind::Overworld {
+            let [sx, _, sz] = doc.world.meta.spawn;
+            if pointer.is_some_and(|p| self.to_screen(canvas, sx as f64 + 0.5, sz as f64 + 0.5).distance(p) <= 12.0) {
+                ui.ctx().set_cursor_icon(CursorIcon::Grab);
+            }
+        }
+        if self.spawn_drag.is_some() {
+            ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
+        }
+        // The map's right-click menu, with the tools whose right button
+        // does nothing else: the spawn point set where it was opened.
+        if matches!(tools.tool, Tool::Pan | Tool::Spawn) && !modifiers.alt {
+            if response.secondary_clicked()
+                && let Some((x, z)) = world_pointer
+            {
+                self.menu_at = Some((x.floor() as i32, z.floor() as i32));
+            }
+            let at = self.menu_at;
+            let mut set = None;
+            response.context_menu(|ui| {
+                if let Some((x, z)) = at {
+                    let overworld = doc.dimension().kind == massif_core::world::DimensionKind::Overworld;
+                    if ui.add_enabled(overworld, egui::Button::new(crate::theme::with_icon(Icon::MapPinHouse, tr!("Set spawn here")))).on_disabled_hover_text(tr!("The spawn point is in the Overworld")).clicked() {
+                        set = Some((x, z));
+                        ui.close();
+                    }
+                    ui.label(egui::RichText::new(format!("x {x}, z {z}")).small().color(Palette::of(ui).weak));
+                }
+            });
+            if let Some((x, z)) = set {
+                *feedback = tools::set_spawn(doc, x, z).or(feedback.take());
             }
         }
 
@@ -2062,6 +2124,15 @@ impl MapView {
         }
         // The measure, over the map.
         crate::measure::draw_map(ui, &painter, &|x, z| self.to_screen(canvas, x, z), doc, tools);
+        // The spawn point, where it is or where it is held.
+        if doc.dimension().kind == massif_core::world::DimensionKind::Overworld {
+            let [sx, _, sz] = doc.world.meta.spawn;
+            let (sx, sz) = self.spawn_drag.unwrap_or((sx, sz));
+            let at = self.to_screen(canvas, sx as f64 + 0.5, sz as f64 + 0.5);
+            if canvas.expand(16.0).contains(at) {
+                spawn_marker(ui, &painter, at, tools.tool == Tool::Spawn);
+            }
+        }
 
         // The world's origin (x 0, z 0), where the game counts blocks
         // from, with the grid only (alone, it was taken for the pointer): a
@@ -2667,6 +2738,22 @@ pub fn region_name(rx: i64, rz: i64) -> String {
 fn turns_brush(m: egui::Modifiers) -> bool {
     // Alt, as in WorldPainter; ⌘ (Ctrl+Shift elsewhere) as before.
     m.alt || m.mac_cmd || (!cfg!(target_os = "macos") && m.ctrl && m.shift)
+}
+
+/// The spawn point's marker: a pin whose point is the spawn, light in a dark
+/// outline to read on any land, the accent's while its tool is in hand.
+pub fn spawn_marker(ui: &Ui, painter: &egui::Painter, at: Pos2, active: bool) {
+    let pal = Palette::of(ui);
+    let head = at - vec2(0.0, 15.0);
+    let fill = if active { pal.accent } else { Color32::WHITE };
+    let ink = if active { Color32::WHITE } else { Color32::from_gray(64) };
+    let outline = egui::Stroke::new(1.5, Color32::from_gray(60));
+    // The pin: a disc over a point.
+    let tip = vec![at, head + vec2(-6.0, 3.5), head + vec2(6.0, 3.5)];
+    painter.add(egui::Shape::convex_polygon(tip, fill, outline));
+    painter.circle(head, 8.5, fill, outline);
+    painter.text(head, egui::Align2::CENTER_CENTER, crate::theme::glyph(Icon::House), egui::FontId::proportional(10.0), ink);
+    painter.circle_filled(at, 2.0, Color32::from_gray(48));
 }
 
 #[cfg(test)]

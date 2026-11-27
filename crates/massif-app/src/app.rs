@@ -9075,6 +9075,9 @@ mod diorama_tests;
 #[path = "jack_tools_tests.rs"]
 mod jack_tools_tests;
 #[cfg(test)]
+#[path = "spawn_tests.rs"]
+mod spawn_tests;
+#[cfg(test)]
 #[path = "paint_check_tests.rs"]
 mod paint_check_tests;
 #[cfg(test)]

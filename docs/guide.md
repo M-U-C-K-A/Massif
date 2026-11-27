@@ -353,6 +353,7 @@ The **Tools** panel holds every tool of the World side, a row for each theme. Ho
 | **Navigate** | **Pan** | Move the map (also: middle button, Space). |
 | | **Eyedropper** (⌥Y) | Pick what is under the cursor to paint with it. See [The eyedropper](#the-eyedropper). |
 | | **Measure** | Measure a line's length, heights and slopes, or an area's size, volume and cover. See [Measure](#measure). |
+| | **Spawn point** | Set where players appear in the world. See [The spawn point](#the-spawn-point). |
 
 The tools new in this version are marked in the panel until you first try them. In the **3D Sculpt** panel the same tools work in 3D, with three of its own: **Sculpt**, **Dig** and **Smooth** (see [3D Sculpt](#3d-sculpt)).
 
@@ -789,6 +790,10 @@ double-click or Enter ends it. A measure is never saved with the map. It
 shows while the tool is in hand; **Keep on screen** leaves it on the map and
 in the Info panel with the other tools. **Esc**, a right-click or **Clear**
 clears it.
+
+### The spawn point
+
+The **Spawn point** tool (in the Navigate group), as WorldPainter's Spawn tool, sets where players appear the first time they join the world. Click the 2D map or a 3D view: the spawn point goes on the ground of that column, or on the water over it, as one step to undo. A pin marks it on the map and in the 3D views (in the accent colour while the tool is in hand); drag it on the map to move it. With the Pan tool or this one, a right-click on the map opens a menu with **Set spawn here**. The spawn point is in the Overworld; **File ▸ World Information…** shows and sets its numbers, and the export's **Spawn point** can still set another for one export.
 
 ## Noise painting
 

@@ -41,6 +41,8 @@ struct Step {
     caves: Option<crate::caves::CaveLayers>,
     /// Pre-image of the structures placed, when the step changed them.
     placed: Option<Vec<Arc<crate::structures::Structure>>>,
+    /// Pre-image of the map's settings alone (its spawn point moved).
+    meta: Option<Box<crate::world::WorldMeta>>,
     /// Pre-image of the whole map, for a save point put back: its settings,
     /// blocks and dimensions (not its save points).
     whole: Option<Box<Whole>>,
@@ -87,6 +89,7 @@ impl Step {
             selection: None,
             caves: None,
             placed: None,
+            meta: None,
             whole: None,
             size: 0,
         }
@@ -103,7 +106,7 @@ impl Step {
     }
 
     fn is_empty(&self) -> bool {
-        self.tiles.is_empty() && self.structure.is_none() && self.voxels.is_empty() && self.selection.is_none() && self.caves.is_none() && self.placed.is_none() && self.whole.is_none()
+        self.tiles.is_empty() && self.structure.is_none() && self.voxels.is_empty() && self.selection.is_none() && self.caves.is_none() && self.placed.is_none() && self.meta.is_none() && self.whole.is_none()
     }
 }
 
@@ -243,6 +246,9 @@ impl History {
             copy.dims = whole.dims.clone();
             return copy;
         }
+        if let Some(meta) = &step.meta {
+            copy.meta = (**meta).clone();
+        }
         let Some(dim) = copy.dims.get_mut(step.dim) else {
             return copy;
         };
@@ -352,6 +358,19 @@ impl History {
         self.commit()
     }
 
+    /// Give the map the settings `meta` (its spawn point moved), as one
+    /// step to undo labelled `label`, its tiles untouched. Returns whether
+    /// they changed.
+    pub fn set_meta(&mut self, world: &mut World, label: impl Into<String>, meta: crate::world::WorldMeta) -> bool {
+        if world.meta == meta {
+            return false;
+        }
+        self.begin(label, 0);
+        let step = self.open.as_mut().expect("just begun");
+        step.meta = Some(Box::new(std::mem::replace(&mut world.meta, meta)));
+        self.commit()
+    }
+
     /// Put the map back as `point` holds it (its settings, blocks and
     /// dimensions; the map keeps its name and its save points), as one step
     /// to undo labelled `label`.
@@ -438,6 +457,9 @@ fn swap(step: Step, world: &mut World) -> Step {
     if let Some(whole) = step.whole {
         inverse.whole = Some(Box::new(whole.swap(world)));
         return inverse;
+    }
+    if let Some(meta) = step.meta {
+        inverse.meta = Some(Box::new(std::mem::replace(&mut world.meta, *meta)));
     }
     let Some(dim) = world.dims.get_mut(step.dim) else {
         return inverse;

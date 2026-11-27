@@ -7086,6 +7086,14 @@ impl View3d {
                 (v.w > 0.1).then(|| pos2(rect.center().x + v.x / v.w * rect.width() * 0.5, rect.center().y - v.y / v.w * rect.height() * 0.5))
             };
             crate::measure::draw_3d(ui, &painter, &to_screen, doc, tools);
+            // The spawn point: a pin standing on the block players appear on.
+            if doc.dimension().kind == massif_core::world::DimensionKind::Overworld {
+                let [sx, sy, sz] = doc.world.meta.spawn;
+                let feet = [sx as f32 + 0.5, sy as f32, sz as f32 + 0.5];
+                if let Some(at) = to_screen(feet).filter(|p| rect.contains(*p)) {
+                    crate::map_view::spawn_marker(ui, &painter, at, tools.tool == Tool::Spawn);
+                }
+            }
         }
 
         drop(section);

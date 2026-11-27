@@ -88,6 +88,9 @@ pub enum Tool {
     /// Distances, slopes, areas and volumes, measured on the map (see
     /// `measure`).
     Measure,
+    /// Where the player appears in the world, as WorldPainter's Spawn
+    /// tool: a click sets it, the marker dragged moves it.
+    Spawn,
     Pan,
 }
 
@@ -113,12 +116,12 @@ impl Tool {
         (WATER_GROUP, Icon::Droplet, &[Tool::Water, Tool::Flood, Tool::River]),
         (tn!("Underground"), Icon::Pickaxe, &[Tool::Layer, Tool::Caves, Tool::CaveBiome]),
         (tn!("Levels"), Icon::Layers, &[Tool::StampSlab, Tool::EraseSlab]),
-        (tn!("Navigate"), Icon::Compass, &[Tool::Pan, Tool::Eyedropper, Tool::Measure]),
+        (tn!("Navigate"), Icon::Compass, &[Tool::Pan, Tool::Eyedropper, Tool::Measure, Tool::Spawn]),
     ];
 
     /// Tools new in this version: the Tools panel marks them until they
     /// are first tried.
-    pub const NEW: [Tool; 6] = [Tool::Gradient, Tool::Slabs, Tool::Caves, Tool::CaveBiome, Tool::Layer, Tool::Structure];
+    pub const NEW: [Tool; 7] = [Tool::Gradient, Tool::Slabs, Tool::Caves, Tool::CaveBiome, Tool::Layer, Tool::Structure, Tool::Spawn];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -160,6 +163,7 @@ impl Tool {
             Tool::SelectLasso => tr!("Lasso selection"),
             Tool::SelectBrush => tr!("Selection brush"),
             Tool::Measure => tr!("Measure"),
+            Tool::Spawn => tr!("Spawn point"),
             Tool::Pan => tr!("Pan"),
         }
     }
@@ -204,6 +208,7 @@ impl Tool {
             Tool::SelectLasso => Icon::Lasso,
             Tool::SelectBrush => Icon::Highlighter,
             Tool::Measure => Icon::RulerDimensionLine,
+            Tool::Spawn => Icon::MapPinHouse,
             Tool::Pan => Icon::Hand,
         }
     }
@@ -230,6 +235,7 @@ impl Tool {
             Tool::Flood => "Flood, Sponge",
             Tool::SelectRect => "Select",
             Tool::SelectBrush => "Select with Brush",
+            Tool::Spawn => "Spawn",
             _ => return None,
         })
     }
@@ -290,12 +296,13 @@ impl Tool {
             Tool::SelectLasso => tr!("Draw around an area: the other tools then act only inside it. A right-click or Esc clears it."),
             Tool::SelectBrush => tr!("Paint the selection with the brush. Right button: take it out. Esc clears it."),
             Tool::Measure => tr!("Measure distances, heights and slopes along a line, or the area, volume and cover of a part of the map."),
+            Tool::Spawn => tr!("Click where players appear in the world: the spawn point goes there, on the ground. Drag it to move it."),
             Tool::Pan => tr!("Move the map (also: middle button, Space)."),
         }
     }
 
     pub const fn uses_brush(self) -> bool {
-        !matches!(self, Tool::Eyedropper | Tool::Measure | Tool::Flood | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::Structure | Tool::Building | Tool::Village)
+        !matches!(self, Tool::Eyedropper | Tool::Measure | Tool::Spawn | Tool::Flood | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::Structure | Tool::Building | Tool::Village)
     }
 
     /// The tools that draw the selection.
@@ -305,7 +312,7 @@ impl Tool {
 
     /// Tools that apply once per click rather than continuously.
     pub const fn is_click(self) -> bool {
-        matches!(self, Tool::Eyedropper | Tool::Measure | Tool::Flood | Tool::Structure | Tool::Building | Tool::Village)
+        matches!(self, Tool::Eyedropper | Tool::Measure | Tool::Spawn | Tool::Flood | Tool::Structure | Tool::Building | Tool::Village)
     }
 
     pub const fn needs_slab_level(self) -> bool {
@@ -337,7 +344,7 @@ impl Tool {
             // passes): Smooth3d, from its shortcut, melts sculpted matter.
             Tool::Smooth3d => Use3d::Smooth,
             Tool::PaintTerrain => Use3d::Paint,
-            Tool::Eyedropper | Tool::Measure | Tool::Flood | Tool::Structure | Tool::Village => Use3d::Click,
+            Tool::Eyedropper | Tool::Measure | Tool::Spawn | Tool::Flood | Tool::Structure | Tool::Village => Use3d::Click,
             Tool::Building => Use3d::MapOnly,
             Tool::Pan | Tool::Road | Tool::River | Tool::Annotate | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush => Use3d::MapOnly,
             Tool::Smooth
@@ -1985,7 +1992,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
                     massif_core::voxel::sculpt(&mut edit, brush, [x, y, z], strength, mode);
                 }
             }
-            Tool::Eyedropper | Tool::Measure | Tool::Flood | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush | Tool::Structure | Tool::Building | Tool::Village => {}
+            Tool::Eyedropper | Tool::Measure | Tool::Spawn | Tool::Flood | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush | Tool::Structure | Tool::Building | Tool::Village => {}
         }
     }
     // A combined layer's pockets, painted from another level: the same
@@ -2198,6 +2205,26 @@ pub struct Probe {
     pub cover: u16,
     /// The object layer painted on the surface; 0: none.
     pub objects: u16,
+}
+
+/// Where a player stands on the column at `x`, `z`: the block over its
+/// ground, or over the water on it.
+pub fn spawn_at(doc: &Document, x: i32, z: i32) -> Option<[i32; 3]> {
+    let p = probe(doc, x, z)?;
+    let top = if p.fluid != NO_FLUID { p.height.max(p.fluid as f32) } else { p.height };
+    Some([x, block_top(top), z])
+}
+
+/// Put the spawn point on the ground at `x`, `z`, as one step to undo; in
+/// the Overworld only, where the game has it.
+pub fn set_spawn(doc: &mut Document, x: i32, z: i32) -> Feedback {
+    if doc.dimension().kind != massif_core::world::DimensionKind::Overworld {
+        return Some(tr!("The spawn point is in the Overworld").to_owned());
+    }
+    let Some(spawn) = spawn_at(doc, x, z) else {
+        return Some(tr!("No ground here for the spawn point").to_owned());
+    };
+    doc.set_spawn(spawn).then(|| tr!("Spawn point at {x}, {y}, {z}", x = spawn[0], y = spawn[1], z = spawn[2]))
 }
 
 pub fn probe(doc: &Document, x: i32, z: i32) -> Option<Probe> {
@@ -2839,6 +2866,14 @@ pub fn click(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, inverse:
             tools.measure.press(at, kind, near);
             tools.measure.release(at, kind);
             None
+        }
+        // The spawn point, on the ground where clicked (in the 3D views;
+        // the map drags it).
+        Tool::Spawn => {
+            if inverse {
+                return None;
+            }
+            set_spawn(doc, x, z)
         }
         Tool::Structure => crate::structure_tool::click(doc, tools, x, z, inverse),
         Tool::Building => None,

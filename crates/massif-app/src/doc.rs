@@ -477,6 +477,20 @@ impl Document {
         true
     }
 
+    /// Move the spawn point to `spawn`, as one step to undo. Returns
+    /// whether it moved.
+    pub fn set_spawn(&mut self, spawn: [i32; 3]) -> bool {
+        if self.world.meta.spawn == spawn {
+            return false;
+        }
+        let meta = massif_core::WorldMeta { spawn, ..self.world.meta.clone() };
+        let moved = self.history.set_meta(&mut self.world, tr!("Move the spawn point"), meta);
+        if moved {
+            self.mark_changed();
+        }
+        moved
+    }
+
     /// Put `dimension` in place of dimension `dim` (the map made another
     /// size), as one step to undo named `label`; the map's terrains made of
     /// `palette`'s blocks too when it is given, in the same step.
