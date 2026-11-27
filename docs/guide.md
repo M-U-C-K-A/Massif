@@ -3200,6 +3200,11 @@ camera and the output beside it; **Animation** the viewport over the
 timeline. Areas split, swap, float and change as on the other sides. One
 area draws the viewport at a time; a second one says where it is.
 
+- The Render side loads the map around the camera, as far as the views'
+  view distance (Settings): a map within it is loaded whole once and
+  stays however the camera turns; on a larger map, when the camera goes
+  far, the part around it is built in the background while the land
+  already there stays shown, and takes its place once whole.
 - The view moves as Blender's: **drag** (or the middle button) turns about
   the point under the pointer where the drag began, **Shift-drag** slides,
   the point held following the pointer, the **wheel** (or a pinch) comes

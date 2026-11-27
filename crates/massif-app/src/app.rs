@@ -11774,6 +11774,61 @@ mod tests {
         }
     }
 
+    /// Turning the camera about a point never builds the Render scene
+    /// again when the map fits in the reach; with a short reach, the camera
+    /// gone far builds a scene around it behind the one shown, which stays
+    /// until the new one is whole: no frame without the land.
+    #[test]
+    fn the_render_scene_stays_while_the_camera_moves() {
+        use crate::layout::Side;
+        let mut h = harness(ThemeChoice::Light);
+        h.run_steps(3);
+        h.state_mut().layout.show_side(Side::Render);
+        h.run_steps(3);
+        let built = |h: &mut egui_kittest::Harness<'static, MassifApp>| {
+            let started = std::time::Instant::now();
+            while h.state().render_side.building() && started.elapsed().as_secs() < 120 {
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        };
+        built(&mut h);
+        let (made, ..) = h.state().render_side.scenes();
+        // A full turn about a point of the map, in 36 steps.
+        let pivot = h.state().render_side.pose_now().unwrap().target;
+        for _ in 0..36 {
+            h.state_mut().render_side.orbit_about(pivot, std::f32::consts::TAU / 36.0);
+            h.run_steps(2);
+            assert!(h.state().render_side.scenes().2.is_some(), "a scene shown at every step");
+        }
+        assert_eq!(h.state().render_side.scenes().0, made, "no scene made again for a turn: the map fits in the reach");
+        // A short reach: the camera goes far, a scene is built around it
+        // while the one shown stays.
+        h.state_mut().settings.view_distance = 256;
+        h.run_steps(2);
+        built(&mut h);
+        let (made, _, first) = h.state().render_side.scenes();
+        let pose = h.state().render_side.pose_now().unwrap();
+        let far = [pose.eye[0] + 600.0, pose.eye[1], pose.eye[2] + 300.0];
+        h.state_mut().render_side.set_view(far, [far[0] + 40.0, pose.target[1], far[2] + 40.0]);
+        let mut behind = false;
+        let started = std::time::Instant::now();
+        loop {
+            h.step();
+            let (now, next, shown) = h.state().render_side.scenes();
+            assert!(shown.is_some(), "the land stays while the next scene builds");
+            behind |= next;
+            if now > made && !next {
+                assert_ne!(shown, first, "the new scene took the old one's place");
+                break;
+            }
+            assert!(started.elapsed().as_secs() < 120, "the scene around the camera was built");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(behind, "it was built behind the one shown");
+        h.state_mut().settings.view_distance = crate::graphics::DEFAULT_VIEW_DISTANCE;
+    }
+
     /// Let the Render side's image settle, with less motion (it stops at
     /// 64 samples a pixel), so that a snapshot does not wait on the graphics
     /// card path-tracing frame after frame (at 2x, it would time out).

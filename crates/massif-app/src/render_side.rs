@@ -298,6 +298,11 @@ struct Playback {
 
 pub struct RenderSide {
     scene: Option<Scene>,
+    /// The scene around where the camera went, built in the background
+    /// while the one shown stays: it takes its place once whole.
+    next_scene: Option<Scene>,
+    /// Scenes made so far (tests).
+    scenes_made: u32,
     orbit: Option<Orbit>,
     light: Light,
     time: Time,
@@ -381,6 +386,8 @@ impl Default for RenderSide {
         light.set_time(time.hour, time.day, time.latitude, time.north);
         Self {
             scene: None,
+            next_scene: None,
+            scenes_made: 0,
             orbit: None,
             light,
             time,
@@ -670,6 +677,21 @@ impl RenderSide {
         self.minimap_shown
     }
 
+    /// Scenes made so far, whether one is being built behind the one
+    /// shown, and the extent of the one shown (tests).
+    #[cfg(test)]
+    pub fn scenes(&self) -> (u32, bool, Option<massif_render::map_source::Extent>) {
+        (self.scenes_made, self.next_scene.is_some(), self.scene.as_ref().map(|s| s.renderer.extent()))
+    }
+
+    /// Turn the camera by `dyaw` about `pivot` as a drag does (tests).
+    #[cfg(test)]
+    pub fn orbit_about(&mut self, pivot: [f64; 3], dyaw: f32) {
+        if let Some(o) = self.orbit.as_mut() {
+            o.orbit_about(pivot, dyaw, 0.0);
+        }
+    }
+
     /// The Timeline's playhead, seconds (tests).
     #[cfg(test)]
     pub fn playhead(&self) -> f32 {
@@ -738,17 +760,61 @@ impl RenderSide {
         // Loading around the view: the camera gone far from the part of the
         // map the scene holds (or the setting changed), a scene around it
         // now, not while an image is drawn or saved.
+        //
+        // Measured from the eye (turning about a far point moves the point
+        // looked at a long way, not the eye), and only when the scene holds
+        // part of the map: a map within the reach is loaded whole once. The
+        // scene shown stays until the new one is built (see `next_scene`).
         let reach = render_reach();
+        let target = target_for(catalogue.as_ref().map(|c| c.version.as_str()));
         if let (Some(s), Some(orbit)) = (&self.scene, &self.orbit)
             && self.still.is_none()
             && self.writing.is_none()
-            && match (s.around, reach) {
-                (Some((c, r)), Some(reach)) => r != reach || (c[0] - orbit.target[0]).hypot(c[1] - orbit.target[2]) > reach / 2.0,
-                (None, None) => false,
-                _ => true,
-            }
         {
-            self.scene = None;
+            let eye = orbit.eye();
+            let whole = s.renderer.extent() == s.map;
+            let (moved, reset) = match (s.around, reach) {
+                (Some((_, r)), Some(reach)) if r != reach => (false, true),
+                (Some(_), Some(_)) if whole => (false, false),
+                (Some((c, _)), Some(reach)) => ((c[0] - eye[0]).hypot(c[1] - eye[2]) > reach / 2.0, false),
+                (None, None) => (false, false),
+                _ => (false, true),
+            };
+            if reset {
+                self.scene = None;
+                self.next_scene = None;
+            } else if moved && self.next_scene.is_none() {
+                let around = reach.map(|r| ([eye[0], eye[2]], r));
+                let extent = around.and_then(|([x, z], r)| s.map.around(x, z, r)).unwrap_or(s.map);
+                let map = s.map;
+                self.next_scene = Some(new_scene(doc, catalogue.as_ref(), cat_key, self.blades, device, queue, target.clone(), map, extent, around, eye));
+                self.scenes_made += 1;
+            }
+        }
+        // The scene being built in the background, a few milliseconds of
+        // uploads a frame; done, it takes the place of the one shown.
+        if let Some(next) = &mut self.next_scene {
+            let started = Instant::now();
+            if let Some(builder) = &mut next.builder {
+                while started.elapsed() < UPLOAD_BUDGET / 2 {
+                    let Some(built) = builder.take() else { break };
+                    next.built.insert(built.tile);
+                    if !next.renderer.put(built.chunks) {
+                        next.full = true;
+                    }
+                }
+                if builder.finished() {
+                    next.builder = None;
+                    next.took = Some(next.started.elapsed());
+                }
+            }
+            next.renderer.sync_materials(&next.materials);
+            ui.ctx().request_repaint();
+            if next.builder.is_none() {
+                self.scene = self.next_scene.take();
+                self.last = None;
+                self.texture_size = [0; 2];
+            }
         }
         // The grass drawn the other way: the scene built again, the camera
         // where it is.
@@ -768,7 +834,7 @@ impl RenderSide {
             self.scene = None;
         }
         if self.scene.is_none() {
-            let target = target_for(catalogue.as_ref().map(|c| c.version.as_str()));
+            self.next_scene = None;
             let Some(map) = Extent::of_map(&doc.world, doc.dim, &target) else {
                 ui.painter().text(view.center(), Align2::CENTER_CENTER, tr!("Nothing to render: the map is empty"), FontId::proportional(13.0), pal.weak);
                 return;
@@ -789,27 +855,8 @@ impl RenderSide {
                 None => Some(map),
             }
             .unwrap_or(map);
-            let materials = Arc::new(Materials::new(catalogue.clone(), device.limits().max_texture_array_layers as usize));
-            materials.set_blades(self.blades);
-            let tiles = wanted(doc, &extent, orbit.target);
-            let count = tiles.len();
-            let builder = MapBuilder::start(doc.world.copy_unfrozen(), doc.dim, target, materials.clone(), tiles);
-            self.scene = Some(Scene {
-                renderer: Renderer::new(device, queue, extent),
-                materials,
-                builder: Some(builder),
-                built: HashSet::new(),
-                tiles: count,
-                started: Instant::now(),
-                took: None,
-                full: false,
-                map,
-                around,
-                generation: doc.generation,
-                catalogue: cat_key,
-                blades: self.blades,
-                dim: doc.dim,
-            });
+            self.scene = Some(new_scene(doc, catalogue.as_ref(), cat_key, self.blades, device, queue, target.clone(), map, extent, around, orbit.target));
+            self.scenes_made += 1;
             self.dirty.clear();
             self.last = None;
             // A new renderer, a new image: shown from it even at the same size.
@@ -841,8 +888,9 @@ impl RenderSide {
                 scene.built.remove(p);
             }
             first.extend(rest);
-            let target = target_for(catalogue.as_ref().map(|c| c.version.as_str()));
-            scene.builder = Some(MapBuilder::start(doc.world.copy_unfrozen(), doc.dim, target, scene.materials.clone(), first));
+            scene.builder = Some(MapBuilder::start(doc.world.copy_unfrozen(), doc.dim, target.clone(), scene.materials.clone(), first));
+            // A scene being built elsewhere missed these edits: made again.
+            self.next_scene = None;
             scene.took = None;
             scene.started = Instant::now();
         }
@@ -2267,6 +2315,33 @@ impl RenderSide {
             doc.world.meta.animation = (!anim.is_empty() || anim.duration != Animation::default().duration || anim.fps != Animation::default().fps).then_some(anim);
             doc.mark_changed();
         }
+    }
+}
+
+/// A scene of the part `extent` of `map` (around a point, `around`), its
+/// tiles built nearest `near` first.
+#[allow(clippy::too_many_arguments)]
+fn new_scene(doc: &Document, catalogue: Option<&Arc<massif_assets::Catalogue>>, cat_key: Option<usize>, blades: bool, device: &wgpu::Device, queue: &wgpu::Queue, target: massif_anvil::Target, map: Extent, extent: Extent, around: Option<([f64; 2], f64)>, near: [f64; 3]) -> Scene {
+    let materials = Arc::new(Materials::new(catalogue.cloned(), device.limits().max_texture_array_layers as usize));
+    materials.set_blades(blades);
+    let tiles = wanted(doc, &extent, near);
+    let count = tiles.len();
+    let builder = MapBuilder::start(doc.world.copy_unfrozen(), doc.dim, target, materials.clone(), tiles);
+    Scene {
+        renderer: Renderer::new(device, queue, extent),
+        materials,
+        builder: Some(builder),
+        built: HashSet::new(),
+        tiles: count,
+        started: Instant::now(),
+        took: None,
+        full: false,
+        map,
+        around,
+        generation: doc.generation,
+        catalogue: cat_key,
+        blades,
+        dim: doc.dim,
     }
 }
 
