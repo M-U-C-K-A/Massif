@@ -556,6 +556,19 @@ pub struct Layout {
     /// area missing here shows the defaults.
     #[serde(default)]
     pub view3d: BTreeMap<AreaId, View3dLook>,
+    /// What each Diorama area shows (the surface or the caves, its turn),
+    /// by area: an area missing here shows the defaults.
+    #[serde(default)]
+    pub diorama: BTreeMap<AreaId, DioramaLook>,
+}
+
+/// What a Diorama area shows: kept with the layout, so that each area
+/// opens again as it was left.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DioramaLook {
+    pub caves: bool,
+    pub turn: u8,
 }
 
 /// What a 3D View area shows: kept with the layout, so that each area
@@ -856,6 +869,7 @@ impl Default for Layout {
             last_render: first_render,
             version: LAYOUT_VERSION,
             view3d: BTreeMap::new(),
+            diorama: BTreeMap::new(),
         }
     }
 }
@@ -1044,6 +1058,7 @@ impl Layout {
             kept.extend(w.floating.iter().map(|f| (f.id, f.editor)));
         }
         self.view3d.retain(|id, _| kept.iter().any(|(k, e)| k == id && *e == EditorKind::View3d));
+        self.diorama.retain(|id, _| kept.iter().any(|(k, e)| k == id && *e == EditorKind::Diorama));
         self
     }
 
@@ -1283,11 +1298,17 @@ impl Layout {
             if let Some(look) = self.view3d.get(o).copied() {
                 self.view3d.insert(*n, look);
             }
+            if let Some(look) = self.diorama.get(o).copied() {
+                self.diorama.insert(*n, look);
+            }
         }
         for f in &mut copy.floating {
             self.next_id += 1;
             if let Some(look) = self.view3d.get(&f.id).copied() {
                 self.view3d.insert(self.next_id, look);
+            }
+            if let Some(look) = self.diorama.get(&f.id).copied() {
+                self.diorama.insert(self.next_id, look);
             }
             f.id = self.next_id;
         }

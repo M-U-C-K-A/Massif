@@ -2101,7 +2101,10 @@ its shadow to the south-east. It is an editor like the map and the 3D View,
 in the **View** section of an area's chooser: put it beside the 2D map to
 paint on one and see the result on the other, float it, or give it the
 whole window. It follows the map's edits: the tiles changed are built
-again, the old ones shown until then.
+again, the old ones shown until then. Several Diorama areas can be open at
+once, as several 3D Views: each has its own place, zoom, turn and Surface
+or Caves, kept with the layout (each builds its own tiles, so two take
+twice the memory of one).
 
 ![The Diorama over a village, every block textured](images/diorama.png)
 

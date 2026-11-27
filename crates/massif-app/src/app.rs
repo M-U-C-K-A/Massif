@@ -596,7 +596,12 @@ pub struct MassifApp {
     slots3d: HashMap<AreaId, usize>,
     /// The Render side: the map path-traced.
     render_side: crate::render_side::RenderSide,
+    /// The Dioramas: each Diorama area has one of its own (its camera, its
+    /// surface or caves, its tiles), slot 0 being `diorama` and slot `k`
+    /// `extra_dioramas[k - 1]`, as the 3D views' slots.
     diorama: crate::diorama::Diorama,
+    extra_dioramas: Vec<crate::diorama::Diorama>,
+    slots_diorama: HashMap<AreaId, usize>,
     /// The 3D Sculpt editor's view: its own camera and tiles.
     sculpt3d: View3d,
     hover: Option<(i32, i32)>,
@@ -1296,6 +1301,8 @@ impl MassifApp {
             maps: HashMap::new(),
             map_cache: MapCache::default(),
             view3d: View3d::default(),
+            extra_dioramas: Vec::new(),
+            slots_diorama: HashMap::new(),
             extra3d: Vec::new(),
             slots3d: HashMap::new(),
             render_side: Default::default(),
@@ -5039,6 +5046,8 @@ impl MassifApp {
         self.map_center = None;
         let views: Vec<AreaId> = areas.iter().chain(floats.iter()).filter(|a| a.1 == EditorKind::View3d).map(|a| a.0).collect();
         self.assign_3d_slots(&views);
+        let dioramas: Vec<AreaId> = areas.iter().chain(floats.iter()).filter(|a| a.1 == EditorKind::Diorama).map(|a| a.0).collect();
+        self.assign_diorama_slots(&dioramas);
         for (id, editor, rect) in &areas {
             self.area(ui, frame, *id, *editor, *rect, &shown, false);
         }
@@ -5101,6 +5110,48 @@ impl MassifApp {
                 }
                 self.dragging_area = None;
             }
+        }
+    }
+
+    /// The Diorama area `id` is drawn with.
+    fn diorama_of(&mut self, id: AreaId) -> &mut crate::diorama::Diorama {
+        match self.slots_diorama.get(&id).copied().unwrap_or(0) {
+            0 => &mut self.diorama,
+            k => &mut self.extra_dioramas[k - 1],
+        }
+    }
+
+    /// Give each Diorama area of the workspace shown a Diorama of its own,
+    /// kept from frame to frame; one newly shown takes a free one, made if
+    /// need be, and shows what the layout keeps for it.
+    fn assign_diorama_slots(&mut self, areas: &[AreaId]) {
+        let before = std::mem::take(&mut self.slots_diorama);
+        let mut taken = vec![false; areas.len().max(1 + self.extra_dioramas.len())];
+        for id in areas {
+            if let Some(&k) = before.get(id)
+                && !taken[k]
+            {
+                taken[k] = true;
+                self.slots_diorama.insert(*id, k);
+            }
+        }
+        for id in areas {
+            if self.slots_diorama.contains_key(id) {
+                continue;
+            }
+            let k = (0..taken.len()).find(|&k| !taken[k]).unwrap_or(taken.len());
+            if k > self.extra_dioramas.len() {
+                self.extra_dioramas.push(crate::diorama::Diorama::default());
+            }
+            if k >= taken.len() {
+                taken.resize(k + 1, false);
+            }
+            taken[k] = true;
+            self.slots_diorama.insert(*id, k);
+            let look = self.layout.diorama.get(id).copied().unwrap_or_default();
+            let d = self.diorama_of(*id);
+            d.caves = look.caves;
+            d.turn = look.turn;
         }
     }
 
@@ -5437,7 +5488,7 @@ impl MassifApp {
             EditorKind::Diorama => {
                 hui.label(RichText::new(tr!("Beta")).size(10.5).strong().color(pal.accent));
                 hui.add_space(8.0);
-                self.diorama.header(&mut hui);
+                self.diorama_of(id).header(&mut hui);
             }
             _ => {}
         }
@@ -5556,7 +5607,22 @@ impl MassifApp {
                     self.feedback = Some(note);
                 }
             }
-            EditorKind::Diorama => self.diorama.ui(&mut cui, frame, &mut self.doc, self.blocks.catalogue.clone()),
+            EditorKind::Diorama => {
+                let catalogue = self.blocks.catalogue.clone();
+                let k = self.slots_diorama.get(&id).copied().unwrap_or(0);
+                let d = match k {
+                    0 => &mut self.diorama,
+                    k => &mut self.extra_dioramas[k - 1],
+                };
+                d.ui(&mut cui, frame, &mut self.doc, catalogue);
+                // What it shows is kept with the layout.
+                let look = crate::layout::DioramaLook { caves: d.caves, turn: d.turn };
+                if look == Default::default() {
+                    self.layout.diorama.remove(&id);
+                } else {
+                    self.layout.diorama.insert(id, look);
+                }
+            }
             EditorKind::Tools => scrolled(&mut cui, &mut |ui| panels::tools_panel(ui, &mut self.tools)),
             EditorKind::ToolSettings => {
                 scrolled(&mut cui, &mut |ui| panels::tool_settings(ui, &mut self.tools, &mut self.doc, &mut self.blocks))
@@ -7982,6 +8048,9 @@ impl MassifApp {
             }
             self.render_side.invalidate(&dirty);
             self.diorama.invalidate(&dirty);
+            for d in &mut self.extra_dioramas {
+                d.invalidate(&dirty);
+            }
             ctx.request_repaint();
         }
         let title = format!("{}{} — Massif", self.doc.title(), if self.doc.is_modified() { " •" } else { "" });
@@ -11399,6 +11468,48 @@ mod tests {
         if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
             settle_render(&mut h);
             h.render().unwrap().save(dir.join("render-minimap.png")).unwrap();
+        }
+    }
+
+    /// Two Diorama areas side by side each have a Diorama of their own:
+    /// one shows the surface, the other the caves turned a quarter, each
+    /// draws its own image, and the layout keeps what each shows
+    /// (MASSIF_SNAPSHOT_DIR: the window).
+    #[test]
+    fn each_diorama_keeps_its_own_view() {
+        use crate::layout::DioramaLook;
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(3);
+        let ids = [9101, 9102];
+        let area = |k: usize| Box::new(Node::Area { id: ids[k], editor: EditorKind::Diorama });
+        let root = Node::Split { dir: Dir::Row, ratio: 0.5, a: area(0), b: area(1) };
+        {
+            let app = h.state_mut();
+            app.layout.workspaces.push(crate::layout::Workspace { name: "Two dioramas".into(), root, maximized: None, terrain: false, render: false, floating: Vec::new() });
+            let layout = std::mem::take(&mut app.layout).sanitize();
+            app.layout = layout;
+            app.layout.activate(app.layout.workspaces.len() - 1);
+            app.layout.diorama.insert(ids[1], DioramaLook { caves: true, turn: 1 });
+        }
+        h.run_steps(4);
+        assert_eq!(h.state().extra_dioramas.len(), 1, "a Diorama of its own for the second area");
+        let started = std::time::Instant::now();
+        while (h.state().extra_dioramas[0].progress().built == 0 || h.state().diorama.progress().built == 0) && started.elapsed().as_secs() < 120 {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        h.run_steps(8);
+        let (a, b) = (&h.state().diorama, &h.state().extra_dioramas[0]);
+        assert!(!a.caves && a.turn == 0, "the first shows the surface, north up");
+        assert!(b.caves && b.turn == 1, "the second the caves, turned");
+        assert!(a.progress().built > 0 && b.progress().built > 0, "each builds its tiles");
+        // Turned by hand: the layout keeps it.
+        h.state_mut().diorama.turn = 2;
+        h.run_steps(2);
+        assert_eq!(h.state().layout.diorama.get(&ids[0]).copied(), Some(DioramaLook { caves: false, turn: 2 }));
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            h.run_steps(20);
+            h.render().unwrap().save(dir.join("two-dioramas.png")).unwrap();
         }
     }
 
