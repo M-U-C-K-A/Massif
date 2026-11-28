@@ -139,7 +139,7 @@
  "Add a point": "Ajouter un point",
  "Add a shortcut": "Ajouter un raccourci",
  "Add an ore": "Ajouter un minerai",
- "Add an ore taken out": "Remettre un minerai retiré",
+ "Add an ore: one taken out, or of any block, a mod's": "Ajouter un minerai : un minerai retiré, ou celui d'un bloc quelconque, d'un mod",
  "Add and Max: painted where the image is on, and kept where it was painted already.": "Ajouter et Max : peint là où l'image est allumée, et gardé là où il était déjà peint.",
  "Add brushes": "Ajouter des pinceaux",
  "Add brushes…": "Ajouter des pinceaux…",
@@ -2495,7 +2495,7 @@
  "{name} · {point} (read-only)": "{name} · {point} (lecture seule)",
  "{name} — for {use_for}": "{name} — pour {use_for}",
  "{name}, of the blocks read.": "{name}, parmi les blocs lus.",
- "{name}: for {use_for}. About {thousands} blocks a chunk of rock.": "{name} : pour {use_for}. Environ {thousands} blocs par chunk de roche.",
+ "{name}: {use_for}. About {thousands} blocks a chunk of rock.": "{name} : {use_for}. Environ {thousands} blocs par chunk de roche.",
  "{name}: on the map only": "{name} : sur la carte seulement",
  "{n} ({t} tiles)": "{n} ({t} tuiles)",
  "{n} blocks": {
@@ -4236,5 +4236,13 @@
  "Back to its own colour, from its blocks": "Revenir à sa propre couleur, celle de ses blocs",
  "With keys only": "Avec touches seulement",
  "No action has keys.": "Aucune action n'a de touches.",
- "Also {actions}: one of them does nothing.": "Aussi {actions} : l'une des deux ne fait rien."
+ "Also {actions}: one of them does nothing.": "Aussi {actions} : l'une des deux ne fait rien.",
+ "Ore of any block…": "Minerai d'un bloc quelconque…",
+ "{stone}, {deep} in deepslate": "{stone}, {deep} dans l'ardoise des abîmes",
+ "Add an ore of any block": "Ajouter un minerai d'un bloc quelconque",
+ "laid as the game's: in veins, in the rock, in its own bands": "posé comme ceux du jeu : en filons, dans la roche, dans ses propres bandes",
+ "Search the blocks of the game and the mods": "Chercher parmi les blocs du jeu et des mods",
+ "No block found. Mods' blocks show once Game & mods… has read them.": "Aucun bloc trouvé. Les blocs des mods apparaissent une fois que Jeu et mods… les a lus.",
+ "In deepslate and tuff": "Dans l'ardoise des abîmes et le tuf",
+ "The same block": "Le même bloc"
 }

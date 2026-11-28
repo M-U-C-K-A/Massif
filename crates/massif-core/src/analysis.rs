@@ -325,6 +325,18 @@ pub struct MineralCount {
     pub exposed: u64,
 }
 
+/// An ore of any block (see [`crate::ores::CustomOre`]) over the whole map.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CustomOreCount {
+    /// As people read it: "Tin Ore".
+    pub name: String,
+    pub color: [u8; 3],
+    /// Its blocks, in stone and in deepslate.
+    pub ore: u64,
+    /// Those in the open: at the top of a column, or in objects.
+    pub exposed: u64,
+}
+
 /// The land within [`SPAWN_REACH`] blocks of the spawn point.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Near {
@@ -429,6 +441,8 @@ pub struct Analysis {
     pub trees: u64,
     /// Every [`Mineral`], in its order.
     pub minerals: Vec<MineralCount>,
+    /// The ores of any block Edit ▸ Ores lays (a mod's), in its order.
+    pub custom_ores: Vec<CustomOreCount>,
     /// Blocks of bedrock above the bottom [`FLOOR`] layers of the world.
     pub stray_bedrock: u64,
 
@@ -832,6 +846,8 @@ struct Ctx<'a> {
     /// Of every ore of the settings, its blocks in stone and in deepslate:
     /// indices into `names`.
     ore_names: Vec<[usize; 2]>,
+    /// The ores of any block: name, colour, the ids of their blocks.
+    custom_ores: Vec<(String, [u8; 3], [String; 2])>,
 }
 
 impl<'a> Ctx<'a> {
@@ -907,8 +923,8 @@ impl<'a> Ctx<'a> {
             .ores
             .iter()
             .map(|rule| {
-                let (stone, deep) = crate::ores::ore_blocks(rule.mineral);
-                let speck = |rock: [u8; 3]| std::array::from_fn(|k| ((rock[k] as f32) * 0.6 + rule.mineral.color()[k] as f32 * 0.4) as u8);
+                let (stone, deep) = rule.blocks();
+                let speck = |rock: [u8; 3]| std::array::from_fn(|k| ((rock[k] as f32) * 0.6 + rule.color()[k] as f32 * 0.4) as u8);
                 [intern(stone, speck([125, 125, 125])), intern(deep, speck([80, 80, 82]))]
             })
             .collect();
@@ -940,6 +956,16 @@ impl<'a> Ctx<'a> {
             ores: crate::ores::Placer::new(&world.meta.ores, world.meta.seed),
             hosts: crate::ores::hosts(reg),
             ore_names,
+            custom_ores: world
+                .meta
+                .ores
+                .custom()
+                .map(|r| {
+                    let (stone, deep) = r.blocks();
+                    let base = |s: &str| s.split('[').next().unwrap_or(s).trim().to_owned();
+                    (r.name(), r.color(), [base(stone), base(deep)])
+                })
+                .collect(),
             biomes: crate::compose::AutoBiomes::new(reg, world.meta.sea_level, dim.min_y),
         }
     }
@@ -1467,6 +1493,20 @@ impl<'a> Ctx<'a> {
                 MineralCount { mineral: m, ore, riches, exposed }
             })
             .collect();
+        let custom_ores = self
+            .custom_ores
+            .iter()
+            .map(|(name, color, ids)| {
+                let of = |list: &[Count]| list.iter().filter(|c| ids.contains(&c.id)).map(|c| c.count).sum::<u64>();
+                let mut exposed = of(&surface);
+                for (k, n) in self.names.iter().enumerate() {
+                    if ids.contains(n) {
+                        exposed += t.extra[k];
+                    }
+                }
+                CustomOreCount { name: name.clone(), color: *color, ore: of(&volume), exposed }
+            })
+            .collect();
         let spot = |s: Spot| t.spots[s.index()].map(|(_, x, z)| (x, z));
         let mut spots = Spots {
             bedrock: spot(Spot::Bedrock),
@@ -1515,6 +1555,7 @@ impl<'a> Ctx<'a> {
             biomes: sorted(biomes),
             trees: t.trees,
             minerals,
+            custom_ores,
             stray_bedrock: t.stray_bedrock,
             near: t.near,
             spawn_column: t.spawn,
@@ -2151,6 +2192,9 @@ impl Analysis {
         for c in &self.minerals {
             let _ = writeln!(md, "| {} | {} | {} | {} |", c.mineral.name(), thousands(c.ore), thousands(c.riches), thousands(c.exposed));
         }
+        for c in &self.custom_ores {
+            let _ = writeln!(md, "| {} | {} | — | {} |", c.name, thousands(c.ore), thousands(c.exposed));
+        }
         let _ = writeln!(md);
         for (heading, list, whole) in [("At the surface", &self.surface, self.grounded()), ("In the ground", &self.volume, self.solid()), ("Biomes", &self.biomes, self.columns)] {
             let _ = writeln!(md, "## {heading}\n");
@@ -2270,7 +2314,7 @@ mod tests {
                     }
                 }
             }
-            let mut ores: HashMap<usize, &'static str> = HashMap::new();
+            let mut ores: HashMap<usize, &str> = HashMap::new();
             if let Some(placer) = &placer {
                 for cz in (oz >> 4)..(oz >> 4) + 8 {
                     for cx in (ox >> 4)..(ox >> 4) + 8 {
@@ -2284,7 +2328,7 @@ mod tests {
                                 return;
                             }
                             let Some(host) = hosts.get(here as usize).copied().flatten() else { return };
-                            let (stone, deep) = crate::ores::ore_blocks(world.meta.ores.ores[b.ore as usize].mineral);
+                            let (stone, deep) = world.meta.ores.ores[b.ore as usize].blocks();
                             ores.insert(at(cell, b.y), if host == crate::ores::Host::Deepslate { deep } else { stone });
                             grid[at(cell, b.y)] = ORE;
                         });
@@ -2350,6 +2394,22 @@ mod tests {
         assert_eq!((a.grounded(), a.void), (a.columns, 0), "every column has ground");
         assert!(a.layered > 0 && a.hollow > 0, "the slab and the cave");
         assert!(a.at_ceiling > 0, "columns up to the top of the world");
+    }
+
+    /// An ore of a mod's blocks is counted where the export lays it, block
+    /// for block, and listed with the game's ores.
+    #[test]
+    fn ores_of_any_block_are_counted() {
+        let mut world = varied();
+        world.meta.ores = Default::default();
+        world.meta.ores.insert(crate::ores::OreRule::custom("examplemod:tin_ore", Some("examplemod:deepslate_tin_ore"), [200, 200, 210]));
+        let a = run(&world);
+        let counts = by_name(&a.volume);
+        assert_eq!(counts, every_block(&world));
+        let tin = counts.get("examplemod:tin_ore").copied().unwrap_or(0) + counts.get("examplemod:deepslate_tin_ore").copied().unwrap_or(0);
+        assert!(tin > 100 && counts.contains_key("examplemod:deepslate_tin_ore"), "{counts:?}");
+        assert_eq!(a.custom_ores, vec![CustomOreCount { name: "Tin Ore".into(), color: [200, 200, 210], ore: tin, exposed: 0 }]);
+        assert!(a.report().contains("| Tin Ore |"));
     }
 
     /// Underground pockets are counted where the export lays them, in the

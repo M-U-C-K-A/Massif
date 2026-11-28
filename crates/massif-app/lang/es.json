@@ -139,7 +139,7 @@
  "Add a point": "Añadir un punto",
  "Add a shortcut": "Añadir un atajo",
  "Add an ore": "Añadir un mineral",
- "Add an ore taken out": "Volver a añadir un mineral quitado",
+ "Add an ore: one taken out, or of any block, a mod's": "Añadir una mena: una quitada, o la de cualquier bloque, de un mod",
  "Add and Max: painted where the image is on, and kept where it was painted already.": "Añadir y Máx: se pinta donde la imagen está encendida y se conserva donde ya estaba pintado.",
  "Add brushes": "Añadir pinceles",
  "Add brushes…": "Añadir pinceles…",
@@ -2492,7 +2492,7 @@
  "{name} · {point} (read-only)": "{name} · {point} (solo lectura)",
  "{name} — for {use_for}": "{name} — para {use_for}",
  "{name}, of the blocks read.": "{name}, entre los bloques leídos.",
- "{name}: for {use_for}. About {thousands} blocks a chunk of rock.": "{name}: para {use_for}. Unos {thousands} bloques por chunk de roca.",
+ "{name}: {use_for}. About {thousands} blocks a chunk of rock.": "{name}: {use_for}. Unos {thousands} bloques por chunk de roca.",
  "{name}: on the map only": "{name}: solo en el mapa",
  "{n} ({t} tiles)": "{n} ({t} teselas)",
  "{n} blocks": {
@@ -4175,5 +4175,13 @@
  "Back to its own colour, from its blocks": "Volver a su propio color, el de sus bloques",
  "With keys only": "Solo con teclas",
  "No action has keys.": "Ninguna acción tiene teclas.",
- "Also {actions}: one of them does nothing.": "También {actions}: una de ellas no hace nada."
+ "Also {actions}: one of them does nothing.": "También {actions}: una de ellas no hace nada.",
+ "Ore of any block…": "Mena de cualquier bloque…",
+ "{stone}, {deep} in deepslate": "{stone}, {deep} en pizarra profunda",
+ "Add an ore of any block": "Añadir una mena de cualquier bloque",
+ "laid as the game's: in veins, in the rock, in its own bands": "colocada como las del juego: en vetas, en la roca, en sus propias franjas",
+ "Search the blocks of the game and the mods": "Buscar entre los bloques del juego y de los mods",
+ "No block found. Mods' blocks show once Game & mods… has read them.": "Ningún bloque encontrado. Los bloques de los mods aparecen cuando Juego y mods… los ha leído.",
+ "In deepslate and tuff": "En pizarra profunda y toba",
+ "The same block": "El mismo bloque"
 }

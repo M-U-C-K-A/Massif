@@ -496,7 +496,7 @@ impl<'a> ExportContext<'a> {
             .ores
             .iter()
             .map(|rule| {
-                let (stone, deep) = massif_core::ores::ore_blocks(rule.mineral);
+                let (stone, deep) = rule.blocks();
                 [stone, deep].map(|state| {
                     let block = BlockDef { state: state.to_owned(), color: [0; 3] };
                     let (name, kept) = target.block(block.name());

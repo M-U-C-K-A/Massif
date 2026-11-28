@@ -84,8 +84,8 @@ struct Drag {
 /// Something removed, and where it was.
 enum Removed {
     Ore(usize, OreRule),
-    /// Of the ore of this mineral, band `.1`.
-    Band(Mineral, usize, Band),
+    /// Of the ore of this key (see [`OreRule::key`]), band `.1`.
+    Band(String, usize, Band),
 }
 
 /// The map cut through along a row, as images.
@@ -116,6 +116,58 @@ struct Series {
     /// By ore: the rock at each height from `y0` in the biomes it keeps to,
     /// in columns (`None` until the map's rock is read).
     rock: Option<Vec<Vec<f64>>>,
+}
+
+/// A block an ore may be of, as the Blocks panel offers it: the game's or
+/// a mod's.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BlockChoice {
+    /// `create:zinc_ore`.
+    pub id: String,
+    /// `Zinc Ore`.
+    pub name: String,
+    pub color: [u8; 3],
+}
+
+/// An ore of any block being added: the search, the block picked and its
+/// block in deepslate (`None`: the same).
+#[derive(Debug, Clone, Default)]
+struct Adding {
+    search: String,
+    block: Option<usize>,
+    deepslate: Option<usize>,
+}
+
+/// The block of `blocks` an ore of block `k` lays in deepslate, as the
+/// game names its own (`deepslate_iron_ore` for `iron_ore`): the same
+/// namespace, `deepslate_` before the name, or `stone` in it made
+/// `deepslate`.
+fn deepslate_of(blocks: &[BlockChoice], k: usize) -> Option<usize> {
+    let id = &blocks.get(k)?.id;
+    let (ns, path) = id.split_once(':').unwrap_or(("minecraft", id));
+    if path.contains("deepslate") {
+        return None;
+    }
+    let mut names = vec![format!("{ns}:deepslate_{path}")];
+    if path.contains("stone") {
+        names.push(format!("{ns}:{}", path.replacen("stone", "deepslate", 1)));
+    }
+    names.iter().find_map(|n| blocks.iter().position(|b| &b.id == n))
+}
+
+/// The blocks a search finds, ores first: with nothing typed, the ores
+/// alone.
+fn found(blocks: &[BlockChoice], search: &str) -> Vec<usize> {
+    let needle = search.trim().to_lowercase();
+    let ore = |b: &BlockChoice| b.id.ends_with("_ore") || b.id.contains("_ore_") || b.id.contains("ore_");
+    let mut list: Vec<usize> = (0..blocks.len())
+        .filter(|&k| {
+            let b = &blocks[k];
+            if needle.is_empty() { ore(b) } else { b.id.contains(&needle) || b.name.to_lowercase().contains(&needle) }
+        })
+        .collect();
+    list.sort_by_key(|&k| (!ore(&blocks[k]), blocks[k].id.contains("deepslate"), massif_assets::namespace(&blocks[k].id) == "minecraft", blocks[k].id.clone()));
+    list
 }
 
 pub struct OresView {
@@ -157,6 +209,10 @@ pub struct OresView {
     /// over in the cut (its row lit in the details).
     row_hover: Option<usize>,
     cut_hover: Option<(usize, usize)>,
+    /// The blocks an ore may be of (see [`OresView::with_blocks`]).
+    blocks: Arc<Vec<BlockChoice>>,
+    /// An ore of any block being added, in place of the details.
+    adding: Option<Adding>,
 }
 
 impl Drop for OresView {
@@ -185,7 +241,7 @@ impl OresView {
                 ctx2.request_repaint();
             })
             .expect("a thread for the ores");
-        let selected = settings.ores.iter().position(|o| o.mineral == Mineral::Diamond).unwrap_or(0);
+        let selected = settings.ores.iter().position(|o| o.vanilla() == Some(Mineral::Diamond)).unwrap_or(0);
         Self {
             settings,
             dim,
@@ -212,7 +268,60 @@ impl OresView {
             removed: Vec::new(),
             row_hover: None,
             cut_hover: None,
+            blocks: Arc::new(Vec::new()),
+            adding: None,
         }
+    }
+
+    /// Offer these blocks for ores of any block (the game's and the mods'
+    /// the Blocks panel shows), besides those of the map.
+    pub fn with_blocks(mut self, blocks: Vec<BlockChoice>) -> Self {
+        self.set_blocks(blocks);
+        self
+    }
+
+    /// [`OresView::with_blocks`] on the window open.
+    pub fn set_blocks(&mut self, mut blocks: Vec<BlockChoice>) {
+        for b in &self.world.registry.blocks {
+            let id = b.name();
+            if id.contains(':') && !blocks.iter().any(|c| c.id == id) {
+                blocks.push(BlockChoice { id: id.to_owned(), name: massif_core::analysis::pretty(id), color: b.color });
+            }
+        }
+        // The game's ores even without its blocks read, as the presets lay them.
+        for m in Mineral::ALL {
+            let (stone, deep) = massif_core::ores::ore_blocks(m);
+            for id in [stone, deep] {
+                let id = id.split('[').next().unwrap_or(id);
+                if !blocks.iter().any(|c| c.id == id) {
+                    blocks.push(BlockChoice { id: id.to_owned(), name: massif_core::analysis::pretty(id), color: m.color() });
+                }
+            }
+        }
+        self.blocks = Arc::new(blocks);
+    }
+
+    /// Start adding an ore of any block (for tests: as the + does).
+    pub fn start_adding(&mut self) {
+        self.adding = Some(Adding::default());
+    }
+
+    /// Add the ore being added, and pick it.
+    fn finish_adding(&mut self) {
+        let Some(a) = self.adding.take() else { return };
+        let Some(b) = a.block.and_then(|k| self.blocks.get(k)) else { return };
+        let deep = a.deepslate.and_then(|k| self.blocks.get(k)).map(|d| d.id.as_str());
+        let rule = match self.removed.iter().rposition(|r| r.custom.as_ref().is_some_and(|c| c.block == b.id)) {
+            Some(k) => self.removed.remove(k),
+            None => OreRule::custom(&b.id, deep, b.color),
+        };
+        if let Some(k) = self.settings.ores.iter().position(|r| r.key() == rule.key()) {
+            self.selected = k;
+        } else {
+            self.selected = self.settings.insert(rule);
+        }
+        self.band = 0;
+        crate::sounds::play(crate::sounds::Cue::Select);
     }
 
     /// Where a grip of band `band` of ore `ore` was last drawn (for tests).
@@ -288,7 +397,7 @@ impl OresView {
             return;
         }
         let rule = self.settings.ores.remove(k);
-        self.removed.retain(|r| r.mineral != rule.mineral);
+        self.removed.retain(|r| r.key() != rule.key());
         self.removed.push(rule.clone());
         self.undo.push(Removed::Ore(k, rule));
         // The ore after it is picked in its place, or the one before at the end.
@@ -305,7 +414,7 @@ impl OresView {
             return;
         }
         let band = rule.bands.remove(j);
-        self.undo.push(Removed::Band(rule.mineral, j, band));
+        self.undo.push(Removed::Band(rule.key(), j, band));
         self.band = self.band.min(rule.bands.len().saturating_sub(1));
         self.drag = None;
     }
@@ -313,7 +422,7 @@ impl OresView {
     /// Add ore `mineral` back among the others: as it was when removed
     /// here, else as the preset for this world's heights has it.
     fn add_ore(&mut self, mineral: Mineral) {
-        let rule = match self.removed.iter().rposition(|r| r.mineral == mineral) {
+        let rule = match self.removed.iter().rposition(|r| r.vanilla() == Some(mineral)) {
             Some(k) => self.removed.remove(k),
             None => {
                 let floor = self.world.dims[self.dim].min_y;
@@ -334,16 +443,16 @@ impl OresView {
         while let Some(last) = self.undo.pop() {
             match last {
                 Removed::Ore(k, rule) => {
-                    if self.settings.ores.iter().any(|r| r.mineral == rule.mineral) {
+                    if self.settings.ores.iter().any(|r| r.key() == rule.key()) {
                         continue;
                     }
-                    self.removed.retain(|r| r.mineral != rule.mineral);
+                    self.removed.retain(|r| r.key() != rule.key());
                     let k = k.min(self.settings.ores.len());
                     self.settings.ores.insert(k, rule);
                     (self.selected, self.band) = (k, 0);
                 }
-                Removed::Band(mineral, j, band) => {
-                    let Some(k) = self.settings.ores.iter().position(|r| r.mineral == mineral) else { continue };
+                Removed::Band(key, j, band) => {
+                    let Some(k) = self.settings.ores.iter().position(|r| r.key() == key) else { continue };
                     let bands = &mut self.settings.ores[k].bands;
                     let j = j.min(bands.len());
                     bands.insert(j, band);
@@ -546,7 +655,7 @@ impl OresView {
         let n = self.settings.ores.len().max(1);
         // The ores taken out, to add back at the end.
         let missing = self.settings.missing();
-        let add_w = if missing.is_empty() { 0.0 } else { 46.0 };
+        let add_w = 46.0;
         let cells = Rect::from_min_max(pos2(map.right() + 14.0, rect.top()), pos2(rect.right() - add_w, rect.bottom()));
         let cw = cells.width() / n as f32;
         if self.settings.ores.is_empty() {
@@ -558,7 +667,7 @@ impl OresView {
             let cell = Rect::from_min_size(pos2(cells.left() + k as f32 * cw, rect.top()), vec2(cw, rect.height()));
             let r = ui.interact(cell, egui::Id::unique(("ores cell", k)), Sense::click());
             let on = self.settings.on && rule.on;
-            let color = theme::rgb(rule.mineral.color());
+            let color = theme::rgb(rule.color());
             if k == self.selected {
                 p.rect_filled(cell.shrink2(vec2(3.0, 6.0)), theme::TILE_RADIUS, selected_fill(pal));
                 p.hline(cell.shrink2(vec2(14.0, 0.0)).x_range(), cell.bottom() - 6.5, Stroke::new(2.0, color));
@@ -570,7 +679,7 @@ impl OresView {
             }
             let sq = Rect::from_min_size(pos2(cell.left() + 12.0, cell.top() + 15.0), vec2(8.0, 8.0));
             p.rect_filled(sq, 2, if on { color } else { color.gamma_multiply(0.35) });
-            let name = p.text(pos2(sq.right() + 6.0, sq.center().y), Align2::LEFT_CENTER, crate::i18n::tr_name(rule.mineral.name()), FontId::proportional(11.5), pal.weak);
+            let name = p.text(pos2(sq.right() + 6.0, sq.center().y), Align2::LEFT_CENTER, ore_name(rule), FontId::proportional(11.5), pal.weak);
             // Kept to some biomes: a funnel, as a brush's filter shows.
             if !rule.biomes.is_everywhere() {
                 p.text(pos2(name.right() + 5.0, sq.center().y), Align2::LEFT_CENTER, theme::glyph(Icon::Funnel).to_string(), FontId::proportional(10.5), pal.accent);
@@ -592,16 +701,16 @@ impl OresView {
             if r.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
-            let mut tip = tr!("{name}: for {use_for}. About {thousands} blocks a chunk of rock.", name = crate::i18n::tr_name(rule.mineral.name()), use_for = crate::i18n::tr_name(rule.mineral.use_for()), thousands = thousands(self.settings.per_chunk(rule).round() as u64));
+            let mut tip = tr!("{name}: {use_for}. About {thousands} blocks a chunk of rock.", name = ore_name(rule), use_for = ore_use(rule), thousands = thousands(self.settings.per_chunk(rule).round() as u64));
             if let Some(words) = biome_words(&rule.biomes, reg) {
                 tip = tr!("{tip} {words}.", tip, words);
             }
-            r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, k == self.selected, crate::i18n::tr_name(rule.mineral.name())));
+            r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, k == self.selected, ore_name(rule)));
             r.on_hover_text(tip);
         }
 
-        // The +: an ore taken out, back among the others.
-        if !missing.is_empty() {
+        // The +: an ore taken out, back among the others, or one of any block.
+        {
             let cell = Rect::from_min_max(pos2(cells.right(), rect.top()), rect.max);
             let r = ui.interact(cell, egui::Id::unique("ores add"), Sense::click());
             if r.hovered() || egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&r)) {
@@ -613,20 +722,30 @@ impl OresView {
             }
             p.text(cell.center(), Align2::CENTER_CENTER, theme::glyph(Icon::Plus).to_string(), FontId::proportional(16.0), pal.text);
             r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tr!("Add an ore")));
-            let r = r.on_hover_text(tr!("Add an ore taken out"));
+            let r = r.on_hover_text(tr!("Add an ore: one taken out, or of any block, a mod's"));
             let mut add = None;
+            let mut any = false;
             egui::Popup::menu(&r).show(|ui| {
                 // Each ore with its colour, in the room left of its name.
                 ui.spacing_mut().button_padding.x = 24.0;
                 for &m in &missing {
-                    let button = ui.button(m.name());
+                    let button = ui.button(crate::i18n::tr_name(m.name()));
                     let sq = Rect::from_center_size(pos2(button.rect.left() + 12.0, button.rect.center().y), vec2(8.0, 8.0));
                     ui.painter().rect_filled(sq, 2, theme::rgb(m.color()));
                     if button.clicked() {
                         add = Some(m);
                     }
                 }
+                if !missing.is_empty() {
+                    ui.separator();
+                }
+                if ui.button(tr!("Ore of any block…")).clicked() {
+                    any = true;
+                }
             });
+            if any {
+                self.start_adding();
+            }
             if let Some(m) = add {
                 self.add_ore(m);
                 crate::sounds::play(crate::sounds::Cue::Select);
@@ -805,7 +924,7 @@ impl OresView {
                 (false, true) => Color32::from_white_alpha(170),
                 (false, false) => pal.weak,
             };
-            painter.text(pos2(x, plot.top() + 6.0), Align2::CENTER_TOP, crate::i18n::tr_name(rule.mineral.name()).to_uppercase(), FontId::monospace(9.5), ink);
+            painter.text(pos2(x, plot.top() + 6.0), Align2::CENTER_TOP, ore_name(rule).to_uppercase(), FontId::monospace(9.5), ink);
         }
         if let Some(d) = &self.drag {
             let b = self.settings.ores[d.ore].bands[d.band];
@@ -823,7 +942,7 @@ impl OresView {
             && let Some(at) = pointer
         {
             let b = self.settings.ores[ore].bands[band];
-            let words = tr!("{name} · y {min} to {max}, most at {peak} · {veins} veins a chunk · {size} blocks a vein", name = crate::i18n::tr_name(self.settings.ores[ore].mineral.name()), min = b.min, max = b.max, peak = if b.peak[0] == b.peak[1] { b.peak[0].to_string() } else { tr!("{low} to {high}", low = b.peak[0], high = b.peak[1]) }, veins = trim(b.veins as f64), size = b.size);
+            let words = tr!("{name} · y {min} to {max}, most at {peak} · {veins} veins a chunk · {size} blocks a vein", name = ore_name(&self.settings.ores[ore]), min = b.min, max = b.max, peak = if b.peak[0] == b.peak[1] { b.peak[0].to_string() } else { tr!("{low} to {high}", low = b.peak[0], high = b.peak[1]) }, veins = trim(b.veins as f64), size = b.size);
             bubble(&p, pal, at + vec2(14.0, -18.0), &words);
         }
         if !self.settings.on {
@@ -859,7 +978,7 @@ impl OresView {
                     body_bottom: clamp(to_y(b.peak[0] as f32)),
                     past_top: to_y(b.max as f32 + 1.0) < plot.top() + 16.0,
                     past_bottom: to_y(b.min as f32) > plot.bottom() - 2.0,
-                    color: theme::rgb(rule.mineral.color()),
+                    color: theme::rgb(rule.color()),
                     on: rule.on && self.settings.on,
                 });
             }
@@ -1105,7 +1224,7 @@ impl OresView {
         let mut order: Vec<usize> = (0..values.len()).filter(|&k| self.settings.ores[k].on).collect();
         order.sort_by_key(|&k| k == self.selected);
         for k in order {
-            let color = theme::rgb(self.settings.ores[k].mineral.color());
+            let color = theme::rgb(self.settings.ores[k].color());
             let picked = k == self.selected;
             let points: Vec<Pos2> = values[k].iter().enumerate().map(|(i, &v)| pos2(to_x(v), to_y(y0 as f32 + i as f32 + 0.5))).collect();
             if points.len() < 2 {
@@ -1141,7 +1260,7 @@ impl OresView {
                 rows.sort_by(|a, b| b.1.total_cmp(&a.1));
                 for &(k, v) in &rows {
                     if v > 0.0 {
-                        painter.circle(pos2(to_x(v), sy), 3.5, theme::rgb(self.settings.ores[k].mineral.color()), Stroke::new(1.5, card_fill(pal)));
+                        painter.circle(pos2(to_x(v), sy), 3.5, theme::rgb(self.settings.ores[k].color()), Stroke::new(1.5, card_fill(pal)));
                     }
                 }
                 tooltip(&p, pal, (plot, at), y, &rows, (&self.settings, self.selected), self.scale);
@@ -1152,6 +1271,10 @@ impl OresView {
     // ------------------------------------------------------ inspector --
 
     fn inspector(&mut self, ui: &mut Ui, pal: &Palette) {
+        if self.adding.is_some() {
+            self.add_form(ui, pal);
+            return;
+        }
         let world = self.world.clone();
         let reg = &world.registry;
         let selected = self.selected;
@@ -1169,12 +1292,12 @@ impl OresView {
                     ui.label(RichText::new(tr!("No ore: the export lays none. Add one with the + at the end of the ores.")).size(12.5).color(pal.weak));
                     return None;
                 };
-                let mineral = rule.mineral;
+                let (name, color) = (ore_name(rule), rule.color());
                 ui.horizontal(|ui| {
                     let (sq, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
-                    ui.painter().rect_filled(sq, 2, theme::rgb(mineral.color()));
-                    ui.label(RichText::new(crate::i18n::tr_name(mineral.name())).size(14.0).medium());
-                    ui.label(RichText::new(tr!("for {use_for}", use_for = crate::i18n::tr_name(mineral.use_for()))).size(12.0).color(pal.weak));
+                    ui.painter().rect_filled(sq, 2, theme::rgb(color));
+                    ui.label(RichText::new(&name).size(14.0).medium());
+                    ui.label(RichText::new(ore_use(rule)).size(12.0).color(pal.weak));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = 8.0;
                         let add = egui::Button::new(RichText::new(theme::with_icon(Icon::Plus, tr!("Add a band"))).size(12.5))
@@ -1191,7 +1314,7 @@ impl OresView {
                         ui.add_space(6.0);
                         let (key, undo) = if cfg!(target_os = "macos") { ("⌫", "⌘Z") } else { ("Delete", "Ctrl+Z") };
                         let remove = egui::Button::new(RichText::new(theme::with_icon(Icon::Trash2, tr!("Remove"))).size(12.5).color(pal.weak)).frame(false);
-                        if ui.add(remove).on_hover_text(tr!("Take {name} out of the ores ({key}); {undo} or the + brings it back", name = mineral.name(), key, undo)).clicked() {
+                        if ui.add(remove).on_hover_text(tr!("Take {name} out of the ores ({key}); {undo} or the + brings it back", name = name, key, undo)).clicked() {
                             remove_ore = true;
                         }
                     });
@@ -1264,7 +1387,7 @@ impl OresView {
                 if rule.bands.is_empty() {
                     ui.label(RichText::new(tr!("No band: this ore is laid nowhere.")).size(12.0).color(pal.weak));
                 }
-                Some(theme::rgb(mineral.color()))
+                Some(theme::rgb(color))
             });
         // The ore the details are of: its colour down their left side, as
         // under it in the strip.
@@ -1282,6 +1405,103 @@ impl OresView {
             // The cut, drawn before, lights the candle on the next frame.
             self.row_hover = row_hover;
             ui.ctx().request_repaint();
+        }
+    }
+}
+
+impl OresView {
+    /// In place of the details: an ore of any block to add, picked among
+    /// the blocks the Blocks panel offers (a mod's too), with its block in
+    /// deepslate.
+    fn add_form(&mut self, ui: &mut Ui, pal: &Palette) {
+        let blocks = self.blocks.clone();
+        let (mut done, mut cancel) = (false, false);
+        egui::Frame::new()
+            .fill(card_fill(pal))
+            .stroke(Stroke::new(1.0, pal.border))
+            .corner_radius(theme::CARD_RADIUS)
+            .inner_margin(egui::Margin { left: 18, right: 16, top: 12, bottom: 12 })
+            .show(ui, |ui| {
+                ui.set_width(width(ui.ctx()) - 34.0);
+                let Some(a) = self.adding.as_mut() else { return };
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(tr!("Add an ore of any block")).size(14.0).medium());
+                    ui.label(RichText::new(tr!("laid as the game's: in veins, in the rock, in its own bands")).size(12.0).color(pal.weak));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        let add = egui::Button::new(RichText::new(theme::with_icon(Icon::Plus, tr!("Add"))).size(12.5).medium())
+                            .fill(pal.control())
+                            .stroke(Stroke::new(1.0, pal.control_border()))
+                            .corner_radius(theme::PILL)
+                            .min_size(vec2(0.0, 26.0));
+                        if ui.add_enabled(a.block.is_some(), add).clicked() {
+                            done = true;
+                        }
+                        if ui.add(egui::Button::new(RichText::new(tr!("Cancel")).size(12.5).color(pal.weak)).frame(false)).clicked() {
+                            cancel = true;
+                        }
+                    });
+                });
+                ui.add_space(8.0);
+                widgets::well(ui, |ui| {
+                    widgets::row(ui, tr!("Block"), |ui| {
+                        widgets::search(ui, &mut a.search, tr!("Search the blocks of the game and the mods"), 320.0);
+                    });
+                    let list = found(&blocks, &a.search);
+                    egui::ScrollArea::vertical().id_salt("ore blocks").max_height(150.0).show(ui, |ui| {
+                        // Always as high, however many found, so that the window stays put.
+                        ui.set_min_height(150.0);
+                        if list.is_empty() {
+                            ui.label(RichText::new(tr!("No block found. Mods' blocks show once Game & mods… has read them.")).size(12.0).color(pal.weak));
+                        }
+                        for &k in list.iter().take(200) {
+                            let b = &blocks[k];
+                            let picked = a.block == Some(k);
+                            let r = ui.horizontal(|ui| {
+                                let (sq, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
+                                ui.painter().rect_filled(sq, 2, theme::rgb(b.color));
+                                let r = ui.selectable_label(picked, RichText::new(&b.name).size(12.5));
+                                ui.label(RichText::new(&b.id).size(11.5).color(pal.weak));
+                                r
+                            });
+                            if r.inner.clicked() && !picked {
+                                a.block = Some(k);
+                                a.deepslate = deepslate_of(&blocks, k);
+                            }
+                        }
+                    });
+                    // Shown before a block is picked too, so that the window keeps its height.
+                    widgets::row(ui, tr!("In deepslate and tuff"), |ui| {
+                        let Some(k) = a.block else {
+                            ui.add_enabled_ui(false, |ui| widgets::combo("ore deepslate").selected_text(tr!("The same block")).width(320.0).show_ui(ui, |_| {}));
+                            return;
+                        };
+                        {
+                            let same = tr!("The same block");
+                            let label = a.deepslate.map_or(same.to_owned(), |d| blocks[d].id.clone());
+                            // Its own block, the deepslate one found, the blocks of its namespace with deepslate in their names.
+                            let ns = massif_assets::namespace(&blocks[k].id);
+                            let mut offered: Vec<usize> = deepslate_of(&blocks, k).into_iter().collect();
+                            let found = deepslate_of(&blocks, k);
+                            offered.extend((0..blocks.len()).filter(|&d| massif_assets::namespace(&blocks[d].id) == ns && blocks[d].id.contains("deepslate") && Some(d) != found));
+                            widgets::combo("ore deepslate").selected_text(label).width(320.0).show_ui(ui, |ui| {
+                                if ui.selectable_label(a.deepslate.is_none(), same).clicked() {
+                                    a.deepslate = None;
+                                }
+                                for d in offered.into_iter().take(80) {
+                                    if ui.selectable_label(a.deepslate == Some(d), &blocks[d].id).clicked() {
+                                        a.deepslate = Some(d);
+                                    }
+                                }
+                            });
+                        }
+                    });
+                });
+            });
+        if done {
+            self.finish_adding();
+        } else if cancel {
+            self.adding = None;
         }
     }
 }
@@ -1326,7 +1546,7 @@ fn ores_image(world: &World, dim: usize, settings: &OreSettings, cut: &Cut) -> (
     let hosts = massif_core::ores::hosts(reg);
     let in_rock = massif_core::pockets::Pockets::new(reg, world.meta.seed as u64, d.min_y);
     if let Some(placer) = Placer::new(settings, world.meta.seed) {
-        let colors: Vec<Color32> = settings.ores.iter().map(|o| theme::rgb(o.mineral.color())).collect();
+        let colors: Vec<Color32> = settings.ores.iter().map(|o| theme::rgb(o.color())).collect();
         let first = x0.div_euclid(16);
         let count = (x0 + across as i32 - 1).div_euclid(16) - first + 1;
         for chunk in placer.chunks(first, z.div_euclid(16), count, 1, (y0, y1)) {
@@ -1434,6 +1654,26 @@ fn trim(v: f64) -> String {
 }
 
 /// The card behind the parts of the window.
+/// An ore's name as the window shows it: the game's in the language of the
+/// interface, a block's as its id reads.
+fn ore_name(rule: &OreRule) -> String {
+    match rule.vanilla() {
+        Some(m) => crate::i18n::tr_name(m.name()).to_owned(),
+        None => rule.name(),
+    }
+}
+
+/// What an ore is for, or the blocks it lays.
+fn ore_use(rule: &OreRule) -> String {
+    match rule.vanilla() {
+        Some(m) => tr!("for {use_for}", use_for = crate::i18n::tr_name(m.use_for())),
+        None => {
+            let (stone, deep) = rule.blocks();
+            if stone == deep { stone.to_owned() } else { tr!("{stone}, {deep} in deepslate", stone, deep) }
+        }
+    }
+}
+
 fn card_fill(pal: &Palette) -> Color32 {
     if pal.dark { Color32::from_rgb(13, 13, 14) } else { Color32::WHITE }
 }
@@ -1588,9 +1828,9 @@ fn tooltip(p: &egui::Painter, pal: &Palette, (plot, at): (Rect, Pos2), y: i32, r
         if k == picked {
             p.rect_filled(Rect::from_center_size(pos2(r.center().x, row_y), vec2(r.width() - 10.0, 18.0)), 5, selected_fill(pal));
         }
-        let c = theme::rgb(settings.ores[k].mineral.color());
+        let c = theme::rgb(settings.ores[k].color());
         p.rect_filled(Rect::from_center_size(pos2(r.left() + 16.0, row_y), vec2(7.0, 7.0)), 2, c);
-        p.text(pos2(r.left() + 26.0, row_y), Align2::LEFT_CENTER, crate::i18n::tr_name(settings.ores[k].mineral.name()), FontId::proportional(11.5), pal.text);
+        p.text(pos2(r.left() + 26.0, row_y), Align2::LEFT_CENTER, ore_name(&settings.ores[k]), FontId::proportional(11.5), pal.text);
         let value = match scale {
             Scale::Blocks => {
                 let (n, u) = short(v);
@@ -1628,10 +1868,10 @@ mod tests {
     fn the_series_follow_the_bands() {
         let settings = OreSettings::default();
         let s = series(&settings, -64, 320, (0, false));
-        let diamond = settings.ores.iter().position(|o| o.mineral == Mineral::Diamond).unwrap();
+        let diamond = settings.ores.iter().position(|o| o.vanilla() == Some(Mineral::Diamond)).unwrap();
         let d = &s.per_chunk[diamond];
         assert!(d[(-58 + 64) as usize] > d[64] && d[(40 + 64) as usize] == 0.0, "diamonds deep down");
-        let coal = settings.ores.iter().position(|o| o.mineral == Mineral::Coal).unwrap();
+        let coal = settings.ores.iter().position(|o| o.vanilla() == Some(Mineral::Coal)).unwrap();
         assert!(s.per_chunk[coal][(96 + 64) as usize] > s.per_chunk[coal][(10 + 64) as usize]);
     }
 }

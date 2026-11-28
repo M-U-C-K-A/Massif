@@ -3062,7 +3062,8 @@ the whole band), so many veins a chunk, so many blocks a vein.
 - **Across the top**, each ore with what the map is expected to hold of it
   (a click picks it; a funnel marks one kept to some biomes), and the map
   small: click or drag on it to choose the row the map is cut through. The
-  **+** at the end adds back an ore taken out.
+  **+** at the end adds back an ore taken out, or an ore of any block (see
+  below).
 - **The cut**: the map along that row, its rock, water and sky, with the
   ores exactly where the export will lay them, and over it a **candle** for
   each band — the wick from the lowest height to the highest, the body over
@@ -3087,6 +3088,21 @@ what was taken out — an ore or a band — where it was, whatever was changed
 since. While a number is typed, the keys edit the number. The **+** adds an
 ore back as it was when taken out, or as the preset for the map's heights
 has it.
+
+**Ores of any block.** **+ ▸ Ore of any block…** adds an ore of a block
+of your choosing — a mod's (`create:zinc_ore`, a tin or a silver ore) or
+the game's (a block of the Blocks panel, or one of the map) —, laid as the
+game's are: in veins, in its own bands, biomes and sizes, taking the place
+of the rock only. The search looks through the blocks of the game and of
+the mods and packs **Game & mods…** has read (ores first; with nothing
+typed, the ores alone); **In deepslate and tuff** is the block it lays
+there, found as the game names its own (`deepslate_zinc_ore` for
+`zinc_ore`), or **The same block**. It starts as one band around y 16,
+six veins a chunk of eight blocks, to set like any other. It is saved with
+the map, counted in the amounts, the cut and the survival check (a row of
+its own under the game's ores), and written as its block's id: the game
+must have the mod for it to show. Without one, a map and its export are
+the same as before.
 
 **Biomes.** An ore can be laid **Only in** some biomes, or in every biome
 **Except in** some, as a brush keeps to what is on the map: tick the box,

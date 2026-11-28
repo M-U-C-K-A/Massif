@@ -3311,7 +3311,10 @@ impl MassifApp {
 
     fn open_ores(&mut self, ctx: &egui::Context) {
         let snapshot = self.doc.world.snapshot();
-        self.dialog = Some(Dialog::Ores(Box::new(crate::ores::OresView::new(ctx, snapshot, self.doc.dim))));
+        // The blocks the Blocks panel offers, the game's and the mods', for
+        // ores of any block.
+        let blocks = self.blocks.catalogue.as_ref().map_or_else(Vec::new, |cat| cat.blocks.iter().map(|b| crate::ores::BlockChoice { id: b.id.clone(), name: b.name.clone(), color: b.color }).collect());
+        self.dialog = Some(Dialog::Ores(Box::new(crate::ores::OresView::new(ctx, snapshot, self.doc.dim).with_blocks(blocks))));
     }
 
     /// What the map's tiles hold, kept up to date as they change (see
@@ -16108,7 +16111,7 @@ mod tests {
             }
             h.get_by_role_and_label(egui::accesskit::Role::Button, "Blocks").click();
             // Drag the top of the diamonds' candle up 60 points.
-            let diamond = h.state().doc.world.meta.ores.ores.iter().position(|o| o.mineral == massif_core::analysis::Mineral::Diamond).unwrap();
+            let diamond = h.state().doc.world.meta.ores.ores.iter().position(|o| o.vanilla() == Some(massif_core::analysis::Mineral::Diamond)).unwrap();
             let (from, before) = match &mut h.state_mut().dialog {
                 Some(Dialog::Ores(v)) => {
                     v.select(diamond);
@@ -16199,7 +16202,7 @@ mod tests {
                 _ => panic!("the ores window is closed"),
             }
         }
-        let has = |h: &H, m: Mineral| view(h).settings.ores.iter().any(|o| o.mineral == m);
+        let has = |h: &H, m: Mineral| view(h).settings.ores.iter().any(|o| o.vanilla() == Some(m));
         let click = |h: &mut H, at: egui::Pos2| {
             h.event(egui::Event::PointerMoved(at));
             h.step();
@@ -16226,7 +16229,7 @@ mod tests {
         }
         h.run_steps(3);
         let all = view(&h).settings.clone();
-        let index = |m: Mineral| all.ores.iter().position(|o| o.mineral == m).unwrap();
+        let index = |m: Mineral| all.ores.iter().position(|o| o.vanilla() == Some(m)).unwrap();
         let (diamond, iron) = (index(Mineral::Diamond), index(Mineral::Iron));
 
         // Delete takes the diamonds out, and the ore after them is picked.
@@ -16327,6 +16330,69 @@ mod tests {
         assert!(h.state().dialog.is_none());
         let kept = &h.state().doc.world.meta.ores.ores[diamond].biomes;
         assert_eq!((kept.only.clone(), kept.except.clone()), (Some(vec![biomes[0]]), Some(vec![biomes[1]])), "kept in the map");
+    }
+
+    /// Ores of any block: the + offers one, the window finds its deepslate
+    /// block, lays it in the cut and counts it, and the map keeps it; the
+    /// survival check counts its blocks. Draws with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn ores_of_a_mods_blocks() {
+        use egui_kittest::kittest::Queryable;
+        type H = egui_kittest::Harness<'static, MassifApp>;
+        fn view_mut(h: &mut H) -> &mut crate::ores::OresView {
+            match &mut h.state_mut().dialog {
+                Some(Dialog::Ores(v)) => v,
+                _ => panic!("the ores window is closed"),
+            }
+        }
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let ctx = h.ctx.clone();
+        h.state_mut().open_ores(&ctx);
+        let wait = |h: &mut H| {
+            let started = std::time::Instant::now();
+            while !view_mut(h).is_ready() {
+                assert!(started.elapsed().as_secs() < 60, "the ores window never got ready");
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            h.run_steps(3);
+        };
+        wait(&mut h);
+        let block = |id: &str, name: &str| crate::ores::BlockChoice { id: id.into(), name: name.into(), color: [196, 200, 214] };
+        view_mut(&mut h).set_blocks(vec![block("examplemod:tin_ore", "Tin Ore"), block("examplemod:deepslate_tin_ore", "Deepslate Tin Ore"), block("examplemod:tin_block", "Block of Tin")]);
+        h.get_by_label("Add an ore").click();
+        h.run_steps(2);
+        h.get_by_label("Ore of any block…").click();
+        // The window settles where its new height puts it.
+        h.run_steps(10);
+        h.get_by_label("Tin Ore").click();
+        // The window stays put as a block is picked.
+        h.run_steps(8);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("dialog-ores-any-block.png")).unwrap();
+        }
+        let add = h.get_by_label(&theme::with_icon(Icon::Plus, "Add")).rect().center();
+        h.event(egui::Event::PointerMoved(add));
+        h.step();
+        h.event(egui::Event::PointerButton { pos: add, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.step();
+        h.event(egui::Event::PointerButton { pos: add, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+        let k = view_mut(&mut h).settings.ores.len() - 1;
+        let rule = view_mut(&mut h).settings.ores[k].clone();
+        assert_eq!(rule.blocks(), ("examplemod:tin_ore", "examplemod:deepslate_tin_ore"), "its deepslate block found");
+        assert_eq!(view_mut(&mut h).picked(), (k, 0), "picked");
+        wait(&mut h);
+        assert!(view_mut(&mut h).total(k) > 0.0 && view_mut(&mut h).in_cut(k) > 0, "laid in the cut and counted");
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("dialog-ores-tin.png")).unwrap();
+        }
+        h.key_press(Key::Escape);
+        h.run_steps(2);
+        assert!(h.state().dialog.is_none());
+        assert_eq!(h.state().doc.world.meta.ores.ores.last(), Some(&rule), "kept in the map");
     }
 
     /// A map with diamond blocks and bedrock painted at its surface: the

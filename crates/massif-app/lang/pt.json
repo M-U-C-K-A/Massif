@@ -139,7 +139,7 @@
  "Add a point": "Adicionar um ponto",
  "Add a shortcut": "Adicionar um atalho",
  "Add an ore": "Adicionar um minério",
- "Add an ore taken out": "Readicionar um minério removido",
+ "Add an ore: one taken out, or of any block, a mod's": "Adicionar um minério: um retirado, ou o de qualquer bloco, de um mod",
  "Add and Max: painted where the image is on, and kept where it was painted already.": "Adicionar e Máx: pintado onde a imagem está ligada e mantido onde já estava pintado.",
  "Add brushes": "Adicionar pincéis",
  "Add brushes…": "Adicionar pincéis…",
@@ -2492,7 +2492,7 @@
  "{name} · {point} (read-only)": "{name} · {point} (só leitura)",
  "{name} — for {use_for}": "{name} — para {use_for}",
  "{name}, of the blocks read.": "{name}, entre os blocos lidos.",
- "{name}: for {use_for}. About {thousands} blocks a chunk of rock.": "{name}: para {use_for}. Cerca de {thousands} blocos por chunk de rocha.",
+ "{name}: {use_for}. About {thousands} blocks a chunk of rock.": "{name}: {use_for}. Cerca de {thousands} blocos por chunk de rocha.",
  "{name}: on the map only": "{name}: só no mapa",
  "{n} ({t} tiles)": "{n} ({t} ladrilhos)",
  "{n} blocks": {
@@ -4175,5 +4175,13 @@
  "Back to its own colour, from its blocks": "Voltar à sua própria cor, a dos seus blocos",
  "With keys only": "Só com teclas",
  "No action has keys.": "Nenhuma ação tem teclas.",
- "Also {actions}: one of them does nothing.": "Também {actions}: uma delas não faz nada."
+ "Also {actions}: one of them does nothing.": "Também {actions}: uma delas não faz nada.",
+ "Ore of any block…": "Minério de qualquer bloco…",
+ "{stone}, {deep} in deepslate": "{stone}, {deep} em ardósia profunda",
+ "Add an ore of any block": "Adicionar um minério de qualquer bloco",
+ "laid as the game's: in veins, in the rock, in its own bands": "colocado como os do jogo: em veios, na rocha, nas suas próprias faixas",
+ "Search the blocks of the game and the mods": "Procurar entre os blocos do jogo e dos mods",
+ "No block found. Mods' blocks show once Game & mods… has read them.": "Nenhum bloco encontrado. Os blocos dos mods aparecem quando Jogo e mods… os leu.",
+ "In deepslate and tuff": "Em ardósia profunda e tufo",
+ "The same block": "O mesmo bloco"
 }

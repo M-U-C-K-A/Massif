@@ -386,7 +386,7 @@ fn expected_with_ores(world: &World, x: i32, z: i32) -> Vec<String> {
         |b, (_, host)| {
             // Not in a vein's block: no longer rock an ore takes.
             if (b.x, b.z) == (x, z) && !veined.contains(&b.y) {
-                let (stone, deep) = massif_core::ores::ore_blocks(world.meta.ores.ores[b.ore as usize].mineral);
+                let (stone, deep) = world.meta.ores.ores[b.ore as usize].blocks();
                 let name = if host == massif_core::ores::Host::Deepslate { deep } else { stone };
                 column[(b.y - dim.min_y) as usize] = name.split('[').next().unwrap().to_owned();
             }
@@ -434,6 +434,44 @@ fn ores_are_laid_in_the_rock() {
     let names: std::collections::HashSet<String> = (-128..128).step_by(7).flat_map(|x| (-128..128).step_by(7).map(move |z| (x, z))).flat_map(|(x, z)| (0..60).map(move |y| (x, y, z))).map(|(x, y, z)| reader.block(x, y, z)).collect();
     assert!(names.iter().any(|n| n.ends_with("_ore")), "{names:?}");
     assert!(!names.iter().any(|n| n.contains("deepslate")), "{names:?}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// An ore of a mod's blocks, added in Edit ▸ Ores, is laid as the game's
+/// are: its own block in stone, its deepslate one in deepslate, in its band
+/// only, where the survival check expects it; the game's ores keep theirs.
+#[test]
+fn ores_of_any_block_are_laid() {
+    let mut world = build_world();
+    world.meta.ores = Default::default();
+    let mut tin = massif_core::ores::OreRule::custom("examplemod:tin_ore", Some("examplemod:deepslate_tin_ore"), [200, 200, 210]);
+    tin.bands = vec![massif_core::ores::Band::new(-40, [0, 0], 40, 30.0, 10)];
+    world.meta.ores.insert(tin);
+    let dir = temp_dir("ores-custom");
+    export(&world.snapshot(), &dir, &ExportOptions::default(), &Progress::default()).unwrap();
+    let mut reader = Reader::new(&dir);
+    let mut s = 0x51ed_270bu64;
+    let (mut tin, mut deep_tin, mut diamonds) = (0, 0, 0);
+    for _ in 0..160 {
+        s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let (x, z) = (((s >> 33) % 256) as i32 - 128, ((s >> 45) % 256) as i32 - 128);
+        let expected = expected_with_ores(&world, x, z);
+        for (i, want) in expected.iter().enumerate() {
+            let y = -64 + i as i32;
+            let got = reader.block(x, y, z);
+            assert_eq!(&got, want, "block at ({x}, {y}, {z})");
+            match got.as_str() {
+                "examplemod:tin_ore" | "examplemod:deepslate_tin_ore" => {
+                    assert!((-46..=46).contains(&y), "tin out of its band at ({x}, {y}, {z})");
+                    tin += 1;
+                    deep_tin += got.contains("deepslate") as u32;
+                }
+                n if n.ends_with("diamond_ore") => diamonds += 1,
+                _ => {}
+            }
+        }
+    }
+    assert!(tin > 50 && deep_tin > 0 && deep_tin < tin && diamonds > 0, "{tin} tin, {deep_tin} in deepslate, {diamonds} diamonds");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

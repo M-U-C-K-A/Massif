@@ -912,6 +912,19 @@ fn ores_table(ui: &mut Ui, pal: &Palette, a: &Analysis) {
             }
             response.on_hover_text(tr!("{name} — for {use_for}", name = crate::i18n::tr_name(c.mineral.name()), use_for = crate::i18n::tr_name(c.mineral.use_for())));
         }
+        // The ores of any block Edit ▸ Ores lays (a mod's): no riches.
+        for c in &a.custom_ores {
+            let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::hover());
+            let p = ui.painter();
+            p.hline(rect.x_range().expand(12.0), rect.top(), Stroke::new(1.0, pal.border));
+            p.circle_filled(pos2(rect.left() + 4.0, rect.center().y), 4.5, theme::rgb(c.color));
+            p.text(pos2(rect.left() + 18.0, rect.center().y), Align2::LEFT_CENTER, &c.name, FontId::proportional(12.5), if c.ore > 0 { pal.text } else { pal.weak });
+            let per_chunk = c.ore as f64 / a.chunks().max(1.0 / 256.0);
+            let values = [thousands(c.ore), "—".to_owned(), thousands(c.exposed), if per_chunk < 0.1 { "< 0.1".to_owned() } else { tr!("{per_chunk:.1}", per_chunk) }];
+            for ((value, x), raw) in values.into_iter().zip(right_edges(rect)).zip([c.ore, 0, c.exposed, c.ore]) {
+                p.text(pos2(x, rect.center().y), Align2::RIGHT_CENTER, if raw == 0 { "—".to_owned() } else { value }, FontId::proportional(12.5), if raw == 0 { pal.weak } else { pal.text });
+            }
+        }
     });
 }
 

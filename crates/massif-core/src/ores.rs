@@ -102,17 +102,83 @@ fn reach(size: u16) -> i32 {
 /// One kind of ore: its bands, and the biomes it keeps to.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OreRule {
+    /// The game's ore it is; for an ore of any block (see `custom`), a
+    /// mineral the rule does not use.
     pub mineral: Mineral,
     #[serde(default = "yes")]
     pub on: bool,
     pub bands: Vec<Band>,
     #[serde(default, skip_serializing_if = "BiomeChoice::is_everywhere")]
     pub biomes: BiomeChoice,
+    /// An ore of any block, a mod's (`create:zinc_ore`) or the game's,
+    /// instead of the mineral's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom: Option<CustomOre>,
+}
+
+/// The blocks of an ore of the map maker's choosing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomOre {
+    /// The block it lays in stone, granite, diorite and andesite
+    /// (`create:zinc_ore`, properties allowed).
+    pub block: String,
+    /// The one it lays in deepslate and tuff, if not the same
+    /// (`create:deepslate_zinc_ore`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deepslate: Option<String>,
+    /// The colour of its specks in the Ores window and the survival check.
+    #[serde(default = "grey")]
+    pub color: [u8; 3],
+}
+
+fn grey() -> [u8; 3] {
+    [160, 160, 160]
 }
 
 impl OreRule {
     pub fn new(mineral: Mineral, bands: &[Band]) -> Self {
-        Self { mineral, on: true, bands: bands.to_vec(), biomes: BiomeChoice::default() }
+        Self { mineral, on: true, bands: bands.to_vec(), biomes: BiomeChoice::default(), custom: None }
+    }
+
+    /// An ore of block `block` (and `deepslate` in deepslate and tuff), in
+    /// one band as common as iron's around y 16 by default.
+    pub fn custom(block: &str, deepslate: Option<&str>, color: [u8; 3]) -> Self {
+        let custom = CustomOre { block: block.to_owned(), deepslate: deepslate.filter(|d| *d != block).map(str::to_owned), color };
+        Self { mineral: Mineral::Iron, on: true, bands: vec![Band::new(-24, [16, 16], 56, 6.0, 8)], biomes: BiomeChoice::default(), custom: Some(custom) }
+    }
+
+    /// The game's ore it is, unless it is one of any block.
+    pub fn vanilla(&self) -> Option<Mineral> {
+        self.custom.is_none().then_some(self.mineral)
+    }
+
+    /// The blocks it lays: in stone, in deepslate.
+    pub fn blocks(&self) -> (&str, &str) {
+        match &self.custom {
+            Some(c) => (c.block.as_str(), c.deepslate.as_deref().unwrap_or(c.block.as_str())),
+            None => ore_blocks(self.mineral),
+        }
+    }
+
+    /// The colour of its specks.
+    pub fn color(&self) -> [u8; 3] {
+        self.custom.as_ref().map_or(self.mineral.color(), |c| c.color)
+    }
+
+    /// Its name as people read it: "Diamond", "Zinc Ore".
+    pub fn name(&self) -> String {
+        match &self.custom {
+            Some(c) => crate::analysis::pretty(c.block.split('[').next().unwrap_or(&c.block)),
+            None => self.mineral.name().to_owned(),
+        }
+    }
+
+    /// What tells it from the other ores: its mineral, or its block.
+    pub fn key(&self) -> String {
+        match &self.custom {
+            Some(c) => c.block.clone(),
+            None => format!("{:?}", self.mineral),
+        }
     }
 }
 
@@ -190,7 +256,7 @@ impl Preset {
 
     /// The preset's ore of `mineral`, if it has one.
     pub fn rule(self, mineral: Mineral) -> Option<OreRule> {
-        self.settings().ores.into_iter().find(|r| r.mineral == mineral)
+        self.settings().ores.into_iter().find(|r| r.vanilla() == Some(mineral))
     }
 
     /// The preset for a world whose floor is at `min_y`: the game's since
@@ -237,6 +303,11 @@ impl OreSettings {
         Preset::ALL.into_iter().find(|p| p.settings().ores == self.ores)
     }
 
+    /// The ores of any block among them.
+    pub fn custom(&self) -> impl Iterator<Item = &OreRule> {
+        self.ores.iter().filter(|r| r.custom.is_some())
+    }
+
     /// The ore blocks expected at height `y` of a chunk all of rock: veins
     /// times blocks a vein times the share of veins starting there.
     pub fn expected(&self, rule: &OreRule, y: i32) -> f64 {
@@ -257,15 +328,15 @@ impl OreSettings {
     /// The ores of the presets these settings have none of, in the
     /// presets' order.
     pub fn missing(&self) -> Vec<Mineral> {
-        Preset::Modern.settings().ores.into_iter().map(|r| r.mineral).filter(|m| !self.ores.iter().any(|r| r.mineral == *m)).collect()
+        Preset::Modern.settings().ores.into_iter().map(|r| r.mineral).filter(|m| !self.ores.iter().any(|r| r.vanilla() == Some(*m))).collect()
     }
 
     /// Put `rule` among the ores, in the presets' order (coal first,
-    /// emeralds last); its index.
+    /// emeralds last, the ores of any block after them); its index.
     pub fn insert(&mut self, rule: OreRule) -> usize {
         let order: Vec<Mineral> = Preset::Modern.settings().ores.into_iter().map(|r| r.mineral).collect();
-        let rank = |m: Mineral| order.iter().position(|&o| o == m).unwrap_or(order.len());
-        let at = self.ores.iter().position(|r| rank(r.mineral) > rank(rule.mineral)).unwrap_or(self.ores.len());
+        let rank = |r: &OreRule| r.vanilla().map_or(order.len() + 1, |m| order.iter().position(|&o| o == m).unwrap_or(order.len()));
+        let at = self.ores.iter().position(|r| rank(r) > rank(&rule)).unwrap_or(self.ores.len());
         self.ores.insert(at, rule);
         at
     }
@@ -1151,6 +1222,28 @@ mod tests {
             assert!((p.rock_in(&BiomeChoice { only: Some(present.clone()), except: None }, y) - p.rock_at(y)).abs() < 1e-6);
             assert_eq!(p.rock_in(&BiomeChoice { only: None, except: Some(present.clone()) }, y), 0.0);
         }
+    }
+
+    /// An ore of any block is saved with its blocks, comes after the
+    /// game's, and does not stand for the mineral its rule carries.
+    #[test]
+    fn ores_of_any_block() {
+        let mut s = OreSettings::default();
+        let tin = OreRule::custom("examplemod:tin_ore", Some("examplemod:deepslate_tin_ore"), [1, 2, 3]);
+        assert_eq!(s.insert(tin.clone()), 8, "after the game's");
+        assert_eq!(s.insert(OreRule::custom("examplemod:lead_ore", Some("examplemod:lead_ore"), [0; 3])), 9);
+        s.ores.remove(1);
+        assert_eq!(s.missing(), vec![Mineral::Iron], "the tin is no iron");
+        assert_eq!(s.insert(Preset::Modern.rule(Mineral::Iron).unwrap()), 1);
+        assert_eq!((s.ores[9].blocks(), s.ores[9].name()), (("examplemod:lead_ore", "examplemod:lead_ore"), "Lead Ore".to_owned()));
+        assert_eq!(tin.blocks(), ("examplemod:tin_ore", "examplemod:deepslate_tin_ore"));
+        assert_eq!((tin.vanilla(), s.ores[1].vanilla()), (None, Some(Mineral::Iron)));
+        let json = serde_json::to_string(&tin).unwrap();
+        assert!(json.contains(r#""custom":{"block":"examplemod:tin_ore","deepslate":"examplemod:deepslate_tin_ore","color":[1,2,3]}"#), "{json}");
+        assert_eq!(serde_json::from_str::<OreRule>(&json).unwrap(), tin);
+        assert!(!serde_json::to_string(&OreSettings::default()).unwrap().contains("custom"), "the game's ores saved as before");
+        assert_eq!(s.custom().count(), 2);
+        assert_eq!(s.preset(), None);
     }
 
     #[test]

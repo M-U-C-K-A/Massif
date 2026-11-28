@@ -141,7 +141,7 @@
  "Add a point": "Добавить точку",
  "Add a shortcut": "Добавить сочетание клавиш",
  "Add an ore": "Добавить руду",
- "Add an ore taken out": "Добавить убираемую руду",
+ "Add an ore: one taken out, or of any block, a mod's": "Добавить руду: убранную или из любого блока, в том числе из мода",
  "Add and Max: painted where the image is on, and kept where it was painted already.": "Сложение и максимум: рисуется там, где изображение включено, и сохраняется там, где уже было нарисовано.",
  "Add brushes": "Добавить кисти",
  "Add brushes…": "Добавить кисти…",
@@ -2495,7 +2495,7 @@
  "{name} · {point} (read-only)": "{name} · {point} (только чтение)",
  "{name} — for {use_for}": "{name} — для: {use_for}",
  "{name}, of the blocks read.": "{name}, из прочитанных блоков.",
- "{name}: for {use_for}. About {thousands} blocks a chunk of rock.": "{name}: для: {use_for}. Около {thousands} блоков на чанк породы.",
+ "{name}: {use_for}. About {thousands} blocks a chunk of rock.": "{name}: {use_for}. Около {thousands} блоков на чанк породы.",
  "{name}: on the map only": "{name}: только на карте",
  "{n} ({t} tiles)": "{n} (тайлов: {t})",
  "{n} blocks": {
@@ -4147,5 +4147,13 @@
  "Back to its own colour, from its blocks": "Вернуть собственный цвет, по его блокам",
  "With keys only": "Только с клавишами",
  "No action has keys.": "Ни у одного действия нет клавиш.",
- "Also {actions}: one of them does nothing.": "Также {actions}: одно из них ничего не делает."
+ "Also {actions}: one of them does nothing.": "Также {actions}: одно из них ничего не делает.",
+ "Ore of any block…": "Руда из любого блока…",
+ "{stone}, {deep} in deepslate": "{stone}, {deep} в глубинном сланце",
+ "Add an ore of any block": "Добавить руду из любого блока",
+ "laid as the game's: in veins, in the rock, in its own bands": "кладётся как руды игры: жилами, в породе, в своих полосах",
+ "Search the blocks of the game and the mods": "Искать среди блоков игры и модов",
+ "No block found. Mods' blocks show once Game & mods… has read them.": "Блоки не найдены. Блоки модов появятся, когда «Игра и моды…» их прочитает.",
+ "In deepslate and tuff": "В глубинном сланце и туфе",
+ "The same block": "Тот же блок"
 }
