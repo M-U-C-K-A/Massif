@@ -1,0 +1,1 @@
+**Massif starts on Windows PCs with an AMD card whose OpenGL driver crashed it.** On Windows Massif now draws with Direct3D 12 or Vulkan without looking at OpenGL first: AMD's OpenGL driver could crash Massif before its window opened. OpenGL can still be asked for with WGPU_BACKEND=gl.

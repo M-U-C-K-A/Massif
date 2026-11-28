@@ -599,7 +599,11 @@ fn next_api() -> &'static str {
 /// The graphics APIs wgpu may choose from: those `WGPU_BACKEND` names (in
 /// quotes or not), or else all but those set aside on this computer.
 pub fn backends() -> wgpu::Backends {
-    let all = wgpu::Backends::PRIMARY | wgpu::Backends::GL;
+    // On Windows, OpenGL is left out unless WGPU_BACKEND asks for it: looking
+    // for an OpenGL adapter loads the card maker's OpenGL driver, and AMD's
+    // (atio6axx.dll) can crash in it before Direct3D 12 or Vulkan is even
+    // tried. Every card Massif can draw with has one of those two there.
+    let all = if cfg!(windows) { wgpu::Backends::PRIMARY } else { wgpu::Backends::PRIMARY | wgpu::Backends::GL };
     if let Some(asked) = std::env::var_os("WGPU_BACKEND") {
         let asked = asked.to_string_lossy();
         let named = named_backends(&asked);
@@ -634,6 +638,10 @@ pub fn backends() -> wgpu::Backends {
     let mut allowed = all;
     for api in aside {
         allowed.remove(api.into());
+    }
+    if allowed.is_empty() {
+        // Windows' Direct3D 12 and Vulkan both set aside: OpenGL, last.
+        allowed = wgpu::Backends::GL;
     }
     allowed
 }
