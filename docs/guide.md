@@ -3621,9 +3621,12 @@ their own:
   shallows, where farther off it is a plain surface.
   **Load**: **Around the view** (the default) or **The whole map**. Around
   the view, a 3D view builds the land within the **View distance** of its
-  camera (1,024, 2,048, 4,096 or 8,192 blocks), the nearest first, and
-  shows the rest at most as the first look the 2D map's summaries give,
-  nothing decoded; the Diorama builds the tiles in view and a quarter of the
+  camera (512, 1,024, 2,048, 4,096 or 8,192 blocks; 512 for a slower
+  computer), the nearest first, and shows the rest at most as the first
+  look the 2D map's summaries give, nothing decoded; with **Fog** on, the
+  land fades into the haze from three quarters of the view distance to it
+  (in the player's view too, and with Shaders), so that it ends softly
+  rather than at an edge; the Diorama builds the tiles in view and a quarter of the
   view around them, within the view distance of its middle; the Render
   holds and builds only the part of the map within the view distance of the
   point its camera looks at, and makes it again around the new place once

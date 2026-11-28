@@ -1515,6 +1515,10 @@ pub struct Globals {
     pub pick: [f32; 4],
     /// The materials of stone and deepslate, the layers of water and lava.
     pub rock: [f32; 4],
+    /// The fog at the view distance (Settings ▸ Graphics): the middle of
+    /// what is loaded (from the frame's origin, x and z), where the fog
+    /// starts and where it is whole, across; w 0: none.
+    pub edge: [f32; 4],
 }
 
 /// What the shaders draw: the views' own look in flat colours or with the
@@ -1592,8 +1596,24 @@ struct Globals {
     brush_t: vec4<f32>,
     pick: vec4<f32>,
     rock: vec4<f32>,
+    edge: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> g: Globals;
+
+/// Where the fragment drawn is, across (x and z, from the frame's origin):
+/// set by each fragment shader for [`edge_haze`].
+var<private> haze_xz: vec2<f32>;
+
+/// The fog at the view distance: none within its start of the middle of
+/// what is loaded, the most at its end, so that the land built block by
+/// block fades into the coarser land beyond rather than ending in an edge;
+/// the land beyond stays veiled, still seen.
+fn edge_haze() -> f32 {
+    if (g.edge.w <= 0.0) {
+        return 0.0;
+    }
+    return 0.65 * smoothstep(g.edge.z, g.edge.w, distance(haze_xz, g.edge.xy));
+}
 
 fn to_linear(c: vec3<f32>) -> vec3<f32> {
     return pow(c, vec3<f32>(2.2));
@@ -1613,7 +1633,7 @@ fn shade_lit(c: vec3<f32>, n: vec3<f32>, d: f32, ao: f32) -> vec3<f32> {
     let sky = 0.72 + 0.28 * n.y;
     let lit = c * (g.fog.z * sky + g.fog.w * sun) * ao;
     let f = clamp((d - g.fog.x) / max(g.fog.y - g.fog.x, 1.0), 0.0, 1.0);
-    return mix(lit, to_linear(g.mist.rgb), f * f * g.mist.w);
+    return mix(lit, to_linear(g.mist.rgb), max(f * f * g.mist.w, edge_haze()));
 }
 
 /// How light the block at `world` (on a face turned `n`, `d` blocks away)
@@ -1802,6 +1822,7 @@ fn game_fragment(in: VertexOut, n: vec3<f32>, d: f32) -> vec4<f32> {
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let n = normalize(in.normal);
     let d = distance(in.world, g.eye.xyz);
+    haze_xz = in.world.xz;
     // Blocks across a pixel, here (before any branch: derivatives need
     // every pixel of the quad).
     let fw = max(length(dpdx(in.world.xz)), length(dpdy(in.world.xz)));
@@ -1812,7 +1833,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         // Lava glows: its own light, not the sun's.
         var c = to_linear(in.color.rgb) * 1.1;
         let f = clamp((d - g.fog.x) / max(g.fog.y - g.fog.x, 1.0), 0.0, 1.0);
-        c = mix(c, to_linear(g.mist.rgb), f * f * g.mist.w * 0.6);
+        c = mix(c, to_linear(g.mist.rgb), max(f * f * g.mist.w * 0.6, edge_haze()));
         return vec4<f32>(c, 1.0);
     }
     if (in.water > 0.5 && in.color.b > in.color.r) {
@@ -1849,7 +1870,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             fres = 0.0;
         }
         let f = clamp((d - g.fog.x) / max(g.fog.y - g.fog.x, 1.0), 0.0, 1.0);
-        c = mix(c, to_linear(g.mist.rgb), f * f * g.mist.w);
+        c = mix(c, to_linear(g.mist.rgb), max(f * f * g.mist.w, edge_haze()));
         return vec4<f32>(c, mix(in.color.a, 1.0, 0.55 * fres));
     }
     if (TEXTURED) {
@@ -2449,6 +2470,7 @@ fn fs_trace(in: TraceOut) -> TraceFrag {
         }
     }
     let world = vec3<f32>(p.x * stride + terrain.origin.x, p.y, p.z * stride + terrain.origin.y);
+    haze_xz = world.xz;
     if (GAME_LOOK) {
         var c: vec3<f32>;
         if (hit.level == 0 && stride == 1.0) {
@@ -2652,6 +2674,7 @@ fn fs_post(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
         n = -n;
     }
     let dist = distance(pc, g.eye.xyz);
+    haze_xz = pc.xz;
     let jitter = fract(52.9829189 * fract(dot(pos.xy, vec2<f32>(0.06711056, 0.00583715))));
     let ndl = max(dot(n, g.sun.xyz), 0.0);
     var vis = 0.0;
@@ -2669,7 +2692,7 @@ fn fs_post(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let lit = c * light / max(amb + sun, 1.0e-3);
     // The haze far off keeps its colour.
     let f = clamp((dist - g.fog.x) / max(g.fog.y - g.fog.x, 1.0), 0.0, 1.0);
-    return vec4<f32>(grade(mix(lit, c, f * f * g.mist.w)), 1.0);
+    return vec4<f32>(grade(mix(lit, c, max(f * f * g.mist.w, edge_haze()))), 1.0);
 }
 "#;
 
@@ -4451,6 +4474,7 @@ impl Camera {
             brush_t: [0.0; 4],
             pick: [0.0; 4],
             rock: [0.0; 4],
+            edge: [0.0; 4],
         }
     }
 }
@@ -7165,6 +7189,15 @@ impl View3d {
         globals.sun[3] = graphics.reflections as u8 as f32;
         if !graphics.fog && !under_water {
             globals.mist[3] = 0.0;
+        }
+        // Loading around the view: the land fades into the haze toward the
+        // view distance, from three quarters of it, rather than ending in
+        // an edge; not under water, whose murk is nearer, nor without fog.
+        let load = crate::graphics::loading();
+        if !load.whole && graphics.fog && !under_water {
+            let d = load.distance as f32;
+            let (tx, tz) = (self.camera.target[0] - origin.0 as f64, self.camera.target[2] - origin.1 as f64);
+            globals.edge = [tx as f32, tz as f32, d * 0.75, d];
         }
         // The game's textures (Settings ▸ Graphics), in the player's view and
         // in the views' own look of the map's blocks (Terrain).

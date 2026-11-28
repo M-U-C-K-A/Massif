@@ -218,7 +218,7 @@ pub struct Loading {
 }
 
 /// The view distances the settings offer, in blocks.
-pub const VIEW_DISTANCES: [u32; 4] = [1024, 2048, 4096, 8192];
+pub const VIEW_DISTANCES: [u32; 5] = [512, 1024, 2048, 4096, 8192];
 /// The view distance a new installation has.
 pub const DEFAULT_VIEW_DISTANCE: u32 = 4096;
 

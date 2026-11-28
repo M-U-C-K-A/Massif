@@ -266,3 +266,40 @@ fn the_3d_view_keeps_its_colours_through_a_graphics_preset() {
         assert!(dark <= dark0 + (first.width() * first.height()) as usize / 200, "{preset:?}: {dark} pixels near black, {dark0} before");
     }
 }
+
+/// A view distance of 512 blocks against 1,024 on a map of 40 × 40 tiles:
+/// the tiles the 3D view builds, the time and the processor's time it takes,
+/// and the frames' time as the camera turns; the land fades into the haze
+/// toward the view distance (MASSIF_SNAPSHOT_DIR: the view at each).
+#[test]
+fn view_distance_512_against_1024() {
+    let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from);
+    let mut built = Vec::new();
+    for distance in [512u32, 1024] {
+        let mut h = harness(generate(&GenParams { tiles_x: 40, tiles_z: 40, ..GenParams::default() }));
+        h.state_mut().settings.view_distance = distance;
+        set_whole(&mut h, false);
+        let (both, _) = workspaces(&h);
+        h.state_mut().layout.active = both;
+        let (seconds, cpu, _) = until(&mut h, 180.0, &|app| app.view3d.pending() == 0 && !app.view3d.building());
+        let cells = h.state().view3d.cells_built();
+        // The frames' time as the camera turns, a frame drawn each time.
+        let mut times = Vec::new();
+        for k in 0..40 {
+            h.state_mut().view3d.camera.yaw += 0.02;
+            let t = std::time::Instant::now();
+            h.step();
+            let _ = h.render();
+            if k >= 5 {
+                times.push(t.elapsed().as_secs_f32() * 1000.0);
+            }
+        }
+        times.sort_by(f32::total_cmp);
+        eprintln!("view distance {distance}: {cells} tiles built in {seconds:.1} s ({cpu:.1} s of processor); a frame: best {:.1} ms, middle {:.1} ms", times[0], times[times.len() / 2]);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join(format!("view-distance-{distance}.png"))).unwrap();
+        }
+        built.push(cells);
+    }
+    assert!(built[0] > 0 && built[0] * 2 < built[1], "fewer tiles built at 512 blocks: {built:?}");
+}

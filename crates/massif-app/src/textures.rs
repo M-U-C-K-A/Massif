@@ -357,7 +357,7 @@ fn game_face(n: vec3<f32>) -> f32 {
 /// Far away, the game's fog.
 fn game_fog(c: vec3<f32>, d: f32) -> vec3<f32> {
     let f = clamp((d - g.fog.x) / max(g.fog.y - g.fog.x, 1.0), 0.0, 1.0);
-    return mix(c, to_linear(g.mist.rgb), f * g.mist.w);
+    return mix(c, to_linear(g.mist.rgb), max(f * g.mist.w, edge_haze()));
 }
 
 /// A face of colour `c` (linear) lit as the game lights it at noon: its
