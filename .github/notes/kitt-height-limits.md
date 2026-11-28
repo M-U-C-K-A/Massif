@@ -1,1 +1,0 @@
-**Brush height limits keep their numbers.** In Brush Settings, turning "At or above" or "At or below" off and on again brings back the height you typed, instead of resetting it to the sea level or 24 blocks above it.

@@ -2,6 +2,31 @@ Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, 
 
 ## New in 1.2.5
 
+**The Render view no longer falls apart when the camera turns**
+
+Turning or moving the camera on the Render side no longer throws the scene away and builds it again in pieces floating over the sea: a map within the view distance is loaded whole once and stays, and on a larger map the part around where the camera went is built in the background while the land already there stays shown, taking its place once whole.
+
+
+**Windows: Massif starts on a fresh Windows**
+
+Massif no longer needs the Visual C++ Redistributable, which a freshly installed Windows does not have: on such a computer Massif could fail to open without a word. The app, massif-cli and the Explorer thumbnails now carry the C runtime inside them, and the few runtime files the denoiser needs come in the zip beside it. A crash before the window appears (in a graphics driver, say) is now said in a message box, with where the start's log is, instead of ending in silence.
+
+
+**Brush height limits keep their numbers.** In Brush Settings, turning "At or above" or "At or below" off and on again brings back the height you typed, instead of resetting it to the sea level or 24 blocks above it.
+
+
+**The Render view's left drag grabs the land, and Space flies up**
+
+In the Render Viewport, a left drag grabs the land and moves the camera over it, as a map is dragged: the point under the pointer stays under it, whatever else is going on (walking with W A S D, the camera unlocked from the view, after a double-click or after looking around with the right button). The middle button, or Alt with the left, turns about the point under the pointer; Shift with them slides across the view; the right button looks around; the wheel comes toward the pointer, even while a walk key is held (it sets the walking speed only with the right button held). Moving the camera by hand stops a camera path playing, which used to take it straight back. Space goes up and C down, as flying in the game, beside E and Q; while a Timeline is shown, Space keeps playing and pausing. A key pressed with ⌘ (a shortcut such as ⌘S) no longer keeps the camera walking after it is let go.
+
+
+**The Diorama no longer stands still, and Settings ▸ Keyboard is shorter**
+
+The Diorama could stop drawing the map and stay on its old image, after Apply to map from the Terrain Generator or with a second Diorama, the 3D View or the Render side open: the scenes of these views were built in the same threads, and one of them could wait behind another's for good. Each now waits for its tiles outside those threads, and the Diorama draws the new land once Apply is done. Settings ▸ Keyboard lists the shortcuts in groups that fold, the tools grouped as in the Tools panel (Sculpt terrain, Paint, Select, Decor…), in as many columns as the window has room for; each group says how many of its actions have keys, **With keys only** hides the others, the search also finds a group by its name, and keys two actions share are in red, the other action named under the pointer.
+
+
+**Massif starts on Windows PCs with an AMD card whose OpenGL driver crashed it.** On Windows Massif now draws with Direct3D 12 or Vulkan without looking at OpenGL first: AMD's OpenGL driver could crash Massif before its window opened. OpenGL can still be asked for with WGPU_BACKEND=gl.
+
 ## New in 1.2.4
 
 Version 1.2.3 was tagged but never published (its Linux and Windows builds stopped while packaging); 1.2.4 is that release, with the packaging fixed.
