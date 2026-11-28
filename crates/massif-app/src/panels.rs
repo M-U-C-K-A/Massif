@@ -4344,7 +4344,7 @@ pub fn game_and_mods(ui: &mut Ui, blocks: &mut BlockLibrary, jar: &mut Option<st
             });
         }
         if ui
-            .add(egui::Button::new(theme::with_icon(Icon::Plus, tr!("Add mods…"))).small().truncate())
+            .add(egui::Button::new(theme::with_icon(Icon::Plus, tr!("Add mods…"))).truncate())
             .on_hover_text(tr!("The jars of mods with blocks, from the mods folder of your instance, the resource packs (.zip) that give them their textures, and the lists of blocks made for WorldPainter (.csv) that give their states: their blocks are painted and exported like the game's"))
             .clicked()
             && let Some(files) = rfd::FileDialog::new().set_title(tr!("Choose mods and resource packs")).add_filter(tr!("Mods, resource packs and block lists"), &["jar", "zip", "csv"]).pick_files()
@@ -4357,7 +4357,7 @@ pub fn game_and_mods(ui: &mut Ui, blocks: &mut BlockLibrary, jar: &mut Option<st
             }
         }
         if ui
-            .add(egui::Button::new(theme::with_icon(Icon::FolderOpen, tr!("Instance…"))).small().truncate())
+            .add(egui::Button::new(theme::with_icon(Icon::FolderOpen, tr!("Instance…"))).truncate())
             .on_hover_text(tr!("A modpack's instance (CurseForge, Prism, Modrinth…): its mods with blocks, its resource packs and its lists of blocks at once, over the version of the game it plays"))
             .clicked()
             && let Some(dir) = rfd::FileDialog::new().set_title(tr!("Choose a modpack's instance")).pick_folder()
@@ -5543,6 +5543,12 @@ pub fn levels_panel(ui: &mut Ui, doc: &mut Document, rename: &mut Option<(usize,
 
 // ------------------------------------------------------------------- info --
 
+/// The room over a section of World Information, under its title, and
+/// between a well and the note under it.
+const INFO_SECTION_GAP: f32 = 12.0;
+const INFO_TITLE_GAP: f32 = 4.0;
+const INFO_NOTE_GAP: f32 = 4.0;
+
 /// File ▸ World Information…: the world's name, seed, sea level, spawn and
 /// blocks, the map's size, memory and file. Returns true when a world
 /// setting that affects the map changed. `palettes`: the block palettes to make the map's terrains of; `edit` is
@@ -5552,6 +5558,8 @@ pub fn world_info(ui: &mut Ui, doc: &mut Document, cache: (usize, usize, usize),
     let mut affects_map = false;
     let (bottom, top) = (doc.dimension().min_y, doc.dimension().max_y);
     section(ui, Icon::Globe, tr!("World"));
+    ui.add_space(INFO_TITLE_GAP);
+    let mut picked = None;
     crate::widgets::well(ui, |ui| {
         let meta = &mut doc.world.meta;
         let mut changed = false;
@@ -5586,67 +5594,87 @@ pub fn world_info(ui: &mut Ui, doc: &mut Document, cache: (usize, usize, usize),
         } else {
             crate::widgets::row(ui, tr!("Spawn"), &mut spawn);
         }
+        // What the built-in terrains are made of: changed, they are made
+        // again of the other blocks, all over the map at once.
+        crate::widgets::row(ui, tr!("Blocks"), |ui| {
+            let now = meta.palette.clone();
+            // As wide as the panel lets it, in a narrow one.
+            let width = (ui.available_width() * 0.62).clamp(40.0, 170.0);
+            match crate::palettes::choose(ui, "map palette", palettes, &now, width) {
+                Some(crate::palettes::Picked::Use(p)) => picked = Some(p),
+                Some(crate::palettes::Picked::Edit) => *edit = true,
+                None => {}
+            }
+        });
         if changed {
             doc.mark_changed();
         }
     });
-    // What the built-in terrains are made of: changed, they are made again
-    // of the other blocks, all over the map at once.
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        ui.label(tr!("Blocks"));
-        let now = doc.world.meta.palette.clone();
-        // As wide as the panel lets it, in a narrow one.
-        let width = (ui.available_width() - 24.0).clamp(40.0, 170.0);
-        match crate::palettes::choose(ui, "map palette", palettes, &now, width) {
-            Some(crate::palettes::Picked::Use(p)) => affects_map |= doc.set_palette(p),
-            Some(crate::palettes::Picked::Edit) => *edit = true,
-            None => {}
-        }
-    });
+    if let Some(p) = picked {
+        affects_map |= doc.set_palette(p);
+    }
+    ui.add_space(INFO_NOTE_GAP);
     hint(ui, tr!("What grass, soils, rock, sand, gravel and snow are made of. Another palette makes them again of its blocks across the whole map, in one step to undo."));
 
-    section(ui, Icon::Map, tr!("Map"));
-    let dim = doc.dimension();
-    match dim.bounds() {
-        Some((lo, hi)) => {
-            let (w, d) = (hi.x - lo.x + 1, hi.z - lo.z + 1);
-            ui.label(tr!("{value} × {value2} blocks ({w} × {d} tiles)", value = w * 128, value2 = d * 128, w, d));
-            ui.label(RichText::new(format!("x {} … {}, z {} … {}", lo.x * 128, (hi.x + 1) * 128 - 1, lo.z * 128, (hi.z + 1) * 128 - 1)).color(pal.weak));
-        }
-        None => {
-            ui.label(tr!("Empty"));
-        }
-    }
-    ui.label(RichText::new(tr!("Build height {min_y} … {value}", min_y = dim.min_y, value = dim.max_y - 1)).color(pal.weak));
+    // A row of a well: its name, its value at the right, cut with an
+    // ellipsis (whole on hover) where the room ends.
+    let value_row = |ui: &mut Ui, name: &str, value: &str, weak: bool| {
+        crate::widgets::row(ui, name, |ui| {
+            let text = RichText::new(value).size(12.5);
+            let room = (ui.available_width() * 0.7).max(40.0);
+            ui.set_max_width(room);
+            ui.add(egui::Label::new(if weak { text.color(pal.weak) } else { text }).truncate());
+        });
+    };
 
+    ui.add_space(INFO_SECTION_GAP);
+    section(ui, Icon::Map, tr!("Map"));
+    ui.add_space(INFO_TITLE_GAP);
+    let dim = doc.dimension();
+    crate::widgets::well(ui, |ui| {
+        match dim.bounds() {
+            Some((lo, hi)) => {
+                let (w, d) = (hi.x - lo.x + 1, hi.z - lo.z + 1);
+                value_row(ui, tr!("Size"), &tr!("{value} × {value2} blocks ({w} × {d} tiles)", value = w * 128, value2 = d * 128, w, d), false);
+                value_row(ui, tr!("Area"), &format!("x {} … {}, z {} … {}", lo.x * 128, (hi.x + 1) * 128 - 1, lo.z * 128, (hi.z + 1) * 128 - 1), true);
+            }
+            None => value_row(ui, tr!("Size"), tr!("Empty"), true),
+        }
+        value_row(ui, tr!("Build height"), &format!("{} … {}", dim.min_y, dim.max_y - 1), false);
+    });
+
+    ui.add_space(INFO_SECTION_GAP);
     section(ui, Icon::Activity, tr!("Memory"));
-    let mut hot = 0;
-    let mut cold = 0;
-    egui::Grid::new("memory").num_columns(3).spacing([10.0, 2.0]).show(ui, |ui| {
+    ui.add_space(INFO_TITLE_GAP);
+    let (mut hot, mut cold) = (0, 0);
+    crate::widgets::well(ui, |ui| {
         for level in &doc.dimension().levels {
             let s = level.stats();
             hot += s.hot_bytes;
             cold += s.cold_bytes;
-            ui.label(&level.name);
-            ui.label(RichText::new(tr!("{tiles} tiles", tiles = s.tiles)).color(pal.weak));
-            ui.label(RichText::new(tr!("{hot_tiles} hot", hot_tiles = s.hot_tiles)).color(pal.weak));
-            ui.end_row();
+            value_row(ui, &level.name, &tr!("{tiles} tiles, {hot_tiles} hot", tiles = s.tiles, hot_tiles = s.hot_tiles), true);
         }
+        value_row(ui, tr!("Decoded"), &human(hot as u64), false);
+        value_row(ui, tr!("Compressed"), &human(cold as u64), false);
+        value_row(ui, tr!("Map cache"), &tr!("{value} textures, {value2} grids, {value3} summaries", value = cache.0, value2 = cache.1, value3 = cache.2), true);
     });
-    ui.label(tr!("Decoded {human} · compressed {human2}", human = human(hot as u64), human2 = human(cold as u64)));
-    ui.label(RichText::new(tr!("Map cache: {value} textures, {value2} grids, {value3} summaries", value = cache.0, value2 = cache.1, value3 = cache.2)).color(pal.weak));
 
+    ui.add_space(INFO_SECTION_GAP);
     section(ui, Icon::Save, tr!("File"));
-    match &doc.path {
+    ui.add_space(INFO_TITLE_GAP);
+    crate::widgets::well(ui, |ui| match &doc.path {
         Some(p) => {
-            ui.label(RichText::new(p.display().to_string()).color(pal.weak).size(11.0));
+            let path = p.display().to_string();
+            crate::widgets::row(ui, tr!("Saved as"), |ui| {
+                ui.set_max_width((ui.available_width() * 0.7).max(40.0));
+                ui.add(egui::Label::new(RichText::new(&path).size(11.5).color(pal.weak)).truncate()).on_hover_text(&path);
+            });
+            if doc.is_modified() {
+                value_row(ui, tr!("Changes"), tr!("Unsaved changes"), false);
+            }
         }
-        None => hint(ui, tr!("Not saved yet")),
-    }
-    if doc.is_modified() {
-        ui.label(RichText::new(tr!("Unsaved changes")).color(pal.accent));
-    }
+        None => value_row(ui, tr!("Saved as"), tr!("Not saved yet"), true),
+    });
     affects_map
 }
 

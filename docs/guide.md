@@ -139,7 +139,8 @@ Massif's window has three **sides**, switched at the top left, each with its own
 
 The circle marks the brush footprint. The diorama on the right shows the village at block scale. [View full size](assets/workspaces/map-editor.webp).
 
-**Settings ▸ Appearance ▸ Compact mode** puts the top of the window on one row, for small screens: New, Open, Save and Export, the sides, the workspaces (scrolled sideways when the window is narrow), then the map's title as a menu (World Information, Save Point, Versions, Save As) and Versions. The favourite tools leave the bar for the Tools panel, Undo and Redo for the Edit menu and ⌘Z, and the hint about maximising and moving areas goes into the workspaces' tooltip. The gaps between the panels narrow too.
+**Settings ▸ Appearance ▸ Compact mode**, the first setting of the page,
+or **View ▸ Compact mode** puts the top of the window on one row, for small screens: New, Open, Save and Export, the sides, the workspaces (scrolled sideways when the window is narrow), then the map's title as a menu (World Information, Save Point, Versions, Save As) and Versions. The favourite tools leave the bar for the Tools panel, Undo and Redo for the Edit menu and ⌘Z, and the hint about maximising and moving areas goes into the workspaces' tooltip. The gaps between the panels narrow too.
 
 ### Workspaces
 
@@ -2959,7 +2960,7 @@ from a height map takes a height too.
 
 #### Test Export
 
-**Test Export…** writes a part of the map to a world of its own beside the export ("*name* test"), to try it in the game quickly: **The selection**, **Around the view** (384 × 384 blocks around the middle of the map view), **These blocks** (a corner, width and depth typed in), or **Regions**: **Pick on the map…** shows the region files' grid and names over the map; a click takes a region of 512 × 512 blocks, a drag takes or leaves several, and **Done** comes back. **Snap to regions** rounds the other parts out to whole region files. The dialog lists the region files it will write (`r.0.-1.mca`…), and **Export the test** writes them.
+**Test export…** writes a part of the map to a world of its own beside the export ("*name* test"), to try it in the game quickly: **The selection**, **Around the view** (384 × 384 blocks around the middle of the map view), **These blocks** (a corner, width and depth typed in), or **Regions**: **Pick on the map…** shows the region files' grid and names over the map; a click takes a region of 512 × 512 blocks, a drag takes or leaves several, and **Done** comes back. **Snap to regions** rounds the other parts out to whole region files. The dialog lists the region files it will write (`r.0.-1.mca`…), and **Export the test** writes them.
 
 ![The export dialog's Test Export with Regions chosen and the region files listed](images/export-test-regions.png)
 
@@ -2973,7 +2974,7 @@ spawn point, what surrounds the map (vanilla terrain or void), data packs
 difficulty, hardcore and world rules (see [World rules](#world-rules)).
 Versions before 1.18 hold 256 blocks of height: the map is cut below 0 and
 above 255, and the dialog says so. The water is written so that the game
-leaves it as it is (see [Water in the game](#water-in-the-game)). **Test Export…** asks which part of the map to try: the
+leaves it as it is (see [Water in the game](#water-in-the-game)). **Test export…** asks which part of the map to try: the
 selection (draw a rectangle, an ellipse or a lasso with the Select tools
 first), the 384 × 384 blocks around the middle of the map view, or blocks
 typed in; the tiles of 128 blocks it reaches are written to a world of
@@ -3145,7 +3146,8 @@ ores out of one export, and so can `massif-cli export --no-ores`.
 **Edit ▸ Analyse the map…** checks the whole map for a survival game. Every
 block is counted as the export writes it — the layers of each column's
 terrain, the stone and deepslate under them, the bedrock floor, the water,
-the plants of the covers, the blocks of the objects — and the land
+the water and lava of the caves (a Caves layer's lava counts as lava for a
+Nether portal), the plants of the covers, the blocks of the objects — and the land
 measured: the height players stand at, the step from each column to its
 neighbours, the water over it, its biome, the land around the spawn point.
 On a WorldPainter map of 5,888 blocks a side (4.3 billion blocks) it takes
@@ -3175,7 +3177,9 @@ What it finds comes in three tones, as a survival player would read it:
 Above them, the way through a game: wood, stone, iron, diamonds, the Nether
 (ten obsidian, cast from lava with a bucket of water or mined with a diamond
 pickaxe). Below, **How to fix it** gathers what to do about each.
-**Relief** draws the heights players stand at, the sea marked, and the
+**Relief** draws the heights players stand at on dry land, the sea marked
+(the columns under water are left out, their share said under the chart,
+so that the sea does not flatten the land), and the
 steps between columns: none, one block (walked), two or three (climbed),
 4 to 22 (a fall that hurts), 23 and more (a fall that kills); the water and
 the shape of the land (overhangs, air under the surface, columns at the top
@@ -3472,7 +3476,7 @@ its own file; a map never saved asks where); **Discard** deletes the copy;
 Should Massif run into an error while you work, it keeps the map there
 and then: it writes a copy at once, whatever the time set, and says
 **Massif ran into an error**, with the error. **Save As…** saves the map
-under a name of your own; **Carry On** goes back to work; **Quit** closes
+under a name of your own; **Carry on** goes back to work; **Quit** closes
 Massif and keeps the copy, offered back at the next start as after a crash.
 An error in a task in the background (opening, saving, exporting, carving
 caves…) only stops that task, the map as it was.
@@ -3879,11 +3883,11 @@ dialog links to both. It holds:
 
 The dialog lists every file with its size, and **Show** opens each one as it
 will be written. Your home folder is written `~` in all of them, and the
-names in any other account's folder are left out. **Copy Summary** puts a
+names in any other account's folder are left out. **Copy summary** puts a
 few lines on the clipboard for a message: the version, the computer, the
 graphics card, how the last minute ran and the last error of the log.
 
-**Performance recording** is for what is slow: **Start Recording**, do the
+**Performance recording** is for what is slow: **Start recording**, do the
 slow thing, then **Stop** in the pill at the top of the window (it stops by
 itself after ten minutes). The report then also holds `recording/`, the
 files of a performance recording (see below).
@@ -3891,7 +3895,7 @@ files of a performance recording (see below).
 ## Recording performance
 
 When Massif stutters, **Help ▸ Record Performance…** (also **Record…** in
-**Settings ▸ Developer**) records it for us. **Start Recording**, then use
+**Settings ▸ Developer**) records it for us. **Start recording**, then use
 Massif as when it slows down: move the map, sculpt, paint, open the views
 that stutter. A red dot and the time recorded show at the right of the top
 bar; click it, or **Help ▸ Stop Recording Performance**, to stop. The

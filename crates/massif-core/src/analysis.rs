@@ -426,6 +426,12 @@ pub struct Analysis {
     pub deepest: i32,
     /// Wet columns whose fluid stands above the sea: lakes and rivers.
     pub above_sea: u64,
+    /// Blocks of the other fluid, which caves and sculpting hold: lava in a
+    /// world of water, water in a world of lava.
+    pub other_fluid: u64,
+    /// Dry columns by the height a player stands at on them, from `min_y`
+    /// up: [`Analysis::heights`] without the columns under a fluid.
+    pub dry_heights: Vec<u64>,
 
     /// Every solid block the export writes, most first (fluids apart).
     pub volume: Vec<Count>,
@@ -720,6 +726,8 @@ struct Tally {
     depth_sum: u64,
     deepest: i32,
     above_sea: u64,
+    other_fluid: u64,
+    dry_heights: Vec<u64>,
     biomes: Vec<u64>,
     objects: Vec<u64>,
     trees: u64,
@@ -777,6 +785,8 @@ impl Tally {
         self.depth_sum += o.depth_sum;
         self.deepest = self.deepest.max(o.deepest);
         self.above_sea += o.above_sea;
+        self.other_fluid += o.other_fluid;
+        add(&mut self.dry_heights, &o.dry_heights);
         add(&mut self.biomes, &o.biomes);
         add(&mut self.objects, &o.objects);
         self.trees += o.trees;
@@ -802,6 +812,8 @@ impl Tally {
 struct Scratch {
     spans: Vec<Span>,
     fluids: Vec<(i32, i32)>,
+    /// The fluids of the caves of a column, with their kind.
+    caves: Vec<(i32, i32, crate::voxel::Fluid)>,
     /// The surface of each column of the tile.
     tops: Vec<i32>,
     /// The runs of every column of the tile (for the ores): where each
@@ -995,6 +1007,8 @@ impl<'a> Ctx<'a> {
             depth_sum: 0,
             deepest: 0,
             above_sea: 0,
+            other_fluid: 0,
+            dry_heights: vec![0; (self.max_y - self.min_y + 1).max(1) as usize],
             biomes: vec![0; self.reg.biomes.len()],
             objects: vec![0; self.reg.objects.len()],
             trees: 0,
@@ -1040,7 +1054,7 @@ impl<'a> Ctx<'a> {
         let (ox, oz) = pos.origin();
         let ground = stack.ground();
         let n = TILE_SIZE as usize;
-        let Scratch { spans, fluids, tops, runs, cells } = s;
+        let Scratch { spans, fluids, caves, tops, runs, cells } = s;
         tops.clear();
         tops.resize(TILE_AREA, self.min_y);
         runs.clear();
@@ -1101,6 +1115,26 @@ impl<'a> Ctx<'a> {
                     } else if f1 <= top.y0 {
                         t.buried_fluid += blocks;
                     }
+                }
+                // The caves' fluid that is not the world's: lava in a world of
+                // water, water in a world of lava. The export writes it as
+                // the caves hold it.
+                stack.cave_fluids(cell, caves);
+                for &(f0, f1, fluid) in caves.iter() {
+                    if (fluid == crate::voxel::Fluid::Lava) != self.lava {
+                        let blocks = (f1 - f0).max(0) as u64;
+                        t.fluid = t.fluid.saturating_sub(blocks);
+                        t.other_fluid += blocks;
+                        if f1 <= top.y0 {
+                            t.buried_fluid = t.buried_fluid.saturating_sub(blocks);
+                        }
+                        if wet.is_some_and(|w| w.0 == f0) {
+                            wet = None;
+                        }
+                    }
+                }
+                if wet.is_none() {
+                    t.dry_heights[(surface - self.min_y).clamp(0, self.max_y - self.min_y) as usize] += 1;
                 }
                 if let Some((f0, f1)) = wet {
                     t.wet += 1;
@@ -1548,6 +1582,8 @@ impl<'a> Ctx<'a> {
             depth_sum: t.depth_sum,
             deepest: t.deepest,
             above_sea: t.above_sea,
+            other_fluid: t.other_fluid,
+            dry_heights: t.dry_heights,
             volume,
             surface,
             plants: sorted(plants),
@@ -1610,13 +1646,13 @@ impl Analysis {
 
     /// Water, blocks of it.
     pub fn water(&self) -> u64 {
-        let fluid = if self.lava_world { 0 } else { self.fluid };
+        let fluid = if self.lava_world { self.other_fluid } else { self.fluid };
         fluid + self.blocks_of(|k| k == Kind::Water)
     }
 
     /// Lava, blocks of it.
     pub fn lava(&self) -> u64 {
-        let fluid = if self.lava_world { self.fluid } else { 0 };
+        let fluid = if self.lava_world { self.fluid } else { self.other_fluid };
         fluid + self.blocks_of(|k| k == Kind::Lava)
     }
 
@@ -2598,6 +2634,28 @@ mod tests {
         let f = a.findings();
         assert!(f.iter().any(|f| f.title == "Spawn in lava" && f.severity == Severity::Critical), "{:?}", f.iter().map(|f| &f.title).collect::<Vec<_>>());
         assert!(f.iter().any(|f| f.title == "Seas of lava" && f.severity == Severity::Warning));
+    }
+
+    /// The lava of a cave layer, in a world of water, is lava: counted
+    /// apart from the water, it gives the way to the Nether; the columns
+    /// under water stay out of the dry heights.
+    #[test]
+    fn lava_of_the_caves_counts() {
+        let mut world = small(GenParams::default());
+        let plain = run(&world);
+        assert_eq!((plain.other_fluid, plain.lava()), (0, 0), "no lava without caves");
+        assert!(plain.wet > 0, "the generated map has water");
+        assert_eq!(plain.dry_heights.iter().sum::<u64>() + plain.wet, plain.grounded(), "dry and wet columns make the whole");
+        let d = &mut world.dims[0];
+        d.caves = crate::caves::CaveLayers::new(vec![crate::caves::CaveDef::vanilla("Caves", 7, d.min_y, d.max_y, 63)]);
+        let tile = d.ground_mut().tile_mut(TilePos::new(0, 0)).unwrap();
+        tile.caves = crate::plane::Plane::Uniform(1);
+        let a = run(&world);
+        assert!(a.other_fluid > 100, "lava in the caves: {}", a.other_fluid);
+        assert_eq!(a.lava(), a.other_fluid);
+        assert!(a.water() > 0);
+        let f = a.findings();
+        assert!(!f.iter().any(|f| f.title == "No lava for a Nether portal"), "{:?}", f.iter().map(|f| &f.title).collect::<Vec<_>>());
     }
 
     /// A stop asked for stops the pass.

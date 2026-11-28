@@ -97,6 +97,8 @@ pub enum Command {
     FitMap,
     /// View ▸ Show Annotations: on the map and in 3D, or hidden.
     ShowAnnotations,
+    /// View ▸ Compact mode: one bar at the top and narrower gaps, or not.
+    CompactMode,
     /// A report of a problem to save and send (see `report`).
     ReportProblem,
     /// Start a performance recording, or stop and save it (see `perf`).
@@ -191,6 +193,8 @@ pub struct State<'a> {
     pub selected: bool,
     /// The annotations are shown.
     pub annotations: bool,
+    /// The window is in compact mode.
+    pub compact: bool,
     /// A performance recording is on: the Help menu stops it.
     pub recording: bool,
     /// The map was imported from WorldPainter: its import report can be
@@ -358,6 +362,10 @@ pub fn menus(state: &State) -> Vec<Menu> {
         Entry::Item(Item {
             checked: Some(state.annotations),
             ..Item::new(Command::ShowAnnotations, None, tr!("Show Annotations"), map)
+        }),
+        Entry::Item(Item {
+            checked: Some(state.compact),
+            ..Item::new(Command::CompactMode, None, tr!("Compact mode"), free)
         }),
         Entry::Separator,
         Entry::Item(Item::new(Command::ResetWorkspaces, None, tr!("Reset workspaces"), free)),
@@ -546,6 +554,7 @@ mod tests {
             theme: ThemeChoice::Dark,
             selected: true,
             annotations: true,
+            compact: false,
             recording: false,
             imported: true,
         }

@@ -25,6 +25,8 @@ const SIDE: f32 = 268.0;
 const GAP: f32 = 26.0;
 /// The window's height, where the screen has room for it.
 const HEIGHT: f32 = 720.0;
+/// The height of the commands at the top, and of the title's line.
+const COMMAND_H: f32 = 32.0;
 /// How far the bodies of notes stand in: past their icon.
 const INDENT: f32 = 27.0;
 
@@ -229,8 +231,11 @@ impl AnalysisView {
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
                 ui.set_max_width(MAIN - 190.0);
-                ui.label(RichText::new(tr!("Survival check")).size(19.0).bold());
-                ui.add_space(6.0);
+                // The title on the commands' line, centred with them.
+                ui.allocate_ui_with_layout(vec2(MAIN - 190.0, COMMAND_H), Layout::left_to_right(Align::Center), |ui| {
+                    ui.label(RichText::new(tr!("Survival check")).size(19.0).bold());
+                });
+                ui.add_space(2.0);
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
                     let (w, d) = self.size;
@@ -252,15 +257,18 @@ impl AnalysisView {
                     }
                 });
             });
-            ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+            // The commands, on one line as high as the buttons, each
+            // centred on it: the loader where Check again is while it reads.
+            ui.allocate_ui_with_layout(vec2(ui.available_width(), COMMAND_H), Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
-                if ui.add(outline_button(pal, &theme::with_icon(Icon::Check, tr!("Done")))).clicked() {
+                if ui.add(outline_button(pal, tr!("Close"))).clicked() {
                     *choice = Choice::Close;
                 }
                 let busy = self.running.is_some();
                 if busy {
-                    ui.add_space(6.0);
-                    crate::loader::loader(ui, 16.0);
+                    ui.allocate_ui_with_layout(vec2(COMMAND_H, COMMAND_H), Layout::centered_and_justified(egui::Direction::LeftToRight), |ui| {
+                        crate::loader::loader(ui, 16.0).on_hover_text(tr!("Reading every block of the map"));
+                    });
                 } else if icon_button(ui, pal, Icon::RotateCw, tr!("Check the map again")).clicked() {
                     *choice = Choice::Again;
                 }
@@ -506,6 +514,13 @@ fn survival(ui: &mut Ui, pal: &Palette, done: &Done, choice: &mut Choice, copied
 fn relief(ui: &mut Ui, pal: &Palette, a: &Analysis, choice: &mut Choice) {
     section_label(ui, pal, tr!("Heights players stand at"));
     panel(ui, pal, |ui| heights_chart(ui, pal, a));
+    // The columns under water, apart: all at the sea, they would flatten
+    // the land.
+    if a.wet > 0 {
+        ui.add_space(6.0);
+        let fluid = if a.lava_world { tr!("Under lava") } else { tr!("Under water") };
+        ui.label(RichText::new(tr!("{fluid}: {percent} of the map, not in the chart", fluid, percent = percent(a.wet, a.columns))).size(11.5).color(pal.weak));
+    }
     ui.add_space(10.0);
     widgets::well(ui, |ui| {
         stat(ui, pal, tr!("Lowest"), format!("y {}", a.lowest[1]), Some((a.lowest[0], a.lowest[2])), choice);
@@ -538,6 +553,11 @@ fn relief(ui: &mut Ui, pal: &Palette, a: &Analysis, choice: &mut Choice) {
         stat(ui, pal, tr!("Mean depth"), tr!("{mean:.1} blocks", mean), None, choice);
         stat(ui, pal, tr!("Above the sea"), tr!("{thousands} columns: lakes, rivers", thousands = thousands(a.above_sea)), None, choice);
         stat(ui, pal, tr!("Under the surface"), tr!("{thousands} blocks", thousands = thousands(a.buried_fluid)), None, choice);
+        // The other fluid, which the caves hold.
+        if a.other_fluid > 0 {
+            let other = if a.lava_world { tr!("Water in caves") } else { tr!("Lava in caves") };
+            stat(ui, pal, other, tr!("{thousands} blocks", thousands = thousands(a.other_fluid)), None, choice);
+        }
     });
 
     ui.add_space(18.0);
@@ -779,8 +799,10 @@ fn stepper(ui: &mut Ui, pal: &Palette, stages: &[Stage]) {
 
 /// The columns by the height of their surface, the sea marked.
 fn heights_chart(ui: &mut Ui, pal: &Palette, a: &Analysis) {
-    let (Some(first), Some(last)) = (a.heights.iter().position(|&c| c > 0), a.heights.iter().rposition(|&c| c > 0)) else {
-        muted(ui, pal, tr!("No surface."));
+    let heights = &a.dry_heights;
+    let dry: u64 = heights.iter().sum();
+    let (Some(first), Some(last)) = (heights.iter().position(|&c| c > 0), heights.iter().rposition(|&c| c > 0)) else {
+        muted(ui, pal, if a.grounded() > 0 { tr!("No dry land: the whole map is under water.") } else { tr!("No surface.") });
         return;
     };
     let span = last - first + 1;
@@ -790,7 +812,7 @@ fn heights_chart(ui: &mut Ui, pal: &Palette, a: &Analysis) {
         .map(|b| {
             let from = first + b * per;
             let to = (from + per).min(last + 1);
-            (a.min_y + from as i32, a.heights[from..to].iter().sum())
+            (a.min_y + from as i32, heights[from..to].iter().sum())
         })
         .collect();
     let top = bins.iter().map(|b| b.1).max().unwrap_or(1).max(1);
@@ -806,10 +828,9 @@ fn heights_chart(ui: &mut Ui, pal: &Palette, a: &Analysis) {
         let h = (count as f32 / top as f32 * plot.height()).max(if count > 0 { 1.5 } else { 0.0 });
         let x0 = plot.left() + k as f32 * w;
         let bar = Rect::from_min_max(pos2(x0 + 0.75, plot.bottom() - h), pos2(x0 + w - 0.75, plot.bottom()));
-        let under = y + per as i32 - 1 < a.sea_level;
+        // Dry land only: under the sea's height too, it is not under water.
         let lit = hover.is_some_and(|p| p.x >= x0 && p.x < x0 + w);
-        let fill = if under { water } else { land };
-        p.rect_filled(bar, 1.5, if lit { fill } else { fill.gamma_multiply(0.75) });
+        p.rect_filled(bar, 1.5, if lit { land } else { land.gamma_multiply(0.75) });
         if lit {
             tip = Some((y, count));
         }
@@ -831,7 +852,7 @@ fn heights_chart(ui: &mut Ui, pal: &Palette, a: &Analysis) {
     p.text(pos2(plot.right(), label_y), Align2::RIGHT_CENTER, format!("y {}", a.min_y + last as i32), FontId::proportional(11.0), pal.weak);
     if let Some((y, count)) = tip {
         let range = if per > 1 { tr!("y {y} to {value}", y, value = y + per as i32 - 1) } else { format!("y {y}") };
-        response.on_hover_text(tr!("{range}: {thousands} columns, {percent}", thousands = thousands(count), percent = percent(count, a.grounded()), range));
+        response.on_hover_text(tr!("{range}: {thousands} columns, {percent}", thousands = thousands(count), percent = percent(count, dry), range));
     }
 }
 
@@ -1188,7 +1209,7 @@ fn outline_button(pal: &Palette, text: &str) -> egui::Button<'static> {
         .fill(if pal.dark { theme::mix(pal.panel, pal.text, 0.04) } else { Color32::WHITE })
         .stroke(Stroke::new(1.0, pal.control_border()))
         .corner_radius(theme::PILL)
-        .min_size(vec2(0.0, 32.0))
+        .min_size(vec2(0.0, COMMAND_H))
 }
 
 /// A pill button on the control fill.
@@ -1202,9 +1223,9 @@ fn control_button(pal: &Palette, text: &str) -> egui::Button<'static> {
 
 /// An icon alone, frameless, its words in a tooltip.
 fn icon_button(ui: &mut Ui, pal: &Palette, icon: Icon, tip: &str) -> Response {
-    let (rect, response) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(vec2(COMMAND_H, COMMAND_H), Sense::click());
     if response.hovered() {
-        ui.painter().circle_filled(rect.center(), 16.0, theme::mix(pal.panel, pal.text, 0.08));
+        ui.painter().circle_filled(rect.center(), COMMAND_H / 2.0, theme::mix(pal.panel, pal.text, 0.08));
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     glyph(ui.painter(), rect.center(), icon, 17.0, if response.hovered() { pal.text } else { pal.weak });

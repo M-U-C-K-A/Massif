@@ -326,6 +326,10 @@ fn tips(kind: &NodeKind) -> Tips {
     }
 }
 
+/// The column of a setting's name, at the start of the row, as high as
+/// the row's controls.
+const NAME: egui::Vec2 = egui::vec2(96.0, 18.0);
+
 /// A row of settings: a label, then the control.
 fn row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> egui::Response) -> bool {
     let tip = ui.data(|d| d.get_temp::<Tips>(tips_id())).and_then(|t| {
@@ -335,10 +339,7 @@ fn row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> egui::Response) ->
     });
     ui.horizontal(|ui| {
         ui.spacing_mut().interact_size.y = 18.0;
-        let mut l = ui.add_sized(
-            [96.0, 18.0],
-            egui::Label::new(RichText::new(label).size(12.0)).truncate(),
-        );
+        let mut l = crate::widgets::name_label(ui, RichText::new(label).size(12.0), NAME);
         if let Some(tip) = tip {
             l = l.on_hover_text(tip);
         }
@@ -408,7 +409,7 @@ fn sea_level(ui: &mut Ui, v: &mut f32, hover: &str) -> bool {
     let mut on = *v > massif_core::graph::NO_WATER + 1.0;
     let before = *v;
     ui.horizontal(|ui| {
-        crate::widgets::name_label(ui, RichText::new(tr!("Sea level")).size(12.0), vec2(96.0, 18.0));
+        crate::widgets::name_label(ui, RichText::new(tr!("Sea level")).size(12.0), NAME);
         if crate::widgets::checkbox(ui, &mut on, "").on_hover_text(hover).changed() {
             *v = if on { 63.0 } else { massif_core::graph::NO_WATER };
         }
@@ -422,9 +423,12 @@ fn sea_level(ui: &mut Ui, v: &mut f32, hover: &str) -> bool {
 
 fn seed(ui: &mut Ui, v: &mut u32) -> bool {
     ui.horizontal(|ui| {
-        crate::widgets::name_label(ui, RichText::new(tr!("Seed")).size(12.0), vec2(96.0, 18.0));
-        let mut changed = crate::widgets::drag(ui, egui::DragValue::new(v)).changed();
-        if ui.small_button(theme::glyph(Icon::Dices).to_string()).on_hover_text(tr!("Another seed")).clicked() {
+        crate::widgets::name_label(ui, RichText::new(tr!("Seed")).size(12.0), NAME);
+        let field = crate::widgets::drag(ui, egui::DragValue::new(v));
+        let mut changed = field.changed();
+        // As high as the field beside it.
+        let side = field.rect.height();
+        if ui.add(egui::Button::new(theme::glyph(Icon::Dices).to_string()).min_size(vec2(side, side)).corner_radius(theme::PILL)).on_hover_text(tr!("Another seed")).clicked() {
             *v = v.wrapping_mul(1_103_515_245).wrapping_add(12_345) % 100_000;
             changed = true;
         }
@@ -838,10 +842,7 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or(tr!("— none"));
-                ui.add_sized(
-                    [96.0, 18.0],
-                    egui::Label::new(RichText::new(tr!("File")).size(12.0)),
-                );
+                crate::widgets::name_label(ui, RichText::new(tr!("File")).size(12.0), NAME);
                 ui.label(RichText::new(shown).size(12.0))
                     .on_hover_text(path.as_str());
                 if ui.button(tr!("Choose…")).clicked()

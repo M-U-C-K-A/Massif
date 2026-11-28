@@ -90,16 +90,16 @@ pub fn ui(ctx: &egui::Context, form: &mut ReportForm, recording: Option<&Recordi
         crate::widgets::well(ui, |ui| {
             crate::widgets::row(ui, tr!("Performance recording"), |ui| match recording.filter(|r| r.frames() > 0) {
                 Some(r) => {
-                    if ui.button(tr!("Leave Out")).clicked() {
+                    if ui.button(tr!("Leave out")).clicked() {
                         choice = Choice::DropRecording;
                     }
-                    if ui.button(tr!("Record Again")).clicked() {
+                    if ui.button(tr!("Record again")).clicked() {
                         choice = Choice::Record;
                     }
                     ui.label(RichText::new(format!("{:.0} s · {}", r.seconds(), trn!("{n} frame", "{n} frames", n = r.frames()))).size(12.0).color(pal.weak));
                 }
                 None => {
-                    if ui.button(theme::with_icon(Icon::Circle, tr!("Start Recording"))).clicked() {
+                    if ui.button(theme::with_icon(Icon::Circle, tr!("Start recording"))).clicked() {
                         choice = Choice::Record;
                     }
                 }
@@ -165,11 +165,11 @@ pub fn ui(ctx: &egui::Context, form: &mut ReportForm, recording: Option<&Recordi
         ui.label(RichText::new(tr!("Your home folder is written ~ and other accounts' names are left out.")).size(11.0).color(pal.weak));
         ui.add_space(12.0);
         ui.horizontal(|ui| {
-            if ui.button(theme::with_icon(Icon::Copy, tr!("Copy Summary"))).on_hover_text(tr!("A few lines for a Discord message: the version, the computer, how it ran")).clicked() {
+            if ui.button(theme::with_icon(Icon::Copy, tr!("Copy summary"))).on_hover_text(tr!("A few lines for a Discord message: the version, the computer, how it ran")).clicked() {
                 choice = Choice::Copy;
             }
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                if ui.add(theme::primary_button(ui, tr!("Save Report…"))).clicked() {
+                if ui.add(theme::primary_button(ui, tr!("Save report…"))).clicked() {
                     choice = Choice::Save;
                 }
                 if ui.button(tr!("Cancel")).clicked() {

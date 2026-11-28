@@ -29,6 +29,17 @@ use std::path::PathBuf;
 
 const HEADER: f32 = theme::HEADER_H;
 const GAP: f32 = 4.0;
+/// The room of a Settings page, in points: its width, and the height every
+/// page gets (less on a small screen, never under the least).
+const PREFS_CONTENT_W: f32 = 520.0;
+const PREFS_HEIGHT: f32 = 520.0;
+const PREFS_MIN_HEIGHT: f32 = 360.0;
+/// The room between a page's sections.
+const PREFS_SECTION_GAP: f32 = 14.0;
+/// The least room a row's name keeps, and the column of values at the
+/// right of a row that has a note before its value.
+const PREFS_NAME_W: f32 = 140.0;
+const PREFS_VALUE_W: f32 = 64.0;
 /// The gap in compact mode.
 const COMPACT_GAP: f32 = 2.0;
 
@@ -1516,6 +1527,15 @@ impl MassifApp {
     fn prefs_appearance(&mut self, ui: &mut Ui, ctx: &egui::Context) {
         let pal = Palette::of(ui);
         Self::prefs_header(ui, tr!("Appearance"), tr!("How Massif looks: its language, its theme, and the colour of what is chosen, of the main buttons and of the home screen's art."));
+        // Compact mode first, where it is found: it changes the whole window.
+        crate::widgets::well(ui, |ui| {
+            crate::widgets::row(ui, tr!("Compact mode"), |ui| {
+                crate::widgets::switch(ui, &mut self.settings.compact);
+            });
+        });
+        ui.add_space(4.0);
+        ui.add(egui::Label::new(RichText::new(tr!("One bar at the top and narrower gaps between the panels, for small screens. Also in View ▸ Compact mode.")).size(11.5).color(pal.weak)).wrap());
+        ui.add_space(PREFS_SECTION_GAP);
         crate::widgets::well(ui, |ui| {
             crate::widgets::row(ui, tr!("Language"), |ui| {
                 use crate::i18n::Language;
@@ -1596,10 +1616,6 @@ impl MassifApp {
             // Paint biome shows the map's biomes, Paint terrain its terrains.
             crate::widgets::row(ui, tr!("Switch the map's view with the tool"), |ui| {
                 crate::widgets::switch(ui, &mut self.settings.map_follows_tool);
-            });
-            // One row at the top and narrower gaps, for small screens.
-            crate::widgets::row(ui, tr!("Compact mode"), |ui| {
-                crate::widgets::switch(ui, &mut self.settings.compact);
             });
         });
         if crate::i18n::current() != crate::i18n::Language::English {
@@ -2005,10 +2021,18 @@ impl MassifApp {
         let voxels = dim.voxels.len();
         let mb = |b: usize| tr!("{f64:.0} MB", f64 = b as f64 / (1u64 << 20) as f64);
         crate::widgets::well(ui, |ui| {
+            // The values in a column at the right, what they hold muted
+            // before them, cut where the room ends.
             let line = |ui: &mut Ui, name: &str, value: String, note: String| {
                 crate::widgets::row(ui, name, |ui| {
-                    ui.label(RichText::new(note).size(11.5).color(pal.weak));
-                    ui.label(RichText::new(value).size(12.5));
+                    let h = ui.available_height();
+                    ui.allocate_ui_with_layout(vec2(PREFS_VALUE_W, h), egui::Layout::right_to_left(Align::Center), |ui| {
+                        ui.label(RichText::new(value).size(12.5));
+                    });
+                    let room = (ui.available_width() - PREFS_NAME_W).max(0.0);
+                    ui.allocate_ui_with_layout(vec2(room, h), egui::Layout::right_to_left(Align::Center), |ui| {
+                        ui.add(egui::Label::new(RichText::new(note).size(11.5).color(pal.weak)).truncate());
+                    });
                 });
             };
             line(ui, tr!("Decoded tiles"), mb(hot_bytes), tr!("{hot} of {tiles} tiles, at most {max_hot_tiles} a level", max_hot_tiles = self.doc.max_hot_tiles, hot, tiles));
@@ -2101,7 +2125,7 @@ impl MassifApp {
                 ui.add_sized(vec2(210.0, ui.spacing().interact_size.y), egui::TextEdit::singleline(&mut n.template));
             });
             crate::widgets::row(ui, tr!("Ready ones"), |ui| {
-                egui::ComboBox::from_id_salt("file name presets").selected_text(tr!("Choose…")).width(210.0).show_ui(ui, |ui| {
+                crate::widgets::combo("file name presets").selected_text(tr!("Choose…")).width(210.0).show_ui(ui, |ui| {
                     for p in PRESETS {
                         if ui.selectable_label(n.template == p, p).clicked() {
                             n.template = p.to_owned();
@@ -2803,7 +2827,7 @@ impl MassifApp {
             ui.add(egui::Label::new(RichText::new(tr!("It keeps the time of each frame and of each of its parts, the memory, the processor, your computer and graphics card, the settings that change how Massif draws, the map's size and the workspaces, and the pointer and the keys as you used them. Never the map itself, nor what you type, nor where your files are.")).size(12.0).color(pal.weak)).wrap());
             ui.add_space(14.0);
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                if ui.add(theme::primary_button(ui, theme::with_icon(Icon::Circle, tr!("Start Recording")))).clicked() {
+                if ui.add(theme::primary_button(ui, theme::with_icon(Icon::Circle, tr!("Start recording")))).clicked() {
                     start = true;
                 }
                 if crate::widgets::button(ui, tr!("Cancel")).clicked() {
@@ -4733,6 +4757,7 @@ impl MassifApp {
             theme: self.settings.theme,
             selected: self.doc.selection().is_some(),
             annotations: self.tools.show_annotations,
+            compact: self.settings.compact,
             recording: self.recording.as_ref().is_some_and(|r| r.is_on()),
             imported: self.doc.world.meta.import_report.is_some(),
         }
@@ -4855,6 +4880,7 @@ impl MassifApp {
             }
             Command::FitMap => self.fit_map(),
             Command::ShowAnnotations => self.tools.show_annotations = !self.tools.show_annotations,
+            Command::CompactMode => self.settings.compact = !self.settings.compact,
             Command::ReportProblem => self.open_report(ctx, false),
             Command::RecordPerformance if self.recording.as_ref().is_some_and(|r| r.is_on()) => self.stop_recording(ctx),
             Command::RecordPerformance => self.dialog = Some(Dialog::RecordPerformance),
@@ -6311,10 +6337,10 @@ impl MassifApp {
                     let keys = section == PrefsSection::Keyboard;
                     // In a small window, the columns narrower, all on screen.
                     let keys_width = crate::keys_page::WIDTH.min(ctx.content_rect().width() - 240.0 - 96.0);
-                    let keys_height = 560.0f32.min(ctx.content_rect().height() - 190.0).max(360.0);
-                    // Appearance and its background's picture, taller.
-                    let tall = 470.0f32.min(ctx.content_rect().height() - 190.0).max(360.0);
-                    let (content, height) = if keys { (keys_width, keys_height) } else if section == PrefsSection::Appearance { (520.0, tall) } else { (520.0, 360.0) };
+                    // Every section as high, so that the window keeps its
+                    // size from one to the next: a long one scrolls.
+                    let height = PREFS_HEIGHT.min(ctx.content_rect().height() - 190.0).max(PREFS_MIN_HEIGHT);
+                    let content = if keys { keys_width } else { PREFS_CONTENT_W };
                     ui.set_width(content + 240.0);
                     let pal = Palette::of(ui);
                     ui.horizontal(|ui| {
@@ -6635,7 +6661,7 @@ impl MassifApp {
                             if self.doc.is_modified() && ui.add(theme::primary_button(ui, tr!("Save As…"))).clicked() {
                                 choice = Some(0);
                             }
-                            if ui.button(tr!("Carry On")).clicked() {
+                            if ui.button(tr!("Carry on")).clicked() {
                                 choice = Some(1);
                             }
                         });
@@ -7407,7 +7433,7 @@ impl MassifApp {
                     }
                     ui.horizontal(|ui| {
                         let test = ui
-                            .button(tr!("Test Export…"))
+                            .button(tr!("Test export…"))
                             .on_hover_text(tr!("Export a part of the map to a world of its own, to try it in the game"));
                         if test.clicked() {
                             form.testing = true;
@@ -7920,6 +7946,7 @@ impl MassifApp {
                 let response = modal(ctx, "world info").show(ctx, |ui| {
                     ui.set_width(420.0);
                     ui.label(RichText::new(tr!("World Information")).bold().size(15.0));
+                    ui.add_space(10.0);
                     affects_map = panels::world_info(ui, &mut self.doc, stats, &palettes, &mut edit);
                     ui.add_space(10.0);
                     ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
@@ -7967,11 +7994,13 @@ impl MassifApp {
                     );
                     ui.add_space(6.0);
                     ui.label(tr!("A map editor for Minecraft worlds of any size."));
-                    ui.add_space(6.0);
-                    ui.add_space(8.0);
-                    if ui.button(tr!("Close")).clicked() {
-                        keep = false;
-                    }
+                    ui.add_space(14.0);
+                    // At the bottom right, as every dialog's.
+                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                        if ui.add(theme::primary_button(ui, tr!("Close"))).clicked() {
+                            keep = false;
+                        }
+                    });
                 });
                 if response.should_close() {
                     keep = false;
@@ -8596,7 +8625,14 @@ impl Modal {
 /// A titled group of settings: its name, a word on it, its settings in a
 /// well.
 fn card(ui: &mut Ui, title: &str, subtitle: &str, add: impl FnOnce(&mut Ui)) {
+    card_level(ui, None, title, subtitle, add);
+}
+
+/// [`card`], one of cards side by side (`level`: their id and its place
+/// among them), its well as high as the highest of them.
+fn card_level(ui: &mut Ui, level: Option<(egui::Id, usize)>, title: &str, subtitle: &str, add: impl FnOnce(&mut Ui)) {
     let pal = Palette::of(ui);
+    let heights: [f32; 2] = level.and_then(|(id, _)| ui.data(|d| d.get_temp(id))).unwrap_or_default();
     ui.add_space(4.0);
     ui.label(RichText::new(title).medium());
     if !subtitle.is_empty() {
@@ -8610,7 +8646,21 @@ fn card(ui: &mut Ui, title: &str, subtitle: &str, add: impl FnOnce(&mut Ui)) {
         .inner_margin(egui::Margin::symmetric(14, 10))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
+            let top = ui.cursor().top();
             add(ui);
+            if let Some((id, k)) = level {
+                let mut now = heights;
+                let own = ui.min_rect().bottom() - top;
+                now[k.min(1)] = own;
+                let most = heights.iter().copied().fold(0.0, f32::max);
+                if most > own {
+                    ui.allocate_space(vec2(0.0, (most - own - ui.spacing().item_spacing.y).max(0.0)));
+                }
+                if now != heights {
+                    ui.data_mut(|d| d.insert_temp(id, now));
+                    ui.ctx().request_discard("cards made level");
+                }
+            }
         });
     ui.add_space(8.0);
 }
@@ -8716,20 +8766,17 @@ fn export_general(ui: &mut Ui, form: &mut ExportForm) {
     }
     ui.columns(2, |cols| {
         let (left, right) = cols.split_at_mut(1);
-        card(&mut left[0], tr!("Game"), tr!("What the world allows. Its game mode, difficulty and rules are in Rules."), |ui| {
-            row(ui, "", |ui| {
-                crate::widgets::checkbox(ui, &mut form.allow_cheats, tr!("Allow cheats"));
-            });
-            row(ui, "", |ui| {
-                crate::widgets::checkbox(ui, &mut form.structures, tr!("Structures beyond the map")).on_hover_text(tr!("Minecraft generates villages, strongholds and the like in the land it makes around the map"));
-            });
+        let pair = egui::Id::unique("export game and border");
+        card_level(&mut left[0], Some((pair, 0)), tr!("Game"), tr!("What the world allows. Its game mode, difficulty and rules are in Rules."), |ui| {
+            // Choices that name themselves: at the start of the card, not
+            // under an empty name.
+            crate::widgets::checkbox(ui, &mut form.allow_cheats, tr!("Allow cheats"));
+            crate::widgets::checkbox(ui, &mut form.structures, tr!("Structures beyond the map")).on_hover_text(tr!("Minecraft generates villages, strongholds and the like in the land it makes around the map"));
             if form.has_selection {
-                row(ui, "", |ui| {
-                    crate::widgets::checkbox(ui, &mut form.selection_only, tr!("Only the selection")).on_hover_text(tr!("Export only the tiles of 128 × 128 blocks the selection reaches, to try a part of the map in the game"));
-                });
+                crate::widgets::checkbox(ui, &mut form.selection_only, tr!("Only the selection")).on_hover_text(tr!("Export only the tiles of 128 × 128 blocks the selection reaches, to try a part of the map in the game"));
             }
         });
-        card(&mut right[0], tr!("World border"), tr!("The border Minecraft shows around the world."), |ui| {
+        card_level(&mut right[0], Some((pair, 1)), tr!("World border"), tr!("The border Minecraft shows around the world."), |ui| {
             row(ui, tr!("Centre"), |ui| {
                 crate::widgets::drag(ui, egui::DragValue::new(&mut form.border.center[0]).speed(16.0));
                 crate::widgets::drag(ui, egui::DragValue::new(&mut form.border.center[1]).speed(16.0));
@@ -8738,7 +8785,7 @@ fn export_general(ui: &mut Ui, form: &mut ExportForm) {
                 crate::widgets::drag(ui, egui::DragValue::new(&mut form.border.size).range(16.0..=60_000_000.0).speed(64.0).suffix(tr!(" blocks")));
             });
             row(ui, "", |ui| {
-                if ui.small_button(tr!("Fit the map")).on_hover_text(tr!("Centre the border on the map, just large enough for it")).clicked()
+                if ui.button(tr!("Fit the map")).on_hover_text(tr!("Centre the border on the map, just large enough for it")).clicked()
                     && let Some((c, size)) = form.fit
                 {
                     form.border.center = c;
@@ -8750,7 +8797,7 @@ fn export_general(ui: &mut Ui, form: &mut ExportForm) {
     card(ui, tr!("Data packs"), tr!("Data packs copied into the world."), |ui| {
         ui.horizontal_top(|ui| {
             egui::Frame::new().stroke(Stroke::new(1.0, pal.border)).corner_radius(theme::TILE_RADIUS).inner_margin(6).show(ui, |ui| {
-                ui.set_min_size(vec2(ui.available_width() - 40.0, 90.0));
+                ui.set_min_size(vec2(ui.available_width() - 46.0, 90.0));
                 if form.datapacks.is_empty() {
                     ui.label(RichText::new(tr!("No data packs")).color(pal.weak));
                 }
@@ -9383,6 +9430,9 @@ mod views_loading_tests;
 #[cfg(test)]
 #[path = "doc_captures_tests.rs"]
 mod doc_captures_tests;
+#[cfg(test)]
+#[path = "ui_audit_tests.rs"]
+mod ui_audit_tests;
 
 #[cfg(test)]
 mod tests {
@@ -14242,9 +14292,9 @@ mod tests {
         }
         // The dialog settles in its place over a few frames.
         h.run_steps(12);
-        h.get_by_label("Test Export…").hover();
+        h.get_by_label("Test export…").hover();
         h.run_steps(2);
-        h.get_by_label("Test Export…").click();
+        h.get_by_label("Test export…").click();
         h.run_steps(3);
         assert!(matches!(&h.state().dialog, Some(Dialog::Export(f)) if f.testing), "asks which part");
         h.get_by_label("These blocks").hover();
@@ -16013,6 +16063,46 @@ mod tests {
         let c = h.state().maps[&id].center;
         assert!((c[0] - 300.5).abs() < 1.0 && (c[1] + 199.5).abs() < 1.0, "the map is at {c:?}");
 
+    }
+
+    /// Compact mode from View ▸ Compact mode, checked there as it is; the
+    /// first setting of Settings ▸ Appearance. The survival check's button
+    /// says Close, ready or not.
+    #[test]
+    fn compact_mode_from_the_view_menu() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(3);
+        let ctx = h.ctx.clone();
+        let checked = |h: &egui_kittest::Harness<'_, MassifApp>| {
+            let menus = crate::menu::menus(&h.state().menu_state());
+            menus.iter().flat_map(|m| m.entries.iter()).find_map(|e| match e {
+                crate::menu::Entry::Item(i) if i.command == Command::CompactMode => Some(i.checked),
+                _ => None,
+            })
+        };
+        assert_eq!(checked(&h), Some(Some(false)), "in the View menu, not checked");
+        h.state_mut().command(&ctx, Command::CompactMode);
+        h.run_steps(3);
+        assert!(h.state().settings.compact);
+        assert_eq!(checked(&h), Some(Some(true)));
+        h.state_mut().command(&ctx, Command::CompactMode);
+        h.run_steps(2);
+        assert!(!h.state().settings.compact);
+        // First on the Appearance page, above the language.
+        h.state_mut().dialog = Some(Dialog::Preferences(PrefsSection::Appearance));
+        h.run_steps(4);
+        let (compact, language) = (h.get_by_label("Compact mode").rect(), h.get_by_label("Language").rect());
+        assert!(compact.top() < language.top(), "{compact:?} {language:?}");
+        h.state_mut().dialog = None;
+        // The survival check closes with Close while it reads.
+        h.state_mut().open_analysis(&ctx);
+        h.run_steps(2);
+        let (close, done) = (h.query_all_by_label("Close").count(), h.query_all_by_label("Done").count());
+        assert!(close == 1 && done == 0, "Close {close}, Done {done}");
+        h.get_by_label("Close").click();
+        h.run_steps(2);
+        assert!(h.state().dialog.is_none());
     }
 
     /// The survival check of a real map (MASSIF_RIVER_WORLD: a .massif),

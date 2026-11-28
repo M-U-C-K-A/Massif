@@ -156,7 +156,7 @@ fn recording_performance_from_the_help_menu() {
     if let Some(out) = &snapshots {
         h.render().unwrap().save(out.join("record-performance.png")).unwrap();
     }
-    h.get_by_label_contains("Start Recording").click();
+    h.get_by_label_contains("Start recording").click();
     h.run_steps(3);
     assert!(h.state().dialog.is_none());
     assert!(h.state().recording.as_ref().is_some_and(|r| r.is_on() && !r.for_report));
