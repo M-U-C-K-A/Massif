@@ -4,7 +4,7 @@
 # looks for them (crates/massif-render/src/oidn.rs), with its licence and
 # third-party notices. Apache-2.0.
 #
-#   tools/oidn.sh macos   <Massif.app>       # Contents/Frameworks, both architectures
+#   tools/oidn.sh macos   <Massif.app>       # Contents/Frameworks, Apple silicon
 #   tools/oidn.sh windows <folder of Massif.exe>
 #   tools/oidn.sh linux   <folder of massif> # lib/
 set -euo pipefail
@@ -57,19 +57,18 @@ notices() {
 
 case $platform in
   macos)
+    # Apple silicon only: the library is mostly its trained networks, 51 MB
+    # an architecture that hardly compress, and Macs with an Intel chip run
+    # the renderer's own filter on the graphics card instead (or Blender's
+    # copy of the library, when it is installed). The Metal device runs on
+    # Apple silicon only.
     arm=$(fetch arm64.macos.tar.gz)
-    intel=$(fetch x86_64.macos.tar.gz)
     frameworks="$dest/Contents/Frameworks"
     mkdir -p "$frameworks"
     for lib in "$arm"/lib/libOpenImageDenoise*.dylib; do
       name=$(basename "$lib")
       [ -L "$lib" ] && continue
-      if [ -e "$intel/lib/$name" ]; then
-        lipo -create -output "$frameworks/$name" "$lib" "$intel/lib/$name"
-      else
-        # The Metal device runs on Apple silicon only.
-        cp "$lib" "$frameworks/$name"
-      fi
+      cp "$lib" "$frameworks/$name"
       codesign --force --sign - "$frameworks/$name"
     done
     # The names the libraries link each other by.
